@@ -1,0 +1,4995 @@
+{
+ "doors": [
+  {
+   "id": "home",
+   "label": "Home",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:move-in",
+       "tab": "operate",
+       "sub": "move-in",
+       "name": "Move-in",
+       "sees": [
+        "office"
+       ],
+       "what": "Hand in what your church needs to move over: your people list, giving setup, files and the rest.",
+       "words": [
+        "move in",
+        "moving in",
+        "move over",
+        "hand in",
+        "handing in",
+        "upload",
+        "people list",
+        "giving export",
+        "getting started",
+        "onboarding"
+       ],
+       "answers": [
+        {
+         "id": "hand-in-something-for-the-move",
+         "q": "Hand in something for the move",
+         "a": "Open the item, fill in its lines or press Choose files, then press Hand in. We look it over and mark it checked, or ask for a change with a note.",
+         "words": [
+          "upload our people list",
+          "send our files",
+          "getting started",
+          "move over from another system"
+         ]
+        },
+        {
+         "id": "fix-something-we-were-asked-to-change",
+         "q": "Fix something we were asked to change",
+         "a": "The item shows We asked for a change with a note. Open it, fix what the note says, and press Hand in again.",
+         "words": [
+          "change requested",
+          "sent back",
+          "needs a change"
+         ]
+        },
+        {
+         "id": "save-a-move-in-item-and-finish-it-later",
+         "q": "Save a move-in item and finish it later",
+         "a": "Fill in what you have and press Save for later. It stays as you left it until you press Hand in.",
+         "words": [
+          "not finished yet",
+          "come back later"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:my-week",
+       "tab": "operate",
+       "sub": "my-week",
+       "name": "My week",
+       "sees": "every",
+       "what": "See what is yours this week: your next thing, your assignments and the jobs you hold, day by day.",
+       "words": [
+        "my week",
+        "mine"
+       ],
+       "answers": [
+        {
+         "id": "mark-an-assignment-done",
+         "q": "Mark an assignment done",
+         "a": "Under Your assignments, press Done beside it. If you pressed it by mistake, press Not done to open it again.",
+         "words": [
+          "finish a task",
+          "check off my work",
+          "complete an assignment"
+         ]
+        },
+        {
+         "id": "say-i-am-stuck-on-an-assignment",
+         "q": "Say I am stuck on an assignment",
+         "a": "Press Stuck beside it, type what is in the way, and press Mark stuck. Whoever is over you can see it.",
+         "words": [
+          "need help with a task",
+          "waiting on someone",
+          "blocked"
+         ]
+        },
+        {
+         "id": "hear-a-walk-through-of-my-week",
+         "q": "Hear a walk-through of my week",
+         "a": "Under How your week goes, press Walk me through it. It plays each job you hold, day by day, and opens its page as you listen.",
+         "words": [
+          "what are my jobs",
+          "show me my week",
+          "what do i do each day"
+         ]
+        },
+        {
+         "id": "move-one-of-my-jobs-to-a-different-day",
+         "q": "Move one of my jobs to a different day",
+         "a": "Under How your week goes, press Pick your days and choose the day each job falls on. Your week and the office team’s page follow it.",
+         "words": [
+          "change my days",
+          "change which day i do something"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:team",
+       "tab": "operate",
+       "sub": "team",
+       "name": "Office team",
+       "sees": [],
+       "what": "See each office login’s week, what is late, and hand out assignments.",
+       "words": [
+        "office team",
+        "my team",
+        "admin team",
+        "staff",
+        "their weeks",
+        "who is late",
+        "oversee"
+       ],
+       "answers": [
+        {
+         "id": "give-someone-an-assignment",
+         "q": "Give someone an assignment",
+         "a": "Under Assignments, press Give an assignment in the person’s column. Fill in What, By when and Done when, then press Give it.",
+         "words": [
+          "hand out work",
+          "assign a task to staff",
+          "delegate"
+         ]
+        },
+        {
+         "id": "see-someones-week-the-way-they-see-it",
+         "q": "See someone’s week the way they see it",
+         "a": "On their card under Each login, press See their week. It opens My week as that person, and nothing changes for them.",
+         "words": [
+          "check on a staff member",
+          "who is late",
+          "look at their tasks"
+         ]
+        },
+        {
+         "id": "start-a-new-persons-first-assignment",
+         "q": "Start a new person’s first assignment",
+         "a": "In their column under Assignments, press Start their first assignment. Their column then shows how far along they are.",
+         "words": [
+          "onboard a new admin",
+          "first week for new staff"
+         ]
+        },
+        {
+         "id": "send-a-stuck-assignment-up",
+         "q": "Send a stuck assignment up",
+         "a": "On the stuck item in the person’s column, press Send up. Whoever is over you hears about it.",
+         "words": [
+          "escalate",
+          "pass it to the pastor"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:dashboard",
+       "tab": "operate",
+       "sub": "dashboard",
+       "name": "Needs you",
+       "sees": "every",
+       "what": "One list of what is waiting on you, worst first, with a button on each row.",
+       "words": [
+        "needs you",
+        "dashboard",
+        "home",
+        "urgent",
+        "attention"
+       ],
+       "answers": [
+        {
+         "id": "change-the-order-of-the-needs-you-list",
+         "q": "Change the order of the Needs you list",
+         "a": "Press Customize and use the up and down arrows to move a kind of work higher or lower. Untick one to hide it, then press Done.",
+         "words": [
+          "hide a section",
+          "reorder the list",
+          "customize"
+         ]
+        },
+        {
+         "id": "deal-with-something-on-the-list",
+         "q": "Deal with something on the list",
+         "a": "Press the button on its row, such as Review for something waiting on your approval or Open tasks for a late task. It opens the page where that work is done.",
+         "words": [
+          "what is waiting on me",
+          "urgent",
+          "overdue"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:overview",
+       "tab": "operate",
+       "sub": "overview",
+       "name": "The week",
+       "sees": [
+        "office"
+       ],
+       "what": "Read the church’s week on one page: Sunday, people and care, giving and messages waiting.",
+       "words": [],
+       "answers": [
+        {
+         "id": "see-what-the-church-needs-this-week",
+         "q": "See what the church needs this week",
+         "a": "Read the card at the top. It names the one next thing and has a button that opens the page for it.",
+         "words": [
+          "church overview",
+          "how is the week going",
+          "what is next"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:reports",
+       "tab": "operate",
+       "sub": "reports",
+       "name": "Reports",
+       "sees": [
+        "office"
+       ],
+       "what": "See the year’s numbers for people, Sunday, groups, serving, giving, care and events.",
+       "words": [
+        "reports",
+        "report",
+        "annual report",
+        "statistics",
+        "stats",
+        "numbers",
+        "denomination",
+        "denomination report",
+        "year end report",
+        "year-end report",
+        "average attendance"
+       ],
+       "answers": [
+        {
+         "id": "make-the-annual-report",
+         "q": "Make the annual report",
+         "a": "Pick the year, then press Make the annual report. Read the preview and press Print the annual report.",
+         "words": [
+          "annual meeting",
+          "yearly report",
+          "print the year’s numbers"
+         ]
+        },
+        {
+         "id": "export-the-years-numbers-for-a-denomination-form",
+         "q": "Export the year’s numbers for a denomination form",
+         "a": "Pick the year and press Export the numbers. It saves a spreadsheet (CSV) with each number and where it came from.",
+         "words": [
+          "denomination report",
+          "download the statistics",
+          "csv",
+          "average attendance"
+         ]
+        },
+        {
+         "id": "see-an-earlier-year",
+         "q": "See an earlier year",
+         "a": "Beside The year, use the Year box or the arrows next to it. It shows this year and the four before it.",
+         "words": [
+          "last year’s numbers",
+          "past years"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:briefing",
+       "tab": "grow",
+       "sub": "briefing",
+       "name": "Briefing",
+       "sees": [
+        "office"
+       ],
+       "what": "Read Chief’s weekly letter about the last seven days and what to do next.",
+       "words": [
+        "briefing",
+        "brief",
+        "weekly read"
+       ],
+       "answers": [
+        {
+         "id": "get-a-new-weekly-briefing",
+         "q": "Get a new weekly briefing",
+         "a": "Press Generate New Briefing. Chief reads the last seven days and writes a new letter, which opens when it is ready.",
+         "words": [
+          "weekly read",
+          "summary of the week",
+          "what happened this week"
+         ]
+        },
+        {
+         "id": "read-an-older-briefing",
+         "q": "Read an older briefing",
+         "a": "Press Older to go back one letter and Newer to come forward again.",
+         "words": [
+          "last week’s briefing",
+          "past briefings"
+         ]
+        },
+        {
+         "id": "talk-the-briefing-over-with-chief",
+         "q": "Talk the briefing over with Chief",
+         "a": "Press Discuss with Chief. Chief opens with a question about this week’s briefing already asked.",
+         "words": [
+          "ask chief about the briefing"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sunday",
+   "label": "Sunday",
+   "groups": [
+    {
+     "caption": "This week",
+     "pages": [
+      {
+       "key": "operate:sunday-home",
+       "tab": "operate",
+       "sub": "sunday-home",
+       "name": "This Sunday",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "See the next Sunday, check it is ready, and open, rehearse or run it.",
+       "words": [
+        "sunday",
+        "this sunday",
+        "service",
+        "this week"
+       ],
+       "answers": [
+        {
+         "id": "check-that-sunday-is-ready",
+         "q": "Check that Sunday is ready",
+         "a": "The list called Ready for Sunday? shows what is left to fix. Press the button on a row and it opens where that fix is made.",
+         "words": [
+          "is the service ready",
+          "what is missing for sunday",
+          "checklist"
+         ]
+        },
+        {
+         "id": "run-sundays-slides",
+         "q": "Run Sunday’s slides",
+         "a": "Press Run it on the next Sunday’s card. On a phone the same button says Remote.",
+         "words": [
+          "start the service",
+          "go live on the screens",
+          "present"
+         ]
+        },
+        {
+         "id": "start-next-weeks-sunday-from-this-one",
+         "q": "Start next week’s Sunday from this one",
+         "a": "Under the date of the Sunday after, press Copy this Sunday. It keeps the same order and leaves the songs and passages for you to pick.",
+         "words": [
+          "plan next sunday",
+          "copy the service",
+          "repeat last week"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:serve-order",
+       "tab": "operate",
+       "sub": "serve-order",
+       "name": "Order of service",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "See the order for Sunday with times, who is on each item, and a note for each team.",
+       "words": [
+        "order of service",
+        "run sheet",
+        "service plan",
+        "setlist",
+        "run of show"
+       ],
+       "answers": [
+        {
+         "id": "print-the-run-sheet",
+         "q": "Print the run sheet",
+         "a": "Pick the service at the top and press Print the run sheet. It prints with a column for each team.",
+         "words": [
+          "run of show",
+          "service plan printout",
+          "print the order of service"
+         ]
+        },
+        {
+         "id": "add-a-note-for-a-team-on-an-item",
+         "q": "Add a note for a team on an item",
+         "a": "Tap the item, press Add a team note, choose who it is For, type the note and press Save.",
+         "words": [
+          "note for the band",
+          "note for sound",
+          "cue for the booth"
+         ]
+        },
+        {
+         "id": "change-the-songs-or-items-in-the-order",
+         "q": "Change the songs or items in the order",
+         "a": "Press Open in ChurchSavvy and change them in that Sunday’s plan. This page reads the same plan, so the change shows here.",
+         "words": [
+          "edit the setlist",
+          "add a song to the service",
+          "reorder the service"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:serve-schedule",
+       "tab": "operate",
+       "sub": "serve-schedule",
+       "name": "Who serves when",
+       "sees": [
+        "worship_media",
+        "kids_youth",
+        "people_care"
+       ],
+       "what": "Fill the worship and production teams’ places for the next five Sundays.",
+       "words": [
+        "volunteer",
+        "volunteers",
+        "serve",
+        "roster",
+        "schedule"
+       ],
+       "answers": [
+        {
+         "id": "fill-the-open-spots-for-the-coming-sundays",
+         "q": "Fill the open spots for the coming Sundays",
+         "a": "Press Fill the next 5 Sundays (the number matches the Sundays shown). Chief asks people who are trained, free and not away, and you can press Take them back before anything goes out.",
+         "words": [
+          "schedule the worship team",
+          "who is serving",
+          "roster the band",
+          "auto fill"
+         ]
+        },
+        {
+         "id": "ask-one-person-to-serve",
+         "q": "Ask one person to serve",
+         "a": "Tap an open spot (it says + Fill), then press Ask beside a name in the list of who could take it.",
+         "words": [
+          "put someone on the schedule",
+          "assign a volunteer",
+          "fill one spot"
+         ]
+        },
+        {
+         "id": "mark-that-someone-said-yes-in-person",
+         "q": "Mark that someone said yes in person",
+         "a": "Tap their spot and press They said yes. If they told you no, press They can’t and ask someone else.",
+         "words": [
+          "confirm a volunteer",
+          "they answered",
+          "can’t make it"
+         ]
+        },
+        {
+         "id": "offer-a-spot-to-the-whole-team",
+         "q": "Offer a spot to the whole team",
+         "a": "Tap the open spot and press Offer it to the whole team. Everyone on the team who is trained and free gets it, and the first yes takes it.",
+         "words": [
+          "open call",
+          "anyone available",
+          "find a sub"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:kids",
+       "tab": "operate",
+       "sub": "kids",
+       "name": "Kids check-in",
+       "sees": [
+        "kids_youth"
+       ],
+       "what": "Check children into their rooms with a name tag and release them at pickup with a code.",
+       "words": [
+        "kids",
+        "children",
+        "child",
+        "check in",
+        "check-in",
+        "checkin",
+        "pickup",
+        "nursery"
+       ],
+       "answers": [
+        {
+         "id": "check-a-child-in",
+         "q": "Check a child in",
+         "a": "On Check in, find the family by name or the last 4 of their phone, tick the children, choose Who brought them and press the Check in button. You get a pickup code and can print the name tags and pickup stub.",
+         "words": [
+          "drop off a child",
+          "nursery check in",
+          "print a name tag",
+          "children’s ministry"
+         ]
+        },
+        {
+         "id": "release-a-child-at-pickup",
+         "q": "Release a child at pickup",
+         "a": "On Pick up, type the Pickup code from the parent’s stub or text and press Look up. Tick who is going home, choose who is picking up, and press Release.",
+         "words": [
+          "pick up a child",
+          "check a child out",
+          "pickup code",
+          "send a child home"
+         ]
+        },
+        {
+         "id": "see-who-is-in-each-room",
+         "q": "See who is in each room",
+         "a": "Open In the rooms. Each room lists the children in it with allergies flagged, and you can reprint a tag or undo a check-in there.",
+         "words": [
+          "room count",
+          "which kids are here",
+          "allergies",
+          "undo a check-in"
+         ]
+        },
+        {
+         "id": "start-check-in-when-no-service-is-set-up-yet",
+         "q": "Start check-in when no service is set up yet",
+         "a": "Press Start this week’s check-in. It makes this week’s service in Services & Events, and you can check children in to it right away.",
+         "words": [
+          "nothing to check in to",
+          "no service showing"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:worship-announcements",
+       "tab": "operate",
+       "sub": "worship-announcements",
+       "name": "Announcements",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Make announcements once, choose the days and screens they show on, and approve ministry requests.",
+       "words": [
+        "announcement",
+        "announcements",
+        "slides"
+       ],
+       "answers": [
+        {
+         "id": "make-a-new-announcement",
+         "q": "Make a new announcement",
+         "a": "Press New announcement, fill in the Title, The day it happens and Where it shows, then press Done. It shows on the days you pick and retires by itself the day after its last day.",
+         "words": [
+          "add a slide",
+          "post an event",
+          "announcement for sunday",
+          "flyer on the screen"
+         ]
+        },
+        {
+         "id": "approve-an-announcement-a-ministry-sent",
+         "q": "Approve an announcement a ministry sent",
+         "a": "Under Waiting for you, press Put it on. To edit it first press Change it first, or press Not this time to leave it off.",
+         "words": [
+          "ministry request",
+          "announcement request",
+          "decline an announcement"
+         ]
+        },
+        {
+         "id": "take-an-announcement-down",
+         "q": "Take an announcement down",
+         "a": "Open the announcement and press Take it off the board, then Take it off. It leaves every screen.",
+         "words": [
+          "remove an announcement",
+          "delete a slide",
+          "cancel an event notice"
+         ]
+        },
+        {
+         "id": "bring-events-in-from-the-church-calendar",
+         "q": "Bring events in from the church calendar",
+         "a": "Press Bring in from the calendar. The events you bring over are added to the board.",
+         "words": [
+          "calendar events as announcements",
+          "import events"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:print-materials",
+       "tab": "build",
+       "sub": "print-materials",
+       "name": "Bulletins & print",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Generate printable designs in your church’s colors, then print or download them.",
+       "words": [
+        "bulletin",
+        "bulletins",
+        "print",
+        "program"
+       ],
+       "answers": [
+        {
+         "id": "make-a-connect-card-to-print",
+         "q": "Make a connect card to print",
+         "a": "Pick Connect Card and press Generate, then press Print when the preview shows. To change it, type a line under Feedback or direction and press Regenerate.",
+         "words": [
+          "visitor card",
+          "guest card",
+          "bulletin insert",
+          "welcome card"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Plan and look back",
+     "pages": [
+      {
+       "key": "operate:@roster",
+       "tab": "operate",
+       "sub": "@roster",
+       "name": "Services & Events",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Plan each service or event: who is coming, who is serving, and which spots are still open.",
+       "words": [],
+       "answers": [
+        {
+         "id": "add-a-service-or-event",
+         "q": "Add a service or event",
+         "a": "Press the Create button at the top of the page and fill in the form. The new one then shows under Upcoming.",
+         "words": [
+          "plan a service",
+          "new event",
+          "add a bible study",
+          "schedule a gathering"
+         ]
+        },
+        {
+         "id": "set-the-serving-roles-a-service-needs",
+         "q": "Set the serving roles a service needs",
+         "a": "On its card press Set up serving, or Roles if it already has some. Add each one with Add a role and press Save roles.",
+         "words": [
+          "greeters needed",
+          "how many ushers",
+          "serving spots",
+          "volunteer roles"
+         ]
+        },
+        {
+         "id": "put-someone-on-the-roster",
+         "q": "Put someone on the roster",
+         "a": "At the bottom of the card, type a name or pick a member, choose Attending or a serving role, and press Add.",
+         "words": [
+          "add an attendee",
+          "sign someone up",
+          "who is coming",
+          "rsvp"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:sundays",
+       "tab": "operate",
+       "sub": "sundays",
+       "name": "Sundays",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Start, open, rehearse and run every Sunday’s plan, and keep your own templates.",
+       "words": [
+        "sundays",
+        "past sundays",
+        "rehearse"
+       ],
+       "answers": [
+        {
+         "id": "start-a-new-sundays-plan",
+         "q": "Start a new Sunday’s plan",
+         "a": "Under Start a new Sunday pick a starting point, such as a starter, Last Sunday again or A blank Sunday. Set the Name and when it Starts, then press Make the plan.",
+         "words": [
+          "plan a service",
+          "build the slides for sunday",
+          "new service plan",
+          "past sundays"
+         ]
+        },
+        {
+         "id": "run-a-sunday-that-is-coming-up",
+         "q": "Run a Sunday that is coming up",
+         "a": "Under Coming up, press Run beside that Sunday. Press the row itself to open its plan instead.",
+         "words": [
+          "go live",
+          "start the slides",
+          "present the service"
+         ]
+        },
+        {
+         "id": "put-a-verse-or-song-up-without-a-plan",
+         "q": "Put a verse or song up without a plan",
+         "a": "Press the put something up on the spot link near the bottom of the page. When no Sunday is planned, the button at the top says Put something up now.",
+         "words": [
+          "quick verse",
+          "show a scripture now",
+          "last minute slide"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:serve-teams",
+       "tab": "operate",
+       "sub": "serve-teams",
+       "name": "Teams",
+       "sees": [
+        "worship_media",
+        "kids_youth",
+        "people_care"
+       ],
+       "what": "Set up the worship and production teams: their places, who is trained, and how often each serves.",
+       "words": [
+        "team",
+        "teams",
+        "ministry",
+        "ministries"
+       ],
+       "answers": [
+        {
+         "id": "add-a-sunday-team",
+         "q": "Add a Sunday team",
+         "a": "Press Add a team, pick a team you have or A new team, choose its usual places and press Add the team.",
+         "words": [
+          "new worship team",
+          "create a ministry team",
+          "set up the band"
+         ]
+        },
+        {
+         "id": "add-a-person-to-a-team",
+         "q": "Add a person to a team",
+         "a": "Open the team and press Add a person. Type their Name and Email, tick the places under Can serve on, and press the Add button.",
+         "words": [
+          "new volunteer",
+          "put someone on the worship team",
+          "add a singer"
+         ]
+        },
+        {
+         "id": "choose-who-is-trained-for-a-place",
+         "q": "Choose who is trained for a place",
+         "a": "Open the team and press Choose people on that place. Add people, mark each one Trained or Learning, and press Save.",
+         "words": [
+          "who can run sound",
+          "mark someone trained",
+          "training"
+         ]
+        },
+        {
+         "id": "limit-how-often-each-person-is-asked-to-serve",
+         "q": "Limit how often each person is asked to serve",
+         "a": "Open the team and under Turns pick 1, 2 or 3 a month, or No limit. Chief never asks anyone for more when it fills the Sundays.",
+         "words": [
+          "how many sundays a month",
+          "avoid burnout",
+          "serving limit"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:attendance",
+       "tab": "operate",
+       "sub": "attendance",
+       "name": "Attendance & check-in",
+       "sees": [
+        "kids_youth",
+        "people_care",
+        "worship_media"
+       ],
+       "what": "Record who was at a service, by name and by headcount, and turn on Sunday check-in.",
+       "words": [
+        "attendance",
+        "headcount",
+        "how many came"
+       ],
+       "answers": [
+        {
+         "id": "record-sundays-headcount",
+         "q": "Record Sunday’s headcount",
+         "a": "Pick the service at the top, then under Headcount type the number for each area or use the plus and minus buttons. Add another area, like Kids or Online, with the buttons underneath.",
+         "words": [
+          "how many came",
+          "count the room",
+          "attendance number",
+          "head count"
+         ]
+        },
+        {
+         "id": "check-someone-in-by-name",
+         "q": "Check someone in by name",
+         "a": "Under Check people in, type their name in the Find someone box and press Check in beside them.",
+         "words": [
+          "mark someone present",
+          "who was here",
+          "take roll"
+         ]
+        },
+        {
+         "id": "add-a-first-time-guest",
+         "q": "Add a first-time guest",
+         "a": "Under A guest, type their name, leave First-time guest ticked and press Check in. They are added to Members as a guest so someone follows up.",
+         "words": [
+          "new visitor",
+          "visitor came today",
+          "first time here"
+         ]
+        },
+        {
+         "id": "let-members-check-themselves-in-on-sunday",
+         "q": "Let members check themselves in on Sunday",
+         "a": "In the Sunday check-in card, set when the service starts and press Turn on Sunday check-in. Then press Download for the slide to put the code on your welcome slide.",
+         "words": [
+          "self check-in",
+          "check in from my phone",
+          "qr code for check-in",
+          "online attendance"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:stations",
+       "tab": "operate",
+       "sub": "stations",
+       "name": "Check-in stations",
+       "sees": [
+        "kids_youth"
+       ],
+       "what": "Set up welcome-desk tablets and family kiosks for kids check-in.",
+       "words": [
+        "station",
+        "stations",
+        "kiosk",
+        "tablet",
+        "self check-in"
+       ],
+       "answers": [
+        {
+         "id": "set-up-a-check-in-tablet",
+         "q": "Set up a check-in tablet",
+         "a": "Press Add a station, choose Welcome desk or Self check-in, set a Name and Station PIN, and press Add station and get a pairing code. On the tablet, open the station address shown and type the code.",
+         "words": [
+          "kiosk",
+          "self check-in",
+          "pair a tablet",
+          "welcome desk ipad"
+         ]
+        },
+        {
+         "id": "pair-a-replacement-tablet",
+         "q": "Pair a replacement tablet",
+         "a": "Press Pair a new tablet beside the station and type the new code on the tablet. The old tablet stops working at once.",
+         "words": [
+          "new tablet",
+          "tablet broke",
+          "pairing code expired"
+         ]
+        },
+        {
+         "id": "change-a-stations-pin",
+         "q": "Change a station’s PIN",
+         "a": "Press the key button beside the station, type the new PIN (4 to 8 digits) and press Save PIN.",
+         "words": [
+          "forgot the pin",
+          "reset the pin"
+         ]
+        },
+        {
+         "id": "remove-a-lost-or-old-tablet",
+         "q": "Remove a lost or old tablet",
+         "a": "Press the trash button beside the station, then Remove station. That tablet can’t check anyone in after that.",
+         "words": [
+          "tablet was lost",
+          "delete a station",
+          "stop a kiosk"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Volunteers",
+     "pages": [
+      {
+       "key": "operate:volunteer-teams",
+       "tab": "operate",
+       "sub": "volunteer-teams",
+       "name": "Volunteer teams",
+       "sees": [
+        "office"
+       ],
+       "what": "Set up greeters, ushers, parking and other volunteer teams: places, who is trained, how often.",
+       "words": [
+        "volunteer team",
+        "volunteer teams",
+        "greeters",
+        "ushers",
+        "hospitality",
+        "parking team",
+        "outreach team"
+       ],
+       "answers": [
+        {
+         "id": "add-a-volunteer-team",
+         "q": "Add a volunteer team",
+         "a": "Press Add a team, pick a team you have or A new team, choose its usual places and press Add the team.",
+         "words": [
+          "new greeter team",
+          "set up ushers",
+          "hospitality team",
+          "parking team"
+         ]
+        },
+        {
+         "id": "add-a-volunteer-to-a-team",
+         "q": "Add a volunteer to a team",
+         "a": "Open the team and press Add a person. Type their Name and Email, tick the places under Can serve on, and press the Add button.",
+         "words": [
+          "new volunteer",
+          "sign up a greeter",
+          "someone wants to serve"
+         ]
+        },
+        {
+         "id": "choose-who-is-trained-for-a-place-volunteer-teams",
+         "q": "Choose who is trained for a place",
+         "a": "Open the team and press Choose people on that place. Add people, mark each one Trained or Learning, and press Save.",
+         "words": [
+          "who can serve where",
+          "mark a volunteer trained"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:volunteer-schedule",
+       "tab": "operate",
+       "sub": "volunteer-schedule",
+       "name": "Volunteer schedule",
+       "sees": [
+        "office"
+       ],
+       "what": "Fill the volunteer teams’ places for the next five Sundays.",
+       "words": [
+        "volunteer schedule",
+        "volunteers schedule",
+        "who volunteers",
+        "usher schedule",
+        "greeter schedule"
+       ],
+       "answers": [
+        {
+         "id": "fill-the-volunteer-spots-for-the-coming-sundays",
+         "q": "Fill the volunteer spots for the coming Sundays",
+         "a": "Press Fill the next 5 Sundays (the number matches the Sundays shown). Chief asks people who are trained, free and not away, and you can press Take them back before anything goes out.",
+         "words": [
+          "schedule the greeters",
+          "usher schedule",
+          "who is volunteering",
+          "auto fill"
+         ]
+        },
+        {
+         "id": "ask-one-volunteer-to-serve",
+         "q": "Ask one volunteer to serve",
+         "a": "Tap an open spot (it says + Fill), then press Ask beside a name in the list of who could take it.",
+         "words": [
+          "put a greeter on sunday",
+          "fill one spot",
+          "find a sub"
+         ]
+        },
+        {
+         "id": "see-the-worship-teams-on-the-same-schedule",
+         "q": "See the worship teams on the same schedule",
+         "a": "Press Whole Sunday at the top. It shows every team to read, and each team is changed from its own page.",
+         "words": [
+          "whole sunday",
+          "all the teams",
+          "everyone serving"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:serving",
+       "tab": "operate",
+       "sub": "serving",
+       "name": "Background checks & hours",
+       "sees": [
+        "worship_media",
+        "kids_youth",
+        "people_care"
+       ],
+       "what": "Track background checks for people who serve with kids or youth, and see serving hours.",
+       "words": [
+        "hours",
+        "serving hours",
+        "volunteer hours",
+        "background check",
+        "background checks",
+        "safety check",
+        "check date",
+        "clearance"
+       ],
+       "answers": [
+        {
+         "id": "record-a-background-check-that-came-back",
+         "q": "Record a background check that came back",
+         "a": "Under Background checks press Record beside the person, enter The day it came back clear, and press Record the check.",
+         "words": [
+          "clearance",
+          "safety check date",
+          "check cleared",
+          "background check done"
+         ]
+        },
+        {
+         "id": "remind-people-whose-check-is-due",
+         "q": "Remind people whose check is due",
+         "a": "Press Send check reminders, then confirm. Each person gets a phone alert, an email or both, with your check link if you have set one.",
+         "words": [
+          "overdue background check",
+          "expired check",
+          "check reminder"
+         ]
+        },
+        {
+         "id": "add-hours-for-a-work-day-or-a-mission-trip",
+         "q": "Add hours for a work day or a mission trip",
+         "a": "Under Outside the schedule press Add hours. Pick the person, the Day, the Hours and What they did, then press Add hours.",
+         "words": [
+          "volunteer hours",
+          "log serving time",
+          "hours served"
+         ]
+        },
+        {
+         "id": "set-the-link-people-use-to-get-a-check",
+         "q": "Set the link people use to get a check",
+         "a": "In the small line under Send check reminders, press Change. Enter Your check link and press Save.",
+         "words": [
+          "check link",
+          "how long a check lasts"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "ChurchSavvy",
+     "pages": [
+      {
+       "key": "operate:worship-media",
+       "tab": "operate",
+       "sub": "worship-media",
+       "name": "Screen pictures & videos",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Keep the pictures and videos for Sunday’s screens: backgrounds, flyers and video announcements.",
+       "words": [
+        "backgrounds",
+        "background",
+        "slides pictures",
+        "video announcement",
+        "screen pictures",
+        "flyers for the screen",
+        "churchsavvy"
+       ],
+       "answers": [
+        {
+         "id": "add-a-picture-or-video-for-the-screens",
+         "q": "Add a picture or video for the screens",
+         "a": "Press Add pictures or videos and choose the files. Pictures can be PNG, JPG or WebP up to 20 MB, and videos MP4, MOV or WebM up to 100 MB.",
+         "words": [
+          "upload a background",
+          "upload a flyer",
+          "video announcement",
+          "slide background"
+         ]
+        },
+        {
+         "id": "remove-a-picture-or-video",
+         "q": "Remove a picture or video",
+         "a": "Press the trash button under it, then Take it out. Any Sunday or look that used it shows nothing in its place.",
+         "words": [
+          "delete a background",
+          "delete a video"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:worship-setup",
+       "tab": "operate",
+       "sub": "worship-setup",
+       "name": "Worship setup",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Set up ChurchSavvy once: screens, the team, your look, songs, and phones and remotes.",
+       "words": [
+        "churchsavvy",
+        "screens",
+        "setup",
+        "songs",
+        "song",
+        "worship",
+        "chords",
+        "lyrics",
+        "ccli",
+        "confidence screen"
+       ],
+       "answers": [
+        {
+         "id": "add-a-song-to-the-library",
+         "q": "Add a song to the library",
+         "a": "Open Songs and press Find a song. Type the song’s name, bring the words in with Take a photo, Use a file or Paste the words, and press Add to the library.",
+         "words": [
+          "new song",
+          "lyrics",
+          "hymn",
+          "ccli"
+         ]
+        },
+        {
+         "id": "add-a-screen-or-projector",
+         "q": "Add a screen or projector",
+         "a": "Open Screens and under Add a screen press the kind you have, such as In the room, Livestream or Lobby TV. Each screen gets its own link to open on the computer that drives it.",
+         "words": [
+          "projector",
+          "lobby tv",
+          "livestream lower third",
+          "confidence monitor"
+         ]
+        },
+        {
+         "id": "invite-someone-to-the-worship-team",
+         "q": "Invite someone to the worship team",
+         "a": "Open Team and roles and press Invite someone. Enter Their name and Their email, then press Invite.",
+         "words": [
+          "add a booth operator",
+          "give someone the slides",
+          "worship leader access"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "people",
+   "label": "People",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:contacts",
+       "tab": "operate",
+       "sub": "contacts",
+       "name": "Members",
+       "sees": [
+        "people_care"
+       ],
+       "what": "See everyone on the roll, add people, and text, email or keep a note on anyone.",
+       "words": [
+        "member",
+        "members",
+        "people",
+        "directory",
+        "contact",
+        "contacts",
+        "crm"
+       ],
+       "answers": [
+        {
+         "id": "add-a-member-or-a-guest",
+         "q": "Add a member or a guest",
+         "a": "Press Add a person, type the name, mobile and email, and choose A guest or A member. Press Add to the roll and their page opens.",
+         "words": [
+          "new member",
+          "add a person",
+          "add someone",
+          "add a visitor",
+          "new person"
+         ]
+        },
+        {
+         "id": "bring-everyone-over-from-a-spreadsheet",
+         "q": "Bring everyone over from a spreadsheet",
+         "a": "Press Import at the top of the roll, press Choose a file and pick your spreadsheet. When it finishes, press Done and the roll shows the new people.",
+         "words": [
+          "import members",
+          "upload a list",
+          "csv",
+          "move people from another system"
+         ]
+        },
+        {
+         "id": "text-or-email-a-few-people-at-once",
+         "q": "Text or email a few people at once",
+         "a": "Tick the box beside each name, then press Text them or Email. Chief drafts one message to those people and shows it to you before anything sends.",
+         "words": [
+          "message several people",
+          "group text",
+          "bulk email",
+          "pick people"
+         ]
+        },
+        {
+         "id": "keep-a-note-on-someone",
+         "q": "Keep a note on someone",
+         "a": "Open the person on the roll and press Note. Type what happened or what to remember, then press Keep the note.",
+         "words": [
+          "add a note",
+          "log a call",
+          "record a visit",
+          "notes on a member"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:directory",
+       "tab": "operate",
+       "sub": "directory",
+       "name": "Member directory",
+       "sees": [
+        "people_care",
+        "office"
+       ],
+       "what": "Turn the member directory on or off, see who is listed, and take someone out.",
+       "words": [
+        "directory",
+        "church directory",
+        "phone list",
+        "listed"
+       ],
+       "answers": [
+        {
+         "id": "turn-the-member-directory-on",
+         "q": "Turn the member directory on",
+         "a": "Press the Off switch beside Member directory so it reads On, which only the owner can do. Members can then add themselves from the app.",
+         "words": [
+          "church directory",
+          "phone list",
+          "let members see each other"
+         ]
+        },
+        {
+         "id": "take-someone-out-of-the-directory",
+         "q": "Take someone out of the directory",
+         "a": "Find the person under Listed and press Take out. Type a reason (they see it in the app) and press Take out of the directory.",
+         "words": [
+          "remove from directory",
+          "unlist a member",
+          "hide someone"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:families",
+       "tab": "operate",
+       "sub": "families",
+       "name": "Families",
+       "sees": [
+        "people_care"
+       ],
+       "what": "Keep each household, its children, their allergies and who may pick them up.",
+       "words": [
+        "family",
+        "families",
+        "household",
+        "households"
+       ],
+       "answers": [
+        {
+         "id": "add-a-family",
+         "q": "Add a family",
+         "a": "Press Add a family, pick a parent or guardian, check the family name and press Add family. Then open the family to add the other parent, the children and pickups.",
+         "words": [
+          "new household",
+          "add a household",
+          "set up a family"
+         ]
+        },
+        {
+         "id": "add-a-child-to-a-family",
+         "q": "Add a child to a family",
+         "a": "Open the family and press Add a child. Fill in the name, birthday, grade, usual room and allergies, then press Add child.",
+         "words": [
+          "new child",
+          "kids allergies",
+          "child’s room",
+          "add a kid"
+         ]
+        },
+        {
+         "id": "add-someone-allowed-to-pick-up-a-child",
+         "q": "Add someone allowed to pick up a child",
+         "a": "Open the family and find Also allowed to pick up. Type the name, relationship and mobile, then press Add.",
+         "words": [
+          "pickup list",
+          "authorized pickup",
+          "grandma picks up",
+          "who can pick up"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:groups",
+       "tab": "operate",
+       "sub": "groups",
+       "name": "Groups",
+       "sees": [
+        "groups_classes"
+       ],
+       "what": "See every group, who leads it and who comes, and log its meetings.",
+       "words": [
+        "group",
+        "groups",
+        "small group",
+        "bible study"
+       ],
+       "answers": [
+        {
+         "id": "start-a-new-group",
+         "q": "Start a new group",
+         "a": "Press New group, pick the kind, give it a name, when and where it meets and how people join, then press Add group.",
+         "words": [
+          "add a small group",
+          "new bible study",
+          "create a team",
+          "new ministry"
+         ]
+        },
+        {
+         "id": "add-someone-to-a-group",
+         "q": "Add someone to a group",
+         "a": "Open the group and type their name in the Add someone from Members box. Press Add beside the right person.",
+         "words": [
+          "put a member in a group",
+          "join a group",
+          "group roster"
+         ]
+        },
+        {
+         "id": "record-who-came-to-a-group-meeting",
+         "q": "Record who came to a group meeting",
+         "a": "Open the group and press Log a meeting. Pick the day, tick who came (or press Everyone) and press Log meeting.",
+         "words": [
+          "group attendance",
+          "take attendance for a group",
+          "who came"
+         ]
+        },
+        {
+         "id": "make-someone-a-group-leader",
+         "q": "Make someone a group leader",
+         "a": "Open the group, find the person under People and press Make leader. Press Make member to change them back.",
+         "words": [
+          "group leader",
+          "assign a leader",
+          "change the leader"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:course-studio",
+       "tab": "build",
+       "sub": "course-studio",
+       "name": "Classes & discipleship",
+       "sees": [
+        "groups_classes"
+       ],
+       "what": "Write the church’s classes, add people to them and see how far each person has come.",
+       "words": [
+        "class",
+        "classes",
+        "discipleship",
+        "course",
+        "lesson"
+       ],
+       "answers": [
+        {
+         "id": "start-a-new-class",
+         "q": "Start a new class",
+         "a": "Press New class, name it and choose how its lessons open. Or press Ask Chief to draft one and Chief writes the lessons for you to approve.",
+         "words": [
+          "membership class",
+          "new believers course",
+          "baptism class",
+          "write a course"
+         ]
+        },
+        {
+         "id": "add-people-to-a-class",
+         "q": "Add people to a class",
+         "a": "Open the class and press Add people. It opens the class’s Students part, where you pick the person and press Enroll.",
+         "words": [
+          "enroll a member",
+          "sign someone up for a class",
+          "class roster"
+         ]
+        },
+        {
+         "id": "publish-a-class",
+         "q": "Publish a class",
+         "a": "Open the class and press Publish the class. If the button reads Finish the lessons to publish, press Edit lessons and write them first.",
+         "words": [
+          "make a class live",
+          "open a class",
+          "class sign-up link"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "New and in need",
+     "pages": [
+      {
+       "key": "operate:follow-up",
+       "tab": "operate",
+       "sub": "follow-up",
+       "name": "Follow-up board",
+       "sees": [
+        "people_care"
+       ],
+       "what": "See every guest who filled in a card, who has them, and which step they are on.",
+       "words": [
+        "follow up",
+        "follow-up",
+        "guest",
+        "guests",
+        "visitor",
+        "first time",
+        "welcome",
+        "connect card",
+        "new people"
+       ],
+       "answers": [
+        {
+         "id": "hand-a-guest-to-a-leader",
+         "q": "Hand a guest to a leader",
+         "a": "Open the person on the board, choose a name under Hand to and press Hand on. Chief tells that leader.",
+         "words": [
+          "assign a visitor",
+          "who follows up",
+          "give a guest to someone",
+          "reassign"
+         ]
+        },
+        {
+         "id": "mark-a-follow-up-step-done",
+         "q": "Mark a follow-up step done",
+         "a": "Open the person and press the Mark done button, which names their current step. Press Close when the whole follow-up is finished.",
+         "words": [
+          "called the guest",
+          "finish follow-up",
+          "close a card",
+          "step done"
+         ]
+        },
+        {
+         "id": "leave-a-note-about-a-guest",
+         "q": "Leave a note about a guest",
+         "a": "Open the person, type in Add a note for whoever has them and press Save the note. Tick Pastors only to keep it to the pastors.",
+         "words": [
+          "follow-up notes",
+          "private note",
+          "what happened on the call"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:funnel",
+       "tab": "grow",
+       "sub": "funnel",
+       "name": "Visitor flow",
+       "sees": [
+        "people_care"
+       ],
+       "what": "See how many new people came in over a period and how far each got.",
+       "words": [
+        "visitor",
+        "visitors",
+        "guests",
+        "lead flow",
+        "new people"
+       ],
+       "answers": []
+      },
+      {
+       "key": "operate:care",
+       "tab": "operate",
+       "sub": "care",
+       "name": "Prayer & care",
+       "sees": [
+        "people_care"
+       ],
+       "what": "Read prayer and care requests in private, mark them prayed for, and hand one to a teammate.",
+       "words": [
+        "prayer",
+        "pray",
+        "prayer request",
+        "care",
+        "hospital",
+        "sick"
+       ],
+       "answers": [
+        {
+         "id": "read-the-prayer-requests",
+         "q": "Read the prayer requests",
+         "a": "Open Prayer & care and press Open inbox. Requests show newest first, and only you and anyone you hand one to can see them.",
+         "words": [
+          "prayer list",
+          "see prayer requests",
+          "pastoral care",
+          "who needs prayer"
+         ]
+        },
+        {
+         "id": "mark-a-request-as-prayed-for",
+         "q": "Mark a request as prayed for",
+         "a": "Open the request and press Mark prayed. You can also set where it stands with New, Reviewed or Closed.",
+         "words": [
+          "we prayed",
+          "close a prayer request",
+          "answered prayer"
+         ]
+        },
+        {
+         "id": "hand-a-request-to-someone-on-the-team",
+         "q": "Hand a request to someone on the team",
+         "a": "Open the request and choose the person under Hand to. Only the church’s owner can do this, and that person then sees the request.",
+         "words": [
+          "assign a prayer request",
+          "share with a pastor",
+          "give to the care team"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:help",
+       "tab": "operate",
+       "sub": "help",
+       "name": "Help requests",
+       "sees": [
+        "people_care"
+       ],
+       "what": "Record requests for help, say yes to an amount, and record how the church helped.",
+       "words": [
+        "help",
+        "help request",
+        "help requests",
+        "benevolence",
+        "benevolence fund",
+        "assistance",
+        "food",
+        "food pantry",
+        "pantry",
+        "groceries",
+        "bill",
+        "light bill",
+        "rent",
+        "utility",
+        "utilities"
+       ],
+       "answers": [
+        {
+         "id": "add-a-request-for-help",
+         "q": "Add a request for help",
+         "a": "Press Add a request, pick what they need, add the amount and what is going on, then press Add the request. Tick Keep who asked private to hide the name.",
+         "words": [
+          "benevolence request",
+          "someone needs help with a bill",
+          "food pantry ask",
+          "light bill"
+         ]
+        },
+        {
+         "id": "approve-a-help-request",
+         "q": "Approve a help request",
+         "a": "Open the request and, under Say yes, enter the amount in Approve up to and press Approve. Above the church’s limit, press Ask a keeper and enter the keeper’s 6-digit code.",
+         "words": [
+          "say yes to help",
+          "benevolence approval",
+          "over the limit",
+          "keeper code"
+         ]
+        },
+        {
+         "id": "record-how-we-helped",
+         "q": "Record how we helped",
+         "a": "On an approved request press Record how we helped. Pick how you helped, the amount, the day and who it was paid to, then press the Record button.",
+         "words": [
+          "gave a gift card",
+          "paid a bill for someone",
+          "log benevolence",
+          "record help given"
+         ]
+        },
+        {
+         "id": "set-the-help-funds-budget",
+         "q": "Set the help fund’s budget",
+         "a": "Under The fund press Set the budget (it reads Change the fund once one is set). Choose the fund, the amount each month and the most for one gift, then press Save.",
+         "words": [
+          "benevolence budget",
+          "monthly limit",
+          "gift limit",
+          "benevolence fund"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:shepherding",
+       "tab": "operate",
+       "sub": "shepherding",
+       "name": "Shepherding",
+       "sees": [
+        "people_care"
+       ],
+       "what": "Give every member family a shepherd and see who is drifting or not yet reached.",
+       "words": [
+        "shepherd",
+        "shepherding",
+        "elder",
+        "elders",
+        "pastoral"
+       ],
+       "answers": [
+        {
+         "id": "give-families-a-shepherd",
+         "q": "Give families a shepherd",
+         "a": "On the Waiting for a shepherd card press Hand them out. Chief proposes who takes each family, and nothing moves until you press Approve and tell the shepherds.",
+         "words": [
+          "assign elders to families",
+          "shepherd list",
+          "pastoral assignments",
+          "who cares for which family"
+         ]
+        },
+        {
+         "id": "move-a-family-to-another-shepherd",
+         "q": "Move a family to another shepherd",
+         "a": "Press Open on the shepherd’s card and pick the family. Choose a name in the Move to… list and press the Move to button.",
+         "words": [
+          "change a family’s shepherd",
+          "reassign a family",
+          "switch elders"
+         ]
+        },
+        {
+         "id": "change-how-many-families-each-shepherd-has",
+         "q": "Change how many families each shepherd has",
+         "a": "Under Who shepherds, find Families per shepherd and press the plus or minus beside the number.",
+         "words": [
+          "families per elder",
+          "shepherd load",
+          "too many families"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:retention",
+       "tab": "grow",
+       "sub": "retention",
+       "name": "Who's drifting",
+       "sees": [
+        "people_care"
+       ],
+       "what": "See regulars who have stopped coming, at church or at their group, so someone can reach out.",
+       "words": [
+        "drifting",
+        "missing",
+        "absent",
+        "lapsed",
+        "retention"
+       ],
+       "answers": [
+        {
+         "id": "reach-out-to-someone-who-stopped-coming",
+         "q": "Reach out to someone who stopped coming",
+         "a": "Find them on the list and press Check in with Chief. Chief drafts a short, warm note to them and shows it to you before anything is sent.",
+         "words": [
+          "missing members",
+          "haven’t seen them",
+          "absent three weeks",
+          "lapsed"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Cards and roles",
+     "pages": [
+      {
+       "key": "build:next-steps",
+       "tab": "build",
+       "sub": "next-steps",
+       "name": "Next steps",
+       "sees": [
+        "people_care"
+       ],
+       "what": "Line up your cards and classes in the order people take them, from first hello on.",
+       "words": [
+        "next step",
+        "next steps",
+        "baptism",
+        "membership class"
+       ],
+       "answers": [
+        {
+         "id": "change-the-order-of-the-next-steps",
+         "q": "Change the order of the next steps",
+         "a": "Press Arrange the road and put the cards and classes in order. Add any missing ones under Add to the road, then press Save the road.",
+         "words": [
+          "discipleship path",
+          "growth track",
+          "reorder steps",
+          "membership path"
+         ]
+        },
+        {
+         "id": "invite-people-to-their-next-step",
+         "q": "Invite people to their next step",
+         "a": "Open a step on the road and look at What happens next. Press Invite them with Chief and Chief drafts the invitation for the people who are waiting.",
+         "words": [
+          "who is ready for baptism",
+          "move people along",
+          "invite to a class"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:intake-forms",
+       "tab": "build",
+       "sub": "intake-forms",
+       "name": "Forms",
+       "sees": [
+        "people_care",
+        "office"
+       ],
+       "what": "Make the cards guests fill in, such as a connect card, and share each by link or QR code.",
+       "words": [
+        "form",
+        "forms",
+        "card",
+        "cards",
+        "connect card"
+       ],
+       "answers": [
+        {
+         "id": "make-a-connect-card",
+         "q": "Make a connect card",
+         "a": "Press New card and, under Cards churches keep, press Add it on the card you want. It is made switched on, with its own link.",
+         "words": [
+          "visitor card",
+          "guest form",
+          "prayer form",
+          "event sign-up form"
+         ]
+        },
+        {
+         "id": "share-a-card-with-a-link-or-qr-code",
+         "q": "Share a card with a link or QR code",
+         "a": "Press Open on the card and look at Where it lives. Copy its own link for a text or an email, or press QR code for the bulletin or a screen.",
+         "words": [
+          "qr code for the bulletin",
+          "copy the form link",
+          "put a form on the screen"
+         ]
+        },
+        {
+         "id": "change-the-questions-on-a-card",
+         "q": "Change the questions on a card",
+         "a": "Press Edit on the card, change the fields and press Save the card. A card that is part of your website shows Edit the page instead.",
+         "words": [
+          "edit a form",
+          "add a question",
+          "change the connect card"
+         ]
+        },
+        {
+         "id": "switch-a-card-off",
+         "q": "Switch a card off",
+         "a": "Press Switch off on the card. Nobody can send it while it is off, and the answers you have so far are kept.",
+         "words": [
+          "turn off a form",
+          "close sign-ups",
+          "stop taking answers"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:leaders",
+       "tab": "operate",
+       "sub": "leaders",
+       "name": "Leaders & roles",
+       "sees": [
+        "people_care",
+        "office"
+       ],
+       "what": "Name the church’s roles in your own words and ask people to hold them.",
+       "words": [
+        "leader",
+        "leaders",
+        "roles",
+        "role"
+       ],
+       "answers": [
+        {
+         "id": "make-a-new-role",
+         "q": "Make a new role",
+         "a": "Press Make a role, type the title, pick the job it does, what it covers and who it answers to, then press Save the role.",
+         "words": [
+          "add a title",
+          "church mother",
+          "new position",
+          "deacon role"
+         ]
+        },
+        {
+         "id": "ask-someone-to-take-a-role",
+         "q": "Ask someone to take a role",
+         "a": "Press Ask someone on the role (it reads Open once someone holds it). Under Who holds it pick the person and press Send the invitation.",
+         "words": [
+          "name a leader",
+          "appoint an elder",
+          "invite a volunteer leader",
+          "put someone in a role"
+         ]
+        },
+        {
+         "id": "give-a-leader-a-login",
+         "q": "Give a leader a login",
+         "a": "Press Give a login on the Office logins row. It opens Settings, Team, where the church’s logins are set.",
+         "words": [
+          "staff login",
+          "add a user",
+          "office access"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "giving",
+   "label": "Giving",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:bookkeeping",
+       "tab": "operate",
+       "sub": "bookkeeping",
+       "name": "Gifts",
+       "sees": "money",
+       "what": "Record cash, check and bank gifts, count each service, and keep the church’s books.",
+       "words": [
+        "give",
+        "giving",
+        "tithe",
+        "tithes",
+        "offering",
+        "offerings",
+        "donation",
+        "donations",
+        "gift",
+        "gifts",
+        "books",
+        "ledger",
+        "accounting",
+        "expenses",
+        "bookkeeping"
+       ],
+       "answers": [
+        {
+         "id": "record-a-gift",
+         "q": "Record a gift",
+         "a": "On the Giving tab fill in Record a gift: the amount, the day it was received, the giver, how it was given and the fund. Press Record gift.",
+         "words": [
+          "enter a tithe",
+          "log a donation",
+          "cash gift",
+          "check from a member"
+         ]
+        },
+        {
+         "id": "record-sundays-offering",
+         "q": "Record Sunday’s offering",
+         "a": "Under Giving by service press the service. Add a row for each gift under Add gifts, using Loose offering (plate cash) for cash with no name, then press Save gifts.",
+         "words": [
+          "count the offering",
+          "enter the plate",
+          "sunday giving",
+          "count sheet"
+         ]
+        },
+        {
+         "id": "close-the-count-for-a-service",
+         "q": "Close the count for a service",
+         "a": "Open the service under Giving by service. Enter Cash counted, Checks counted and who counted, then press Close the count.",
+         "words": [
+          "finish counting",
+          "two counters",
+          "close out sunday",
+          "balance the offering"
+         ]
+        },
+        {
+         "id": "fix-a-gift-that-was-entered-wrong",
+         "q": "Fix a gift that was entered wrong",
+         "a": "Find the gift in the Gifts list and press Correct, change it, type the reason and press Save correction. Online gifts are corrected through the payment provider.",
+         "words": [
+          "wrong amount",
+          "refund a gift",
+          "edit a gift",
+          "wrong fund"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:payments",
+       "tab": "operate",
+       "sub": "payments",
+       "name": "Payments",
+       "sees": "money",
+       "what": "Connect Stripe so people can give online, and see charges, payouts and refunds.",
+       "words": [
+        "payment",
+        "payments",
+        "payout",
+        "payouts",
+        "stripe",
+        "charge"
+       ],
+       "answers": [
+        {
+         "id": "set-up-online-giving",
+         "q": "Set up online giving",
+         "a": "On Payments, under Accept gifts online, press Set up Stripe here, or Connect Stripe if you see that button. Stripe handles the cards and pays the gifts out to the church’s bank.",
+         "words": [
+          "take cards",
+          "connect stripe",
+          "online gifts",
+          "give by card"
+         ]
+        },
+        {
+         "id": "refund-an-online-gift",
+         "q": "Refund an online gift",
+         "a": "Open the Charges tab, find the gift and press Refund on its row. A box opens to finish the refund.",
+         "words": [
+          "give money back",
+          "charged twice",
+          "reverse a card gift"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:recurring-gifts",
+       "tab": "operate",
+       "sub": "recurring-gifts",
+       "name": "Recurring gifts",
+       "sees": "money",
+       "what": "See everyone who gives on a schedule, how much each month, and whose gift is late.",
+       "words": [
+        "recurring",
+        "recurring gift",
+        "recurring gifts",
+        "monthly gift",
+        "weekly gift",
+        "automatic giving",
+        "auto giving"
+       ],
+       "answers": [
+        {
+         "id": "see-who-gives-every-week-or-month",
+         "q": "See who gives every week or month",
+         "a": "Open Recurring gifts and press Active, Paused, Ended or All above the list. Each row shows the giver, the amount, how often, the fund and the next date.",
+         "words": [
+          "automatic giving",
+          "monthly givers",
+          "scheduled gifts"
+         ]
+        },
+        {
+         "id": "follow-up-on-a-late-recurring-gift",
+         "q": "Follow up on a late recurring gift",
+         "a": "On a late gift press Ask Chief to reach out. The office cannot change a gift here: givers change, pause or stop their own gift in the member app.",
+         "words": [
+          "card declined",
+          "failed gift",
+          "stop a recurring gift",
+          "cancel a monthly gift"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:pledges",
+       "tab": "operate",
+       "sub": "pledges",
+       "name": "Pledges & campaigns",
+       "sees": "money",
+       "what": "Set a goal for a fund, record pledge cards, and watch real gifts fill it.",
+       "words": [
+        "pledge",
+        "pledges",
+        "pledge card",
+        "campaign",
+        "building fund",
+        "capital campaign"
+       ],
+       "answers": [
+        {
+         "id": "start-a-giving-campaign",
+         "q": "Start a giving campaign",
+         "a": "Press New campaign and give it a name, a goal, the fund and its dates. Press Start the campaign, and gifts to that fund fill the goal on their own.",
+         "words": [
+          "building fund",
+          "capital campaign",
+          "fundraising goal",
+          "missions push"
+         ]
+        },
+        {
+         "id": "record-a-pledge-card",
+         "q": "Record a pledge card",
+         "a": "Press Record a pledge, choose the campaign and the person, and enter the amount as one total or an amount each time. Press Record the pledge.",
+         "words": [
+          "enter a pledge",
+          "commitment card",
+          "faith promise"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:statements",
+       "tab": "operate",
+       "sub": "statements",
+       "name": "Year-end statements",
+       "sees": "money",
+       "what": "Email every giver their giving statement for the year, with the wording the IRS asks for.",
+       "words": [
+        "statement",
+        "statements",
+        "year-end",
+        "year end",
+        "tax letter",
+        "contribution statement"
+       ],
+       "answers": [
+        {
+         "id": "send-year-end-giving-statements",
+         "q": "Send year-end giving statements",
+         "a": "Pick the Year, answer whether givers got anything in return for their gifts, then press the Email statements button. Nothing is sent until you press it.",
+         "words": [
+          "tax letters",
+          "contribution statements",
+          "giving receipts",
+          "january statements"
+         ]
+        },
+        {
+         "id": "get-a-statement-to-someone-with-no-email",
+         "q": "Get a statement to someone with no email",
+         "a": "The page counts the givers who have no email. Print theirs from each person’s page, or add an email to their record and come back.",
+         "words": [
+          "print a statement",
+          "mail a statement",
+          "paper statement"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:intelligence",
+       "tab": "grow",
+       "sub": "intelligence",
+       "name": "Giving health",
+       "sees": "money",
+       "what": "See how giving changed over a period, who gives again and where people come from.",
+       "words": [
+        "health",
+        "church health",
+        "insights"
+       ],
+       "answers": [
+        {
+         "id": "compare-giving-with-last-year",
+         "q": "Compare giving with last year",
+         "a": "Set Period at the top, then set Compare with to Same time last year. The What changed tab shows what moved giving up or down.",
+         "words": [
+          "giving trends",
+          "is giving up or down",
+          "giving report",
+          "year over year"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:grants",
+       "tab": "operate",
+       "sub": "grants",
+       "name": "Find a grant",
+       "sees": "money",
+       "what": "Search open federal grants and keep track of the ones worth going after.",
+       "words": [
+        "grant",
+        "grants",
+        "funding",
+        "funder",
+        "foundation"
+       ],
+       "answers": [
+        {
+         "id": "search-for-a-grant",
+         "q": "Search for a grant",
+         "a": "Type what the church does in the search box and press Search. Results come soonest deadline first, each with What it pays and a link to read it on Grants.gov.",
+         "words": [
+          "funding",
+          "grant money",
+          "federal grants",
+          "foundation"
+         ]
+        },
+        {
+         "id": "keep-track-of-a-grant",
+         "q": "Keep track of a grant",
+         "a": "Press Track this on the grant and it goes on your Grants board with its deadline. If you have no board yet, press Set up my Grants board.",
+         "words": [
+          "save a grant",
+          "grant deadline",
+          "grants board"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Store and setup",
+     "pages": [
+      {
+       "key": "operate:offerings-manager",
+       "tab": "operate",
+       "sub": "offerings-manager",
+       "name": "Store",
+       "sees": "money",
+       "what": "Set up what the church sells, such as books, shirts and retreat fees, and their prices.",
+       "words": [
+        "products",
+        "catalog",
+        "pricing",
+        "store",
+        "shop",
+        "merch"
+       ],
+       "answers": [
+        {
+         "id": "add-something-to-sell",
+         "q": "Add something to sell",
+         "a": "On the Store tab press + Add Item and pick what you are adding. Fill in the name and price, then save it.",
+         "words": [
+          "sell a book",
+          "t-shirts",
+          "retreat fee",
+          "merch"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:giving-page",
+       "tab": "operate",
+       "sub": "giving-page",
+       "name": "Giving page & funds",
+       "sees": "money",
+       "what": "Turn your online giving page on, set the funds people can give to and the amounts it suggests.",
+       "words": [
+        "funds",
+        "fund",
+        "giving page",
+        "designated",
+        "online giving",
+        "suggested amounts"
+       ],
+       "answers": [
+        {
+         "id": "turn-the-online-giving-page-on",
+         "q": "Turn the online giving page on",
+         "a": "Under Your giving page press the Off button so it reads On. Press Copy beside the link to share the page.",
+         "words": [
+          "online giving link",
+          "give online",
+          "share the giving page"
+         ]
+        },
+        {
+         "id": "add-a-fund-people-can-give-to",
+         "q": "Add a fund people can give to",
+         "a": "Under Designated funds type the name in Add a fund and press Add. It saves right away, and the X on a fund removes it.",
+         "words": [
+          "building fund",
+          "missions fund",
+          "designated giving",
+          "new fund"
+         ]
+        },
+        {
+         "id": "change-the-suggested-amounts",
+         "q": "Change the suggested amounts",
+         "a": "Edit the amounts under Suggested amounts, and the Page message if you want, then press Save.",
+         "words": [
+          "giving amounts",
+          "preset amounts",
+          "giving page message"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:money-controls",
+       "tab": "operate",
+       "sub": "money-controls",
+       "name": "Money controls",
+       "sees": "money",
+       "what": "Make the church’s money view-only, so no new charges, refunds or payment links go out.",
+       "words": [
+        "money controls",
+        "financial controls",
+        "view-only",
+        "view only",
+        "freeze money",
+        "block payments",
+        "stop charges",
+        "who may move money"
+       ],
+       "answers": [
+        {
+         "id": "stop-money-moving-through-solutionist",
+         "q": "Stop money moving through Solutionist",
+         "a": "Type a reason of at least 10 characters, press Enable view-only finances, then Confirm with password. New charges, refunds and payment links stop, and your records stay readable.",
+         "words": [
+          "freeze money",
+          "view-only",
+          "block payments",
+          "stop charges"
+         ]
+        },
+        {
+         "id": "allow-charges-and-refunds-again",
+         "q": "Allow charges and refunds again",
+         "a": "Type a reason, press Allow financial actions and then Confirm with password.",
+         "words": [
+          "unfreeze",
+          "turn payments back on",
+          "lift the lock"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "messages",
+   "label": "Messages",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:queue",
+       "tab": "operate",
+       "sub": "queue",
+       "name": "Approvals",
+       "sees": [
+        "people_care",
+        "office"
+       ],
+       "what": "Read what Chief drafted and approve, edit or dismiss it before anything goes out.",
+       "words": [
+        "approve",
+        "approval",
+        "approvals",
+        "draft",
+        "drafts",
+        "queue"
+       ],
+       "answers": [
+        {
+         "id": "approve-a-draft-from-chief",
+         "q": "Approve a draft from Chief",
+         "a": "Open the draft, read it and press Approve. To approve several, tick each one and press the Approve button that shows the count.",
+         "words": [
+          "send chief’s draft",
+          "release a message",
+          "ok an email",
+          "waiting drafts"
+         ]
+        },
+        {
+         "id": "change-a-draft-before-it-sends",
+         "q": "Change a draft before it sends",
+         "a": "Press Edit on the draft and make your changes. Press Save & Approve to send it, or Save, don’t send to keep the changes for later.",
+         "words": [
+          "edit chief’s email",
+          "reword a draft",
+          "fix a message"
+         ]
+        },
+        {
+         "id": "turn-down-a-draft",
+         "q": "Turn down a draft",
+         "a": "Press Dismiss on the draft. Nothing is sent, and it moves to the Sent back tab.",
+         "words": [
+          "reject a draft",
+          "don’t send",
+          "delete a draft"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:email",
+       "tab": "operate",
+       "sub": "email",
+       "name": "Email",
+       "sees": "every",
+       "what": "Read and answer your church email, and write new email from your church address.",
+       "words": [
+        "email",
+        "inbox",
+        "mail"
+       ],
+       "answers": [
+        {
+         "id": "write-an-email-from-my-church-address",
+         "q": "Write an email from my church address",
+         "a": "Press New email, pick the From address, and type a name from your people or any email address. Write it and press Send, or press Draft with Chief to have it written from your notes.",
+         "words": [
+          "send an email",
+          "compose",
+          "email a member",
+          "new message"
+         ]
+        },
+        {
+         "id": "answer-an-email",
+         "q": "Answer an email",
+         "a": "Pick the message to open it. Choose the address under Reply as, write your answer and press Send.",
+         "words": [
+          "reply to an email",
+          "respond to a message",
+          "inbox"
+         ]
+        },
+        {
+         "id": "turn-on-church-email-for-the-team",
+         "q": "Turn on church email for the team",
+         "a": "The pastor opens the Church email tray and follows its three steps, ending with Give everyone their address. Each person on the team then gets their own church address here.",
+         "words": [
+          "staff email addresses",
+          "office@ address",
+          "give someone an email",
+          "prayer@"
+         ]
+        },
+        {
+         "id": "stop-copies-going-to-my-own-email",
+         "q": "Stop copies going to my own email",
+         "a": "At the top of Email press Copies to your own email so it reads off (on a phone it is in the mail menu). Your church mail is then read here in Email.",
+         "words": [
+          "forwarding",
+          "email copies",
+          "duplicate emails"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:sms",
+       "tab": "operate",
+       "sub": "sms",
+       "name": "Texts",
+       "sees": [
+        "people_care",
+        "office",
+        "worship_media"
+       ],
+       "what": "Text one person or everyone who said yes, and read the texts that come back.",
+       "words": [
+        "text",
+        "texts",
+        "sms",
+        "texting"
+       ],
+       "answers": [
+        {
+         "id": "text-one-person",
+         "q": "Text one person",
+         "a": "Press New text, type a name or number and pick the person. Write your message and send it.",
+         "words": [
+          "send a text",
+          "message a member",
+          "sms someone"
+         ]
+        },
+        {
+         "id": "send-a-text-to-the-whole-church",
+         "q": "Send a text to the whole church",
+         "a": "Press Announcement, choose who gets it, write the message and press Review, then the Send button. Only people who said yes to your texts get it.",
+         "words": [
+          "text everyone",
+          "text all the members",
+          "mass text",
+          "text blast",
+          "announcement"
+         ]
+        },
+        {
+         "id": "schedule-a-text-for-later",
+         "q": "Schedule a text for later",
+         "a": "In Announcement, under When, press Later and pick the time. Press Review, then the Schedule button.",
+         "words": [
+          "send a text tomorrow",
+          "timed text",
+          "queue a text"
+         ]
+        },
+        {
+         "id": "get-the-church-its-own-texting-number",
+         "q": "Get the church its own texting number",
+         "a": "Press the gear (Texting settings), then Get a number. Type your area code, press Look, choose a number and press Get this number.",
+         "words": [
+          "texting number",
+          "phone number for texts",
+          "keyword",
+          "set up texting"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:messaging",
+       "tab": "operate",
+       "sub": "messaging",
+       "name": "Member messaging",
+       "sees": [
+        "messages_safety"
+       ],
+       "what": "Turn member chat on, choose who may use it, and name the safety officers who watch it.",
+       "words": [
+        "member messaging",
+        "chat",
+        "chats",
+        "messaging"
+       ],
+       "answers": [
+        {
+         "id": "turn-member-messaging-on",
+         "q": "Turn member messaging on",
+         "a": "Open the Settings tab and press Turn messaging on. The button stays off until your safety officers are named, and only the owner can switch it.",
+         "words": [
+          "member chat",
+          "let members message",
+          "group chat"
+         ]
+        },
+        {
+         "id": "name-a-safety-officer",
+         "q": "Name a safety officer",
+         "a": "On the Settings tab, under Safety officers, switch on Safety officer beside the person.",
+         "words": [
+          "chat moderator",
+          "who watches the chat",
+          "safety team"
+         ]
+        },
+        {
+         "id": "let-a-member-use-messaging",
+         "q": "Let a member use messaging",
+         "a": "On the People tab find the person and switch on Can use messaging. They need a birthdate on file first, and a teen needs a parent linked with Link a parent.",
+         "words": [
+          "allow chat",
+          "teen messaging",
+          "block someone from chat"
+         ]
+        },
+        {
+         "id": "deal-with-a-held-or-reported-message",
+         "q": "Deal with a held or reported message",
+         "a": "A safety officer opens the Safety room tab and presses Deliver it or Remove on a held message. For a report, type what was done and press Close report.",
+         "words": [
+          "flagged message",
+          "bad message",
+          "report in chat",
+          "moderate"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:news",
+       "tab": "operate",
+       "sub": "news",
+       "name": "News & celebrations",
+       "sees": [
+        "people_care",
+        "website_outreach"
+       ],
+       "what": "Post news to the member app, schedule it, and see who saw it.",
+       "words": [
+        "news",
+        "celebration",
+        "celebrations",
+        "birthday",
+        "birthdays",
+        "anniversary"
+       ],
+       "answers": [
+        {
+         "id": "post-news-to-the-church",
+         "q": "Post news to the church",
+         "a": "Press New post, choose who it is for and what kind, and write the title and message. Press the Post button and members see it on Home and News in the app.",
+         "words": [
+          "announcement in the app",
+          "share photos",
+          "praise report",
+          "tell the church"
+         ]
+        },
+        {
+         "id": "schedule-a-post-for-later",
+         "q": "Schedule a post for later",
+         "a": "In New post, set When to Later and pick the time. Press Schedule it, and it shows under Coming up until it goes up.",
+         "words": [
+          "post tomorrow",
+          "timed announcement",
+          "queue a post"
+         ]
+        },
+        {
+         "id": "send-an-urgent-notice-to-phones",
+         "q": "Send an urgent notice to phones",
+         "a": "In New post, switch on Important: ring their phones before you post. It rings the phones of the people it is for who have the app’s alerts on.",
+         "words": [
+          "push notification",
+          "service cancelled",
+          "weather closing",
+          "alert the church"
+         ]
+        },
+        {
+         "id": "pin-a-post-or-take-it-down",
+         "q": "Pin a post or take it down",
+         "a": "In the list of posts, press the pin on a post to keep it at the top, or the bin to take it down.",
+         "words": [
+          "delete a post",
+          "remove news",
+          "keep a post first"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Templates and setup",
+     "pages": [
+      {
+       "key": "build:email-templates",
+       "tab": "build",
+       "sub": "email-templates",
+       "name": "Email Templates",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Set the signature and the wording Chief uses for its standard emails.",
+       "words": [
+        "template",
+        "templates"
+       ],
+       "answers": [
+        {
+         "id": "change-the-email-signature",
+         "q": "Change the email signature",
+         "a": "Under Signature fill in the Name, Title, Phone and Email, then press Save changes. Chief signs every email it drafts with it.",
+         "words": [
+          "sign-off",
+          "email footer",
+          "pastor’s name on emails"
+         ]
+        },
+        {
+         "id": "change-the-wording-of-a-standard-email",
+         "q": "Change the wording of a standard email",
+         "a": "Under Templates open the one you want and edit the Subject and Body, or press Draft with Chief. Press Save changes.",
+         "words": [
+          "welcome email",
+          "thank you email",
+          "edit a template"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:notifications",
+       "tab": "operate",
+       "sub": "notifications",
+       "name": "Notifications",
+       "sees": [
+        "office"
+       ],
+       "what": "See what has happened lately and mark it read.",
+       "words": [
+        "notification",
+        "notifications",
+        "alerts",
+        "bell"
+       ],
+       "answers": [
+        {
+         "id": "clear-my-notifications",
+         "q": "Clear my notifications",
+         "a": "Press Mark all read at the top. Press Unread or All to choose which ones the list shows.",
+         "words": [
+          "alerts",
+          "bell",
+          "unread",
+          "what’s new"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:email-setup",
+       "tab": "build",
+       "sub": "email-setup",
+       "name": "Email setup",
+       "sees": [
+        "office"
+       ],
+       "what": "Connect the church’s own domain so email goes out from your address, and check it is working.",
+       "words": [
+        "email setup",
+        "domain"
+       ],
+       "answers": [
+        {
+         "id": "send-email-from-our-churchs-own-address",
+         "q": "Send email from our church’s own address",
+         "a": "Follow the steps: enter Your domain, Send from and Display name, add the DNS records where you bought the domain, then press Send test email to prove it lands.",
+         "words": [
+          "custom domain",
+          "email from our domain",
+          "sending address",
+          "verify domain"
+         ]
+        },
+        {
+         "id": "get-help-adding-the-dns-records",
+         "q": "Get help adding the DNS records",
+         "a": "On step 2, under Send the records to whoever manages your domain, type Their email and press Send records. They get the records to add for you.",
+         "words": [
+          "dns",
+          "web person",
+          "namecheap",
+          "godaddy"
+         ]
+        },
+        {
+         "id": "check-that-email-is-working",
+         "q": "Check that email is working",
+         "a": "Open Email health and press Send a test. The test only goes to the address you sign in with, and the report shows whether it was delivered.",
+         "words": [
+          "test email",
+          "is email working",
+          "emails not arriving",
+          "email health"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "office",
+   "label": "Office",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:calendar",
+       "tab": "operate",
+       "sub": "calendar",
+       "name": "Calendar",
+       "sees": "every",
+       "what": "See services, events, group meetings, booked rooms, tasks and birthdays on one calendar.",
+       "words": [
+        "calendar",
+        "schedule",
+        "events",
+        "session",
+        "sessions"
+       ],
+       "answers": [
+        {
+         "id": "see-what-is-on-this-week",
+         "q": "See what is on this week",
+         "a": "Open Calendar and press Month, Week or Day at the top to change the view. Press an entry to open its own page, like a Sunday’s plan or a room booking.",
+         "words": [
+          "church calendar",
+          "what is coming up",
+          "this month"
+         ]
+        },
+        {
+         "id": "put-a-meeting-on-the-calendar",
+         "q": "Put a meeting on the calendar",
+         "a": "On an empty hour press Schedule this hour, or on an empty day press Schedule a meeting. Chief opens with the day and time filled in and sets it up with you.",
+         "words": [
+          "schedule a meeting",
+          "book a time with the pastor",
+          "add an appointment"
+         ]
+        },
+        {
+         "id": "add-a-service-or-an-event-so-it-shows-here",
+         "q": "Add a service or an event so it shows here",
+         "a": "The calendar shows what other pages hold, so nothing is typed in here. Add a service or an event behind the Sunday door, a group’s meeting day in Groups, or a booking in Rooms & spaces, and it appears.",
+         "words": [
+          "add an event",
+          "new event",
+          "put vbs on the calendar"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:tasks",
+       "tab": "operate",
+       "sub": "tasks",
+       "name": "Tasks",
+       "sees": "every",
+       "what": "Keep the office to-do list, with due dates and who each task is handed to.",
+       "words": [
+        "task",
+        "tasks",
+        "todo",
+        "to do"
+       ],
+       "answers": [
+        {
+         "id": "add-a-task",
+         "q": "Add a task",
+         "a": "Type it in the box that says Add a task and press Enter or Add. Press Details first to set a due date, a priority or a member to link it to.",
+         "words": [
+          "to do",
+          "new task",
+          "reminder for the office"
+         ]
+        },
+        {
+         "id": "hand-a-task-to-someone",
+         "q": "Hand a task to someone",
+         "a": "Press Details when you add the task and choose the person under HAND TO. They find it on their own Tasks page under Handed to me.",
+         "words": [
+          "assign a task",
+          "give a job to a leader",
+          "delegate"
+         ]
+        },
+        {
+         "id": "mark-a-task-done",
+         "q": "Mark a task done",
+         "a": "Press the box at the left of the task. It moves to the Completed list.",
+         "words": [
+          "finish a task",
+          "check off",
+          "complete"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:projects",
+       "tab": "operate",
+       "sub": "projects",
+       "name": "Projects",
+       "sees": [
+        "office"
+       ],
+       "what": "Track bigger jobs like the fall festival or the roof, with stages, hours and a budget.",
+       "words": [
+        "project",
+        "projects",
+        "board",
+        "milestone"
+       ],
+       "answers": [
+        {
+         "id": "start-a-project",
+         "q": "Start a project",
+         "a": "Press New project, name it, pick who it is for, the stage and a target date, and press Create project.",
+         "words": [
+          "new project",
+          "plan the fall festival",
+          "vacation bible school"
+         ]
+        },
+        {
+         "id": "move-a-project-to-its-next-stage",
+         "q": "Move a project to its next stage",
+         "a": "Press Board at the top and drag the project’s card to the next stage.",
+         "words": [
+          "update a project",
+          "project status",
+          "move a card"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:documents",
+       "tab": "operate",
+       "sub": "documents",
+       "name": "Files & policies",
+       "sees": [
+        "office"
+       ],
+       "what": "Keep bylaws, policies and member papers on file, and send a paper out to be signed.",
+       "words": [
+        "document",
+        "documents",
+        "files",
+        "storage"
+       ],
+       "answers": [
+        {
+         "id": "upload-a-file",
+         "q": "Upload a file",
+         "a": "Press Upload, drag the file in or click to browse, and press Upload again. Pick a person under Link to contact if the paper belongs to one member.",
+         "words": [
+          "add the bylaws",
+          "save a policy",
+          "store a contract",
+          "scan"
+         ]
+        },
+        {
+         "id": "send-a-paper-to-be-signed",
+         "q": "Send a paper to be signed",
+         "a": "On the file’s row press the pen button (Send for signature), type the signer’s name and email and press Send. They get an email with a signing link.",
+         "words": [
+          "e-signature",
+          "sign a form",
+          "get a signature"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Building",
+     "pages": [
+      {
+       "key": "operate:spaces",
+       "tab": "operate",
+       "sub": "spaces",
+       "name": "Rooms & spaces",
+       "sees": [
+        "office"
+       ],
+       "what": "See who has which room, the van or the projector this week, and book or approve one.",
+       "words": [
+        "room",
+        "rooms",
+        "hall",
+        "book a room",
+        "reserve a room",
+        "van",
+        "facility",
+        "facilities",
+        "building",
+        "fellowship hall",
+        "sanctuary",
+        "space",
+        "spaces",
+        "projector"
+       ],
+       "answers": [
+        {
+         "id": "book-a-room",
+         "q": "Book a room",
+         "a": "Press Book a room, pick the room, the date and the times, say what it’s for and press Book it. If your login can’t approve bookings, the button reads Ask for it and your ask waits for a yes.",
+         "words": [
+          "reserve the fellowship hall",
+          "book the van",
+          "use the sanctuary",
+          "reserve the projector"
+         ]
+        },
+        {
+         "id": "say-yes-or-no-to-a-room-request",
+         "q": "Say yes or no to a room request",
+         "a": "Requests show at the top under Waiting for a yes. Press Approve, or the Decline button beside it.",
+         "words": [
+          "approve a booking",
+          "room requests",
+          "decline a room"
+         ]
+        },
+        {
+         "id": "add-a-room-the-van-or-equipment-to-the-list",
+         "q": "Add a room, the van or equipment to the list",
+         "a": "Under The church’s spaces type its name, choose Room, Vehicle or Equipment and how many it holds, and press Add.",
+         "words": [
+          "list the rooms",
+          "new room",
+          "add the projector"
+         ]
+        },
+        {
+         "id": "book-a-room-every-week",
+         "q": "Book a room every week",
+         "a": "In the booking sheet tick Every week and pick the date under Ends on. A weekly repeat runs a year at most.",
+         "words": [
+          "repeat a booking",
+          "weekly booking",
+          "standing reservation"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:rentals",
+       "tab": "operate",
+       "sub": "rentals",
+       "name": "Rentals",
+       "sees": "money",
+       "what": "Keep outside bookings of the building, with the fee, the deposit and whether the bill is paid.",
+       "words": [
+        "rental",
+        "rentals",
+        "rent the hall",
+        "rent a room",
+        "wedding rental",
+        "renter",
+        "renters"
+       ],
+       "answers": [
+        {
+         "id": "record-a-rental-from-someone-outside",
+         "q": "Record a rental from someone outside",
+         "a": "Press New rental, pick the room and the time, and fill in the renter’s name, email, the Fee and the Deposit. Save it and it shows under Coming up.",
+         "words": [
+          "rent the hall",
+          "wedding rental",
+          "outside group using the building"
+         ]
+        },
+        {
+         "id": "send-the-renter-a-bill",
+         "q": "Send the renter a bill",
+         "a": "On the rental’s row press Send the bill. The bill is made in Bills, and Open in Bills takes you to it.",
+         "words": [
+          "bill for the hall",
+          "invoice a renter",
+          "collect the deposit"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:invoices",
+       "tab": "operate",
+       "sub": "invoices",
+       "name": "Bills",
+       "sees": [
+        "office"
+       ],
+       "what": "Bill someone for a rental, an event fee or speaking, and see what is still unpaid.",
+       "words": [
+        "invoice",
+        "invoices",
+        "bill",
+        "bills"
+       ],
+       "answers": [
+        {
+         "id": "send-someone-a-bill",
+         "q": "Send someone a bill",
+         "a": "Press New invoice, choose the member, add a line for what it is for and the amount, and press Send invoice. Save draft keeps it without sending.",
+         "words": [
+          "invoice",
+          "charge for the retreat",
+          "event fee",
+          "bill a member"
+         ]
+        },
+        {
+         "id": "mark-a-bill-as-paid",
+         "q": "Mark a bill as paid",
+         "a": "On the bill’s row press Mark paid. Remind has Chief draft a friendly reminder for one that is late.",
+         "words": [
+          "paid by check",
+          "record a payment",
+          "send a reminder"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:inventory",
+       "tab": "operate",
+       "sub": "inventory",
+       "name": "Supplies & equipment",
+       "sees": [
+        "office"
+       ],
+       "what": "Count what the church keeps on hand, take in deliveries and keep a list of suppliers.",
+       "words": [
+        "inventory",
+        "stock",
+        "supplies",
+        "equipment"
+       ],
+       "answers": [
+        {
+         "id": "count-what-is-on-hand",
+         "q": "Count what is on hand",
+         "a": "Press Count stock and enter how many of each item you have. Use Receive stock when a delivery comes in.",
+         "words": [
+          "inventory",
+          "how many chairs",
+          "running low",
+          "stock count"
+         ]
+        },
+        {
+         "id": "add-a-supplier",
+         "q": "Add a supplier",
+         "a": "Press the Suppliers tab, then Add a vendor, type the name and press Add vendor. Only the name is required.",
+         "words": [
+          "vendor",
+          "where we buy supplies",
+          "office supply store"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Money out",
+     "pages": [
+      {
+       "key": "operate:checks",
+       "tab": "operate",
+       "sub": "checks",
+       "name": "Check requests",
+       "sees": "money",
+       "what": "Ask for a check or a pay-back with its receipt, approve it and mark it paid.",
+       "words": [
+        "check request",
+        "check requests",
+        "reimbursement",
+        "reimbursements",
+        "reimburse",
+        "paid back",
+        "pay back",
+        "get paid back",
+        "receipt",
+        "receipts",
+        "expense",
+        "expense report",
+        "budget",
+        "budgets",
+        "ministry budget",
+        "money out",
+        "cut a check",
+        "write a check"
+       ],
+       "answers": [
+        {
+         "id": "pay-someone-back",
+         "q": "Pay someone back",
+         "a": "Press Add a request, enter the Amount, who gets paid, what it’s for and the ministry it comes out of, and add the receipt as a photo or PDF. Then press Add the request.",
+         "words": [
+          "reimburse a volunteer",
+          "pay back a deacon",
+          "cut a check",
+          "turn in a receipt"
+         ]
+        },
+        {
+         "id": "approve-a-check-request",
+         "q": "Approve a check request",
+         "a": "The next request waiting sits at the top under Waiting for a yes. Press Approve with its amount, or Decline with a reason.",
+         "words": [
+          "say yes to a reimbursement",
+          "treasurer approval",
+          "decline a request"
+         ]
+        },
+        {
+         "id": "mark-a-check-as-paid",
+         "q": "Mark a check as paid",
+         "a": "Under Approved, not paid yet press Mark paid on the request. It goes into the books against its ministry, with its receipt.",
+         "words": [
+          "check went out",
+          "record the payment",
+          "close a request"
+         ]
+        },
+        {
+         "id": "set-each-ministrys-budget",
+         "q": "Set each ministry’s budget",
+         "a": "Press Limit & budgets, enter each ministry’s budget for the year and press Save. Add a ministry adds a new line.",
+         "words": [
+          "ministry budget",
+          "spending limit",
+          "how much is left"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Church records",
+     "pages": [
+      {
+       "key": "operate:register",
+       "tab": "operate",
+       "sub": "register",
+       "name": "Church records",
+       "sees": [
+        "people_care",
+        "office"
+       ],
+       "what": "Keep the register of baptisms, dedications, weddings, funerals and membership, and print certificates.",
+       "words": [
+        "register",
+        "records",
+        "church records",
+        "baptism",
+        "baptisms",
+        "dedication",
+        "dedications",
+        "baby dedication",
+        "wedding",
+        "weddings",
+        "funeral",
+        "funerals",
+        "membership",
+        "certificate",
+        "certificates",
+        "baptism certificate",
+        "marriage"
+       ],
+       "answers": [
+        {
+         "id": "record-a-baptism-wedding-or-dedication",
+         "q": "Record a baptism, wedding or dedication",
+         "a": "Press Add an entry, choose what it is, add the people, the day, the Officiant and the Place, and press Add to the register.",
+         "words": [
+          "baptism record",
+          "baby dedication",
+          "new member date",
+          "funeral record"
+         ]
+        },
+        {
+         "id": "print-a-certificate",
+         "q": "Print a certificate",
+         "a": "Find the entry in its year and press Certificate, then Print the certificate. In the print window pick your printer, or Save as PDF.",
+         "words": [
+          "baptism certificate",
+          "dedication certificate",
+          "membership certificate"
+         ]
+        },
+        {
+         "id": "plan-a-baptism-that-has-not-happened-yet",
+         "q": "Plan a baptism that has not happened yet",
+         "a": "Press Add an entry, choose It’s planned where it asks whether it has happened, and set the day. When the day comes, press Record it on the planned entry.",
+         "words": [
+          "upcoming baptism",
+          "schedule a wedding",
+          "planned dedication"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Board",
+     "pages": [
+      {
+       "key": "operate:board",
+       "tab": "operate",
+       "sub": "board",
+       "name": "Board & minutes",
+       "sees": [
+        "office"
+       ],
+       "what": "Plan board meetings, take the minutes, record votes and look up past decisions.",
+       "words": [
+        "board",
+        "boards",
+        "board meeting",
+        "board meetings",
+        "elders",
+        "elder board",
+        "deacons",
+        "deacon",
+        "deacon board",
+        "trustees",
+        "church council",
+        "minutes",
+        "meeting minutes",
+        "agenda",
+        "vote",
+        "votes",
+        "motion",
+        "decisions",
+        "decision log",
+        "decisions log",
+        "quorum"
+       ],
+       "answers": [
+        {
+         "id": "set-up-a-board",
+         "q": "Set up a board",
+         "a": "Press Add a board, name it, choose how its quorum is counted and press Add the board. Then press Members & quorum on its card to add who sits on it.",
+         "words": [
+          "elders",
+          "deacons",
+          "trustees",
+          "church council"
+         ]
+        },
+        {
+         "id": "plan-a-board-meeting",
+         "q": "Plan a board meeting",
+         "a": "Press Plan a meeting, pick the board, the Day, the Time and Where, and press Plan it. Open items from last time come onto the agenda on their own.",
+         "words": [
+          "schedule the deacons meeting",
+          "agenda",
+          "board meeting"
+         ]
+        },
+        {
+         "id": "take-the-minutes-and-record-a-vote",
+         "q": "Take the minutes and record a vote",
+         "a": "Open the meeting and press Start the meeting, then type the minutes under each agenda item and press Record a decision for a vote. When it is over press End and send the minutes.",
+         "words": [
+          "meeting minutes",
+          "motion",
+          "who voted",
+          "quorum"
+         ]
+        },
+        {
+         "id": "find-an-old-board-decision",
+         "q": "Find an old board decision",
+         "a": "Press Decisions log and type a word from the motion, like roof or budget. You can narrow it by Board and Year.",
+         "words": [
+          "when did we approve the roof",
+          "past votes",
+          "decision history"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Leaders",
+     "pages": [
+      {
+       "key": "operate:leaders-note",
+       "tab": "operate",
+       "sub": "leaders-note",
+       "name": "Leaders note",
+       "sees": [
+        "office"
+       ],
+       "what": "Read over the week’s note to every leader, add one win, and send it.",
+       "words": [
+        "leaders note",
+        "leader note",
+        "monday note",
+        "note to leaders",
+        "leaders email",
+        "email the leaders"
+       ],
+       "answers": [
+        {
+         "id": "send-this-weeks-note-to-the-leaders",
+         "q": "Send this week’s note to the leaders",
+         "a": "Read the draft, press Write the win to add one thing that went right, then press the Send to button and Send now. Each leader gets their own email, and it goes once this week.",
+         "words": [
+          "monday note",
+          "email the leaders",
+          "weekly leader update"
+         ]
+        },
+        {
+         "id": "go-back-to-the-draft-the-app-wrote",
+         "q": "Go back to the draft the app wrote",
+         "a": "Press Start from today’s draft, or Put back the draft under a part you changed.",
+         "words": [
+          "reset the note",
+          "undo my edits",
+          "fresh draft"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:monthly-report",
+       "tab": "operate",
+       "sub": "monthly-report",
+       "name": "Monthly report",
+       "sees": [],
+       "what": "Gather the month’s numbers for each lane, add your notes and send them to the pastor.",
+       "words": [
+        "monthly report",
+        "month report",
+        "report to the pastor",
+        "monthly numbers",
+        "lanes report"
+       ],
+       "answers": [
+        {
+         "id": "send-the-monthly-report-to-the-pastor",
+         "q": "Send the monthly report to the pastor",
+         "a": "Type a line under Your note for each lane and press Save note, then press Send to the pastor and Send now. It goes by email with your notes.",
+         "words": [
+          "report to the pastor",
+          "month end report",
+          "monthly numbers"
+         ]
+        },
+        {
+         "id": "look-at-an-earlier-month",
+         "q": "Look at an earlier month",
+         "a": "Pick it under Month at the top of the page.",
+         "words": [
+          "last month report",
+          "past reports"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Thinking",
+     "pages": [
+      {
+       "key": "grow:notes",
+       "tab": "grow",
+       "sub": "notes",
+       "name": "Notes",
+       "sees": [
+        "office"
+       ],
+       "what": "Jot down a thought, tag it as an idea, a to do or a question, and find it later.",
+       "words": [
+        "note",
+        "notes"
+       ],
+       "answers": [
+        {
+         "id": "write-a-quick-note",
+         "q": "Write a quick note",
+         "a": "Type in the box that says Jot a note and press Note it. Chief guesses the kind, like idea or to do, and you can tap it to change it.",
+         "words": [
+          "jot something down",
+          "remember this",
+          "scratch pad"
+         ]
+        },
+        {
+         "id": "find-an-old-note",
+         "q": "Find an old note",
+         "a": "Type a word in Search your notes. Notes you archived are under Archive and stay searchable.",
+         "words": [
+          "search notes",
+          "archived notes",
+          "where did i write that"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:ideas",
+       "tab": "grow",
+       "sub": "ideas",
+       "name": "Ideas",
+       "sees": [
+        "office"
+       ],
+       "what": "Pin ideas on a board, link the ones that belong together and turn the good ones into tasks or goals.",
+       "words": [
+        "idea",
+        "ideas"
+       ],
+       "answers": [
+        {
+         "id": "put-an-idea-on-the-board",
+         "q": "Put an idea on the board",
+         "a": "Type it in the box at the top and press Capture. On the Board view you can also double-click the board to pin a card where you want it.",
+         "words": [
+          "new idea",
+          "brainstorm",
+          "idea wall"
+         ]
+        },
+        {
+         "id": "turn-an-idea-into-a-task",
+         "q": "Turn an idea into a task",
+         "a": "Open the idea’s card and press Add to my tasks. It makes a real task, with the card’s date if it has one.",
+         "words": [
+          "make it a task",
+          "act on an idea"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:timeline",
+       "tab": "grow",
+       "sub": "timeline",
+       "name": "Timeline",
+       "sees": [
+        "office"
+       ],
+       "what": "Read the story of what the church set out to do, goal by goal.",
+       "words": [
+        "timeline",
+        "activity",
+        "what happened"
+       ],
+       "answers": [
+        {
+         "id": "see-what-has-happened-toward-each-goal",
+         "q": "See what has happened toward each goal",
+         "a": "Open Timeline: each goal is a chapter with what was done under it. Press Refresh to read it again.",
+         "words": [
+          "what happened",
+          "church story",
+          "progress so far"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:goals",
+       "tab": "grow",
+       "sub": "goals",
+       "name": "Goals",
+       "sees": [],
+       "what": "Set a target for members, giving or meetings and watch the progress toward it.",
+       "words": [
+        "goal",
+        "goals",
+        "target"
+       ],
+       "answers": [
+        {
+         "id": "set-a-goal",
+         "q": "Set a goal",
+         "a": "Press New Goal, say what you want to achieve, set the Target and the Period, choose what to count (new members, gifts received, meetings held) and press Save Goal.",
+         "words": [
+          "attendance goal",
+          "giving target",
+          "membership goal"
+         ]
+        },
+        {
+         "id": "mark-a-goal-as-reached",
+         "q": "Mark a goal as reached",
+         "a": "Press Complete on the goal’s card. It moves to Completed.",
+         "words": [
+          "finish a goal",
+          "goal met"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Tools",
+     "pages": [
+      {
+       "key": "build:custom-modules",
+       "tab": "build",
+       "sub": "custom-modules",
+       "name": "Your trackers",
+       "sees": [
+        "office"
+       ],
+       "what": "See the trackers made for your church and ask Chief for a new one.",
+       "words": [
+        "solution",
+        "solutions",
+        "trackers",
+        "tracker"
+       ],
+       "answers": [
+        {
+         "id": "get-a-new-tracker-made",
+         "q": "Get a new tracker made",
+         "a": "Press Ask Chief to build one and say what you need to keep track of. Chief designs it, and it shows up here and in your menu.",
+         "words": [
+          "track something new",
+          "sign-out sheet",
+          "prayer chain",
+          "custom list"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:module-builder",
+       "tab": "build",
+       "sub": "module-builder",
+       "name": "Make a tracker",
+       "sees": [
+        "office"
+       ],
+       "what": "Describe what you need tracked, or pick the fields yourself, and make the tracker.",
+       "words": [
+        "build a solution",
+        "new tool",
+        "make a tracker"
+       ],
+       "answers": [
+        {
+         "id": "make-a-tracker-yourself",
+         "q": "Make a tracker yourself",
+         "a": "Choose Describe It and tell the builder what to track, or Build Manually to name the fields yourself. Press Make the tracker to save it.",
+         "words": [
+          "build a tracker",
+          "new list",
+          "custom form"
+         ]
+        },
+        {
+         "id": "change-or-pause-a-tracker",
+         "q": "Change or pause a tracker",
+         "a": "Find it in the list of your modules at the top and press Edit, or Pause to stop it for now.",
+         "words": [
+          "edit a tracker",
+          "turn off a tracker",
+          "add a field"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:outcomes",
+       "tab": "operate",
+       "sub": "outcomes",
+       "name": "Program results",
+       "sees": [
+        "office"
+       ],
+       "what": "Show how a program like the food pantry is helping, and prepare a report from the records.",
+       "words": [
+        "outcome",
+        "outcomes",
+        "program results",
+        "programs"
+       ],
+       "answers": [
+        {
+         "id": "make-a-report-on-how-a-program-is-helping",
+         "q": "Make a report on how a program is helping",
+         "a": "Press Set up report and choose the tracker that holds sign-ups and the one that holds dated readings. Then press Save report snapshot, and a manager or the owner approves it before it is exported.",
+         "words": [
+          "outcomes report",
+          "grant report",
+          "food pantry results",
+          "program numbers"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "media",
+   "label": "Media",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "grow:sermons",
+       "tab": "grow",
+       "sub": "sermons",
+       "name": "Sermons",
+       "sees": [
+        "worship_media",
+        "website_outreach"
+       ],
+       "what": "Add each message with its video or audio link, group them by series and publish them to your site.",
+       "words": [
+        "sermon",
+        "sermons",
+        "message",
+        "preaching",
+        "podcast"
+       ],
+       "answers": [
+        {
+         "id": "add-sundays-message",
+         "q": "Add Sunday’s message",
+         "a": "Press Add a message, type the Title, the day it was preached, the Speaker and the Video link, and press Save and publish. With Show it on your site turned off it is saved as a draft.",
+         "words": [
+          "post the sermon",
+          "upload the message",
+          "sermon video",
+          "podcast"
+         ]
+        },
+        {
+         "id": "start-a-sermon-series",
+         "q": "Start a sermon series",
+         "a": "In the message form press the New series button beside Series, name it and press Save. Edit series on the page changes or removes one later.",
+         "words": [
+          "new series",
+          "group sermons",
+          "series name"
+         ]
+        },
+        {
+         "id": "make-short-clips-from-a-sermon",
+         "q": "Make short clips from a sermon",
+         "a": "Press Make clips. It opens Clips, where you upload the recording.",
+         "words": [
+          "sermon clips",
+          "reels",
+          "short video"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:live",
+       "tab": "grow",
+       "sub": "live",
+       "name": "Live",
+       "sees": [
+        "worship_media"
+       ],
+       "what": "Go live with the stream you already use so members watch in their app with a chat.",
+       "words": [
+        "live",
+        "livestream",
+        "stream",
+        "broadcast",
+        "youtube"
+       ],
+       "answers": [
+        {
+         "id": "go-live-on-sunday",
+         "q": "Go live on Sunday",
+         "a": "Under Go live type what’s live, paste your stream’s link, choose the service it counts as attendance for and press Go live. Members watch it in their app.",
+         "words": [
+          "livestream",
+          "start the stream",
+          "broadcast the service",
+          "youtube live"
+         ]
+        },
+        {
+         "id": "end-the-live-service",
+         "q": "End the live service",
+         "a": "Press End live, then Yes, end it.",
+         "words": [
+          "stop the stream",
+          "finish live"
+         ]
+        },
+        {
+         "id": "look-after-the-chat-while-live",
+         "q": "Look after the chat while live",
+         "a": "Beside a message press Hide, Pin or Pause. Type in Message as Host to speak to everyone, or press Close chat to shut it.",
+         "words": [
+          "moderate chat",
+          "pin a message",
+          "close the chat",
+          "remove a comment"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:video-studio",
+       "tab": "grow",
+       "sub": "video-studio",
+       "name": "Video studio",
+       "sees": [
+        "worship_media",
+        "website_outreach"
+       ],
+       "what": "Describe a video, shape the scenes with Chief, add your photos and make an MP4.",
+       "words": [
+        "video",
+        "clip",
+        "clips"
+       ],
+       "answers": [
+        {
+         "id": "make-a-short-video-with-chief",
+         "q": "Make a short video with Chief",
+         "a": "Press New video, name it, type your idea, pick the shape and press Create with Chief. Review the scenes, then press Create video and download the MP4 when it is ready.",
+         "words": [
+          "promo video",
+          "announcement video",
+          "event video"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:video-clips",
+       "tab": "grow",
+       "sub": "video-clips",
+       "name": "Video Clips",
+       "sees": [
+        "office"
+       ],
+       "what": "Upload a sermon recording and get short captioned clips with covers, ready to post.",
+       "words": [],
+       "answers": [
+        {
+         "id": "cut-clips-from-a-sermon-recording",
+         "q": "Cut clips from a sermon recording",
+         "a": "Press Choose a video, tick I have the right to use this recording and press Upload. Then press Find my best clips, and you get a notification when they are ready.",
+         "words": [
+          "sermon clips",
+          "reels",
+          "shorts",
+          "highlights"
+         ]
+        },
+        {
+         "id": "cut-one-clip-yourself",
+         "q": "Cut one clip yourself",
+         "a": "Press Cut one yourself, give the clip a name, type the Start and End in seconds and press Create draft clip.",
+         "words": [
+          "trim a video",
+          "manual clip"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:media-library",
+       "tab": "build",
+       "sub": "media-library",
+       "name": "Media Library",
+       "sees": [
+        "website_outreach",
+        "worship_media"
+       ],
+       "what": "Keep the church’s photos and logos in one place for the website, emails and print.",
+       "words": [
+        "media",
+        "photos",
+        "images",
+        "gallery",
+        "pictures"
+       ],
+       "answers": [
+        {
+         "id": "add-a-photo",
+         "q": "Add a photo",
+         "a": "Find the spot it is for, like Hero Banner or About Photo, and press Drop or click to upload. For the gallery press Add image.",
+         "words": [
+          "upload a picture",
+          "church photos",
+          "new headshot"
+         ]
+        },
+        {
+         "id": "keep-a-gallery-photo-off-the-website",
+         "q": "Keep a gallery photo off the website",
+         "a": "Press Edit on the photo in the gallery and untick Show on website.",
+         "words": [
+          "hide a photo",
+          "remove from site"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Through the week",
+     "pages": [
+      {
+       "key": "build:devotionals",
+       "tab": "build",
+       "sub": "devotionals",
+       "name": "Devotionals",
+       "sees": [
+        "people_care",
+        "worship_media"
+       ],
+       "what": "Write a devotional series and send it to your members a day at a time.",
+       "words": [
+        "devotional",
+        "devotionals",
+        "daily reading"
+       ],
+       "answers": [
+        {
+         "id": "write-a-devotional-series",
+         "q": "Write a devotional series",
+         "a": "Press New devotional, give it a Title, press Add a day for each day and fill in its Scripture and The words, then press Publish. Members see it in the Bible tab of the app.",
+         "words": [
+          "daily devotion",
+          "21 days of prayer",
+          "lent readings",
+          "focus week"
+         ]
+        },
+        {
+         "id": "paste-in-a-devotional-you-already-wrote",
+         "q": "Paste in a devotional you already wrote",
+         "a": "Open Paste in a devotional you already wrote and paste the whole thing, with each day starting on its own line as Day 1, Day 2 and so on. Press Read it.",
+         "words": [
+          "import a devotional",
+          "copy from word"
+         ]
+        },
+        {
+         "id": "take-a-devotional-down",
+         "q": "Take a devotional down",
+         "a": "Open it and press Take it down. It is a draft again and members no longer see it.",
+         "words": [
+          "unpublish",
+          "hide a devotional"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:reading-plan",
+       "tab": "build",
+       "sub": "reading-plan",
+       "name": "Bible reading plan",
+       "sees": [
+        "people_care",
+        "worship_media"
+       ],
+       "what": "Choose the Bible reading plan your members follow in the app and the day it starts.",
+       "words": [
+        "reading plan",
+        "bible plan",
+        "bible reading"
+       ],
+       "answers": [
+        {
+         "id": "start-a-bible-reading-plan",
+         "q": "Start a Bible reading plan",
+         "a": "Choose one under Plan, set the day under Starts and press Start this plan.",
+         "words": [
+          "read the bible in a year",
+          "reading schedule",
+          "daily bible reading"
+         ]
+        },
+        {
+         "id": "stop-or-switch-the-plan",
+         "q": "Stop or switch the plan",
+         "a": "Press Stop the plan, or pick another under Start a different plan and press Switch to this plan.",
+         "words": [
+          "change the reading plan",
+          "end the plan"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reach",
+   "label": "Reach",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "grow:marketing",
+       "tab": "grow",
+       "sub": "marketing",
+       "name": "Marketing",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Plan the week’s posts with Chief, approve each one and see what went out.",
+       "words": [
+        "marketing",
+        "promote"
+       ],
+       "answers": [
+        {
+         "id": "approve-this-weeks-posts",
+         "q": "Approve this week’s posts",
+         "a": "On This week each draft says Waiting for you. Press Approve on one, or the Approve all button, and it goes out at its time.",
+         "words": [
+          "ok the posts",
+          "review drafts",
+          "facebook posts waiting"
+         ]
+        },
+        {
+         "id": "write-a-post",
+         "q": "Write a post",
+         "a": "Press New post, type the Caption, pick a picture and the accounts under Goes to, and press Save for my OK. It waits on the desk until you approve it.",
+         "words": [
+          "post to facebook",
+          "post to instagram",
+          "announce an event online"
+         ]
+        },
+        {
+         "id": "have-chief-plan-the-weeks-posts",
+         "q": "Have Chief plan the week’s posts",
+         "a": "On This week press Plan the week now. Chief writes the posts and makes their flyers, and they show up as drafts for your OK in a minute or two.",
+         "words": [
+          "content calendar",
+          "schedule posts",
+          "weekly plan"
+         ]
+        },
+        {
+         "id": "stop-a-post-from-going-out",
+         "q": "Stop a post from going out",
+         "a": "Press Skip on a draft, or Take back on one you already approved.",
+         "words": [
+          "cancel a post",
+          "unschedule"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:create",
+       "tab": "grow",
+       "sub": "create",
+       "name": "Create",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Make a post, a flyer, a video or clips from a recording.",
+       "words": [
+        "create",
+        "flyer",
+        "design",
+        "make a post"
+       ],
+       "answers": [
+        {
+         "id": "make-a-flyer",
+         "q": "Make a flyer",
+         "a": "Press Flyer, type what the flyer is for and press Design it with Chief. Chief tells you in the chat when it is ready, and it lands in your library for the Post tab.",
+         "words": [
+          "event flyer",
+          "graphic",
+          "design a poster"
+         ]
+        },
+        {
+         "id": "write-a-post-for-our-accounts",
+         "q": "Write a post for our accounts",
+         "a": "Press Post, type the Caption, pick a picture and the accounts, and press Save for my OK. Nothing goes out until it is approved on the marketing desk.",
+         "words": [
+          "facebook post",
+          "instagram post",
+          "social post"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:content",
+       "tab": "grow",
+       "sub": "content",
+       "name": "Posts",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "The older plan for your posts. Marketing has taken its place on the menu.",
+       "words": [
+        "posts",
+        "post",
+        "content plan"
+       ],
+       "answers": []
+      },
+      {
+       "key": "build:social-media",
+       "tab": "build",
+       "sub": "social-media",
+       "name": "Social Media",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Connect the church’s social accounts, see where each post went and draft post ideas.",
+       "words": [
+        "social",
+        "facebook",
+        "instagram"
+       ],
+       "answers": [
+        {
+         "id": "connect-our-facebook-or-instagram",
+         "q": "Connect our Facebook or Instagram",
+         "a": "Under Your social accounts press the network’s button below Connect an account and sign in on the network itself. You come right back here with it connected.",
+         "words": [
+          "link facebook",
+          "add instagram",
+          "connect tiktok",
+          "connect youtube"
+         ]
+        },
+        {
+         "id": "get-help-with-the-words-for-a-post",
+         "q": "Get help with the words for a post",
+         "a": "In the box under Need words, type what you want to share, pick the Platforms and a Tone and press Draft posts. Press Post in Create on the one you like.",
+         "words": [
+          "caption ideas",
+          "what should i post",
+          "write a caption"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:campaigns",
+       "tab": "grow",
+       "sub": "campaigns",
+       "name": "Outreach",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Have Chief draft an email or text series toward a goal, then read it and launch it.",
+       "words": [
+        "outreach",
+        "campaign",
+        "campaigns",
+        "newsletter",
+        "blast"
+       ],
+       "answers": [
+        {
+         "id": "send-an-email-or-text-campaign",
+         "q": "Send an email or text campaign",
+         "a": "Under New campaign type the goal, choose who it goes to and press Draft it with Chief. Read the messages, then press Launch and Confirm launch.",
+         "words": [
+          "email blast",
+          "newsletter",
+          "invite people back",
+          "easter invitation"
+         ]
+        },
+        {
+         "id": "pause-or-delete-a-campaign",
+         "q": "Pause or delete a campaign",
+         "a": "Press Pause on one that is running. To remove one, press Delete and then Yes, delete.",
+         "words": [
+          "stop a campaign",
+          "cancel emails"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:getfound",
+       "tab": "grow",
+       "sub": "getfound",
+       "name": "Get found",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Work through a short list of steps that help people find you online.",
+       "words": [
+        "get found",
+        "google",
+        "findable"
+       ],
+       "answers": [
+        {
+         "id": "work-through-the-steps-to-be-found-online",
+         "q": "Work through the steps to be found online",
+         "a": "The page shows your next step. Press Show me how, do it, then press I’ve done this and it moves to the next one.",
+         "words": [
+          "google",
+          "show up in search",
+          "be found on maps"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:reviews",
+       "tab": "grow",
+       "sub": "reviews",
+       "name": "Reviews",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Ask people for a review after a meeting and keep the ones that come back.",
+       "words": [
+        "review",
+        "reviews",
+        "testimonial",
+        "testimonials"
+       ],
+       "answers": [
+        {
+         "id": "ask-someone-for-a-review",
+         "q": "Ask someone for a review",
+         "a": "In the Ask Queue press Request review beside the person. Press Mark asked if you already asked them outside the app.",
+         "words": [
+          "testimonial",
+          "google review",
+          "ask for feedback"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "grow:offers",
+       "tab": "grow",
+       "sub": "offers",
+       "name": "Offers",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Make a discount code with its own link and QR code, and share or print it.",
+       "words": [
+        "offer",
+        "offers",
+        "coupon"
+       ],
+       "answers": [
+        {
+         "id": "make-an-offer-code",
+         "q": "Make an offer code",
+         "a": "Press Make an offer, choose What they get, Who can use it and When it works, and press Make the offer. Then use Copy link, Post it or Print a counter card to share it.",
+         "words": [
+          "coupon",
+          "discount",
+          "promo code"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "web",
+   "label": "Web",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "build:my-site",
+       "tab": "build",
+       "sub": "my-site",
+       "name": "Website",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Build the church website with Chief, change its words and photos, and put it online.",
+       "words": [
+        "website",
+        "site",
+        "web"
+       ],
+       "answers": [
+        {
+         "id": "change-words-on-the-website",
+         "q": "Change words on the website",
+         "a": "Press Edit in the bar above the page, tap the words and retype them. Edits save as you go, and you press Done when you are finished.",
+         "words": [
+          "fix a typo",
+          "update service times",
+          "edit the site"
+         ]
+        },
+        {
+         "id": "change-a-photo-on-the-site",
+         "q": "Change a photo on the site",
+         "a": "Press Edit and tap a dashed photo frame to drop in a new photo. Site photos, under More, lists every photo spot on the site.",
+         "words": [
+          "swap a picture",
+          "new hero photo",
+          "site images"
+         ]
+        },
+        {
+         "id": "take-the-site-offline-or-bring-it-back",
+         "q": "Take the site offline or bring it back",
+         "a": "Press the Live or Offline button in the site bar and choose Take site offline to edit or Bring site back online. While it is off, visitors see a “we’ll be right back” page and nothing is deleted.",
+         "words": [
+          "unpublish",
+          "hide the website",
+          "publish the site"
+         ]
+        },
+        {
+         "id": "use-our-own-web-address",
+         "q": "Use our own web address",
+         "a": "Press Live in the site bar and choose Use your own domain, then type the address and press Connect. Add the records it shows at your domain provider and press Verify.",
+         "words": [
+          "custom domain",
+          "our .org address",
+          "dns"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:link-page",
+       "tab": "build",
+       "sub": "link-page",
+       "name": "Links",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Set up one page that holds all the church’s links, to share in a bio, a text or on a card.",
+       "words": [
+        "link",
+        "links",
+        "bio"
+       ],
+       "answers": [
+        {
+         "id": "turn-on-our-link-page",
+         "q": "Turn on our link page",
+         "a": "Tick Enable link page and press Save. Then press URL to copy its address, QR for a code or Preview to see it.",
+         "words": [
+          "link in bio",
+          "one link",
+          "qr code for links"
+         ]
+        },
+        {
+         "id": "add-a-link-to-the-page",
+         "q": "Add a link to the page",
+         "a": "Under Custom Links type a Label and the address and press Add, then press Save.",
+         "words": [
+          "add giving link",
+          "add a button",
+          "new link"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:booking-share",
+       "tab": "build",
+       "sub": "booking-share",
+       "name": "Meetings page",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Share a page where people book a meeting with the pastor or the office, and set the hours.",
+       "words": [
+        "meetings",
+        "booking",
+        "book a meeting"
+       ],
+       "answers": [
+        {
+         "id": "set-up-a-page-where-people-book-a-meeting",
+         "q": "Set up a page where people book a meeting",
+         "a": "If the church has no page yet, press Ask Chief to set up booking. Chief builds it from your hours, and you review it before anything goes live.",
+         "words": [
+          "book time with the pastor",
+          "counseling appointments",
+          "scheduling page"
+         ]
+        },
+        {
+         "id": "share-the-link-for-booking-a-meeting",
+         "q": "Share the link for booking a meeting",
+         "a": "The page opens on Share. Press Copy beside the link, and press the Not published button so it reads Published and the link works.",
+         "words": [
+          "booking link",
+          "send the meeting link",
+          "qr code"
+         ]
+        },
+        {
+         "id": "set-the-hours-people-can-book",
+         "q": "Set the hours people can book",
+         "a": "Press Availability, set your Weekly hours and any Blocked dates, and press Save.",
+         "words": [
+          "office hours",
+          "block a vacation",
+          "when can people book"
+         ]
+        },
+        {
+         "id": "connect-my-own-calendar-so-im-not-double-booked",
+         "q": "Connect my own calendar so I’m not double booked",
+         "a": "Press Availability and find Use the calendar you already have. Paste your Google, Outlook or iCloud calendar’s private link and press Connect, and only your busy times are read.",
+         "words": [
+          "connect a calendar",
+          "google calendar",
+          "outlook calendar",
+          "double booked"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:brand",
+       "tab": "build",
+       "sub": "brand",
+       "name": "Brand Studio",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Set the church’s colors, fonts, logo and voice, used on the site, emails and print.",
+       "words": [
+        "brand",
+        "logo",
+        "colors",
+        "fonts"
+       ],
+       "answers": [
+        {
+         "id": "change-the-churchs-colors-or-fonts",
+         "q": "Change the church’s colors or fonts",
+         "a": "Open the Look tab and change the Palette or the Type. Your edits are kept as a draft until you press Review and publish in the bar at the bottom.",
+         "words": [
+          "church colors",
+          "change the font",
+          "brand colors"
+         ]
+        },
+        {
+         "id": "upload-our-logo",
+         "q": "Upload our logo",
+         "a": "Open the Mark tab and press Upload on the Primary logo plate. The other logo shapes are drawn from it.",
+         "words": [
+          "new logo",
+          "replace the logo",
+          "favicon"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Member app",
+     "pages": [
+      {
+       "key": "build:member-app",
+       "tab": "build",
+       "sub": "member-app",
+       "name": "Member app",
+       "sees": [
+        "website_outreach",
+        "office"
+       ],
+       "what": "Turn the member app on, choose its look and pictures, and control how members sign in.",
+       "words": [
+        "app",
+        "member app",
+        "tabs",
+        "portal",
+        "sign in"
+       ],
+       "answers": [
+        {
+         "id": "turn-the-member-app-on",
+         "q": "Turn the member app on",
+         "a": "Press the Off switch at the top so it reads On, then press Copy to share the address. Members sign in with a 6-digit code sent to their email or phone, with no password.",
+         "words": [
+          "open the app to members",
+          "app link",
+          "how do members log in"
+         ]
+        },
+        {
+         "id": "change-the-pictures-in-the-app",
+         "q": "Change the pictures in the app",
+         "a": "Under Pictures in the app press Change pictures and choose the photo for each spot. Under Who else can change them you can add your media team.",
+         "words": [
+          "app photos",
+          "home picture",
+          "event image"
+         ]
+        },
+        {
+         "id": "see-the-app-the-way-a-member-does",
+         "q": "See the app the way a member does",
+         "a": "Under Preview as a member use Find a person, choose someone and press Open preview. It opens their week, groups and giving without a code.",
+         "words": [
+          "test the app",
+          "view as member",
+          "what do members see"
+         ]
+        },
+        {
+         "id": "sign-everyone-out-of-the-app",
+         "q": "Sign everyone out of the app",
+         "a": "Press Sign everyone out, then Yes, sign everyone out.",
+         "words": [
+          "log everyone out",
+          "lost phone",
+          "reset sign-ins"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:events-page",
+       "tab": "build",
+       "sub": "events-page",
+       "name": "Events page",
+       "sees": [
+        "website_outreach",
+        "office"
+       ],
+       "what": "Turn on the public page where people sign up for your events, and share its link.",
+       "words": [
+        "rsvp",
+        "sign up",
+        "signup",
+        "registration",
+        "events page"
+       ],
+       "answers": [
+        {
+         "id": "turn-on-event-sign-ups",
+         "q": "Turn on event sign-ups",
+         "a": "Press the Off switch beside Your events page so it reads On, then press Copy to share the link. Only events set to Public show on it.",
+         "words": [
+          "rsvp page",
+          "registration link",
+          "event signup"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "settings",
+   "label": "Settings",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:areas",
+       "tab": "operate",
+       "sub": "areas",
+       "name": "Logins & areas",
+       "sees": [
+        "office"
+       ],
+       "what": "See who has each part of the church, and set what each office login sees and does.",
+       "words": [
+        "areas",
+        "logins",
+        "login",
+        "who sees what",
+        "access",
+        "staff"
+       ],
+       "answers": [
+        {
+         "id": "see-a-new-login-after-inviting-them",
+         "q": "See a new login after inviting them",
+         "a": "Logins are made in All settings: open Your church, then Team, type their email, pick Their lane or a role and press Invite. They then show here on the Office logins tab, where you set what they see.",
+         "words": [
+          "add a staff member",
+          "invite the secretary",
+          "new user",
+          "add an admin"
+         ]
+        },
+        {
+         "id": "change-what-a-login-can-see",
+         "q": "Change what a login can see",
+         "a": "Open the Office logins tab and press Change beside the person, or Give areas if they have none yet. Tick every area they work in and press Save.",
+         "words": [
+          "who sees what",
+          "limit access",
+          "permissions",
+          "hide giving from staff"
+         ]
+        },
+        {
+         "id": "see-the-app-the-way-another-login-sees-it",
+         "q": "See the app the way another login sees it",
+         "a": "On the Office logins tab press See as beside their name. Press Back to yours when you are done.",
+         "words": [
+          "view as staff",
+          "check their menu",
+          "test a login"
+         ]
+        },
+        {
+         "id": "change-who-does-a-job",
+         "q": "Change who does a job",
+         "a": "Open the Duties tab, press Move beside the duty, or Name someone if nobody has it, pick the login and press Save.",
+         "words": [
+          "who sends the weekly text",
+          "assign a duty",
+          "who does the posts"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:about-your-business",
+       "tab": "build",
+       "sub": "about-your-business",
+       "name": "About your church",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "See what Chief knows about the church and talk it through to fill in the rest.",
+       "words": [
+        "about",
+        "church profile",
+        "what chief knows"
+       ],
+       "answers": [
+        {
+         "id": "tell-chief-about-the-church",
+         "q": "Tell Chief about the church",
+         "a": "Press Talk it through with Chief. It is a conversation of about fifteen minutes, and you can pause any time and pick it up where you left off.",
+         "words": [
+          "church profile",
+          "what chief knows",
+          "set up the church"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:integrations",
+       "tab": "build",
+       "sub": "integrations",
+       "name": "Integrations",
+       "sees": [
+        "office"
+       ],
+       "what": "Connect the outside services the church uses: email, the bank, card payments and social accounts.",
+       "words": [
+        "integration",
+        "integrations",
+        "connect"
+       ],
+       "answers": [
+        {
+         "id": "connect-email",
+         "q": "Connect email",
+         "a": "On the Email tile press Set up email, or Open Email setup once it is started. It takes you to Email setup, where the sending address and the inbox are connected.",
+         "words": [
+          "gmail",
+          "church email address",
+          "send from our domain"
+         ]
+        },
+        {
+         "id": "connect-the-churchs-bank",
+         "q": "Connect the church’s bank",
+         "a": "Under BANK CONNECTION press Connect Bank and sign in to your bank. Its transactions then come into the books.",
+         "words": [
+          "link bank account",
+          "plaid",
+          "bank feed"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:agents",
+       "tab": "operate",
+       "sub": "agents",
+       "name": "Autopilot",
+       "sees": [
+        "office"
+       ],
+       "what": "Choose how much Chief’s helpers do without asking, and see what ran by itself.",
+       "words": [
+        "autopilot",
+        "agents"
+       ],
+       "answers": [
+        {
+         "id": "choose-how-much-runs-without-asking",
+         "q": "Choose how much runs without asking",
+         "a": "Under Autonomy pick Manual, Smart or Full Auto for Overall, or on one helper’s card. Full Auto asks you to confirm before it turns on.",
+         "words": [
+          "turn off automatic messages",
+          "approve everything myself",
+          "automation level"
+         ]
+        },
+        {
+         "id": "see-what-ran-by-itself",
+         "q": "See what ran by itself",
+         "a": "Scroll to Activity and open the Autopilot Log for the last 7 days.",
+         "words": [
+          "what did chief send",
+          "automatic activity",
+          "auto log"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:history",
+       "tab": "operate",
+       "sub": "history",
+       "name": "History",
+       "sees": [
+        "office"
+       ],
+       "what": "Look up everything that was done in the church’s account, by whom, and what failed.",
+       "words": [
+        "history",
+        "undo",
+        "log"
+       ],
+       "answers": [
+        {
+         "id": "see-what-was-done-and-who-did-it",
+         "q": "See what was done and who did it",
+         "a": "Type what you are looking for in the box and press Find. Press Failures only to see what did not go through.",
+         "words": [
+          "audit log",
+          "who changed this",
+          "what happened",
+          "activity log"
+         ]
+        },
+        {
+         "id": "undo-something-chief-did",
+         "q": "Undo something Chief did",
+         "a": "History only shows what happened. It has no Undo button and nothing in it can be changed, so to take back something Chief did, ask Chief to undo its last action.",
+         "words": [
+          "take it back",
+          "reverse a change",
+          "made a mistake"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:settings",
+       "tab": "build",
+       "sub": "settings",
+       "name": "All settings",
+       "sees": "every",
+       "what": "Find any setting: logins, your plan and bill, the look, notifications and Chief.",
+       "words": [
+        "settings",
+        "preferences",
+        "theme",
+        "appearance"
+       ],
+       "answers": [
+        {
+         "id": "change-our-plan-or-see-the-bill",
+         "q": "Change our plan or see the bill",
+         "a": "Open Money and plan, then Billing and plan. Next bill shows the date, Switch plan on a plan’s card changes your plan, and Manage Subscription opens Stripe for your card.",
+         "words": [
+          "upgrade",
+          "cancel",
+          "payment method",
+          "subscription"
+         ],
+         "settings": "billing"
+        },
+        {
+         "id": "change-the-look-to-light-or-dark",
+         "q": "Change the look to light or dark",
+         "a": "Open Look and feel, then Appearance. Under the design you like press Light or Dark.",
+         "words": [
+          "dark mode",
+          "light mode",
+          "theme",
+          "colors of the app"
+         ],
+         "settings": "appearance"
+        },
+        {
+         "id": "give-someone-a-login",
+         "q": "Give someone a login",
+         "a": "Open Your church, then Team, type their email, pick Their lane or a role and press Invite. Set what they see afterwards in Logins & areas.",
+         "words": [
+          "invite staff",
+          "add a user",
+          "new office login",
+          "add the treasurer"
+         ],
+         "settings": "team"
+        },
+        {
+         "id": "find-a-setting",
+         "q": "Find a setting",
+         "a": "Type its name in the box at the top that says Find a setting and press the result. Or type what you want changed and press Ask Chief.",
+         "words": [
+          "where is the setting for",
+          "search settings",
+          "notifications",
+          "morning brief"
+         ]
+        },
+        {
+         "id": "change-the-words-the-app-uses",
+         "q": "Change the words the app uses",
+         "a": "Open Your church, then Your words, and press Edit your words.",
+         "words": [
+          "rename members",
+          "terminology",
+          "call them partners"
+         ],
+         "settings": "words"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "help",
+   "label": "Help",
+   "groups": [
+    {
+     "caption": "",
+     "pages": [
+      {
+       "key": "operate:help-center",
+       "tab": "operate",
+       "sub": "help-center",
+       "name": "Help Center",
+       "sees": "every",
+       "what": "Find how to do something, see what has changed, and write to us.",
+       "words": [
+        "help center",
+        "faq",
+        "faqs",
+        "how do i",
+        "how to",
+        "answers",
+        "questions",
+        "support",
+        "contact us",
+        "write to us",
+        "talk to us",
+        "what's new",
+        "whats new",
+        "upgrades",
+        "where is"
+       ],
+       "answers": [
+        {
+         "id": "write-to-the-solutionist-team",
+         "q": "Write to the Solutionist team",
+         "a": "Open Help Center and press Write to us. A person answers, and your messages and our replies stay together under Your messages.",
+         "words": [
+          "contact support",
+          "get help",
+          "report a problem",
+          "something looks wrong"
+         ]
+        },
+        {
+         "id": "see-what-has-changed-in-the-app",
+         "q": "See what has changed in the app",
+         "a": "Open Help Center and look under What’s new. Press Everything that has changed to read every upgrade, newest first.",
+         "words": [
+          "whats new",
+          "upgrades",
+          "new features",
+          "what changed"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Learn",
+     "pages": [
+      {
+       "key": "build:strategy-track",
+       "tab": "build",
+       "sub": "strategy-track",
+       "name": "Solutionist Academy",
+       "sees": "every",
+       "what": "Work through an eight-course planning program with a coach, one session at a time.",
+       "words": [
+        "academy",
+        "learn"
+       ],
+       "answers": [
+        {
+         "id": "start-or-continue-a-course-session",
+         "q": "Start or continue a course session",
+         "a": "Find the course marked NOW STUDYING and press Enter the Lecture Hall. Each session is a conversation with the coach, and your progress is kept.",
+         "words": [
+          "academy",
+          "learn",
+          "training",
+          "coaching"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:structure-import",
+       "tab": "build",
+       "sub": "structure-import",
+       "name": "Bring a file over",
+       "sees": [
+        "office"
+       ],
+       "what": "Turn spreadsheets from your old system into trackers here, with their rows brought in.",
+       "words": [],
+       "answers": [
+        {
+         "id": "bring-in-a-spreadsheet-from-our-old-system",
+         "q": "Bring in a spreadsheet from our old system",
+         "a": "Press Choose CSV files and pick the files you exported. Chief shows what it made of each one, and nothing is saved until you check it and press the Build it and import button.",
+         "words": [
+          "import a spreadsheet",
+          "excel",
+          "upload a csv",
+          "move our lists over"
+         ]
+        },
+        {
+         "id": "paste-a-list-instead-of-a-file",
+         "q": "Paste a list instead of a file",
+         "a": "Press No file? Paste a list instead, paste one row per line with commas between the columns, and press Use this list.",
+         "words": [
+          "copy and paste names",
+          "no spreadsheet"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "build:resources",
+       "tab": "build",
+       "sub": "resources",
+       "name": "Resources",
+       "sees": "every",
+       "what": "Keep a list of guides, worksheets and videos the church shares, free or behind a form.",
+       "words": [],
+       "answers": [
+        {
+         "id": "add-a-resource-to-share",
+         "q": "Add a resource to share",
+         "a": "Press Add Resource, type a Title, paste its link, choose Free or Gated under Access and press Add.",
+         "words": [
+          "share a guide",
+          "worksheet",
+          "download link",
+          "study guide"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

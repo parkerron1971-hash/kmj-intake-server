@@ -1247,6 +1247,15 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     import business_learning
     vertical_block += "\n" + business_learning.PROMPT
 
+    # A church's menu, door by door (church_findway): the same for every
+    # login of a church, so it sits with the per-business manual and
+    # caches. Empty for every other business.
+    try:
+        import church_findway
+        church_menu_block = church_findway.menu_block(biz)
+    except Exception:  # noqa: BLE001 — no menu means today's Chief
+        church_menu_block = ""
+
     # Intelligence blocks — supplied by chief_chat. Each is empty string
     # when there's nothing useful to inject so the prompt stays clean.
     name_block = _build_assistant_name_block(biz)
@@ -2487,6 +2496,7 @@ Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner has
 
 {vertical_block}
 
+{church_menu_block}
 {moved_manual}{delegation_block}
 
 {web_search_block}

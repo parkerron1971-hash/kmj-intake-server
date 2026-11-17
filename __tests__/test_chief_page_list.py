@@ -16,7 +16,7 @@ import chief_of_staff as chief
 import system_destinations
 
 OPERATE = (
-    "areas", "board", "checks", "directory", "giving-page", "help", "leaders-note",
+    "areas", "board", "checks", "directory", "giving-page", "help", "help-center", "leaders-note",
     "money-controls", "monthly-report", "my-week", "pledges", "recurring-gifts", "register",
     "rentals", "reports", "serve-order", "serve-schedule", "serve-teams", "serving", "spaces",
     "statements", "stations", "sunday-home", "team", "volunteer-schedule", "volunteer-teams",
