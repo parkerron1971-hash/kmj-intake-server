@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -45,10 +46,27 @@ router = APIRouter(tags=["member-portal"])
 PAGES = ("/my", "/my/inbox", "/my/inbox/church")
 CHURCH_PAGE = "/my/inbox/church"
 
-# The small button under a church note that opens what it's about.
-LINK_WORDS = {"live": "Watch", "sermons": "Watch", "events": "See the event", "classes": "Open the class",
-              "prayer": "See it", "kids": "Open Kids", "news": "Read it", "serving": "See my serving",
-              "groups": "Open the group", "announcements": "Open"}
+# The small button under a note that opens what it's about, by where it
+# goes (a note's kind says little: an announcement can point anywhere).
+# First match wins; anything else is "Open".
+_GID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+LINK_WORDS = (
+    (re.compile(r"^/my/(live|sermons|watch)(/|$)"), "Watch"),
+    (re.compile(r"^/my/events(/|$)"), "See the event"),
+    (re.compile(rf"^/my/groups/{_GID}/board(/|$)"), "Open the Board"),
+    (re.compile(rf"^/my/groups/{_GID}/prayer(/|$)"), "Open the prayer wall"),
+    (re.compile(rf"^/my/groups/{_GID}/meet(/|$)"), "See the gathering"),
+    (re.compile(rf"^/my/groups/{_GID}/?$"), "Open the group"),
+    (re.compile(r"^/my/serving(/|$)"), "See my serving"),
+    (re.compile(r"^/my/news(/|$)"), "Read it"),
+    (re.compile(r"^/my/classes(/|$)"), "Open the class"),
+)
+
+
+def link_word(url: Any) -> str:
+    """The button's word for a note that opens `url`."""
+    path = re.split(r"[?#]", str(url or ""), maxsplit=1)[0]
+    return next((word for pattern, word in LINK_WORDS if pattern.match(path)), "Open")
 
 DONE = {"ct_sent": "Sent. The church office will see it."}
 ERRORS = {"ct_empty": "Write a message first.",
@@ -79,6 +97,7 @@ THREAD_CSS = """
 .ct-compose textarea.mp-input{resize:none;padding:11px 18px;line-height:1.35;font:inherit;font-size:16px;max-height:160px;}
 .ct-fine{margin:8px 2px 0;font-size:12.5px;color:var(--fg3);text-align:center;}
 .ct-chatlink{display:flex;justify-content:center;margin:16px 0 4px;}
+.mb-thread .ct-chat.ct-group{min-height:0;}
 .ct-chatlink .mp-go{width:auto;padding:0 20px;}
 """
 
@@ -176,9 +195,20 @@ def entry_open(biz: Dict[str, Any]) -> bool:
     return ct.open_for(biz) and ct.tables_ready()
 
 
+def thread_name(biz: Dict[str, Any], thread: str) -> str:
+    """The conversation's name: the church's, or its group's (read)."""
+    gid = ct.group_of(thread)
+    if not gid:
+        return (biz.get("name") or "").strip() or "Your church"
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?business_id=eq.{ct._q(biz['id'])}&id=eq.{ct._q(gid)}&select=name&limit=1")
+    return str((rows[0] if isinstance(rows, list) and rows else {}).get("name") or "").strip() or "Your group"
+
+
 def home_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
-    """Home's card while anything is unread: the church's name, how many
-    are new, the newest one's line. '' otherwise. Never raises."""
+    """Home's card while anything is unread: "From your church", how many
+    are new, and the newest one as "<conversation>: <its line>", so a
+    group's note reads as the group's. '' otherwise. Never raises."""
     try:
         if not entry_open(biz):
             return ""
@@ -194,10 +224,13 @@ def home_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
         newest = max((t["last"] for t in got.values() if t["unread"] and t.get("last")),
                      key=lambda r: str(r.get("created_at") or ""), default=None)
         import member_app_ui as ui
-        name = (biz.get("name") or "").strip() or "Your church"
-        line = preview(newest)
+        line = ""
+        if newest:
+            name = thread_name(biz, str(newest.get("thread") or ct.CHURCH))
+            said = preview(newest, name)
+            line = f"{name}: {said}" if said else name
         return (f'<a class="mb-row h-teal ct-home" href="/my/inbox"><span class="mb-row-ic ct-home-ic">{ui.icon("chat", 20)}</span>'
-                f'<span class="mb-row-t"><strong>{_e(name)}</strong><span>{n} new{" · " + _e(line) if line else ""}</span></span>'
+                f'<span class="mb-row-t"><strong>From your church</strong><span>{n} new{" · " + _e(line) if line else ""}</span></span>'
                 f'{ui.icon("chevron", 18)}</a>'
                 '<style>.ct-home-ic{background:var(--h-deep);color:var(--h-ink);}'
                 '.ct-home .mb-row-t span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}</style>')
@@ -272,8 +305,7 @@ def _bubble(r: Dict[str, Any], zone, said_by: str = "") -> str:
     url = str(r.get("url") or "")
     link = ""
     if url.startswith("/my/") and not ct.is_inbox_url(url):
-        word = LINK_WORDS.get(str(r.get("kind") or ""), "Open")
-        link = f'<a class="ct-open" href="{_e(url)}">{_e(word)}{ui.icon("chevron", 14)}</a>'
+        link = f'<a class="ct-open" href="{_e(url)}">{_e(link_word(url))}{ui.icon("chevron", 14)}</a>'
     text = f'<span class="mb-msg-body">{body}</span>' if body else ""
     return f'<li class="mb-msg ct-note">{title}{text}{link}{at}</li>'
 
@@ -334,7 +366,7 @@ def render_group(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any
     link = (f'<div class="ct-chatlink"><a class="mp-go" href="/my/groups/{_e(g["id"])}/chat">{ui.icon("chat", 17)}'
             'Open the group chat</a></div>' if chat_open else "")
     body = (f'<style>{THREAD_CSS}</style><div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(name)}</h1></div>'
-            f'<ul class="mb-chat ct-chat" id="ct-chat" aria-label="Notes">{chat}</ul>{link}</div>')
+            f'<ul class="mb-chat ct-chat ct-group" id="ct-chat" aria-label="Notes">{chat}</ul>{link}</div>')
     return _shell(biz, site, name, body, tab="me", who=me, bar=False, back=("/my/inbox", "Inbox"), script=SCROLL_JS)
 
 
