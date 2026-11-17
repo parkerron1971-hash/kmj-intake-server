@@ -183,7 +183,8 @@
         "dashboard",
         "home",
         "urgent",
-        "attention"
+        "attention",
+        "waiting on me"
        ],
        "answers": [
         {
@@ -199,11 +200,13 @@
         {
          "id": "deal-with-something-on-the-list",
          "q": "Deal with something on the list",
-         "a": "Press the button on its row, such as Review for something waiting on your approval or Open tasks for a late task. It opens the page where that work is done.",
+         "a": "Press the button on its row, such as Review for something waiting on your approval, Send a reminder for an overdue bill, Reach out for someone under People to check on, or Open tasks for a late task. It opens the page where that work is done, or has Chief draft it.",
          "words": [
           "what is waiting on me",
           "urgent",
-          "overdue"
+          "overdue",
+          "people to check on",
+          "overdue bill"
          ]
         }
        ]
@@ -294,21 +297,25 @@
        "sees": [
         "office"
        ],
-       "what": "Read Chief’s weekly letter about the last seven days and what to do next.",
+       "what": "Read Chief’s weekly letter on the church’s last seven days: Sunday’s count, new people, follow-up, the week ahead.",
        "words": [
         "briefing",
         "brief",
-        "weekly read"
+        "weekly read",
+        "weekly letter",
+        "the week"
        ],
        "answers": [
         {
          "id": "get-a-new-weekly-briefing",
          "q": "Get a new weekly briefing",
-         "a": "Press Generate New Briefing. Chief reads the last seven days and writes a new letter, which opens when it is ready.",
+         "a": "Press Write a new briefing. Chief reads the church’s last seven days and writes a new letter, which opens when it is ready.",
          "words": [
           "weekly read",
+          "weekly letter",
           "summary of the week",
-          "what happened this week"
+          "what happened this week",
+          "generate a briefing"
          ]
         },
         {
@@ -629,7 +636,7 @@
        "sees": [
         "website_outreach"
        ],
-       "what": "Generate printable designs in your church’s colors, then print or download them.",
+       "what": "Make the Sunday bulletin, a connect card, an invite card and a welcome flyer, then print them.",
        "words": [
         "bulletin",
         "bulletins",
@@ -638,14 +645,28 @@
        ],
        "answers": [
         {
+         "id": "make-the-sunday-bulletin",
+         "q": "Make the Sunday bulletin",
+         "a": "Pick Sunday bulletin and press Make it. It fills in from Order of service and the Announcements board, so change those first. Then press Print, print on both sides and fold the sheet in half.",
+         "words": [
+          "bulletin",
+          "program",
+          "sunday handout",
+          "order of worship handout",
+          "print the order of service"
+         ]
+        },
+        {
          "id": "make-a-connect-card-to-print",
          "q": "Make a connect card to print",
-         "a": "Pick Connect Card and press Generate, then press Print when the preview shows. To change it, type a line under Feedback or direction and press Regenerate.",
+         "a": "Pick Connect card and press Make it, then press Print when it shows. To change it, type a line under Anything to change? and press Make it again.",
          "words": [
           "visitor card",
           "guest card",
           "bulletin insert",
-          "welcome card"
+          "welcome card",
+          "invite card",
+          "flyer"
          ]
         }
        ]
@@ -1544,15 +1565,40 @@
        "sees": [
         "people_care"
        ],
-       "what": "See how many new people came in over a period and how far each got.",
+       "what": "See everyone new in a period and how far each has come: back again, a member, serving, leading.",
        "words": [
         "visitor",
         "visitors",
         "guests",
-        "lead flow",
-        "new people"
+        "visitor flow",
+        "new people",
+        "came back",
+        "first visit"
        ],
-       "answers": []
+       "answers": [
+        {
+         "id": "see-which-new-people-nobody-has-reached",
+         "q": "See which new people nobody has reached",
+         "a": "Under Heard from someone, the names after Not yet are new people with no text, call, visit or email since they were added. Press Open Follow-up board to reach out.",
+         "words": [
+          "new guests not contacted",
+          "who needs a call",
+          "first time visitors",
+          "follow up with visitors"
+         ]
+        },
+        {
+         "id": "see-how-many-new-people-came-back",
+         "q": "See how many new people came back",
+         "a": "The Coming back bar counts new people who came back or have gone further, such as becoming a member. Press a bar to list the people in it, and choose the period at the top.",
+         "words": [
+          "second visit",
+          "did they return",
+          "visitor numbers",
+          "how many visitors"
+         ]
+        }
+       ]
       },
       {
        "key": "operate:care",
@@ -2002,20 +2048,28 @@
        "sub": "payments",
        "name": "Payments",
        "sees": "money",
-       "what": "Connect Stripe so people can give online, and see charges, payouts and refunds.",
+       "what": "Connect Stripe so people can give by card, then see what came in, when it reaches the bank, and refunds.",
        "words": [
         "payment",
         "payments",
         "payout",
         "payouts",
         "stripe",
-        "charge"
+        "charge",
+        "card payments",
+        "online gifts",
+        "refund",
+        "refunds",
+        "payroll",
+        "pay staff",
+        "contractor",
+        "1099"
        ],
        "answers": [
         {
          "id": "set-up-online-giving",
          "q": "Set up online giving",
-         "a": "On Payments, under Accept gifts online, press Set up Stripe here, or Connect Stripe if you see that button. Stripe handles the cards and pays the gifts out to the church’s bank.",
+         "a": "Under Accept gifts online, press Set up Stripe here, or Connect Stripe if you see that button. Stripe handles the cards and pays the gifts out to the church’s bank.",
          "words": [
           "take cards",
           "connect stripe",
@@ -2026,7 +2080,7 @@
         {
          "id": "refund-an-online-gift",
          "q": "Refund an online gift",
-         "a": "Open the Charges tab, find the gift and press Refund on its row. A box opens to finish the refund.",
+         "a": "Open the Gifts and payments tab, find the gift and press Refund on its row. A box opens where you set the amount and the reason, then press Refund.",
          "words": [
           "give money back",
           "charged twice",
@@ -3078,7 +3132,7 @@
         {
          "id": "send-someone-a-bill",
          "q": "Send someone a bill",
-         "a": "Press New invoice, choose the member, add a line for what it is for and the amount, and press Send invoice. Save draft keeps it without sending.",
+         "a": "Press New bill, choose the person under Bill to, add a line for what it is for and the amount, and press Send bill. Save as draft keeps it without sending.",
          "words": [
           "invoice",
           "charge for the retreat",
@@ -4187,21 +4241,26 @@
        "sees": [
         "website_outreach"
        ],
-       "what": "Work through a short list of steps that help people find you online.",
+       "what": "Work through a short list of steps that help someone looking for a church find yours.",
        "words": [
         "get found",
         "google",
-        "findable"
+        "findable",
+        "church near me",
+        "google profile",
+        "service times online"
        ],
        "answers": [
         {
          "id": "work-through-the-steps-to-be-found-online",
          "q": "Work through the steps to be found online",
-         "a": "The page shows your next step. Press Show me how, do it, then press I’ve done this and it moves to the next one.",
+         "a": "The page shows your next step with a button to start it. For a step on Google or Instagram, follow the numbered steps, press Copy link to take the website link with you, then press I’ve done this.",
          "words": [
           "google",
           "show up in search",
-          "be found on maps"
+          "be found on maps",
+          "church near me",
+          "service times on google"
          ]
         }
        ]
@@ -4210,53 +4269,41 @@
        "key": "grow:reviews",
        "tab": "grow",
        "sub": "reviews",
-       "name": "Reviews",
+       "name": "Testimonies",
        "sees": [
         "website_outreach"
        ],
-       "what": "Ask people for a review after a meeting and keep the ones that come back.",
+       "what": "Ask people for a testimony, and keep their words to show on your website.",
        "words": [
-        "review",
-        "reviews",
+        "testimony",
+        "testimonies",
         "testimonial",
-        "testimonials"
+        "testimonials",
+        "story",
+        "stories",
+        "review",
+        "reviews"
        ],
        "answers": [
         {
          "id": "ask-someone-for-a-review",
-         "q": "Ask someone for a review",
-         "a": "In the Ask Queue press Request review beside the person. Press Mark asked if you already asked them outside the app.",
+         "q": "Ask someone for a testimony",
+         "a": "Under People to ask, press Ask for a testimony beside the person and Chief drafts the note. If nobody is listed, press Ask someone. Press Mark asked if you already asked them yourself.",
          "words": [
           "testimonial",
-          "google review",
+          "story",
+          "review",
           "ask for feedback"
          ]
-        }
-       ]
-      },
-      {
-       "key": "grow:offers",
-       "tab": "grow",
-       "sub": "offers",
-       "name": "Offers",
-       "sees": [
-        "website_outreach"
-       ],
-       "what": "Make a discount code with its own link and QR code, and share or print it.",
-       "words": [
-        "offer",
-        "offers",
-        "coupon"
-       ],
-       "answers": [
+        },
         {
-         "id": "make-an-offer-code",
-         "q": "Make an offer code",
-         "a": "Press Make an offer, choose What they get, Who can use it and When it works, and press Make the offer. Then use Copy link, Post it or Print a counter card to share it.",
+         "id": "add-a-testimony-someone-gave-us",
+         "q": "Add a testimony someone gave us",
+         "a": "Under Saved testimonies press Add a testimony, paste their words exactly, type their name and press Save. Leave Show on website ticked to mark it for the website.",
          "words": [
-          "coupon",
-          "discount",
-          "promo code"
+          "save a story",
+          "put a testimony on the website",
+          "member quote"
          ]
         }
        ]
@@ -4759,7 +4806,7 @@
         {
          "id": "undo-something-chief-did",
          "q": "Undo something Chief did",
-         "a": "History only shows what happened. It has no Undo button and nothing in it can be changed, so to take back something Chief did, ask Chief to undo its last action.",
+         "a": "History shows what happened and has no Undo button. Press Ask Chief at the top of the page, and Chief lists what it did lately that it can take back.",
          "words": [
           "take it back",
           "reverse a change",
