@@ -273,6 +273,28 @@ def church_clip_hours() -> Dict[str, int]:
     }
 
 
+def church_storage_gb() -> Dict[str, int]:
+    """Storage each church plan includes, in GB (1 GB = 1024^3 bytes): every
+    file the church keeps here, service recordings included (church_storage.py;
+    Kevin, 2026-11-17: an allowance, not a time rule). A two-hour service
+    recorded through the stream relay is about 6 GB."""
+    return {
+        "church_small":       _dial("CHURCH_SMALL_STORAGE_GB", "LIMIT_", 100),
+        "church_growing":     _dial("CHURCH_GROWING_STORAGE_GB", "LIMIT_", 250),
+        "church_established": _dial("CHURCH_ESTABLISHED_STORAGE_GB", "LIMIT_", 500),
+        "church_large":       _dial("CHURCH_LARGE_STORAGE_GB", "LIMIT_", 1024),
+    }
+
+
+def extra_storage_offer() -> Dict[str, int]:
+    """More storage past a church plan's: this many GB for this many cents a
+    month (EXTRA_STORAGE_GB, PRICE_EXTRA_STORAGE_CENTS). Nothing sells it yet;
+    a later PR adds the purchase, and church_storage.extra_bytes is where what
+    a church bought joins its allowance."""
+    return {"gb": _dial("EXTRA_STORAGE_GB", "LIMIT_", 100),
+            "cents": _dial("EXTRA_STORAGE_CENTS", "PRICE_", 500)}
+
+
 def church_size_bands() -> Dict[str, tuple]:
     """People on a Sunday each plan is for: (from, up to); None = no top."""
     return {

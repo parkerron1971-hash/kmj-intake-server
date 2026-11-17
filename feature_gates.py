@@ -299,17 +299,19 @@ def _church_limits() -> Dict[str, Dict[str, Optional[int]]]:
     """Small / Growing / Established / Large. Office logins and texts are
     the size; leaders, volunteers and members use the member app and never
     count. A plan with no texts_monthly (every other plan) isn't held to a
-    text count. clip_hours_monthly is read by clip_finder (10 elsewhere)."""
+    text count. clip_hours_monthly is read by clip_finder (10 elsewhere).
+    storage_gb is read by church_storage (no allowance elsewhere)."""
     credits = pricing_config.church_credits()
     seats = pricing_config.church_seats()
     texts = pricing_config.church_texts_monthly()
     clips = pricing_config.church_clip_hours()
+    storage = pricing_config.church_storage_gb()
     shape = {"church_small":       {"max_businesses": 1, "plaid_connections": 2, "open_assignments": 1},
              "church_growing":     {"max_businesses": 1, "plaid_connections": 5, "open_assignments": 3},
              "church_established": {"max_businesses": 1, "plaid_connections": None, "open_assignments": 10},
              "church_large":       {"max_businesses": 3, "plaid_connections": None, "open_assignments": 15}}
     return {p: {**shape[p], "chief_messages_monthly": credits[p], "max_seats": seats[p],
-                "texts_monthly": texts[p], "clip_hours_monthly": clips[p]}
+                "texts_monthly": texts[p], "clip_hours_monthly": clips[p], "storage_gb": storage[p]}
             for p in CHURCH_PLANS}
 
 

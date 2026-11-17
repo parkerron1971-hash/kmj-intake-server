@@ -503,6 +503,7 @@ def _price_plans() -> Dict[str, Dict[str, Optional[str]]]:
 
 def _plan_detail(fg, limits: Dict[str, Any], p: str) -> Dict[str, Any]:
     import chief_models
+    import church_storage
     lim = limits.get(p) or {}
     return {
         "credits_monthly": lim.get("chief_messages_monthly"),
@@ -515,6 +516,10 @@ def _plan_detail(fg, limits: Dict[str, Any], p: str) -> Dict[str, Any]:
         # it includes. None on every other plan (not held to a text count).
         "texts_monthly": lim.get("texts_monthly"),
         "clip_hours_monthly": lim.get("clip_hours_monthly"),
+        # The storage a church plan includes, in GB (church_storage). None on
+        # every other plan, and on every plan until CHURCH_STORAGE is on for
+        # everyone, so the cards don't promise it before then.
+        "storage_gb": lim.get("storage_gb") if church_storage.cards_on() else None,
         "people_on_sunday": _people_on_sunday(p),
     }
 
