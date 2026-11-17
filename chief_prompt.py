@@ -186,6 +186,11 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
     settings = biz.get("settings") or {}
     track_mode = settings.get("track")
     is_coach = mode == "strategy_coach"
+    # A church's course is its planning course: the everyday Chief is told
+    # what the plan says, in a church's words, and never about the Academy.
+    import church_plan_course
+    if church_plan_course.is_church(biz):
+        return "" if is_coach else church_plan_course.chief_block(track)
     if track_mode not in ("strategy", "launched"):
         # Not flagged onto the track — but a strategy row can still
         # exist (mode flipped later, older businesses). The
@@ -1191,6 +1196,12 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
+        # A church's course is its planning course, with its own coach
+        # (church_plan_course): the business coach asks about an idea to
+        # launch and what to charge.
+        import church_plan_course
+        if church_plan_course.is_church(ctx.get("business")):
+            return _build_church_coach_prompt(ctx, is_greeting, resume_note=resume_note)
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
     if mode == "business_coach":
         import business_track_actions as bta
@@ -2575,6 +2586,20 @@ THIS TURN (fresh every message):
 {catchup_block}
 
 {eod_block}{greeting_clause}{orientation_clause}{resume_clause}"""
+
+
+def _build_church_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
+                               resume_note: Optional[ResumeNote] = None) -> str:
+    """The planning coach for a church in a course session: the shared core
+    and what the church's Chief knows, then church_plan_course's prompt."""
+    import business_learning
+    import church_plan_course
+    biz = ctx.get("business") or {}
+    return church_plan_course.coach_prompt(
+        ctx, is_greeting, resume_note,
+        shared_core=CHIEF_SHARED_CORE,
+        knowledge_block=business_learning.context_block(biz),
+        learning=business_learning.PROMPT)
 
 
 def _build_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
