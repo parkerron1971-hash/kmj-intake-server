@@ -459,6 +459,10 @@ def screen(room, db, monkeypatch):
     monkeypatch.setattr(war, "_read", lambda path, what: list(state["board"]))
     monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 11, 15))
     monkeypatch.setattr(business_users_router, "seat_person", lambda biz, uid: {"name": "Tiara Jones"})
+    # Who it's from and who hears (pinned with the duties in test_sms_announcements).
+    monkeypatch.setattr(nh, "_from_lane", lambda biz, user: "People & Care")
+    state["told"] = []
+    monkeypatch.setattr(nh, "tell_deciders", lambda biz, sent_by, asker: state["told"].append((biz, sent_by, asker)))
     return c, who, state
 
 
@@ -477,6 +481,7 @@ def test_whoever_plans_sunday_puts_the_slide_straight_on(screen, db):
     assert row["qr"] == {"kind": "link", "url": "https://gracehill.church/new", "label": nh.SCREEN_QR_LABEL}
     assert row["shows"] == {"room": True, "lobby": True, "online": False, "phones": False}
     assert row["show_from"] == "2026-11-15" and row["business_id"] == BIZ and "sent_by" not in row
+    assert not state["told"]                                   # nothing waits, so no one is told
 
 
 def test_the_guests_login_sends_it_waiting_for_media(screen, db):
@@ -489,6 +494,11 @@ def test_the_guests_login_sends_it_waiting_for_media(screen, db):
     (row,) = _slides(db)
     assert row["status"] == "waiting" and row["title"] == nh.SCREEN_TITLE and row["source"] == "typed"
     assert row["sent_by"]["ministry"] == "New here" and row["sent_by"]["name"] == "Tiara Jones"
+    assert row["sent_by"]["from"] == "People & Care"
+    # Whoever puts it on is told, once, after the answer.
+    assert state["told"] == [(BIZ, row["sent_by"], "u1")]
+    assert nh.waiting_line(row["sent_by"]) == ("A guest slide from People & Care is waiting for you to put on "
+                                               "Sunday’s screen.")
     # One waits at a time: pressing again asks nothing more of Media.
     state["board"] = [{"id": "a1", "status": "waiting", "source_ref": nh.SCREEN_REF}]
     again = c.post(f"/new-here/{BIZ}/screen").json()
@@ -502,6 +512,7 @@ def test_the_guests_login_sends_it_waiting_for_media(screen, db):
                       {"id": "a2", "status": "on", "source_ref": nh.SCREEN_REF, "show_until": "2026-11-01"},
                       {"id": "a3", "status": "waiting", "source_ref": ""}]
     assert c.post(f"/new-here/{BIZ}/screen").json()["already"] is False and len(_slides(db)) == 2
+    assert len(state["told"]) == 2                             # the presses that added nothing told no one
 
 
 def test_the_slide_asks_only_of_who_changes_new_here(screen, db, monkeypatch):

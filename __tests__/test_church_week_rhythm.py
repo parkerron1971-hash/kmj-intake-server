@@ -231,6 +231,36 @@ def test_a_manager_gets_its_lanes_duties_and_nothing_else(client, week):
     assert not any(cd.CATALOG[k]["money"] for k in _keys(r))
 
 
+def test_the_first_time_guests_sunday_is_the_new_here_cards(client, week, db, monkeypatch):
+    # Kevin approved, 2026-11-17: the guest cards are out every Sunday. A line
+    # under first_guests, never judged and never moved, and not a duty.
+    monkeypatch.setenv("NEW_HERE", "on")
+    _as_manager(client, week, lane="people_care")
+    r = _rhythm(client)
+    cards = _item(r, mw.SUNDAY_CARDS)
+    assert [i["key"] for i in _day(r, "Sun")["items"]][-1] == mw.SUNDAY_CARDS
+    assert cards["label"] == "The New here cards" and cards["days"] == ["Sun"] and cards["when"] == "Sundays"
+    assert cards["door"] == mw.DOOR["new_here"] and cards["door"]["view"] == "new-here" and cards["door"]["id"] == "sms"
+    assert cards["area"] == "people_care" and cards["today"] is False          # a Monday
+    assert "done" not in cards and "state" not in cards and cards.get("movable") in (None, False)
+    assert r["count"] == len(cd.STARTER["people_care"]) and mw.SUNDAY_CARDS not in cd.CATALOG
+    # New here off at the church (Love City, 11-17): the line says to switch it on.
+    assert cards["does"].startswith("New here is off: switch it on in Text, New here")
+    for b in db.t["businesses"]:
+        b["settings"] = {**b["settings"], "new_here": {"on": True}}
+    cd._CACHE.clear()
+    assert _item(_rhythm(client), mw.SUNDAY_CARDS)["does"].startswith("The New here cards (QR) are out on the welcome table")
+    # New here not open for the church: no line.
+    monkeypatch.setenv("NEW_HERE", "off")
+    cd._CACHE.clear()
+    assert mw.SUNDAY_CARDS not in _keys(_rhythm(client))
+    # Without the duty (Media & Communications' week): no line.
+    monkeypatch.setenv("NEW_HERE", "on")
+    _as_manager(client, week, lane="media_comms")
+    cd._CACHE.clear()
+    assert mw.SUNDAY_CARDS not in _keys(_rhythm(client))
+
+
 def test_sunday_and_servings_week_is_the_volunteers(client, week):
     _as_manager(client, week, lane="sunday_serving")
     r = _rhythm(client)

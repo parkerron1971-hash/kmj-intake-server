@@ -61,7 +61,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -920,8 +920,146 @@ def screen_slide(business: Dict[str, Any], number: str, today: date) -> Dict[str
     return wa.clean(raw)
 
 
+def _from_lane(biz: str, user: AuthedUser) -> str:
+    """The lane the slide comes from, in the line Media reads: People & Care's
+    for whoever does the first-time guests, Office & Leadership's for the
+    weekly text. "" when neither can be said."""
+    import church_duties
+    try:
+        for duty in (FIRST_GUESTS, "weekly_text"):
+            if church_duties.holds(biz, user, duty):
+                return church_duties.lane_label(church_duties.CATALOG[duty]["lanes"][0])
+    except HTTPException:
+        pass
+    return ""
+
+
+def waiting_line(sent_by: Optional[Dict[str, Any]]) -> str:
+    """The one line whoever puts a waiting slide on reads (My week, the push)."""
+    frm = str((sent_by or {}).get("from") or "").strip()
+    return (f"A guest slide from {frm} is waiting for you to put on Sunday’s screen." if frm
+            else "A New here guest slide is waiting for you to put on Sunday’s screen.")
+
+
+def _plan_duties() -> Tuple[str, ...]:
+    """The duties that give a Manager the plan's part (worship_team
+    PARTS_FROM_DUTIES: sunday_plan, production_schedule, churchsavvy_team;
+    Media & Communications' by default)."""
+    import worship_team as wt
+    return tuple(d for d, parts in wt.PARTS_FROM_DUTIES.items() if wt.can(set(parts), "plan"))
+
+
+def decides(biz: str, user_id: Any, role: Optional[str]) -> bool:
+    """Whether this login puts a waiting slide on: the board's decide gate
+    (worship_team's plan part), by its seat. The owner and the admins; a
+    Manager by the duties that give the part; anyone by their ChurchSavvy
+    team parts. A read that fails is a 503."""
+    import worship_team as wt
+    if role in ("owner", "admin"):
+        return True
+    if role == "manager":
+        import church_duties
+        if set(church_duties.standing(biz, str(user_id))["duties"]) & set(_plan_duties()):
+            return True
+    return wt.can(wt.parts_of(biz, user_id), "plan")
+
+
+def deciders(biz: str) -> List[str]:
+    """Who hears that a slide waits: the Manager logins whose duties give the
+    plan's part and the ChurchSavvy team's planners, worship leaders and
+    admins with a login; with no one there, the owner (as a late office task
+    goes up to the owner with no Executive Pastor). A read that fails is a 503."""
+    import church_duties
+    import worship_team as wt
+    out: List[str] = []
+    for duty in _plan_duties():
+        for uid in church_duties.manager_holders(biz, duty):
+            if uid not in out:
+                out.append(uid)
+    team = sb_clients.sb_get_as_service(f"/worship_team?business_id=eq.{_q(biz)}&status=eq.active"
+                                        "&user_id=not.is.null&select=user_id,roles&limit=100")
+    if not isinstance(team, list):
+        raise HTTPException(503, "The team couldn't be read just now.")
+    for r in team:
+        uid = str(r.get("user_id") or "")
+        if uid and uid not in out and wt.can({p for p in r.get("roles") or [] if p in wt.ROLES}, "plan"):
+            out.append(uid)
+    if not out:
+        owner = str((_business(biz) or {}).get("owner_id") or "")
+        out = [owner] if owner else []
+    return out
+
+
+SCREEN_NAV = "operate:worship-announcements"    # church_my_week DOOR["announcements"]
+
+
+def tell_deciders(biz: str, sent_by: Dict[str, Any], asker_id: str) -> int:
+    """One push to each login that puts the waiting slide on (never the one
+    who sent it). Best effort: a failure is a log line, the slide still
+    waits on the board and in their My week."""
+    try:
+        import push_notifications
+        line = waiting_line(sent_by)
+        return sum(push_notifications.send_to_user(uid, title="Sunday’s screen", body=line, nav=SCREEN_NAV,
+                                                   tag="new-here-slide", business_id=biz)
+                   for uid in deciders(biz) if uid != str(asker_id))
+    except Exception as e:  # noqa: BLE001 — telling is a courtesy; the request already answered
+        print(f"[new_here] {biz[:8]}: the waiting slide's push didn't go: {e}", flush=True)
+        return 0
+
+
+def week_item(business: Dict[str, Any], user_id: Any, role: Optional[str]) -> Optional[Dict[str, Any]]:
+    """My week's line (church_my_week.build) for whoever puts a waiting New
+    here slide on (decides), until it's put on or left off. Nothing when none
+    waits, for anyone else, and when a read fails: the week stands, the log
+    says so."""
+    if not is_church(business):
+        return None
+    biz = str(business["id"])
+    rows = _rows(f"/worship_announcements?business_id=eq.{_q(biz)}&source_ref=eq.{_q(SCREEN_REF)}"
+                 "&status=eq.waiting&archived_at=is.null&select=id,sent_by&order=created_at.desc&limit=1")
+    if rows is None:
+        print(f"[new_here] {biz[:8]}: a waiting slide wasn't read for My week", flush=True)
+        return None
+    if not rows:
+        return None
+    try:
+        if not decides(biz, user_id, role):
+            return None
+    except HTTPException:
+        print(f"[new_here] {biz[:8]}: who puts the slide on wasn't read for My week", flush=True)
+        return None
+    import church_my_week
+    sent = rows[0].get("sent_by") if isinstance(rows[0].get("sent_by"), dict) else {}
+    who = str(sent.get("name") or "").split(" ")[0]
+    return {"kind": "screen", "late": False, "area": "worship_media", "title": waiting_line(sent),
+            "detail": (f"{who} sent it from New here. " if who else "") + "Put it on in Announcements, under Waiting for you.",
+            "door": church_my_week.DOOR["announcements"]}
+
+
+def sunday_cards(business: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """The first-time guests' Sunday line in How your week goes
+    (church_my_week.rhythm): the New here cards out on the welcome table and
+    the seats (Kevin approved, 2026-11-17). Never judged done: nothing counts
+    cards on a table. None where New here isn't open for the church (the
+    NEW_HERE switch); while the church has it off, the line says to switch it
+    on first."""
+    try:
+        if not is_church(business) or not switched_on(business.get("id")):
+            return None
+    except Exception:  # noqa: BLE001 — a line on My week never fails the week
+        return None
+    if settings_of(business)["on"]:
+        does = ("The New here cards (QR) are out on the welcome table and the seats. Print seat cards is in "
+                "Text, New here.")
+    else:
+        does = ("New here is off: switch it on in Text, New here, then put its cards (QR) out on the welcome "
+                "table and the seats.")
+    return {"label": "The New here cards", "does": does}
+
+
 @router.post("/new-here/{business_id}/screen")
-def put_on_screen(business_id: str, user: AuthedUser = Depends(require_user)):
+def put_on_screen(business_id: str, background: BackgroundTasks, user: AuthedUser = Depends(require_user)):
     """The room's "Put it on Sunday's screen": its slide on the announcements
     board (worship_announce_router). Whoever plans Sunday (the plan's part: a
     planner, the worship leader, an admin, the owner) puts it straight on, as
@@ -978,11 +1116,15 @@ def put_on_screen(business_id: str, user: AuthedUser = Depends(require_user)):
     rec: Dict[str, Any] = {"business_id": biz, **row, "status": status, "source": "typed",
                            "source_ref": SCREEN_REF, "created_at": now, "updated_at": now}
     if not plans:
-        rec["sent_by"] = {"ministry": "New here", "name": _asker(biz, user), "at": now}
+        rec["sent_by"] = {"ministry": "New here", "name": _asker(biz, user), "from": _from_lane(biz, user),
+                          "at": now}
     saved = sb_clients.sb_post_as_service("/worship_announcements?select=id,status", rec,
                                           prefer="return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "It wasn’t sent just now. Try again.")
+    if not plans:
+        # Whoever puts it on hears once, after the answer (a push never holds it up).
+        background.add_task(tell_deciders, biz, rec["sent_by"], str(user.id))
     if plans:
         return {"status": "on", "already": False,
                 "said": "Added to your announcements. It shows on Sunday’s screen until you take it off."}

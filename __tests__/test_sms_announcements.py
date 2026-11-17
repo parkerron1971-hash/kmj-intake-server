@@ -405,6 +405,82 @@ def test_a_first_time_guests_duty_that_cant_be_read_is_a_503_never_a_yes(office,
     assert _edits(CHURCH, ADMIN_ID) is True
 
 
+# ─── Media hears of a waiting slide (Kevin approved, 2026-11-17) ──────
+
+SHAPRETTA_ID = "0f0f0f0f-0000-4000-8000-000000000007"
+LEADER_ID = "0f0f0f0f-0000-4000-8000-000000000008"
+
+
+@pytest.fixture
+def media(office):
+    """Shapretta in Media & Communications (sunday_plan: the plan's part),
+    and a slide Tiara sent from New here, waiting on the board."""
+    office.t["business_users"].append({"business_id": CHURCH, "user_id": SHAPRETTA_ID, "role": "manager",
+                                       "status": "active", "lane": "media_comms",
+                                       "invited_email": "shapretta@lovecity.org"})
+    office.t["worship_team"] = []
+    office.t["worship_announcements"] = [{
+        "id": "a1", "business_id": CHURCH, "status": "waiting", "source": "typed", "source_ref": "new_here",
+        "archived_at": None, "sent_by": {"ministry": "New here", "name": "Tiara Jones", "from": "People & Care"}}]
+    return office
+
+
+def _church():
+    return {"id": CHURCH, "name": "Love City Church", "type": "ministry", "owner_id": OWNER_ID, "settings": {}}
+
+
+def test_whoever_puts_a_slide_on_is_who_hears(media):
+    import new_here
+    seats = {OWNER_ID: "owner", ADMIN_ID: "admin", SHAPRETTA_ID: "manager", NAIYA_ID: "manager", TIARA_ID: "manager"}
+    assert {u for u, r in seats.items() if new_here.decides(CHURCH, u, r)} == {OWNER_ID, ADMIN_ID, SHAPRETTA_ID}
+    assert new_here.deciders(CHURCH) == [SHAPRETTA_ID]
+    # The ChurchSavvy team's worship leader decides too; a booth part doesn't.
+    media.t["worship_team"] = [{"business_id": CHURCH, "user_id": LEADER_ID, "roles": ["worship"], "status": "active"},
+                               {"business_id": CHURCH, "user_id": MEMBER_ID, "roles": ["booth"], "status": "active"}]
+    assert new_here.decides(CHURCH, LEADER_ID, "member") is True and new_here.decides(CHURCH, MEMBER_ID, "member") is False
+    assert new_here.deciders(CHURCH) == [SHAPRETTA_ID, LEADER_ID]
+    # Nobody but the owner and the admins plans Sunday: the owner hears.
+    import church_duties
+    media.t["business_users"] = [s for s in media.t["business_users"] if s["user_id"] != SHAPRETTA_ID]
+    media.t["worship_team"] = []
+    church_duties._CACHE.clear()
+    assert new_here.deciders(CHURCH) == [OWNER_ID]
+
+
+def test_media_gets_one_push_and_a_line_on_my_week(media, monkeypatch):
+    import new_here
+    import push_notifications
+    sent = []
+    monkeypatch.setattr(push_notifications, "send_to_user", lambda uid, **kw: sent.append((uid, kw)) or 1)
+    line = "A guest slide from People & Care is waiting for you to put on Sunday’s screen."
+    sent_by = media.t["worship_announcements"][0]["sent_by"]
+    assert new_here.tell_deciders(CHURCH, sent_by, TIARA_ID) == 1
+    ((uid, kw),) = sent
+    assert uid == SHAPRETTA_ID and kw["body"] == line and kw["nav"] == "operate:worship-announcements"
+    assert kw["business_id"] == CHURCH
+    assert new_here.tell_deciders(CHURCH, sent_by, SHAPRETTA_ID) == 0      # never the one who sent it
+    item = new_here.week_item(_church(), SHAPRETTA_ID, "manager")
+    assert item["title"] == line and item["kind"] == "screen" and item["door"]["id"] == "worship-announcements"
+    assert item["detail"].startswith("Tiara sent it from New here.")
+    assert new_here.week_item(_church(), TIARA_ID, "manager") is None        # she sent it; she doesn't put it on
+    assert new_here.week_item(_church(), OWNER_ID, "owner")["title"] == line
+    # Put on (or left off): the line goes.
+    media.t["worship_announcements"][0]["status"] = "on"
+    assert new_here.week_item(_church(), SHAPRETTA_ID, "manager") is None
+
+
+def test_a_slide_that_cant_be_read_leaves_my_week_standing_and_a_push_never_raises(media, monkeypatch):
+    import new_here
+    import push_notifications
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith(("/worship_announcements", "/worship_team"))
+                        else media.get(p, **k))
+    assert new_here.week_item(_church(), SHAPRETTA_ID, "manager") is None
+    monkeypatch.setattr(push_notifications, "send_to_user", lambda uid, **kw: 1)
+    assert new_here.tell_deciders(CHURCH, {}, TIARA_ID) == 0                 # the team unread: a log line
+
+
 def test_any_other_business_keeps_its_admin_gate(office):
     assert [_may(SHOP, u) for u in (OWNER_ID, ADMIN_ID)] == ["owner", "admin"]
     for uid in (NAIYA_ID, TIARA_ID, MEMBER_ID, STRANGER_ID):
