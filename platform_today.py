@@ -162,6 +162,26 @@ def classify_finding(g: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+CUSTOMER_DAYS = 3
+
+
+def customer_item(alert: Dict[str, Any]) -> Dict[str, Any]:
+    """A new customer's alert as a Today item: good news that stays three
+    days, with a welcome note one tap away."""
+    title = (alert.get("title") or "A new customer").strip()
+    return {
+        "id": f"customer:{alert.get('id')}", "kind": "new customer", "source": "Stripe",
+        "title": title, "detail": (alert.get("body") or "").strip(),
+        "lanes": ["people", "money"], "room": "customers", "tone": "gold", "seen": 1,
+        "at": alert.get("created_at"),
+        "action": {"label": "Open Subscriptions", "nav": "platform-subscriptions"},
+        "secondary": {"label": "Draft a welcome with Chief",
+                      "chief": (f"Draft a short, warm welcome email from Kevin to this new "
+                                f"Solutionist customer ({title}). Thank them, say who to write to "
+                                "with questions, and keep it under 90 words.")},
+    }
+
+
 def rank(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """People first, then money, then the machines; worst tone first."""
     def key(it: Dict[str, Any]):
@@ -413,7 +433,7 @@ async def build_today(owner, with_ops: bool = True) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         since_day = (now - timedelta(hours=36)).isoformat()
         (subs, practitioners, businesses, tickets, unread, findings_rows, runs,
-         approvals, marketing, dev_tasks, traffic, coupons) = await asyncio.gather(
+         approvals, marketing, dev_tasks, traffic, coupons, customers) = await asyncio.gather(
             _guard("subscriptions", lambda: pc.subscriptions_summary(_owner=owner), failed, {}),
             _guard("practitioners", lambda: _practitioners(c), failed, {}),
             _guard("businesses", lambda: _count(c, "businesses", {"is_active": "eq.true"}), failed, None),
@@ -438,6 +458,11 @@ async def build_today(owner, with_ops: bool = True) -> Dict[str, Any]:
                 "order": "updated_at.desc", "limit": "30"}), failed, None),
             _guard("traffic", lambda: _traffic(owner), failed, None),
             _guard("coupons", _coupons, failed, None),
+            # New customers (stripe_billing.tell_owner_new_customer), for three days.
+            _guard("customers", lambda: _get(c, "dev_alerts", {
+                "select": "id,created_at,kind,title,body", "source": "eq.customers",
+                "created_at": f"gte.{(now - timedelta(days=CUSTOMER_DAYS)).isoformat()}",
+                "order": "created_at.desc", "limit": "10"}), failed, None),
         )
 
     ops = None
@@ -495,6 +520,8 @@ async def build_today(owner, with_ops: bool = True) -> Dict[str, Any]:
             "action": {"label": "Open Inbox", "nav": "platform-inbox"},
         })
     needs.extend(marketing or [])
+    for a in customers or []:
+        needs.append(customer_item(a))
 
     # Money: coupons that are about to stop working.
     for cp in (coupons or {}).get("expiring") or []:

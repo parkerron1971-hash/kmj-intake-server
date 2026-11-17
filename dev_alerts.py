@@ -22,11 +22,14 @@ router = APIRouter(tags=['dev-bridge'], route_class=store.BoundedRoute)
 NAV = 'studio:platform-dev-desk:'
 SOURCES = {'worker_needs_you': 'push', 'worker_finished': 'inbox', 'kai': 'push', 'missions': 'push',
            'session_crashed': 'push', 'ci': 'push', 'deploys': 'push', 'sites': 'push',
-           'schedules': 'push', 'desktop_offline': 'push'}
+           'schedules': 'push', 'desktop_offline': 'push', 'customers': 'push'}
 DEVICE_SOURCES = {'worker_needs_you', 'worker_finished', 'kai', 'missions', 'session_crashed'}
 SERVER_SOURCES = set(SOURCES) - DEVICE_SOURCES
 Level = Literal['info', 'warn', 'urgent']
 Mode = Literal['push', 'inbox', 'off']
+# Pages outside the Dev Desk an alert may open. A new customer (stripe_billing,
+# source "customers") opens Mission Control's Subscriptions.
+OTHER_NAV = frozenset({'studio:platform-subscriptions'})
 _COLUMNS = 'id,created_at,source,kind,level,title,body,nav,card_id,delivered,count,read_at'
 
 
@@ -151,6 +154,8 @@ async def _watched(c, nav, device_id):
 
 def _nav(value):
     value = value or NAV + 'alerts'
+    if value in OTHER_NAV:
+        return value
     if not value.startswith(NAV):
         raise HTTPException(422, 'Alert nav must target the Dev Desk')
     target = value[len(NAV):]
