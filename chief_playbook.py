@@ -99,16 +99,19 @@ def _due(biz: Dict[str, Any]) -> bool:
 
 def _mark_run(biz: Dict[str, Any], sources: int, fingerprint: str,
               skipped: Optional[str] = None) -> None:
-    settings = dict(biz.get("settings") or {})
-    settings["chief_playbook"] = {
+    """settings.chief_playbook, and only it: `biz` was read before the
+    distillation, so its whole settings are not what to write back
+    (business_settings)."""
+    import business_settings
+    marker = {
         "last_run_at": _iso(_now()),
         "sources": sources,
         "fingerprint": fingerprint,
         **({"last_skip": skipped} if skipped else {}),
     }
     try:
-        sb_clients.sb_patch_as_service(
-            f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+        if business_settings.merge(biz["id"], {"chief_playbook": marker}) is None:
+            logger.warning(f"[playbook] mark_run did not save for {biz.get('id')}")
     except Exception as e:
         logger.warning(f"[playbook] mark_run failed for {biz.get('id')}: {e}")
 

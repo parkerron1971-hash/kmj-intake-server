@@ -160,7 +160,20 @@ class FakeSB:
         that guard selling would pass against a fake that cannot fail
         the way production can. The row lock has no analogue in a
         single-threaded fake and needs none.
+
+        `merge_business_settings` (business_settings.merge) is modelled the
+        same way: its contract is the database's merge (the shared
+        business_settings.merge_at), the settings after it, null for no row.
         """
+        if fn == "merge_business_settings":
+            import business_settings
+            rows = [r for r in self.rows("businesses") if str(r.get("id")) == str(body["p_business"])]
+            if not rows:
+                return None
+            rows[0]["settings"] = business_settings.merge_at(
+                rows[0].get("settings"), body.get("p_under") or [], body.get("p_set") or {},
+                body.get("p_drop") or [])
+            return dict(rows[0]["settings"])
         if fn != "decrement_offering_stock":
             raise AssertionError(f"FakeSB has no model for rpc/{fn}")
         rows = [r for r in self.rows("offerings")

@@ -138,16 +138,19 @@ def logins_for_term(items, term: tuple) -> list:
 
 
 async def _merge_setting(business_id: str, key: str, value: Any) -> None:
-    """Write one key of businesses.settings, read fresh and merged so no other
-    key is touched."""
-    import stripe_billing as sb
-    biz = await sb._load_business(business_id)
-    settings = dict(_settings(biz))
+    """Write one key of businesses.settings (None removes it) and touch no
+    other, in one UPDATE in the database (business_settings.merge). It used to
+    read the row and write the whole object back, and so did every other
+    writer: the first church's founding place, written here, was dropped by a
+    whole-object write from a copy read before it (2026-11-16)."""
+    import business_settings
     if value is None:
-        settings.pop(key, None)
+        done = await business_settings.amerge(business_id, drop=[key])
     else:
-        settings[key] = value
-    await sb._patch_business(business_id, {"settings": settings})
+        done = await business_settings.amerge(business_id, {key: value})
+    if done is None:
+        logger.error(f"settings.{key} for {business_id} did not save")
+        raise HTTPException(status_code=502, detail="Failed to update business")
 
 
 async def sync_extra_logins(business_id: str, items, status: Optional[str]) -> None:

@@ -156,18 +156,10 @@ def _read_cache(business_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _write_cache(business_id: str, payload: Dict[str, Any]) -> bool:
-    """Surgical merge of settings.maturity, preserving all other settings keys."""
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=settings&limit=1"
-    ) or []
-    if not rows:
-        return False
-    settings = dict(rows[0].get("settings") or {})
-    settings["maturity"] = payload
-    res = sb_clients.sb_patch_as_service(
-        f"/businesses?id=eq.{business_id}", {"settings": settings}
-    )
-    return res is not None
+    """settings.maturity in one UPDATE that touches no other key
+    (business_settings.merge)."""
+    import business_settings
+    return business_settings.merge(business_id, {"maturity": payload}) is not None
 
 
 def _is_fresh(cached: Optional[Dict[str, Any]]) -> bool:

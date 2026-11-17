@@ -588,22 +588,20 @@ def _handle_account_updated(account: Dict[str, Any]) -> None:
     if not stripe_acct_id:
         return
     biz_rows = sb_clients.sb_get_as_service(
-        f"/businesses?stripe_account_id=eq.{stripe_acct_id}&select=id,settings&limit=1"
+        f"/businesses?stripe_account_id=eq.{stripe_acct_id}&select=id&limit=1"
     ) or []
     if not biz_rows:
         return
-    biz = biz_rows[0]
-    settings = dict(biz.get("settings") or {})
-    stripe_settings = dict(settings.get("stripe") or {})
-    stripe_settings["last_account_event_at"] = int(time.time())
-    stripe_settings["charges_enabled"] = account.get("charges_enabled")
-    stripe_settings["payouts_enabled"] = account.get("payouts_enabled")
-    stripe_settings["details_submitted"] = account.get("details_submitted")
-    settings["stripe"] = stripe_settings
-    sb_clients.sb_patch_as_service(
-        f"/businesses?id=eq.{biz['id']}",
-        {"settings": settings},
-    )
+    # Four fields inside settings.stripe, in one UPDATE that touches nothing
+    # else (business_settings): a webhook never writes back a copy of the
+    # whole object.
+    import business_settings
+    business_settings.merge(biz_rows[0]["id"], {
+        "last_account_event_at": int(time.time()),
+        "charges_enabled": account.get("charges_enabled"),
+        "payouts_enabled": account.get("payouts_enabled"),
+        "details_submitted": account.get("details_submitted"),
+    }, under=["stripe"])
 
 
 def _handle_account_deauthorized(_obj: Dict[str, Any], account_id: Optional[str]) -> None:

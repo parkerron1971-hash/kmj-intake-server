@@ -101,21 +101,24 @@ def test_a_plain_subscription_reads_as_it_always_did(monkeypatch):
 
 
 def test_sync_writes_only_a_change_and_zero_once_cancelled(monkeypatch):
-    writes = []
+    from settings_merge_fake import install
+    row = {"id": BIZ, "settings": {"extra_logins": 2, "other": "kept"}}
 
     async def load(bid):
-        return {"id": bid, "settings": {"extra_logins": 2, "other": "kept"}}
+        return {"id": bid, "settings": dict(row["settings"])}
 
     async def patch(bid, body, match=None):
-        writes.append(body)
+        raise AssertionError("extra logins are never a whole-row patch")
     monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN", "price_login")
     monkeypatch.setattr(sb, "_load_business", load)
     monkeypatch.setattr(sb, "_patch_business", patch)
+    writes = install(monkeypatch, lambda bid: row)
     two = [{"price": {"id": "price_login"}, "quantity": 2}]
     asyncio.run(cb.sync_extra_logins(BIZ, two, "active"))
     assert writes == []
     asyncio.run(cb.sync_extra_logins(BIZ, two, "canceled"))
-    assert writes == [{"settings": {"other": "kept"}}]
+    assert writes == [{"id": BIZ, "set": {}, "drop": ["extra_logins"], "under": []}]   # the key, and only it
+    assert row["settings"] == {"other": "kept"}
 
 
 def test_the_webhook_routes_a_paid_move():
@@ -161,6 +164,10 @@ def stripe(monkeypatch):
     monkeypatch.setattr(sb, "_stripe_get", get)
     monkeypatch.setattr(sb, "_stripe_post", post)
     monkeypatch.setattr(cb, "_stripe_delete", delete)
+    # Settings keys go through business_settings.merge (one key, never the
+    # whole object): logged here as ("settings", call), applied to the row.
+    from settings_merge_fake import install
+    install(monkeypatch, lambda bid: state["biz"], into=calls)
     return calls, state
 
 
@@ -501,7 +508,7 @@ def test_a_refused_card_adds_no_login(stripe):
     with pytest.raises(HTTPException) as e:
         _set(1)
     assert e.value.status_code == 402 and e.value.detail == sb.CARD_REFUSED
-    assert state["biz"]["settings"] == {} and not [c for c in calls if c[0] == "patch"]
+    assert state["biz"]["settings"] == {} and not [c for c in calls if c[0] in ("patch", "settings")]
 
 
 def test_a_yearly_church_buys_its_logins_by_the_year(yearly):
@@ -519,7 +526,7 @@ def test_a_yearly_church_is_told_to_write_in_until_the_yearly_price_exists(yearl
     with pytest.raises(HTTPException) as e:
         _set(1)
     assert e.value.status_code == 409 and "Write to us" in e.value.detail
-    assert not [c for c in calls if c[0] in ("post", "delete", "patch")]
+    assert not [c for c in calls if c[0] in ("post", "delete", "patch", "settings")]
 
 
 def test_yearly_logins_are_counted_and_can_be_taken_off(yearly):

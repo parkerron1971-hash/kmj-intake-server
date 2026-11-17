@@ -471,25 +471,16 @@ def _stamps(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _stamp(business_id: str, key: str) -> None:
-    """Read-modify-write settings.lifecycle_emails.<key> = now.
+    """settings.lifecycle_emails.<key> = now, and nothing else.
 
-    Fresh read on purpose: the row we sized the send from may be minutes
-    old and the practitioner may have changed a setting since. Merging
-    into the LIVE settings blob is what keeps this write from clobbering
-    theirs."""
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,settings&limit=1")
-    if not rows:
-        raise RuntimeError("Cannot save lifecycle stamp without current business settings")
-    settings = (rows[0].get("settings") if rows else None) or {}
-    if not isinstance(settings, dict):
-        settings = {}
-    le = dict(settings.get(SETTINGS_KEY) or {})
-    le[key] = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
-    settings[SETTINGS_KEY] = le
-    result = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
-                                           {"settings": settings})
-    if result is None:
+    One UPDATE inside settings.lifecycle_emails (business_settings.merge), so
+    neither the practitioner's settings nor another send's stamp, written a
+    moment ago by another worker, is put back. The row we sized the send
+    from may be minutes old; it is never what is written."""
+    import business_settings
+    done = business_settings.merge(business_id, {key: _now().strftime("%Y-%m-%dT%H:%M:%SZ")},
+                                   under=[SETTINGS_KEY])
+    if done is None:
         raise RuntimeError("Lifecycle send stamp was not saved")
 
 

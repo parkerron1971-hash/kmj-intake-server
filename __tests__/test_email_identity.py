@@ -331,8 +331,9 @@ def test_connect_resend_error_never_half_writes(fake, monkeypatch):
 def test_connect_settings_write_failure_rolls_back_resend(fake, monkeypatch):
     calls = _fake_resend(monkeypatch, {("POST", ""): CREATED,
                                        ("DELETE", "/dom_1"): {}})
-    import sb_clients
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: None)
+    import business_settings
+    # The settings write (settings.email_domain, business_settings.merge) fails.
+    monkeypatch.setattr(business_settings, "merge", lambda *a, **k: None)
     with pytest.raises(HTTPException) as e:
         asyncio.run(edr.connect_domain(
             "b1", edr.ConnectBody(domain="studiok.com", from_local_part="hello"),

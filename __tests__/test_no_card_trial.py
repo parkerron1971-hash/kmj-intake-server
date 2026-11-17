@@ -562,6 +562,10 @@ def _phone_db(monkeypatch, row, taken=False):
     monkeypatch.setattr(um, "_biz_row", lambda biz: row)
     monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", db.get)
     monkeypatch.setattr(nct.sb_clients, "sb_patch_as_service", db.patch)
+    # The verified phone goes into the marker in one UPDATE
+    # (business_settings.merge): logged in db.patches as ("settings", call).
+    from settings_merge_fake import install
+    install(monkeypatch, lambda bid: db.row, into=db.patches)
     return db
 
 
@@ -571,7 +575,11 @@ def test_a_code_texts_and_verifies(monkeypatch, phone_env):
     assert out["ok"] and out["token"] and phone_env[-1][0] == "+12165550100"
     code = _code_from(phone_env)
     assert nct.verify_phone_code("biz1", "216-555-0100", code, out["token"])["verified"]
-    saved = db.patches[-1]["settings"][nct.MARKER]
+    [(kind, call)] = db.patches
+    # Only the two fields, inside the marker: nothing else on the row is sent.
+    assert kind == "settings" and call["under"] == [nct.MARKER] and call["drop"] == []
+    assert sorted(call["set"]) == ["phone_hash", "phone_verified_at"]
+    saved = db.row["settings"][nct.MARKER]
     assert saved["phone_hash"] == nct.phone_hash("+12165550100")
     assert saved["phone_verified_at"]
     assert saved["credits"] == 500          # the marker around it survives
