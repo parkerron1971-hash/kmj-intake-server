@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17: "build" (sell +100 GB for $5 a month on top of a church plan''s storage allowance)'
 status: waiting on Kevin
-prs: [kmj-intake-server (this PR), solutionist-studio (the button and stepper on Live and Billing)]
+prs: [kmj-intake-server#1909, solutionist-studio#1618]
 migrations: [supabase/APPLY-2026-11-17-settings-server-keys.sql (edited, still NOT applied: extra_storage joins the server keys, 43 now)]
 left_undone:
   - "Kevin: create the three Stripe prices (STRIPE_PRICE_ID_EXTRA_STORAGE $5/month, _ANNUAL $50/year, _QUARTERLY $15 every 3 months) with the bootstrap catalog, narrowed to them, and set the three ids on BOTH Railway services (kmj-intake-server: the route and the webhook; kmj-intake-worker: the daily storage job's warning words). Nothing is sold until STRIPE_PRICE_ID_EXTRA_STORAGE is set AND CHURCH_STORAGE is on for the church."
