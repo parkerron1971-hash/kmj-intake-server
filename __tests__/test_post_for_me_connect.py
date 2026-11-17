@@ -137,8 +137,14 @@ def test_star_opens_every_business(monkeypatch):
     monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "*")
     assert pfm.allowed_for(BIZ) and pfm.allowed_for(OTHER)
     assert not pfm.allowed_for("")
+    # Unset or empty is every business too (the code's default since
+    # 2026-11-17); a list still limits it.
     monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "")
-    assert not pfm.allowed_for(BIZ)
+    assert pfm.allowed_for(BIZ) and pfm.allowed_for(OTHER)
+    monkeypatch.delenv("POST_FOR_ME_PILOT_BUSINESSES")
+    assert pfm.allowed_for(BIZ) and pfm.allowed_for(OTHER)
+    monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", BIZ)
+    assert pfm.allowed_for(BIZ) and not pfm.allowed_for(OTHER)
     monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "*")
     monkeypatch.setenv("POST_FOR_ME_API_KEY", "")
     assert not pfm.allowed_for(OTHER)

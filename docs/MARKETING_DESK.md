@@ -235,9 +235,10 @@ platform desk's. They run only where scheduled jobs run (`PROCESS_ROLE`
 worker or all), on the scheduler leader, and **do nothing while
 `MARKETING_DESK_PUBLISHING=off`** (on when unset since 2026-10-08; `off` on the
 worker is the kill switch). The
-sender also claims nothing while `POST_FOR_ME_API_KEY` is missing or
-`POST_FOR_ME_PILOT_BUSINESSES` is empty, so a configuration slip on the
-worker never fails anyone's posts.
+sender also claims nothing while `POST_FOR_ME_API_KEY` is missing, so a
+configuration slip on the worker never fails anyone's posts.
+`POST_FOR_ME_PILOT_BUSINESSES` unset means every business (since 2026-11-17);
+a list of ids still limits it.
 
 | Job | Every | What |
 | --- | --- | --- |

@@ -623,9 +623,11 @@ def test_held_posts_never_crowd_out_other_businesses(s, monkeypatch):
     assert all(post(s, p)['status'] == 'approved' and post(s, p)['error'] == d.PILOT_HELD for p in held)
 
 
-def test_an_empty_pilot_list_claims_nothing(s, monkeypatch):
-    """A configuration slip on the worker never becomes failed posts."""
-    for value in ('', ' , '):
+def test_a_pilot_list_that_names_nobody_claims_nothing(s, monkeypatch):
+    """A configuration slip on the worker never becomes failed posts. (Unset
+    or empty means every business since 2026-11-17; a list of only commas
+    and spaces names nobody.)"""
+    for value in (' , ', ','):
         monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', value)
         pid = seed(s)
         assert run(d.due_tick()) == {'skipped': 'not configured'}

@@ -88,8 +88,10 @@ def pilot_businesses() -> frozenset:
     POST_FOR_ME_PILOT_BUSINESSES), or "*" for every business. Kevin
     opened it to every business on 2026-10-05; posting is in every
     marketing level (Basics included), so "*" takes nothing away later.
-    Unset or empty = off everywhere."""
-    raw = os.environ.get("POST_FOR_ME_PILOT_BUSINESSES") or ""
+    Unset or empty = every business ("*", the default since 2026-11-17);
+    a list still limits it to those ids. POST_FOR_ME_API_KEY is still
+    required (configured())."""
+    raw = os.environ.get("POST_FOR_ME_PILOT_BUSINESSES") or "*"
     return frozenset(x.strip() for x in raw.split(",") if x.strip())
 
 
