@@ -77,7 +77,7 @@ STRATEGY_PHASE_COLUMN = {
 }
 
 
-async def _get_or_create_strategy_track(client, biz_id: str) -> Optional[Dict]:
+async def _get_or_create_strategy_track(client, biz_id: str, first: str = "discovery") -> Optional[Dict]:
     rows = await _sb(client, "GET",
         f"/strategy_tracks?business_id=eq.{biz_id}&order=created_at.desc&limit=1&select=*")
     if rows:
@@ -85,10 +85,85 @@ async def _get_or_create_strategy_track(client, biz_id: str) -> Optional[Dict]:
     created = await _sb(client, "POST", "/strategy_tracks", {
         "business_id": biz_id,
         "status": "in_progress",
-        "current_phase": "discovery",
+        "current_phase": first,
         "phases": {},
     })
     return (created or [None])[0] if isinstance(created, list) else created
+
+
+# ─── A church's planning course (church_plan_course) ──────────────────
+# The same page, the same row and the same verbs as a business's course,
+# with a church's own eight parts. Parts 1 to 7 are kept in the row's
+# `phases` under their own ids; the next 90 days are kept in launch_plan.
+# Finishing it marks the plan written and builds nothing: no site, no
+# products page, no intake form, no settings write.
+
+def _church_course(biz) -> bool:
+    import church_plan_course
+    return church_plan_course.is_church(biz)
+
+
+def _not_a_churchs(verb: str) -> Dict:
+    return _fail(verb, "that belongs to the business course. A church's plan is saved one part at a time "
+                       "with save_phase, and its next 90 days with save_launch_plan")
+
+
+_PLAN_NAV = {"tab": "build", "page": "strategy-track"}
+
+
+async def _church_track(client, biz) -> Optional[Dict]:
+    import church_plan_course as plan
+    return await _get_or_create_strategy_track(client, biz["id"], plan.FIRST)
+
+
+async def _save_church_part(client, biz, phase: str, data) -> Dict:
+    import church_plan_course as plan
+    if phase == plan.LAST:
+        weeks = data.get("weeks") if isinstance(data, dict) else data
+        return await _save_church_weeks(client, biz, weeks, "save_phase")
+    if phase not in plan.ids():
+        return _fail("save_phase", f"'{phase}' is not a part of the church planning course. "
+                                   f"Its parts are: {', '.join(plan.ids())}")
+    kept = plan.clean(phase, data)
+    if not kept:
+        return _fail("save_phase", f"nothing to keep for {plan.title(phase)} yet: its fields were empty")
+    track = await _church_track(client, biz)
+    if not track:
+        return _fail("save_phase", "could not open the church's plan")
+    phases = dict(track.get("phases") or {})
+    phases[phase] = kept
+    await _sb(client, "PATCH", f"/strategy_tracks?id=eq.{track['id']}", {"phases": phases})
+    return {"type": "save_phase", "result": "saved",
+            "label": f"Saved {plan.title(phase)} to the church's plan", "nav": _PLAN_NAV}
+
+
+async def _save_church_weeks(client, biz, weeks, verb: str) -> Dict:
+    import church_plan_course as plan
+    kept = plan.clean_weeks(weeks)
+    if not kept:
+        return _fail(verb, "the next 90 days need at least one week with a step in it")
+    track = await _church_track(client, biz)
+    if not track:
+        return _fail(verb, "could not open the church's plan")
+    await _sb(client, "PATCH", f"/strategy_tracks?id=eq.{track['id']}", {"launch_plan": {"weeks": kept}})
+    steps = sum(len(w["actions"]) for w in kept)
+    return {"type": verb, "result": f"{len(kept)} weeks, {steps} steps saved",
+            "label": "Saved the next 90 days to the church's plan", "nav": _PLAN_NAV}
+
+
+async def _finish_church_plan(client, biz) -> Dict:
+    import church_plan_course as plan
+    track = await _church_track(client, biz)
+    if not track:
+        return _fail("complete_strategy_track", "could not open the church's plan")
+    if not plan.page(track, plan.LAST):
+        return _fail("complete_strategy_track", "the next 90 days are not written yet, so the plan is not finished")
+    await _sb(client, "PATCH", f"/strategy_tracks?id=eq.{track['id']}", {
+        "status": "completed",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"type": "complete_strategy_track", "result": "the plan is written",
+            "label": "The church's plan is written", "nav": _PLAN_NAV}
 
 
 async def handle_save_phase(client, biz, action) -> Dict:
@@ -97,6 +172,8 @@ async def handle_save_phase(client, biz, action) -> Dict:
     discovery it goes into phases.discovery."""
     phase = (action.get("phase") or "").lower().strip()
     data = action.get("data")
+    if _church_course(biz):
+        return await _save_church_part(client, biz, phase, data)
     if phase not in STRATEGY_PHASES:
         return _fail("save_phase", f"unknown phase '{phase}'")
     if data is None:
@@ -127,6 +204,16 @@ async def handle_save_phase(client, biz, action) -> Dict:
 
 async def handle_advance_phase(client, biz, action) -> Dict:
     to_phase = (action.get("to") or "").lower().strip()
+    if _church_course(biz):
+        import church_plan_course as plan
+        if to_phase not in plan.ids():
+            return _fail("advance_phase", f"'{to_phase}' is not a part of the church planning course")
+        track = await _church_track(client, biz)
+        if not track:
+            return _fail("advance_phase", "could not open the church's plan")
+        await _sb(client, "PATCH", f"/strategy_tracks?id=eq.{track['id']}", {"current_phase": to_phase})
+        return {"type": "advance_phase", "result": "advanced",
+                "label": f"Now on: {plan.title(to_phase)}", "nav": _PLAN_NAV}
     if to_phase not in STRATEGY_PHASES:
         return _fail("advance_phase", f"unknown phase '{to_phase}'")
     track = await _get_or_create_strategy_track(client, biz["id"])
@@ -647,6 +734,8 @@ async def handle_run_market_research(client, biz, action) -> Dict:
 
 
 async def handle_save_business_model(client, biz, action) -> Dict:
+    if _church_course(biz):
+        return _not_a_churchs("save_business_model")
     canvas = action.get("canvas") or action.get("data")
     if not isinstance(canvas, dict):
         return _fail("save_business_model", "canvas object required")
@@ -664,6 +753,8 @@ async def handle_save_business_model(client, biz, action) -> Dict:
 
 
 async def handle_save_pricing(client, biz, action) -> Dict:
+    if _church_course(biz):
+        return _not_a_churchs("save_pricing")
     payload: Dict[str, Any] = {}
     if "tiers" in action:
         payload["tiers"] = action["tiers"]
@@ -691,6 +782,8 @@ async def handle_save_pricing(client, biz, action) -> Dict:
 
 
 async def handle_save_packages(client, biz, action) -> Dict:
+    if _church_course(biz):
+        return _not_a_churchs("save_packages")
     packages = action.get("packages") or action.get("data")
     if not isinstance(packages, list):
         return _fail("save_packages", "packages array required")
@@ -708,6 +801,8 @@ async def handle_save_packages(client, biz, action) -> Dict:
 
 
 async def handle_save_projections(client, biz, action) -> Dict:
+    if _church_course(biz):
+        return _not_a_churchs("save_projections")
     payload: Dict[str, Any] = {}
     for k in ("scenarios", "expenses", "break_even", "monthly_net", "notes"):
         if k in action:
@@ -731,6 +826,8 @@ async def handle_save_projections(client, biz, action) -> Dict:
 
 
 async def handle_save_swot(client, biz, action) -> Dict:
+    if _church_course(biz):
+        return _not_a_churchs("save_swot")
     payload: Dict[str, Any] = {}
     for k in ("strengths", "weaknesses", "opportunities", "threats"):
         if k in action:
@@ -759,6 +856,8 @@ async def handle_save_launch_plan(client, biz, action) -> Dict:
         # Allow a full object that includes weeks
         data = action.get("data") or {}
         weeks = data.get("weeks") if isinstance(data, dict) else None
+    if _church_course(biz):
+        return await _save_church_weeks(client, biz, weeks, "save_launch_plan")
     if not isinstance(weeks, list):
         return _fail("save_launch_plan", "weeks array required")
 
@@ -930,7 +1029,8 @@ async def handle_session_summary(client, biz, action) -> Dict:
     if not isinstance(phases_progressed, list):
         phases_progressed = []
 
-    track = await _get_or_create_strategy_track(client, biz["id"])
+    track = await (_church_track(client, biz) if _church_course(biz)
+                   else _get_or_create_strategy_track(client, biz["id"]))
     if not track:
         return _fail("session_summary", "could not load strategy track")
 
@@ -958,7 +1058,12 @@ async def handle_session_summary(client, biz, action) -> Dict:
 async def handle_complete_strategy_track(client, biz, action) -> Dict:
     """Finalize the track: create products module + entries from packages,
     seed an intake form, generate the site, flip settings.track to 'launched',
-    and mark the track completed."""
+    and mark the track completed.
+
+    A church's planning course finishes differently: the plan is marked
+    written and nothing is built or changed (_finish_church_plan)."""
+    if _church_course(biz):
+        return await _finish_church_plan(client, biz)
     track = await _get_or_create_strategy_track(client, biz["id"])
     if not track:
         return _fail("complete_strategy_track", "could not load strategy track")
