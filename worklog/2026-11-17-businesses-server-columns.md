@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17, after the settings guard (#1878) named a second hole: "top tier, no cut corners"'
 status: shipped
-prs: ["kmj-intake-server (this PR; no frontend PR: the app writes only owner columns)"]
+prs: ["kmj-intake-server#1880 (no frontend PR: the app writes only owner columns)"]
 migrations: ["supabase/APPLY-2026-11-17-businesses-server-columns.sql (NOT APPLIED; the parent session applies it, after this PR deploys)"]
 left_undone:
   - "Apply supabase/APPLY-2026-11-17-businesses-server-columns.sql (SQL editor) after this PR has deployed: run its Before query first, then the file, then its Check lines. Until then the hole is open in production; the code works the same either way."
