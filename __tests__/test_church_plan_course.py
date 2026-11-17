@@ -273,3 +273,22 @@ def test_a_session_note_is_kept_for_a_church_too(monkeypatch):
     out = run(csa.handle_session_summary(None, CHURCH, {"summary": "Wrote the mission", "phases_progressed": ["calling"]}))
     assert out["result"] == "logged" and sb.track["current_phase"] == "calling"
     assert sb.track["phases"]["session_log"][0]["summary"] == "Wrote the mission"
+
+
+def test_the_parts_and_fields_are_the_ones_the_app_shows():
+    # The same list, key for key, as tests/church-plan-check.ts in the app
+    # (solutionist-studio). A change here without one there means the coach
+    # saves a field the page never shows.
+    app_parts = {
+        "calling": ["mission", "vision", "values", "story"],
+        "community": ["neighborhood", "who_comes_now", "who_to_reach", "needs"],
+        "path": ["steps:name,what_happens,who_owns_it,gap"],
+        "ministries": ["ministries:name,leader,serves,call,note", "start", "stop"],
+        "leaders": ["teams:name,leader,needs", "gaps", "raising_leaders", "care"],
+        "stewardship": ["priorities", "giving_today", "goals", "risks"],
+        "honest_look": ["strengths", "weaknesses", "open_doors", "risks"],
+        "ninety_days": [],
+    }
+    mine = {p["id"]: [f"{key}:{','.join(cols)}" if kind == "rows" else key for key, kind, cols in p["fields"]]
+            for p in plan.PARTS}
+    assert mine == app_parts
