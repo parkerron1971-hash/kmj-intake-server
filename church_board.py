@@ -74,7 +74,7 @@ members never see a board or its minutes.
                                                        elder this login may not hand work is made, handed to
                                                        no one, and listed in not_handed
 
-Switched by CHURCH_BOARD: off | owner | on (owner until a Thursday). Until
+Switched by CHURCH_BOARD: off | owner | on (on by default since 2026-11-17). Until
 supabase/APPLY-2026-10-27-church-board.sql is applied the status says
 enabled false and every other route answers 503, never 500.
 """
@@ -135,7 +135,7 @@ RESULT_WORDS = {"carried": "Carried", "failed": "Failed", "tabled": "Tabled"}
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_BOARD") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_BOARD") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

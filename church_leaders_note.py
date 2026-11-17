@@ -44,7 +44,7 @@ people pressing Send at once send once. No table, no migration.
   GET  /church/leaders-note?business_id=          the draft, who it goes to, the last send
   POST /church/leaders-note/send                  {business_id, subject, text}
 
-Switched by CHURCH_LEADERS_NOTE: off | owner | on (owner until a Thursday).
+Switched by CHURCH_LEADERS_NOTE: off | owner | on (on by default since 2026-11-17).
 A read that fails is a 503, never an empty note.
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ DAY_RE = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_LEADERS_NOTE") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_LEADERS_NOTE") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

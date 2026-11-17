@@ -355,12 +355,9 @@ def test_not_a_church_starts_nothing(db):
     assert follow_ups(db) == []
 
 
-@pytest.mark.parametrize("mode", [None, "owner", "off", "ON?"])
+@pytest.mark.parametrize("mode", ["owner", "off", "ON?"])   # unset is on since 2026-11-17
 def test_switched_off_it_starts_nothing_and_reads_nothing(db, monkeypatch, mode):
-    if mode is None:
-        monkeypatch.delenv("CHURCH_AREAS", raising=False)
-    else:
-        monkeypatch.setenv("CHURCH_AREAS", mode)
+    monkeypatch.setenv("CHURCH_AREAS", mode)
     started = []
     monkeypatch.setattr(cfv, "_spawn", lambda fn, *a: started.append(fn))
     kids_in([MIA, LEO])

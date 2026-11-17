@@ -44,7 +44,7 @@ Admin login). Giving a login its lane is giving it the lane's areas; an
 invite can carry one (business_users_router), so the person's login is set
 up the moment they accept.
 
-Switched by CHURCH_AREAS: off | owner | on (owner until a Thursday).
+Switched by CHURCH_AREAS: off | owner | on (on by default since 2026-11-17).
 """
 from __future__ import annotations
 
@@ -593,7 +593,7 @@ def view_for(business_id: str, user_id: str, role: Optional[str]) -> Optional[Di
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_AREAS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_AREAS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

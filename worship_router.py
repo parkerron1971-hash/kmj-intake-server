@@ -73,7 +73,7 @@ _FULL = ("id,title,needs_title,authors,ccli_number,copyright,public_domain,song_
 
 
 def mode() -> str:
-    m = (os.environ.get("WORSHIP_SONGS") or "owner").strip().lower()
+    m = (os.environ.get("WORSHIP_SONGS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

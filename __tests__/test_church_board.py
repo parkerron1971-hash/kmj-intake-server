@@ -504,7 +504,7 @@ def test_the_switch(db, monkeypatch):
     monkeypatch.setenv("CHURCH_BOARD", "sideways")      # anything unknown is off
     assert cb.mode() == "off"
     monkeypatch.delenv("CHURCH_BOARD")
-    assert cb.mode() == "owner"
+    assert cb.mode() == "on"   # every church since 2026-11-17
 
 
 def test_before_the_migration_nothing_answers_500(db):

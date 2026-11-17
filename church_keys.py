@@ -39,7 +39,7 @@ as the backup, and a yes opens the area for one hour.
 
 Every read that fails is a 503, never "no keeper" (which would open the
 lock) and never "locked" for someone who keeps the area. Switched by
-CHURCH_KEYS: off | owner | on (owner until a Thursday). Off takes every
+CHURCH_KEYS: off | owner | on (on by default since 2026-11-17). Off takes every
 lock away; owner shows the routes to the platform owner, and to the logins
 and accountants of the platform owner's own churches, while a church that
 has keepers stays locked either way. (2026-11-01: owner used to show them
@@ -79,7 +79,7 @@ REASON_MAX = 300
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_KEYS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_KEYS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

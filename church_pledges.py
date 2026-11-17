@@ -40,7 +40,7 @@ list and the pledges) also sits behind the church's keys
 Giving, everyone else needs a key. Campaign totals stay open, as the keys
 leave totals open.
 
-THE SWITCH. CHURCH_PLEDGES = off | owner | on, owner until a Thursday:
+THE SWITCH. CHURCH_PLEDGES = off | owner | on, on by default since 2026-11-17:
 owner shows the pages to the platform owner only; off hides them. Status
 answers false (never an error) when the switch is closed, the login isn't
 finance, the business isn't a church, or the tables aren't there yet;
@@ -76,7 +76,7 @@ CAMPAIGNS_MAX = 200
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_PLEDGES") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_PLEDGES") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

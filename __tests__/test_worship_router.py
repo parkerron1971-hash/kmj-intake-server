@@ -150,6 +150,7 @@ def add(as_, who="owner", **body):
 
 def test_the_switch_opens_it_to_the_owner_first(api, monkeypatch):
     db, as_ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "owner")   # unset is on since 2026-11-17
     assert as_("owner").get(f"/worship/songs?business_id={BIZ}").status_code == 200
     assert as_("manager").get(f"/worship/songs?business_id={BIZ}").status_code == 404
     assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": False, "can_write": False}

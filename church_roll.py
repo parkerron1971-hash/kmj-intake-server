@@ -46,7 +46,7 @@ Giving & money is open to them (church_keys).
 Who: the owner and the church's staff seats (manager, admin), the people
 the shepherding and families pages are for; while Who sees what is on, a
 staff login whose areas are neither People & care nor the Office is refused.
-Switch: CHURCH_ROLL off | owner (the default: the platform owner only) | on.
+Switch: CHURCH_ROLL off | owner (the platform owner only) | on (on by default since 2026-11-17).
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sun
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_ROLL") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_ROLL") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

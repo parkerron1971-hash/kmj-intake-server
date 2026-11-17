@@ -170,7 +170,7 @@ def test_the_switch_off_hides_everything_and_owner_means_the_platform_owner(db, 
     assert cp.status(BIZ, ADMIN)["enabled"] is False, "owner mode is the platform owner only"
     assert _refused(cp.recurring, BIZ, user=ADMIN).status_code == 404
     monkeypatch.delenv("CHURCH_PLEDGES")
-    assert cp.mode() == "owner", "owner until a Thursday"
+    assert cp.mode() == "on", "on for every church since 2026-11-17"
 
 
 def test_status_says_pledges_false_while_the_tables_are_missing_and_nothing_500s(db, monkeypatch):

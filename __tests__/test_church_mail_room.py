@@ -111,7 +111,8 @@ def _tray(view, label):
 
 # ─── Who reads what ──────────────────────────────────────────────────
 
-def test_a_login_reads_its_own_box_and_the_office_it_shares_never_another_persons(mail, resend):
+def test_a_login_reads_its_own_box_and_the_office_it_shares_never_another_persons(mail, resend, monkeypatch):
+    monkeypatch.setenv("CHURCH_AREAS", "off")   # login areas (on by default) would open the prayer count to care
     _arrive(resend, "m1", "jessica@lovecityc.com", subject="Your spot this Sunday")
     _arrive(resend, "m2", "office@lovecityc.com", subject="The hall on the 21st")
     _arrive(resend, "m3", "typo@lovecityc.com", subject="To nobody")

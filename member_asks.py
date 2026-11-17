@@ -56,7 +56,7 @@ THE RULES
   · Rate-limited per member (member_ask, member_ask_day), on top of the
     member app's own (member_action), so one member can't flood the office.
 
-THE SWITCH. CHURCH_MEMBER_ASKS = off | owner | on, owner until a Thursday
+THE SWITCH. CHURCH_MEMBER_ASKS = off | owner | on, on by default since 2026-11-17
 (the church_keys pattern). With owner, only the platform owner sees the
 office section and only a church whose owner is the platform owner may turn
 asks on; members of any other church see nothing. Off hides it all. The
@@ -168,7 +168,7 @@ def _words(v: Any, top: int) -> str:
 
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_MEMBER_ASKS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_MEMBER_ASKS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

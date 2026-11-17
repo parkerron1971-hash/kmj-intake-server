@@ -70,6 +70,8 @@ def test_denied_user_never_reads_media_store(monkeypatch):
     def deny(*a):
         raise HTTPException(403, 'Denied')
     monkeypatch.setattr(business_users_router, 'require_role', deny)
+    import worship_team
+    monkeypatch.setattr(worship_team, 'team_can', lambda *a: False)   # not on a Sunday team either
     monkeypatch.setattr(media, 'read', lambda *a: pytest.fail('Unauthorized media read'))
     with pytest.raises(HTTPException):
         media.asset(BIZ, CLIP, USER)

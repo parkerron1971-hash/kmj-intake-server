@@ -501,6 +501,7 @@ def test_the_page_is_for_a_manager_and_up_at_a_church(office, db):
 
 def test_the_switch_keeps_the_routes_to_the_platform_owner_then_everyone_or_no_one(office, db, monkeypatch):
     put = lambda: office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [NAIYA]})  # noqa: E731
+    monkeypatch.setenv("CHURCH_DUTIES", "owner")   # unset is on since 2026-11-17
     office.who["email"] = "pastor@lovecity.org"
     assert office.get(f"/church/duties?business_id={BIZ}").status_code == 404
     assert put().status_code == 404
@@ -525,6 +526,7 @@ def test_the_platform_owners_church_opens_the_routes_to_its_own_office(office, d
     owner_is = {"email": PLATFORM}
     monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: owner_is["email"] if uid == OWNER else "")
     monkeypatch.setenv("CHURCH_MAP", "off")             # this fake has no leaders map (church_three has)
+    monkeypatch.setenv("CHURCH_DUTIES", "owner")
     put = lambda: office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [TIARA]})  # noqa: E731
     undo = lambda: office.post("/church/duties/weekly_text/undo", json={"business_id": BIZ})  # noqa: E731
     office.who.update(role="admin", id=ADMIN, email="minnie@lovecity.org")

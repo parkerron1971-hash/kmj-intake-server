@@ -331,8 +331,8 @@ def test_the_switch(db, monkeypatch):
     assert status("owner") is True and status("clerk") is False and status("admin") is False
     ok(page("owner"))
     assert page("clerk").status_code == 404
-    monkeypatch.delenv("CHURCH_LEADERS_NOTE")              # unset is owner
-    assert cln.mode() == "owner" and status("clerk") is False
+    monkeypatch.delenv("CHURCH_LEADERS_NOTE")              # unset is on (since 2026-11-17)
+    assert cln.mode() == "on" and status("clerk") is True
     monkeypatch.setenv("CHURCH_LEADERS_NOTE", "sideways")  # nonsense is off
     assert cln.mode() == "off" and status("owner") is False
     monkeypatch.setenv("CHURCH_LEADERS_NOTE", "on")

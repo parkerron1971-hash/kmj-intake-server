@@ -204,7 +204,7 @@ def test_the_switch_decides_who_sees_the_leaders(office, monkeypatch):
     monkeypatch.setenv("CHURCH_LEADER_TASKS", "sideways")
     assert clt.mode() == "off"
     monkeypatch.delenv("CHURCH_LEADER_TASKS")
-    assert clt.mode() == "owner"
+    assert clt.mode() == "on"   # on for every church since 2026-11-17
 
 
 def test_a_room_that_cant_be_read_drops_the_leaders_and_keeps_the_logins(office, db, monkeypatch):

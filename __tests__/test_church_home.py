@@ -49,7 +49,7 @@ def _defaults(monkeypatch):
     monkeypatch.delenv("HOME_EDITION", raising=False)
     monkeypatch.delenv("HOME_EDIT", raising=False)
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
-    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")   # on sale when unset since 2026-11-17
     monkeypatch.delenv("CHURCH_OFFERED", raising=False)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "at", 0.0)

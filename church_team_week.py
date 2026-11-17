@@ -42,7 +42,7 @@ view, without the monthly report (its own PR).
                      record that doesn't save is logged and counted. Quiet when
                      no Manager is over the lanes.
 
-Switched by CHURCH_TEAM_ROLLUP: off | owner | on. Owner (the default) means
+Switched by CHURCH_TEAM_ROLLUP: off | owner | on (on by default since 2026-11-17). Owner means
 the platform owner's own church (member_asks.platform_church), for the
 overseer's See as, the team page and the roll-up alike; the owner's and the
 admins' See as is unchanged whatever it says. The roll-up runs on the worker:
@@ -85,7 +85,7 @@ NOT_CHURCH = "The team page is for churches"
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_TEAM_ROLLUP") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_TEAM_ROLLUP") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

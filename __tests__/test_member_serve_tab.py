@@ -70,6 +70,8 @@ def test_without_the_switch_serving_alone_is_no_tab(db, monkeypatch):
 def test_someone_who_only_serves_opens_on_their_sundays(db, on, shell, monkeypatch):
     import member_portal_serving
     import sunday_serving as ss
+    monkeypatch.setenv("CHURCH_CHECKS", "off")   # no Get paid back door in this page
+    monkeypatch.setenv("CHURCH_BOARD", "off")
     _parts(monkeypatch, serving=True)
     monkeypatch.setattr(ss, "mine", lambda biz, cid: {"me": "mine"})
     monkeypatch.setattr(ss, "hearing", lambda biz, cid: {})

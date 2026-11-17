@@ -85,7 +85,14 @@ def test_names_and_thinking_follow_the_price():
 
 # ─── 2. who can buy, and when ─────────────────────────────────────────
 
+def test_on_sale_unless_switched_off(monkeypatch):
+    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    monkeypatch.delenv("CHURCH_OFFERED", raising=False)
+    assert fg.audience_plans_for("church") == list(fg.CHURCH_PLANS)   # on sale since 2026-11-17
+
+
 def test_hidden_until_offered_then_all_four_for_churches(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")
     assert fg.audience_plans_for("church") == []
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
     for kind in ("church", "ministry", "faith", "religious"):
@@ -223,7 +230,8 @@ def _sessions(posted):
     return [d for p, d in posted if p == "/checkout/sessions"]
 
 
-def test_not_offered_is_refused(checkout):
+def test_not_offered_is_refused(checkout, monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")
     posted, _ = checkout
     with pytest.raises(HTTPException) as e:
         _buy(plan=GROWING)
@@ -275,6 +283,7 @@ def test_the_plans_endpoint_draws_the_church_ladder(monkeypatch):
         return {"configured": False}
     monkeypatch.setattr(sb, "_price_display", no_display)
     monkeypatch.setattr(sb, "_founder_summary", no_founder)
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")
     assert asyncio.run(sb.billing_plans(for_type="church"))["church_offer"] is None
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
     out = asyncio.run(sb.billing_plans(for_type="church"))
