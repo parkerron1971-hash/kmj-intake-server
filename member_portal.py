@@ -883,7 +883,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
                 reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None,
                 checkin: str = "", serving: str = "", edit: bool = False, devotional: str = "", news: str = "",
-                news_n: Optional[int] = None, celebrate: str = "", ask: str = "") -> str:
+                news_n: Optional[int] = None, celebrate: str = "", ask: str = "", inbox: str = "") -> str:
     """Home ("Member App, Top Tier", Kevin approved 2026-10-15; round three
     2026-10-19): the greeting, the next gathering on the church's own photo
     (a Live now card while the church is live; the church itself when
@@ -958,7 +958,7 @@ e.textContent='';e.append(g+', ',em);}
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
 {band(checkin, serving, f'<div style="display:flex;flex-direction:column;gap:12px;margin:6px 0 16px">{celebrate}</div>' if celebrate else '')}
-{band(hero + f'<nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>', flash + news + today, cls="hm-lead")}
+{band(hero + f'<nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>', flash + inbox + news + today, cls="hm-lead")}
 {rows}
 {band(mai.install_card(church), member_push.home_card(biz), prayer_card(), ask, cls="hm-cards")}""",
                   tab="home", who=me, script=script + (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else ""),
@@ -987,7 +987,7 @@ def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
 def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
               year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
               this_year: int, flash: str = "", pictures: bool = False, serving: bool = False,
-              asks: Optional[List[str]] = None) -> str:
+              asks: Optional[List[str]] = None, inbox: bool = False) -> str:
     """Me: who's signed in, their giving (a year's total, month by month,
     each gift and the statement), then the ways to look after their own
     record, and sign out. `pictures` (the owner in a preview, or someone
@@ -1069,6 +1069,7 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
   {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
   {link('/my/prayer', 'pray', 'Prayer', 'A private request to the pastors')}
+  {link('/my/inbox', 'chat', 'From your church', 'Notes from the church, and a way to write back') if inbox else ''}
   {link('/my/ask', 'send', 'Ask the church', _e(member_asks.me_sub(asks))) if asks else ''}
   {recurring}
   {link('/my/notifications', 'bell', 'Notifications', 'What this app tells you about') if notes_on else ''}
@@ -1305,6 +1306,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         if isinstance(out, tuple):
             return _page(out[0], out[1])
         return out
+    # From your church (member_portal_threads.py, church_threads.py): the
+    # church's notes and the member's groups' notes, like texts, and a way
+    # to write back to the office. Only while CHURCH_THREADS is open here.
+    if sub == "/my/inbox" or sub.startswith("/my/inbox/"):
+        import member_portal_threads as mpt
+        out = await mpt.serve(request, biz, site, me, sub, preview=preview)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
     if (sub == "/my/lead" or sub.startswith("/my/lead/")) and not preview:
         import church_follow_up as cfu
         import member_portal_lead as mpl
@@ -1496,7 +1506,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         serving = await asyncio.to_thread(ssv.serves, biz, str(me["id"]))
         return _page(render_me(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
                                give_url=give_url, this_year=this_year, flash=mpc._flash(request),
-                               pictures=can_picture, serving=serving, asks=await _ask_entry(biz, me)))
+                               pictures=can_picture, serving=serving, asks=await _ask_entry(biz, me),
+                               inbox=await _inbox_entry(biz)))
     # The church's reading plan (reading_plans.py, member_portal_reading.py).
     import reading_plans as rp
     import member_portal_reading as mpr
@@ -1553,7 +1564,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_portal_celebrations as mcl
     church_home = space not in ("kids", "youth")
     import sunday_serving as ssv
-    occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks = await asyncio.gather(
+    occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
@@ -1571,7 +1582,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
         asyncio.to_thread(mcl.home_asks, biz, me) if church_home and not preview else _nothing(),
         # Asks to serve waiting on this member (member_portal_serving).
-        asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing())
+        asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
+        # From your church, while something there is unread (member_portal_threads).
+        _inbox_card(biz, me) if church_home else _nothing())
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
     devotional, own, own_done = extras
     if own and not today:
@@ -1605,7 +1618,35 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                              checkin=checkin, serving=serving, devotional=devotional,
                              edit=can_picture and request.query_params.get("edit") == "pictures",
                              news=news_html, news_n=mpn.home_bell(news), celebrate=celebrate,
-                             ask=member_asks.home_row(await _ask_entry(biz, me))))
+                             ask=member_asks.home_row(await _ask_entry(biz, me)), inbox=inbox or ""))
+
+
+def _inbox_space() -> bool:
+    """From your church lives in Church: not in Kids, nor for an adult who
+    switched into Youth (member_asks' rule)."""
+    import member_spaces as msp
+    ctx = msp.CURRENT.get() or {}
+    return not (ctx.get("space", "church") == "kids" or (ctx.get("space") == "youth" and not ctx.get("youth")))
+
+
+async def _inbox_entry(biz: Dict[str, Any]) -> bool:
+    """Me's way into From your church (member_portal_threads)."""
+    if not _inbox_space():
+        return False
+    try:
+        import member_portal_threads as mpt
+        return await asyncio.to_thread(mpt.entry_open, biz)
+    except Exception:
+        logger.warning("church threads: Me's way in was skipped", exc_info=True)
+        return False
+
+
+async def _inbox_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
+    """Home's card while something in From your church is unread."""
+    if not _inbox_space():
+        return ""
+    import member_portal_threads as mpt
+    return await asyncio.to_thread(mpt.home_card, biz, me)
 
 
 async def _ask_entry(biz: Dict[str, Any], me: Dict[str, Any]) -> List[str]:

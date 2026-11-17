@@ -34,6 +34,11 @@ What goes on a lock screen is chosen here, never by the caller's raw
 text. A message or a prayer note says that something happened, not
 what was written: a teen's phone, a shared tablet.
 
+Church threads (church_threads.py, CHURCH_THREADS, Kevin 2026-11-17): a
+note of a kind the inbox keeps is also recorded in the member's inbox
+(/my/inbox), and its lock screen reads like a text from the church (or
+the group) and opens that conversation.
+
 Endpoints (member side; the session decides who, never the body):
   POST /my/push/subscribe     {subscription}   this device, on
   POST /my/push/unsubscribe   {endpoint}       this device, off
@@ -314,6 +319,16 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
         if not claimed:
             return 0
         log_id = claimed[0].get("id")
+    if contact_ids is not None:
+        contact_ids = [str(c) for c in contact_ids]     # read twice below: never a spent iterator
+    # Church threads (church_threads.py): the note also lands in the
+    # member's inbox, in the church's conversation or its group's, for
+    # everyone it's for (not only those with a phone). Never raises.
+    import church_threads
+    thread = None
+    if kind in church_threads.THREAD_KINDS:
+        thread = church_threads.record(business, kind, title=title, body=body, url=url,
+                                       contact_ids=contact_ids, ref_id=ref_id)
     q = f"/{_TABLE}?business_id=eq.{biz_id}&select=id,contact_id,endpoint,subscription&limit=5000"
     subs = sb_clients.sb_get_as_service(q) or []
     if contact_ids is not None:
@@ -332,6 +347,10 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
     # on the lock screen instead of stacking twenty.
     payload = {"title": title, "body": body, "url": url,
                "tag": (tag or f"{kind}-{ref_id or ''}")[:60]}
+    if thread:
+        # Reads like a text: the church's name and what it said, opening the
+        # conversation (a group's keeps its name, and opens the group's).
+        payload.update(church_threads.lock_screen(business, thread, title, body))
     held: Set[str] = set()
     if kind in QUIET_KINDS and quiet_hour(business):
         prefs = {str(r["contact_id"]): r for r in off_rows}
@@ -340,7 +359,7 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
             if c not in muted and p.get("quiet") is not False and not (ring and p.get("after_hours") is not False):
                 held.add(c)
         if ring:
-            payload["title"] = f"After-hours alert · {title}"[:TITLE_MAX]
+            payload["title"] = f"After-hours alert · {payload['title']}"[:TITLE_MAX]
         _hold(biz_id, kind, held, payload)
     reached = 0
     for s in subs:
@@ -405,9 +424,12 @@ def sweep_held(now: Optional[datetime] = None) -> int:
                     for n in reversed(fresh):
                         if n["title"] not in names:
                             names.append(n["title"])
+                    # Notes kept in the inbox (church_threads) open it; any
+                    # other mix opens Groups, as it always did.
+                    many = "/my/inbox" if all(u.startswith("/my/inbox") for u in urls) else "/my/groups"
                     payload = {"title": "While you were resting",
                                "body": " · ".join(names)[:BODY_MAX],
-                               "url": urls.pop() if len(urls) == 1 else "/my/groups", "tag": "quiet-morning"}
+                               "url": urls.pop() if len(urls) == 1 else many, "tag": "quiet-morning"}
                 subs = sb_clients.sb_get_as_service(
                     f"/{_TABLE}?business_id=eq.{bid}&contact_id=eq.{cid}&select=id,contact_id,endpoint,subscription&limit=20") or []
                 for s in subs:
