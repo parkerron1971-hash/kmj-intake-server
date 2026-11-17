@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-16/17, after the first paying church''s founding place (settings.founding_church) was found gone two hours after its first payment: "top tier, no cut corners"'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (PR 2, after this merges)]
+prs: [kmj-intake-server#1878, solutionist-studio (PR 2, after #1878 merges)]
 migrations: [supabase/APPLY-2026-11-17-settings-server-keys.sql (NOT APPLIED; the parent session applies it)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-17-settings-server-keys.sql (SQL editor). Until then business_settings.merge falls back to a fresh read and a whole write, and Railway prints '[settings] merge_business_settings isn't in the database yet' once every five minutes per replica."
