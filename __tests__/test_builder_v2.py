@@ -12,8 +12,10 @@ from unittest import mock
 import builder_v2 as v2
 
 
-def test_flag_default_off():
+def test_flag_default_on_and_off_still_turns_it_off():
     with mock.patch.dict(os.environ, {}, clear=True):
+        assert v2.enabled() is True
+    with mock.patch.dict(os.environ, {"SITE_BUILDER_V2": "off"}):
         assert v2.enabled() is False
     with mock.patch.dict(os.environ, {"SITE_BUILDER_V2": "on"}):
         assert v2.enabled() is True

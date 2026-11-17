@@ -174,8 +174,10 @@ def test_loop_keeps_the_last_render_when_the_purse_or_the_cap_runs_out(monkeypat
     assert client.seen[1]["tool_choice"] == {"type": "tool", "name": "finish"}
 
 
-def test_loop_is_off_by_default_and_run_builder_v2_falls_back_to_one_pass(monkeypatch):
+def test_loop_is_on_by_default_and_run_builder_v2_falls_back_to_one_pass(monkeypatch):
     monkeypatch.delenv("BUILDER_V2_LOOP", raising=False)
+    assert bl.enabled() is True
+    monkeypatch.setenv("BUILDER_V2_LOOP", "off")
     assert bl.enabled() is False
     monkeypatch.setenv("BUILDER_V2_LOOP", "on")
     assert bl.enabled() is True
@@ -189,6 +191,16 @@ def test_loop_is_off_by_default_and_run_builder_v2_falls_back_to_one_pass(monkey
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["html"] and len(calls) == 1
     assert any(f["stage"] == "loop" for f in out["report"]["fallbacks"])
+
+
+def test_one_tool_call_is_the_default_cap(monkeypatch):
+    """Production ran BUILDER_LOOP_MAX_TOOLS=1; unset now means the same."""
+    monkeypatch.delenv("BUILDER_LOOP_MAX_TOOLS", raising=False)
+    assert bl.max_tools() == 1
+    monkeypatch.setenv("BUILDER_LOOP_MAX_TOOLS", "4")
+    assert bl.max_tools() == 4
+    monkeypatch.setenv("BUILDER_LOOP_MAX_TOOLS", "x")
+    assert bl.max_tools() == 1
 
 
 def test_opus_5_5_is_told_to_finish_without_a_forced_tool_choice(monkeypatch):

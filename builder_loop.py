@@ -24,13 +24,13 @@ This module gives the same builder a small, real toolset and a budget:
   finish(html)          hand the document in
 
 The fence is the point:
-  · BUILDER_LOOP_MAX_TOOLS calls (default 8) and the shared output-token
+  · BUILDER_LOOP_MAX_TOOLS calls (default 1) and the shared output-token
     budget (builder_v2._output_budget). When either runs out the loop
     forces finish and keeps the best document it has seen — the last
     rendered draft if there is one. Never nothing.
   · Everything downstream is unchanged: armor, laws, the surgical repair,
     the eyes, the judge. The loop only replaces the single authoring call.
-  · Off by default (BUILDER_V2_LOOP=on turns it on) until benched.
+  · On by default since 2026-11-17 (BUILDER_V2_LOOP=off turns it off).
 """
 from __future__ import annotations
 
@@ -45,13 +45,13 @@ import llm_call
 
 logger = logging.getLogger("builder_loop")
 
-LOOP_MAX_TOOLS_DEFAULT = 8
+LOOP_MAX_TOOLS_DEFAULT = 1   # production ran 1 (2026-11-17); was 8
 RENDER_WIDTHS = (1440, 390)
 
 
 def enabled() -> bool:
-    return (os.environ.get("BUILDER_V2_LOOP") or "off").strip().lower() \
-        in ("on", "1", "true", "yes")
+    return (os.environ.get("BUILDER_V2_LOOP") or "on").strip().lower() \
+        not in ("off", "0", "false", "no")
 
 
 def max_tools() -> int:

@@ -17,7 +17,7 @@
 # block byte-identity, the substance floor, and the anatomy census. One
 # corrective retry, then the module path (the §9 degradation ladder).
 #
-# Gated on SITE_CANVAS=on (default OFF — canvas_enabled()). Modules and
+# On unless SITE_CANVAS=off (default ON since 2026-11-17 — canvas_enabled()). Modules and
 # the atelier are untouched: they remain the floor the canvas falls
 # back to (§12), and their contract/armor are reused wholesale here.
 # ─────────────────────────────────────────────────────────────────────
@@ -52,11 +52,11 @@ _WORD_RE = re.compile(r"[A-Za-z0-9][\w'’\-]*")
 
 
 def canvas_enabled() -> bool:
-    """Env gate, default OFF (spec §11: SITE_CANVAS=on enables, first
-    for the KMJ business). When unset the deterministic module+atelier
-    path runs byte-identically."""
-    return (os.environ.get("SITE_CANVAS") or "").strip().lower() in (
-        "on", "1", "true", "yes")
+    """Env gate, default ON (2026-11-17; it was spec §11's opt-in, first
+    for the KMJ business). SITE_CANVAS=off runs the deterministic
+    module+atelier path byte-identically."""
+    return (os.environ.get("SITE_CANVAS") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
 
 
 def _model() -> str:

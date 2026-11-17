@@ -51,7 +51,7 @@ def _wire(monkeypatch, *, dro_by_stance, judge=None, b_raises=False):
 
 
 def test_off_is_exactly_one_authoring_call(monkeypatch):
-    monkeypatch.delenv("DRO_DIRECTIONS", raising=False)
+    monkeypatch.setenv("DRO_DIRECTIONS", "off")
     a = _exemplar("e13_glass")
     calls = _wire(monkeypatch, dro_by_stance={"concept-literal": a, None: a},
                   judge={"winner": 1, "by": "judge", "because": "x"})
@@ -199,8 +199,10 @@ def test_stances_come_from_the_gallery_source_of_truth():
     assert st["concept-literal"].startswith("CONCEPT-LITERAL")
 
 
-def test_switch_is_off_by_default(monkeypatch):
+def test_switch_is_on_by_default_and_off_still_turns_it_off(monkeypatch):
     monkeypatch.delenv("DRO_DIRECTIONS", raising=False)
+    assert dj.enabled() is True
+    monkeypatch.setenv("DRO_DIRECTIONS", "off")
     assert dj.enabled() is False
     monkeypatch.setenv("DRO_DIRECTIONS", "on")
     assert dj.enabled() is True

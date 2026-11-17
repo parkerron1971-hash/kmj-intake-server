@@ -1231,7 +1231,7 @@ def _author_directions(business_id: str, signals: List[Dict[str, Any]],
                        owner_direction: Optional[Dict[str, Any]],
                        facts_text: str = "") -> Optional[Dict[str, Any]]:
     """TWO DIRECTIONS + A JUDGE (2026-08-29, builder bench step 5). Off
-    (DRO_DIRECTIONS unset) → exactly the single author_dro call this
+    (DRO_DIRECTIONS=off) → exactly the single author_dro call this
     replaced. On → candidate A (concept-literal, today's default) and
     candidate B (the stance the owner's energy argues for), B authored
     with A in its cohort so the existing collision check keeps them
