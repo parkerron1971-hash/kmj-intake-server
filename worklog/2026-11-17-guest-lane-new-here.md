@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17: "can you make sure that Tiara also has the ability to make sure that things like qr code and stuff is made for guest as well."'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (NewHereRoom calls the new route)]
+prs: [kmj-intake-server#1905, solutionist-studio#1616]
 migrations: []
 left_undone:
   - "Merge order: this backend first, then the frontend PR (the room's button calls POST /new-here/{biz}/screen)"
