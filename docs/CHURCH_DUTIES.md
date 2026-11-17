@@ -104,12 +104,39 @@ route made stays (the switch, the card, the seat on that church, the keepers).
 | chat_rules | `messaging_router._chat_rules_keeper` | `PATCH /messaging/settings` (on or off, how long chats are kept), still needing its two safety officers to turn on | Naming safety officers and the Safety room: the owner and the named officers |
 | rooms | `church_spaces._access` | Booking straight away, approving, keeping the spaces; the Rentals list without one amount (`rental_list` in `me`). The Office's alone since the split (2026-11-02): every room is booked from one place | Fees, deposits and bills: the owner and Admins (`rentals` in `me` still means the page with its money); Member and Viewer logins still go by the Office area |
 | events | `church_event_signups._office` | The sign-ups' status, summary and each event's sign-ups | Prices, places, cancelling and the export: the owner and Admins (one PUT carries prices with the rest) |
+| events, outreach_nights | `church_spaces._access` (2026-11-17) | A room request: a Manager without `rooms` that holds either asks for a room as an office Member does (status `book: true, approve: false`), whatever its areas | Approving, the spaces, the Rentals list, amounts and an outside renter's email and phone: whoever does the rooms; the owner and Admins |
 | leaders_note | `church_leaders_note._access` | The draft and the send | Once a week; the leaders room as the list |
 
 A Manager no lane names keeps what its areas gave it: the duty's own area decides, as `holds()`
 says. Event sign-ups were the one job whose old area (the Office) isn't its duty's (Website &
 outreach), so for them a Manager no lane names also keeps the Office area's yes until the church
 moves the events.
+
+### An event's room request and volunteer list (2026-11-17)
+
+Kevin, 2026-11-17: "Laquesha couldn't make event volunteer list. can we make sure that she has
+access and ability to make list and or make volunteers list." The `events` and `outreach_nights`
+duties promise "a room request" and "volunteers"; neither worked for her (Sunday & Serving,
+Worship & media alone).
+
+- **The room request.** `church_spaces._access`: a Manager that doesn't hold `rooms` but holds
+  `events` or `outreach_nights` acts as an office Member there: it asks (a request), changes or
+  takes back its own, and reads the week. It never approves (told whose job the rooms are), keeps
+  no spaces, reads no Rentals list, sees no amounts and no outside renter's email or phone. Once
+  both duties move away it's refused, as before. A failed duties read is a 503.
+- **The volunteer list.** It lives on the event, in the church's events room (an `event_roster`
+  module, "Services & Events" at Love City), which every office login adds to: Chief's
+  `create_module_entry` and `update_module_entry` take `roles` and `volunteers` and write them in
+  the room's shape (`chief_roster`: each role's id as the app makes one, a role's people kept when
+  its number changes). A lane's login whose Chief tried to make a new list for it instead is told
+  the list goes in that room (`chief_areas.room_hint`); making a new list stays the owner's and
+  admins'. When the church's events page is on and the event is on it with a role still open
+  (`events_rsvp_router`'s own rules; no paid sign-up in the way), Chief also says people can sign
+  themselves up there, with the page's address (`events_url_for_site`). Sunday's own places are
+  Who serves when's: Chief points there (its Ask reaches each person's phone), never at a text to
+  the whole church, which is the Office's weekly text.
+- **Not done:** Who serves when (`sunday_planning`) schedules Sundays only; an event's or an
+  outreach night's volunteers aren't on it.
 
 ### Background checks (2026-11-02)
 
