@@ -31,7 +31,7 @@ def _now_iso() -> str:
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
     if not rows or str(rows[0].get("owner_id")) != str(user.id):
         raise HTTPException(403, "not your business")
     return rows[0]
@@ -250,12 +250,13 @@ def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
     the proposal reasoning): overdue-invoice follow-up emails. The other
     new domains (tasks, tags, scheduling, content) are fully live as
     proposal types + executors — rules and future analyzers feed them."""
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    import bill_words   # a church's payer reads "bill"; a business reads what it read
     created: List[Dict[str, Any]] = []
     invoices = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{biz}&paid_at=is.null"
         f"&status=in.(sent,viewed,overdue)"
-        f"&select=id,invoice_number,total,due_date,contact_id,contacts(name,email)"
+        f"&select=id,invoice_number,is_gift,total,due_date,contact_id,contacts(name,email)"
         f"&limit=100") or []
     today = datetime.now(timezone.utc).date()
     pending = sb_clients.sb_get_as_service(
@@ -276,6 +277,7 @@ def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
         c = (inv.get("contacts") or {}) or {}
         if not c.get("email"):
             continue
+        nudge = bill_words.overdue_nudge(biz_row, inv, c.get("name"), float(inv.get("total") or 0), due, days)
         res = sb_clients.sb_post_as_service("/chief_proposals", {
             "business_id": biz,
             "proposal_type": "propose_followup_email",
@@ -285,18 +287,11 @@ def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
                 "contact_id": inv.get("contact_id"),
                 "contact_name": c.get("name"),
                 "contact_email": c.get("email"),
-                "subject": f"Friendly nudge — invoice {inv.get('invoice_number')}",
-                "body": (f"Hi {c.get('name') or 'there'},\n\nJust a gentle "
-                         f"reminder that invoice {inv.get('invoice_number')} "
-                         f"(${float(inv.get('total') or 0):,.2f}) was due on "
-                         f"{due}. The payment link is on the invoice — and if "
-                         f"anything's off, just reply here.\n\nThank you!"),
+                "subject": nudge["subject"],
+                "body": nudge["body"],
             },
             "confidence": 0.85,
-            "reasoning": (f"Invoice {inv.get('invoice_number')} is {days} days "
-                          f"overdue and {c.get('name') or 'the client'} hasn't "
-                          "been nudged. Approve to send this reminder — nothing "
-                          "sends until you say so."),
+            "reasoning": nudge["reasoning"],
             "status": "pending",
             "created_at": _now_iso(),
         })

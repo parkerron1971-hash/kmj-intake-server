@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import bill_words
 import payments_core
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -276,7 +277,7 @@ async def invoice_checkout(
     rows = sb_clients.sb_get_as_service(
         f"/invoices?id=eq.{invoice_id}"
         f"&select=id,business_id,contact_id,invoice_number,total,currency,"
-        f"status,stripe_payment_url&limit=1"
+        f"status,stripe_payment_url,is_gift&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "invoice not found")
@@ -298,7 +299,7 @@ async def invoice_checkout(
 
     biz_rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
-        f"&select=id,name,owner_id,stripe_account_id,settings&limit=1"
+        f"&select=id,name,type,owner_id,stripe_account_id,settings&limit=1"
     ) or []
     biz = biz_rows[0] if biz_rows else {}
     provider = payments_core.provider_for(biz)
@@ -332,6 +333,9 @@ async def invoice_checkout(
             amount_cents=amount_cents,
             business_id=business_id,
             currency=str(inv.get("currency") or "usd").lower(),
+            # What the payer reads on Stripe's page: "Bill <number>" for a
+            # church's bill, "Invoice <number>" for everyone else, as before.
+            product_name=bill_words.stripe_name(biz, inv, inv.get("invoice_number")),
         )
     except RuntimeError as e:
         logger.warning(
