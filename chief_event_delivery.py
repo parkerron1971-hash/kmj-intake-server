@@ -13,7 +13,8 @@ _delivery = contextvars.ContextVar('chief_event_delivery', default=None)
 
 
 def enabled():
-    return os.getenv('CHIEF_DURABLE_EVENTS', 'off').lower() in ('on', 'true', '1')
+    # On unless CHIEF_DURABLE_EVENTS=off (default on since 2026-11-17).
+    return (os.getenv('CHIEF_DURABLE_EVENTS') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
 
 
 def rpc(name, args):

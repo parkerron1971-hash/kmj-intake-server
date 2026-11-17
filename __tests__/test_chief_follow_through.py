@@ -278,3 +278,13 @@ def test_only_the_winner_of_atomic_retry_starts_a_worker(monkeypatch):
     results=run(race())
     assert len(runs)==1
     assert sum(isinstance(r,chief_jobs.HTTPException) and r.status_code==409 for r in results)==1
+
+
+def test_durable_events_are_on_unless_switched_off(monkeypatch):
+    """CHIEF_DURABLE_EVENTS is on by the code's own default (2026-11-17;
+    production had it on through Railway, web and worker). off is still the
+    rollback to the agent_handled_at cursor."""
+    monkeypatch.delenv('CHIEF_DURABLE_EVENTS', raising=False)
+    assert delivery.enabled() is True
+    monkeypatch.setenv('CHIEF_DURABLE_EVENTS', 'off')
+    assert delivery.enabled() is False

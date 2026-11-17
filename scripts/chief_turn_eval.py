@@ -750,6 +750,10 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     monkeypatch.setattr(cos, "_compose_post_action_reply", lambda *a, **k: _instant(""))
     if hasattr(cos, "_archive_turn"):
         monkeypatch.setattr(cos, "_archive_turn", lambda *a, **k: _instant(None))
+    # Chief builds are on by default (CHIEF_BUILDS, 2026-11-17): the turn
+    # reads the business's build jobs. The fixture business has none.
+    import chief_build_runtime
+    monkeypatch.setattr(chief_build_runtime, "context", lambda *a, **k: _instant([]))
 
     import chief_bookkeeping
     import chief_proactive_suggestions

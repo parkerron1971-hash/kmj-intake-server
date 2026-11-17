@@ -22,7 +22,7 @@ No MySite builder, voice runtime, new dashboard or external sending path is adde
 
 ## Recovery contract
 
-`CHIEF_DURABLE_EVENTS=off` is the deployment default. When enabled, event work
+`CHIEF_DURABLE_EVENTS` is on by default (since 2026-11-17); `off` rolls back. When enabled, event work
 claims a three-minute database lease and renews it every 30 seconds. Only a
 current token can cross the action boundary or confirm completion. Preparation
 can be retried at most three times, including after the event passes the normal

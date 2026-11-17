@@ -31,6 +31,16 @@ os.environ.setdefault("LEAD_SCORING_MODE", "off")
 # tests call it directly with the reads faked.
 os.environ.setdefault("CHIEF_RAIL", "off")
 
+# Chief builds and durable event delivery are on by the code's default
+# (since 2026-11-17), and both read their own tables on every turn and every
+# event run: the build jobs (chief_build_runtime.context) and the delivery
+# leases (chief_event_delivery). The many turn and agent tests fake the
+# tables they were written against, not those, so unit tests run the off
+# path unless they switch a feature on themselves (test_chief_builds,
+# test_chief_follow_through); each file's default test unsets it.
+os.environ.setdefault("CHIEF_BUILDS", "off")
+os.environ.setdefault("CHIEF_DURABLE_EVENTS", "off")
+
 # Members' quiet hours (member_push) follow the church's clock: left on, a
 # test's notification would wait or not depending on the hour it runs. The
 # quiet-hours tests turn it on with monkeypatch.setenv and a fixed clock.

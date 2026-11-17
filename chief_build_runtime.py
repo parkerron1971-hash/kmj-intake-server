@@ -24,7 +24,8 @@ MAX_ORDERS_PER_TURN = 4
 
 
 def enabled():
-    return os.getenv('CHIEF_BUILDS', 'off').lower() in ('1','true','on')
+    # On unless CHIEF_BUILDS=off (default on since 2026-11-17).
+    return (os.getenv('CHIEF_BUILDS') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
 
 
 async def db(client, method, path, body=None):
