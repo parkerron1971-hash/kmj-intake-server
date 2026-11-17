@@ -398,13 +398,24 @@ def _clips(hours: int) -> str:
     return f"Clips from {_count(hours, 'hour')} of sermons a month"
 
 
+def _storage(lim: Dict[str, object]) -> List[str]:
+    """'100 GB of storage' (1 TB at 1,024), once church storage is on for
+    everyone (church_storage.cards_on); nothing before."""
+    import church_storage
+    gb = lim.get("storage_gb")
+    if not church_storage.cards_on() or not isinstance(gb, int):
+        return []
+    size = f"{gb // 1024:,} TB" if gb >= 1024 and gb % 1024 == 0 else f"{gb:,} GB"
+    return [f"{size} of storage"]
+
+
 def _includes(plan: str) -> List[str]:
     """An overview card's Includes list, from the plan's limits and features."""
     import feature_gates as fg
     lim = fg.plan_limits()[plan]
     have = fg.plan_features(plan)
     out = [_count(lim["max_seats"], "office login"), _count(lim["texts_monthly"], "text") + " a month",
-           _clips(lim["clip_hours_monthly"])]
+           _clips(lim["clip_hours_monthly"]), *_storage(lim)]
     if "dedicated_sms_number" in have:
         out.append("Your own texting number and text-to-give")
     if {"reports_full", "period_close", "vertical_reports"} <= have:
@@ -625,7 +636,7 @@ def _plan_strip() -> str:
     for i, plan in enumerate(plans):
         lp = lim[plan]
         items = (_people(plan), _count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
-                 f"{credits[plan]:,} AI actions a month", _clips(lp["clip_hours_monthly"]))
+                 f"{credits[plan]:,} AI actions a month", _clips(lp["clip_hours_monthly"]), *_storage(lp))
         lis = "\n".join(f"<li>{_TICK}{x}</li>" for x in items)
         if plan in founding:
             pp = (f'<span class="preg">Regular price <s>${_dollars(prices[plan])}</s></span>'
@@ -669,7 +680,7 @@ def _picker_data() -> Dict[str, object]:
         conv = f"{mp._about(credits[plan] // per_turn):,}"
         pay = founding.get(plan, prices[plan])
         items = [_count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
-                 f"About {conv} messages to Chief", _clips(lp["clip_hours_monthly"])]
+                 f"About {conv} messages to Chief", _clips(lp["clip_hours_monthly"]), *_storage(lp)]
         if plan in founding:
             items.insert(0, f"Founding price, regular ${_dollars(prices[plan])} a month")
         out.append({

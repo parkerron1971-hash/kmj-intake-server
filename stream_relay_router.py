@@ -100,6 +100,12 @@ Env (all of them make the feature "ready"; without them it stays quiet):
   STREAM_R2_BUCKET             the private media bucket
   STREAM_R2_ACCESS_KEY_ID      an R2 token with READ on that bucket only
   STREAM_R2_SECRET_ACCESS_KEY
+
+Optional, and not part of "ready": STREAM_R2_WRITE_ACCESS_KEY_ID and
+STREAM_R2_WRITE_SECRET_ACCESS_KEY, a token with Object Read & Write on the
+same bucket. Only church_storage uses it, to delete a recording a church
+removes (or one kept past its 14 days while the church was full). Without
+it nothing is ever deleted and the storage warnings stay quiet.
 """
 from __future__ import annotations
 
@@ -336,28 +342,39 @@ def staff_watch_url(session_id: str) -> str:
     return f"{watch_url(session_id)}?t={staff_token(session_id)}"
 
 
-# R2 is S3: a GET link signed with AWS Signature V4 in the query string.
+# R2 is S3: a link signed with AWS Signature V4 in the query string.
 # Hand-rolled (no boto3 on this server); checked against AWS's published
-# example in the tests.
+# example in the tests. A GET with no other query is a link to one object
+# (the player's segments); church_storage also signs a LIST of a folder
+# (GET /<bucket>?list-type=2&prefix=...) and a DELETE of one object, with
+# the separate write key below.
 
 def _hmac(key: bytes, msg: str) -> bytes:
     return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
 
 
 def sigv4_presign(scheme: str, host: str, path: str, *, key_id: str, secret: str, expires: int,
-                  when: datetime, region: str = "auto") -> str:
+                  when: datetime, region: str = "auto", method: str = "GET",
+                  query: Optional[Dict[str, str]] = None) -> str:
+    """`method` and `query` (the request's own parameters, signed with the
+    rest) default to what the player's links always were, so a GET link
+    comes out byte for byte the same."""
     amz_date = when.strftime("%Y%m%dT%H%M%SZ")
     day = when.strftime("%Y%m%d")
     scope = f"{day}/{region}/s3/aws4_request"
     params = {"X-Amz-Algorithm": "AWS4-HMAC-SHA256", "X-Amz-Credential": f"{key_id}/{scope}",
               "X-Amz-Date": amz_date, "X-Amz-Expires": str(int(expires)), "X-Amz-SignedHeaders": "host"}
-    query = "&".join(f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in sorted(params.items()))
-    canonical = "\n".join(["GET", path, query, f"host:{host}\n", "host", "UNSIGNED-PAYLOAD"])
+    for name, value in (query or {}).items():
+        if name in params:
+            raise ValueError(f"sigv4_presign: {name} is the signature's own parameter")
+        params[name] = str(value)
+    qs = "&".join(f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in sorted(params.items()))
+    canonical = "\n".join([method.upper(), path, qs, f"host:{host}\n", "host", "UNSIGNED-PAYLOAD"])
     to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope,
                          hashlib.sha256(canonical.encode("utf-8")).hexdigest()])
     k = _hmac(_hmac(_hmac(_hmac(f"AWS4{secret}".encode("utf-8"), day), region), "s3"), "aws4_request")
     sig = hmac.new(k, to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{scheme}://{host}{path}?{query}&X-Amz-Signature={sig}"
+    return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
 
 
 def r2_link(object_key: str, expires: int = SEGMENT_LINK_S) -> str:
@@ -367,6 +384,35 @@ def r2_link(object_key: str, expires: int = SEGMENT_LINK_S) -> str:
     path = "/" + quote(r2["bucket"], safe="") + "/" + quote(object_key, safe="/-_.~")
     return sigv4_presign(ep.scheme, ep.netloc, path, key_id=r2["key_id"], secret=r2["secret"],
                          expires=expires, when=datetime.now(timezone.utc))
+
+
+def r2_write_config() -> Optional[Dict[str, str]]:
+    """The bucket with the key that may also delete (STREAM_R2_WRITE_*), or
+    None when it isn't set. The player's key (STREAM_R2_ACCESS_KEY_ID) only
+    reads; this one is used for nothing but a church removing a recording
+    (church_storage.py)."""
+    r2 = r2_config()
+    key_id, secret = _env("STREAM_R2_WRITE_ACCESS_KEY_ID"), _env("STREAM_R2_WRITE_SECRET_ACCESS_KEY")
+    if not (r2["endpoint"].startswith("https://") and r2["bucket"] and key_id and secret):
+        return None
+    return {"endpoint": r2["endpoint"], "bucket": r2["bucket"], "key_id": key_id, "secret": secret}
+
+
+def r2_write_link(method: str, object_key: Optional[str] = None, query: Optional[Dict[str, str]] = None,
+                  expires: int = 300, when: Optional[datetime] = None) -> Optional[str]:
+    """A short-lived signed request with the write key: a LIST of the bucket
+    (no object_key, query list-type=2&prefix=...) or a DELETE of one object.
+    None when the write key isn't set."""
+    cfg = r2_write_config()
+    if cfg is None:
+        return None
+    ep = urlparse(cfg["endpoint"])
+    path = "/" + quote(cfg["bucket"], safe="")
+    if object_key is not None:
+        path += "/" + quote(object_key, safe="/-_.~")
+    return sigv4_presign(ep.scheme, ep.netloc, path, key_id=cfg["key_id"], secret=cfg["secret"],
+                         expires=expires, when=when or datetime.now(timezone.utc), method=method,
+                         query=query)
 
 
 def r2_origin() -> str:
@@ -519,12 +565,25 @@ def stream_row(business_id: str) -> Optional[Dict[str, Any]]:
 _SESSION_COLS = "id,business_id,status,live_session_id,sermon_id,playlist_path,duration_s,bytes,started_at,ended_at"
 
 
-def _sessions(business_id: str, *, live: bool, limit: int) -> Optional[List[Dict[str, Any]]]:
+def _sessions(business_id: str, *, live: bool, limit: int,
+              hide_removed: bool = False) -> Optional[List[Dict[str, Any]]]:
+    """`hide_removed` leaves out recordings the church deleted
+    (church_storage; the column exists once its migration is applied, and
+    it is only asked for where CHURCH_STORAGE is on)."""
     status = "live" if live else "ended"
+    gone = "&removed_at=is.null" if hide_removed else ""
     rows = sb_clients.sb_get_as_service(
-        f"/stream_sessions?business_id=eq.{_q(business_id)}&status=eq.{status}"
+        f"/stream_sessions?business_id=eq.{_q(business_id)}&status=eq.{status}{gone}"
         f"&select={_SESSION_COLS}&order=started_at.desc&limit={int(limit)}")
     return rows if isinstance(rows, list) else None
+
+
+def _storage_on(business_id: str) -> bool:
+    try:
+        import church_storage
+        return church_storage.switched_on(business_id)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _session(sid: str) -> Optional[Dict[str, Any]]:
@@ -583,7 +642,11 @@ def stream_overview(business_id: str = Query(...), user: AuthedUser = Depends(re
         raise _unavailable()
     sweep_stale(biz)
     live = _sessions(biz, live=True, limit=1)
-    recent = _sessions(biz, live=False, limit=10)
+    hide = _storage_on(biz)
+    recent = _sessions(biz, live=False, limit=10, hide_removed=hide)
+    if recent is None and hide:
+        # Switched on before its migration: the Stream panel still loads.
+        recent = _sessions(biz, live=False, limit=10)
     if live is None or recent is None:
         raise _unavailable()
     return {
@@ -1154,7 +1217,20 @@ def finalize(s: Dict[str, Any], duration_s: int, size: int) -> Optional[str]:
     if fin["outcome"] != "ended":
         raise HTTPException(503, "session didn't close")
     done = fin.get("session") if isinstance(fin.get("session"), dict) else {}
+    _after_recording(biz, sid)
     return done.get("sermon_id")
+
+
+def _after_recording(biz: str, sid: str) -> None:
+    """The church's storage, once the recording is fully saved: over its
+    allowance, the recording is kept 14 days and the office is told
+    (church_storage.recording_ended; nothing while CHURCH_STORAGE is off).
+    Never raises: a recording is never held up by storage."""
+    try:
+        import church_storage
+        church_storage.recording_ended(biz, sid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[stream_relay] storage check skipped: {type(e).__name__}", flush=True)
 
 
 def _finish(sid: str, draft: Optional[Dict[str, str]]) -> Dict[str, Any]:
