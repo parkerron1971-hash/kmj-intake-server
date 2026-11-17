@@ -4128,7 +4128,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # 2-3 chunks under the canvas contract), fact-checks the assembled
     # page, and hands the document to render_and_persist at slot
     # population. Any failure falls back to today's module+atelier path
-    # (the §9 degradation ladder). Default OFF: unset SITE_CANVAS leaves
+    # (the §9 degradation ladder). Default ON: SITE_CANVAS=off leaves
     # the deterministic path byte-identical.
     def _try_canvas(the_spec: List[Dict[str, Any]], notes: str = ""):
         import canvas as _canvas_mod

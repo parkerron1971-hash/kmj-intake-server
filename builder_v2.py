@@ -34,7 +34,7 @@
 #       unavailable or repair breaks a law → the law-passing document
 #       ships and the report says exactly what happened.
 #
-# Gated on SITE_BUILDER_V2=on (default OFF). The v2 document joins
+# On unless SITE_BUILDER_V2=off (on by default since 2026-11-17). The v2 document joins
 # render_and_persist at the same seam the canvas uses (_canvas_html),
 # so slot population, overrides, the token bridge, the easel step and
 # the judge all apply unchanged. Model-portable by construction: the
@@ -113,8 +113,8 @@ def contact_endpoint(business_id: str) -> str:
 
 
 def enabled() -> bool:
-    return (os.environ.get("SITE_BUILDER_V2") or "").strip().lower() in (
-        "on", "1", "true", "yes")
+    return (os.environ.get("SITE_BUILDER_V2") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
 
 
 def _model() -> str:

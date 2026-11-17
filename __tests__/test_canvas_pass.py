@@ -728,9 +728,11 @@ class TestFallbacks(unittest.TestCase):
         self.assertLessEqual(report["keyframes"], 8)
         self.assertTrue(report["script"])
 
-    def test_gate_default_off(self):
+    def test_gate_default_on_and_off_still_turns_it_off(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SITE_CANVAS", None)
+            self.assertTrue(canvas.canvas_enabled())
+        with mock.patch.dict(os.environ, {"SITE_CANVAS": "off"}):
             self.assertFalse(canvas.canvas_enabled())
         with mock.patch.dict(os.environ, {"SITE_CANVAS": "on"}):
             self.assertTrue(canvas.canvas_enabled())
@@ -948,10 +950,8 @@ class TestComposeSiteGate(unittest.TestCase):
         canvas_out = {"html": "<html>canvas page</html>",
                       "report": {"fact_check": {"ok": True}, "fallbacks": [],
                                  "planned": {"authored": ["hero"]}}}
-        env = {"SITE_CANVAS": "on"} if env_on else {}
+        env = {"SITE_CANVAS": "on" if env_on else "off"}
         with mock.patch.dict(os.environ, env, clear=False):
-            if not env_on:
-                os.environ.pop("SITE_CANVAS", None)
             with mock.patch.object(site_composer, "gather_context",
                                    return_value=_ctx()), \
                     mock.patch.object(site_composer, "_maybe_analyze_references",

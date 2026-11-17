@@ -15,7 +15,7 @@
 # audit. Cost: one extra DRO on the DRL model + one short judge call —
 # cents, not a second build.
 #
-# Off by default (DRO_DIRECTIONS=on to switch it on, like BUILDER_V2_LOOP).
+# On by default since 2026-11-17 (DRO_DIRECTIONS=off switches it off, like BUILDER_V2_LOOP).
 # Fail-open everywhere: no second candidate → candidate A; judge cannot
 # run / cannot parse → candidate A ("today's default") with the reason on
 # the record. Never raises into produce_dro.
@@ -36,8 +36,8 @@ DEFAULT_STANCE = "concept-literal"
 
 
 def enabled() -> bool:
-    return (os.environ.get("DRO_DIRECTIONS") or "off").strip().lower() \
-        in ("on", "1", "true", "yes")
+    return (os.environ.get("DRO_DIRECTIONS") or "on").strip().lower() \
+        not in ("off", "0", "false", "no")
 
 
 # The three Arc-6 stances live on site_composer.DIRECTION_STANCES (the

@@ -13,6 +13,12 @@ os.environ.setdefault("CANVAS_VISION_LOOP", "off")
 # vision call belong to real builds, never to unit tests.
 os.environ.setdefault("SITE_V2_VISION_LOOP", "off")
 
+# And for builder v2's tool loop (builder_loop, on by default since
+# 2026-11-17): it is a model conversation. Tests that author a page
+# through run_builder_v2 test the one-pass author unless they turn the
+# loop on themselves; the loop's own tests call run_loop directly.
+os.environ.setdefault("BUILDER_V2_LOOP", "off")
+
 # Lead scoring fires on a worker thread from four capture paths. A
 # detached thread outliving a test's mock.patch block would reach the
 # real network, and would do it non-deterministically. "off" here; the
