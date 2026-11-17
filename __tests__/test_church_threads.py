@@ -21,10 +21,9 @@ import sys
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -558,7 +557,7 @@ def test_a_groups_conversation_is_for_its_members_only(fake, monkeypatch):
     assert any(r["thread"] == f"group:{GROUP}" for r in fake.t["church_thread_reads"])
     # Not in the group: 404, and nothing is read out.
     assert ana.get(f"/my/inbox/group/{GROUP2}").status_code == 404
-    dee = fake.person(DEE, "Dee Lane")
+    fake.person(DEE, "Dee Lane")
     r = _app(fake, monkeypatch, DEE).get(f"/my/inbox/group/{GROUP}")
     assert r.status_code == 404 and "Bring a friend" not in r.text
     assert _app(fake, monkeypatch, ANA).get("/my/inbox/group/not-a-uuid").status_code == 404
@@ -841,4 +840,3 @@ def test_the_routes_are_mounted_before_the_catch_all():
     last = src.index("app.include_router(public_site_router)")
     assert src.index("app.include_router(church_threads_router)") < last
     assert src.index("app.include_router(member_portal_threads_router)") < last
-    assert src.rstrip().splitlines()[-1] != ""
