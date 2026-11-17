@@ -63,7 +63,7 @@ year's numbers but stays on file.
   GET    /church/register/import?business_id=                     baptism dates from the import, not in yet
   POST   /church/register/import                                  {business_id, contact_id?}: add them
 
-Switched by CHURCH_REGISTER: off | owner | on (owner until a Thursday). Until
+Switched by CHURCH_REGISTER: off | owner | on (on by default since 2026-11-17). Until
 supabase/APPLY-2026-10-27-church-register.sql is applied the status says
 enabled false and every other route answers 503, never 500.
 """
@@ -137,7 +137,7 @@ CARE_FIELDS = "id,created_at,status,submission,contact_id"
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_REGISTER") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_REGISTER") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

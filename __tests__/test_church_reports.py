@@ -424,8 +424,8 @@ def test_the_switch(db, monkeypatch):
     monkeypatch.setenv("CHURCH_REPORTS", "owner")   # the platform owner alone until a Thursday
     assert status("owner") is True and status("admin") is False
     assert client("admin").get(f"/church/reports?business_id={BIZ}").status_code == 404
-    monkeypatch.delenv("CHURCH_REPORTS")            # unset is owner
-    assert status("owner") is True and status("admin") is False
+    monkeypatch.delenv("CHURCH_REPORTS")            # unset is on (since 2026-11-17)
+    assert status("owner") is True and status("admin") is True
     monkeypatch.setenv("CHURCH_REPORTS", "on")
     assert status("admin") is True
 

@@ -159,6 +159,7 @@ def plan(as_, who="owner", **body):
 
 def test_the_switch(api, monkeypatch):
     db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "owner")   # unset is on since 2026-11-17
     assert as_("owner").get(f"/worship/services?business_id={BIZ}").status_code == 200
     assert as_("manager").get(f"/worship/services?business_id={BIZ}").status_code == 404
     monkeypatch.setenv("WORSHIP_SONGS", "on")

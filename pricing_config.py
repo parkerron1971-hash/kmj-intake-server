@@ -291,8 +291,9 @@ def church_plan_for_size(people: int) -> str:
 
 
 def church_plans_offered() -> bool:
-    """PLAN_CHURCH_OFFERED=1 puts all four church plans on sale together."""
-    return _dial("CHURCH_OFFERED", "PLAN_", 0) != 0
+    """All four church plans are on sale together (on by default since
+    2026-11-17; PLAN_CHURCH_OFFERED=0 takes them off sale)."""
+    return _dial("CHURCH_OFFERED", "PLAN_", 1) != 0
 
 
 def church_free_week() -> bool:

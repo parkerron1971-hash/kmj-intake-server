@@ -83,7 +83,7 @@ _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def mode() -> str:
-    m = (os.environ.get("SUNDAY_PLANNING") or "owner").strip().lower()
+    m = (os.environ.get("SUNDAY_PLANNING") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

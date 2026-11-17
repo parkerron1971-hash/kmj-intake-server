@@ -70,7 +70,7 @@ and the admins': they carry the money.
   GET  /public/events/{slug}/receipt/{session_id}                 what was bought (after Stripe)
   POST /my/events/signup                 the member app's form (a signed-in member)
 
-Switched by CHURCH_PAID_SIGNUPS: off | owner | on, owner by default. Owner:
+Switched by CHURCH_PAID_SIGNUPS: off | owner | on, on by default since 2026-11-17. Owner:
 only a church owned by the platform owner can set a price or take a sign-up
 (read from the owner's sign-in address, fail-closed). Off: no prices; an
 event set up earlier shows "sign-ups aren't open online" rather than turning
@@ -135,7 +135,7 @@ BIZ_FIELDS = "id,name,type,owner_id,settings,stripe_account_id"
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_PAID_SIGNUPS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_PAID_SIGNUPS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

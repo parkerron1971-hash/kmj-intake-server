@@ -53,7 +53,7 @@ app in this version.
   POST  /church/spaces/bookings/{id}/bill           {business_id}        make the rental's bill, once
   GET   /church/spaces/rentals?business_id=&when=   upcoming | past
 
-Switched by CHURCH_SPACES: off | owner | on (owner until a Thursday). Until
+Switched by CHURCH_SPACES: off | owner | on (on by default since 2026-11-17). Until
 supabase/APPLY-2026-10-27-church-spaces.sql is applied the status says
 enabled: false and every other route answers 503, never 500.
 """
@@ -104,7 +104,7 @@ BILL_NS = uuid.UUID("6d1c3c5e-6b8f-4c55-9a3e-2a0f6f1e7b21")
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_SPACES") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_SPACES") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

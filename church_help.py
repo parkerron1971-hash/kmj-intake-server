@@ -122,7 +122,7 @@ CARE_FIELDS = "id,created_at,status,submission,contact_id"
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_HELP") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_HELP") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

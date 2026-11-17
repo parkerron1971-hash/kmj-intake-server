@@ -69,7 +69,7 @@ admin's, or the Manager's that holds the background_checks duty
 (church_duties, Kevin 2026-11-02: Sunday & Serving's by default); a Manager
 that doesn't is told whose job it is. Serving is only for churches.
 
-Switched by CHURCH_SERVING: off | owner | on (owner until a Thursday). The
+Switched by CHURCH_SERVING: off | owner | on (on by default since 2026-11-17). The
 member's own hours on My serving (member_portal_serving) follow the same
 switch: on for everyone, and in owner mode only in the platform owner's own
 preview of the member app.
@@ -124,7 +124,7 @@ NEEDS = ("blocked", "overdue", "none", "due")
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_SERVING") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_SERVING") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

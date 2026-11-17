@@ -71,7 +71,7 @@ care team" and nothing is read for it.
 
 The handlers are plain def: FastAPI runs them on its worker threads, never
 on the event loop, and the sections read side by side on a small pool.
-Switched by CHURCH_REPORTS: off | owner | on (owner until a Thursday). No
+Switched by CHURCH_REPORTS: off | owner | on (on by default since 2026-11-17). No
 migration: every number comes from a table that already exists.
 """
 from __future__ import annotations
@@ -154,7 +154,7 @@ SRC = {
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_REPORTS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_REPORTS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

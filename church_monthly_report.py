@@ -52,7 +52,7 @@ Manager who does it (church_my_week), until it's sent.
 Notes and sends live in church_monthly_reports (supabase/APPLY-2026-11-02-
 church-monthly-report.sql: server-only, RLS on, no policies). Before it's
 applied, the page and the send are a 503 and My week leaves the line out.
-Switched by CHURCH_MONTHLY_REPORT: off | owner | on (owner, the default, is the
+Switched by CHURCH_MONTHLY_REPORT: off | owner | on (on by default since 2026-11-17; owner is the
 platform owner's own church, member_asks.platform_church).
 """
 from __future__ import annotations
@@ -98,7 +98,7 @@ ROW_FIELDS = "month,notes,notes_by_name,notes_at,send_id,send_state,sent_at,sent
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_MONTHLY_REPORT") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_MONTHLY_REPORT") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

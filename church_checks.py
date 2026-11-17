@@ -75,7 +75,7 @@ Subsplash (M-1)".
 
 The member side is member_portal_checks.py (/my/paid-back), which calls
 member_ask / member_requests / member_receipt here. Switched by
-CHURCH_CHECKS: off | owner | on (owner until a Thursday): owner opens the
+CHURCH_CHECKS: off | owner | on (on by default since 2026-11-17): owner opens the
 office routes to the platform owner alone, and the member side only in the
 platform owner's own preview of the member app. Until
 supabase/APPLY-2026-10-27-church-checks.sql is applied the status says
@@ -141,7 +141,7 @@ REQ_FIELDS = ("id,contact_id,asker_name,payee,ministry,about,amount_cents,receip
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_CHECKS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_CHECKS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

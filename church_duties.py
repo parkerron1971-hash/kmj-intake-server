@@ -45,7 +45,7 @@ Who holds a duty (holds):
 Chief reads and moves duties through the same functions (chief_duties.py:
 list_duties reads build(), move_duty and undo_duty call move() and undo()).
 
-The switch, CHURCH_DUTIES (off | owner | on; owner until a Thursday), gates
+The switch, CHURCH_DUTIES (off | owner | on; on by default since 2026-11-17), gates
 these routes only, for the login or the church (office_open): with `owner`,
 the platform owner's login and the platform owner's own church (Love City:
 its admins move a duty, its Managers read the page). holds() answers
@@ -349,7 +349,7 @@ def catalog_view() -> List[Dict[str, Any]]:
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_DUTIES") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_DUTIES") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

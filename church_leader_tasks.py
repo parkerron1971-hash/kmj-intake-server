@@ -59,7 +59,7 @@ fall retreat by Nov 15" couldn't be handed to the youth pastor. Now it can
   The Board .... church_board.make_tasks hands a follow-up whose member has
                  no login but is one of the church's people by their contact.
 
-Switched by CHURCH_LEADER_TASKS: off | owner | on. Owner (the default): the
+Switched by CHURCH_LEADER_TASKS: off | owner | on (on by default since 2026-11-17). Owner: the
 platform owner's office alone, and on the member side and in the sweep, the
 platform owner's own church (member_asks.platform_church). The sweep runs on
 the worker, so switching on means setting it on both Railway services.
@@ -103,7 +103,7 @@ _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_LEADER_TASKS") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_LEADER_TASKS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 

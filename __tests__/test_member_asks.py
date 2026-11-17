@@ -304,8 +304,10 @@ def test_the_switch_keeps_it_dark(fake, monkeypatch):
     assert ma.offered(biz, minor=False) == []
     monkeypatch.setenv("CHURCH_MEMBER_ASKS", "nonsense")
     assert ma.mode() == "off" and ma.offered(biz, minor=False) == []
-    # Owner (the default): only a church whose owner is the platform owner.
     monkeypatch.delenv("CHURCH_MEMBER_ASKS")
+    assert ma.mode() == "on"   # every church since 2026-11-17
+    # Owner: only a church whose owner is the platform owner.
+    monkeypatch.setenv("CHURCH_MEMBER_ASKS", "owner")
     assert ma.mode() == "owner"
     monkeypatch.setattr(ma, "platform_church", lambda b: False)
     assert ma.offered(biz, minor=False) == []

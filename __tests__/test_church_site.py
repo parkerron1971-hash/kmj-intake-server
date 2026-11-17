@@ -43,7 +43,7 @@ def _defaults(monkeypatch):
     monkeypatch.setenv("CHURCH_SITE", "on")
     monkeypatch.delenv("HOME_EDITION", raising=False)
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
-    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")   # on sale when unset since 2026-11-17
     monkeypatch.delenv("CHURCH_OFFERED", raising=False)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "at", 0.0)
@@ -494,7 +494,7 @@ def test_what_a_text_is_is_said_once_under_the_plans(by_size):
 
 
 def test_switched_off_no_page_speaks_of_parts(monkeypatch):
-    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")   # on sale when unset since 2026-11-17
     for slug in cs.PAGES:
         assert "160 characters" not in cs.render(slug), slug
     assert "160 characters" not in mp.render_faq()

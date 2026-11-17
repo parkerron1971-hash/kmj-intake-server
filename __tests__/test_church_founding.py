@@ -468,6 +468,7 @@ def test_the_plans_endpoint_and_the_move_status_carry_it(monkeypatch):
     monkeypatch.setattr(sb, "_price_display", no_display)
     monkeypatch.setattr(sb, "_founder_summary", no_founder)
     monkeypatch.setattr(cf, "public_state", lambda: {"spots": 10, "left": 8})
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")
     assert asyncio.run(sb.billing_plans(for_type="church"))["church_founding"] is None     # not on sale yet
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
     out = asyncio.run(sb.billing_plans(for_type="church"))
