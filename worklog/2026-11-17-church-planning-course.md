@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-17, on the Academy being a business strategy course on a church''s Help door: "i would say keep for business and build a church planning course!"'
 status: in review
-prs: []
+prs: [kmj-intake-server#1892]
 migrations: []
 left_undone:
   - "No real model-written session has been read: the coach's prompt is tested with fakes (live evals bill production)."
