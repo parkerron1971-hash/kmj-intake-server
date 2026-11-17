@@ -703,8 +703,14 @@ async def create_invoice_checkout(
     invoice_number: str = "",
     business_id: Optional[str] = None,
     currency: str = "usd",
+    product_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Per-invoice pay link on the connected account (PR 3b, revived).
+
+    `product_name` is what the payer reads on Stripe's page and receipt.
+    The caller passes it when the business words it another way (a church's
+    bill: bill_words.stripe_name); without it the name is "Invoice <number>",
+    as it always was.
 
     Deliberately a Payment Link, NOT a Checkout Session: sessions expire
     within 24 hours and an emailed invoice is routinely paid days later.
@@ -725,7 +731,8 @@ async def create_invoice_checkout(
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
 
-    name = f"Invoice {invoice_number}".strip() if invoice_number else "Invoice Payment"
+    name = (product_name or "").strip() or (
+        f"Invoice {invoice_number}".strip() if invoice_number else "Invoice Payment")
     headers = {"Stripe-Account": stripe_account_id}
     require_stripe_write(stripe_account_id)
 

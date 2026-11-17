@@ -20,7 +20,9 @@ def invoice_text(biz, invoice):
     except (KeyError, InvalidOperation, ValueError):
         raise ValueError('This invoice needs a valid positive total before I can text it.')
     currency = str(invoice.get('currency') or 'USD').upper()
-    lines = [f"{biz.get('name') or 'Your business'} — Invoice {invoice.get('invoice_number') or invoice['id']}"]
+    # A church's payer reads "bill" (bill_words); a business reads what it read.
+    import bill_words
+    lines = [bill_words.text_head(biz, invoice, invoice.get('invoice_number') or invoice['id'])]
     for item in invoice.get('items') or []:
         lines.append(f"{item.get('description') or 'Item'} (qty {item.get('quantity', 1)})")
     lines.append(f'Total: {currency} {total:,.2f}')
@@ -54,7 +56,7 @@ async def send_invoice_sms(client, biz, action, *, preview=False):
         selected = dict(action)
         if selected.get('invoice_id') == 'latest':
             rows = await chief._sb(client, 'GET',
-                f'/invoices?business_id=eq.{owner}&order=created_at.desc&limit=1&select=id')
+                f'/invoices?business_id=eq.{owner}&is_gift=is.false&order=created_at.desc&limit=1&select=id')
             if not rows:
                 return fail('No invoice was found. Which invoice would you like me to text?')
             selected['invoice_id'] = rows[0]['id']

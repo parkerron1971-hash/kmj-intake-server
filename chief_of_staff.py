@@ -9511,6 +9511,7 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     if connected_account_id and stripe_key and total > 0 and invoice_id:
         try:
             from stripe_proxy import _create_stripe_payment_link
+            import bill_words
             # PR 3a — unified-source metadata so the resulting charge
             # in the Charges tab resolves back to "from Invoice #INV-".
             # PR 3c — business_id metadata + connected_account_id so
@@ -9521,7 +9522,9 @@ async def handle_create_invoice(client, biz, action) -> Dict:
             data = await _create_stripe_payment_link(
                 amount=float(total),
                 currency=(currency or "usd").lower(),
-                description=f"Invoice {invoice_number}",
+                # What the payer reads on Stripe's page: "Bill <number>" for
+                # a church, "Invoice <number>" for everyone else, as before.
+                description=bill_words.stripe_name(biz, None, invoice_number),
                 source_type="invoice",
                 source_id=str(invoice_id),
                 business_id=str(biz.get("id") or ""),
@@ -10072,10 +10075,12 @@ def _build_payment_buttons(biz: Dict[str, Any], invoice: Dict[str, Any], brand_p
             f'Please reply to this email for payment arrangements.</div>'
         )
 
+    # A church's payer reads "bill" (bill_words); a business reads what it read.
+    import bill_words
     header = (
         f'<div style="text-align:center;margin-top:24px;margin-bottom:12px;'
         f'font-size:14px;color:#666;font-weight:600;">'
-        f'Pay This Invoice — {total_fmt}</div>'
+        f'{bill_words.pay_header(biz, invoice, total_fmt)}</div>'
     )
     return header + "\n".join(buttons)
 
@@ -10117,6 +10122,9 @@ async def _send_invoice_email(
     # manual links. Falls back to "contact us" note when nothing is
     # configured.
     payment_block = _build_payment_buttons(biz, invoice, primary)
+    # What the payer reads it called: an invoice, or for a church a bill.
+    import bill_words
+    _w = bill_words.words(biz, invoice)
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -10125,12 +10133,12 @@ async def _send_invoice_email(
   <div style="display:flex;justify-content:space-between;margin-bottom:24px;">
     <div style="font-size:20px;font-weight:700;color:{primary};">{biz_name}</div>
     <div style="text-align:right;">
-      <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#999;">INVOICE</div>
+      <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#999;">{_w["label"]}</div>
       <div style="font-size:16px;font-weight:700;color:{primary};">{invoice.get("invoice_number","")}</div>
     </div>
   </div>
   <p style="font-size:14px;line-height:1.6;color:#333;">Hi {contact.get("name") or "there"},</p>
-  <p style="font-size:14px;line-height:1.6;color:#333;">Please find your invoice below.
+  <p style="font-size:14px;line-height:1.6;color:#333;">{_w["intro"]}
   {f'Payment is due by <strong>{invoice.get("due_date")}</strong>.' if invoice.get("due_date") else ''}</p>
   <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px;">
     <thead><tr style="border-bottom:2px solid {primary};">
@@ -10161,7 +10169,7 @@ async def _send_invoice_email(
             to_name=contact.get("name"),
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
             from_name=chief_areas.sender(biz, sig.get("name") or biz_name),
-            subject=f"Invoice {invoice.get('invoice_number')} from {biz_name}",
+            subject=bill_words.email_subject(biz, invoice, invoice.get('invoice_number'), biz_name),
             body=html,
             reply_to=routed or sig.get("email"),
         )
@@ -10187,9 +10195,11 @@ async def handle_send_invoice(client, biz, action) -> Dict:
 
     # Sentinel support: "latest" resolves to the most recent draft/sent
     # invoice for this business. Lets the Chief chain without UUIDs.
+    # Never a gift: a church's gifts are paid invoices too (is_gift), and
+    # the newest row at a church is almost always one.
     if invoice_id == "latest":
         latest = await _sb(client, "GET",
-            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+            f"/invoices?business_id=eq.{biz['id']}&is_gift=is.false&order=created_at.desc&limit=1&select=id")
         if not latest:
             print(f"[Chief] send_invoice — 'latest' but no invoices exist for business", flush=True)
             return _fail("send_invoice", "no invoices found")
@@ -10318,7 +10328,7 @@ async def handle_mark_invoice_paid(client, biz, action) -> Dict:
     # most recent invoice for this business.
     if invoice_id == "latest":
         latest = await _sb(client, "GET",
-            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+            f"/invoices?business_id=eq.{biz['id']}&is_gift=is.false&order=created_at.desc&limit=1&select=id")
         if not latest:
             return _fail("mark_invoice_paid", "no invoices found")
         invoice_id = latest[0]["id"]
