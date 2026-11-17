@@ -89,8 +89,9 @@ TOOLS = [
      "description": ("Church job descriptions: whose job some work is. Ranks everyone's job at the church (written "
                      "job descriptions and titles, their duties, departments and roles) against the work's words: the "
                      "top three with what matched, who is over each, and whether the signed-in person may hand it to "
-                     "them; then everyone's job in one line each, so you can judge past the words. Call it before "
-                     "saying whose job something is, and before handing out work when nobody was named."),
+                     "them; then everyone's job in one line each, so you can judge past the words. Call it for work "
+                     "that isn't one of the office's duties (THE OFFICE, in your instructions for a church, names "
+                     "whose those are), and before handing out such work when nobody was named."),
      "input_schema": {"type": "object", "properties": {"work": {"type": "string",
                                                                 "description": "The work, in a few words"}},
                       "required": ["work"]}},

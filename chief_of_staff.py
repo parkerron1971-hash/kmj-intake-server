@@ -263,6 +263,7 @@ from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
+import chief_office as _church_office  # the office team's week and the monthly report, read for the office
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_church_mail import (handle_church_email, handle_give_church_email,
                                handle_take_back_church_email, handle_switch_on_church_mail)
@@ -421,6 +422,7 @@ _ACTION_PHRASES = {
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_roles.PROGRESS,
+    **_church_office.PROGRESS,
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
     "list_map": "reading the leaders map",
@@ -12422,6 +12424,7 @@ ACTION_HANDLERS = {
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_roles.HANDLERS,
+    **_church_office.HANDLERS,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
     "list_map":              handle_list_map,
@@ -15366,6 +15369,7 @@ async def chief_chat(
     _area_token = chief_areas.TURN.set(_area_scope)
     _who_token = chief_areas.WHO.set(_who)
     _asks_read, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
+    _office_roster = None                  # THE OFFICE (chief_office): None until read
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15558,11 +15562,16 @@ async def chief_chat(
             view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
             # Is this right? (church_map_asks): this login's lines, read alongside the context and done with it,
             # so their time is the context stage's (a church's only).
+            # THE OFFICE (chief_office) rides the same gather: kept two minutes a replica, so most turns
+            # read nothing for it.
             import church_follow_up as _cfu
             if biz_lite and _cfu.is_church(biz_lite):
                 import church_map_asks
-                ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
-                    church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
+                ctx, view_detail, _asks_read, _office_roster = await asyncio.gather(
+                    ctx_task, view_task,
+                    asyncio.to_thread(church_map_asks.turn_lines, biz_lite, str(user_session.user.id),
+                                      chief_areas.WHO.get()),
+                    asyncio.to_thread(_church_office.text_for, biz_lite))
             else:
                 ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
@@ -15865,6 +15874,13 @@ async def chief_chat(
                 _login_block += await asyncio.to_thread(_church_assign.turn_line, biz, str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
+            # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the
+            # admins and the Managers; it sits in the per-business segment (chief_prompt).
+            if _office_roster is None and _cfu.is_church(biz):
+                _office_roster = await asyncio.to_thread(_church_office.text_for, biz)
+            _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
+            if _office_shown:
+                chief_truth.record('context:office_roster', _office_shown, kind='context')
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -15887,6 +15903,7 @@ async def chief_chat(
                 first_run=first_run,
                 orientation_kind=orientation_kind,
                 week_day=week_day,
+                office_roster=_office_shown,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt

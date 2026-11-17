@@ -16,19 +16,30 @@ it's logged, and that undo_duty puts it back.
                       may read the duties page (a Manager seat or above).
                       There are no money amounts here
     move_duty ....... {duty, to: [names or login ids]}; [] puts it back to the
-                      lanes. The owner or an Admin only. Names resolve to the
+                      lanes. The owner or an Admin; and whoever is over the
+                      office's lanes (the Executive Pastor) for the Managers
+                      under her (church_duties.overseer_refusal: never money,
+                      never her own oversight, never to or from the owner, an
+                      Admin or a Manager she isn't over). Names resolve to the
                       church's active logins exactly (a full name, or a first
                       name only one login has); an unknown or shared name
                       changes nothing. Then church_duties.move(), the PUT's own
                       code: a money duty only to the owner or an Admin login,
-                      never a Member or Viewer, logged, the same names again
-                      changing nothing
-    undo_duty ....... {duty}: the last change back (church_duties.undo()); with
-                      change_id (undo_last's inverse) only while that change
-                      is still the last one
+                      never a Member or Viewer, logged with who asked, the
+                      same names again changing nothing
+    undo_duty ....... {duty}: the last change back (church_duties.undo()), by
+                      the same people under the same rule; with change_id
+                      (undo_last's inverse) only while that change is still
+                      the last one
     jobs_line() ..... "Their jobs here: …" for a church login that isn't the
                       owner or an Admin, in the THIS LOGIN block
-                      (chief_areas.turn_for, block)
+                      (chief_areas.turn_for, block); for whoever is over the
+                      lanes, also what she can ask Chief to do for her team
+
+Kevin, 2026-11-17: "make sure Jessica has ability to request things from chief
+in regards to admins etc like I would as well". The Executive Pastor moves her
+team's duties through Chief as the owner would, and the page agrees (the PUT
+asks the same rule).
 
 Switched with the routes: CHURCH_DUTIES (off | owner | on), for the person
 or their church (church_duties.office_open). Owner is the platform owner's
@@ -55,7 +66,9 @@ import church_duties as cd
 
 NAV = {"tab": "operate", "sub": "areas"}
 NOT_ON = "Duties aren't switched on here yet, so Chief can't read or move them."
-NOT_YOURS = "Moving a duty is the owner's or an admin's."
+NOT_YOURS = ("Moving a duty is the owner's or an admin's; whoever is over the office's lanes moves the duties of "
+             "the Managers under them.")
+OVERSEER = "overseer"      # _open's role for a Manager over the lanes, moving her team's duties
 _ROLE_WORDS = {"owner": "owner", "admin": "Admin", "manager": "Manager", "member": "Member", "viewer": "Viewer"}
 _RANK = {"viewer": 1, "member": 2, "manager": 3, "admin": 4, "owner": 5}
 
@@ -65,7 +78,9 @@ TOOL = {
         "A church's duties: who does each office job (the weekly text, the Monday leaders note, meetings, rooms, "
         "the care board, the Sunday plan, posts, the monthly report, the books and the rest), grouped by lane; "
         "whether each follows the lanes or was moved to named logins; which need someone; and the office logins "
-        "by name. Use it before saying whose job something is, and before move_duty so the names are real."),
+        "by name. THE OFFICE, in your instructions for a church, already says whose each duty is: read this for "
+        "the lane-by-lane detail (what moved, from whom, what needs someone) and before move_duty, so the names "
+        "are real."),
     "input_schema": {"type": "object", "properties": {}},
 }
 
@@ -130,7 +145,9 @@ def _role(business: Dict[str, Any], uid: str) -> Optional[str]:
 def _open(atype: str, business_id: str, least: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], str]:
     """(a refusal or None, the church's row, the person's role). The person
     talking must be signed in, the switch on for them, the business a church
-    and their role `least` or above. A read that fails raises 503."""
+    and their role `least` or above; with `least` admin, a Manager over the
+    office's lanes passes too, as OVERSEER (her team's duties only: the move
+    itself asks church_duties.overseer_refusal). A read that fails raises 503."""
     uid = _turn_user()
     if not uid:
         return _fail(atype, "duties are read and moved only by someone signed in to the church's office."), {}, ""
@@ -145,6 +162,8 @@ def _open(atype: str, business_id: str, least: str) -> Tuple[Optional[Dict[str, 
     role = _role(business, uid) or ""
     if _RANK.get(role, 0) < _RANK[least]:
         if least == "admin":
+            if role == "manager" and cd.oversees(business_id, uid):
+                return None, business, OVERSEER
             return _fail(atype, NOT_YOURS), business, role
         return _fail(atype, "the duties are for the church's owner, its admins and its Manager logins."), business, role
     return None, business, role
@@ -277,9 +296,10 @@ def list_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     return {"type": atype, "result": "\n".join(lines), "label": label, "nav": NAV,
             "moved": moved, "needs_someone": list(page["needs_someone"]),
             "note_for_chief": (
-                "Say whose job a duty is from this, by name. Only the owner or an admin moves one (move_duty, the "
-                "whole list of who does it; [] puts it back to the lanes); a money duty only to the owner or an "
-                "Admin login. If moving one is your idea, suggest it and ask first.")}
+                "Say whose job a duty is from this, by name. The owner or an admin moves one (move_duty, the "
+                "whole list of who does it; [] puts it back to the lanes), and whoever is over the office's lanes "
+                "moves the duties of the Managers under them, never money; a money duty goes only to the owner or "
+                "an Admin login. If moving one is your idea, suggest it and ask first.")}
 
 
 async def handle_list_duties(client, biz, action) -> Dict[str, Any]:
@@ -303,7 +323,7 @@ def move_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     if action.get("_unattended"):
         return _fail(atype, "a duty moves only when the owner or an admin asks for it.")
     try:
-        refused, business, _ = _open(atype, business_id, "admin")
+        refused, business, role = _open(atype, business_id, "admin")
         if refused:
             return refused
         duty = find_duty(action.get("duty"))
@@ -322,9 +342,9 @@ def move_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             return _fail(atype, f"say who does “{label}” now (their names), or [] to put it back to the lanes.")
         before = _entry(before_page, duty)
         try:
-            out = cd.move(business, duty, ids, _turn_user())
+            out = cd.move(business, duty, ids, _turn_user(), overseer=role == OVERSEER)
         except HTTPException as e:
-            if e.status_code == 400:
+            if e.status_code in (400, 403):
                 return _fail(atype, f"{e.detail} Nothing changed.")
             raise
     except HTTPException as e:
@@ -358,7 +378,7 @@ def undo_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     if action.get("_unattended"):
         return _fail(atype, "a duty is put back only when the owner or an admin asks for it.")
     try:
-        refused, business, _ = _open(atype, business_id, "admin")
+        refused, business, role = _open(atype, business_id, "admin")
         if refused:
             return refused
         duty = find_duty(action.get("duty"))
@@ -368,10 +388,12 @@ def undo_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         before_page = cd.build(business)
         change_id = str(action.get("change_id") or "").strip() or None
         try:
-            out = cd.undo(business, duty, _turn_user(), change_id=change_id)
+            out = cd.undo(business, duty, _turn_user(), change_id=change_id, overseer=role == OVERSEER)
         except HTTPException as e:
             if e.status_code in (404, 409):
                 return _fail(atype, str(e.detail))
+            if e.status_code == 403:
+                return _fail(atype, f"{e.detail} Nothing changed.")
             raise
     except HTTPException as e:
         return _fail(atype, str(e.detail))
@@ -416,11 +438,47 @@ def jobs_line(business_id: Any, user_id: Any) -> Optional[str]:
             return None
     if not s["church"] or not s["role"] or s["role"] in ("owner", "admin"):
         return None
+    if s["role"] == "manager" and cd.OVERSEE in s["duties"]:
+        return _overseer_line(biz, uid, s)
     labels = [d["label"] for k, d in cd.CATALOG.items() if k in s["duties"]]
     if labels:
-        return ("Their jobs here: " + "; ".join(labels) + ". Any other duty is someone else's: say whose with "
-                "list_duties, and that the owner or an admin can move it.")
+        return ("Their jobs here: " + "; ".join(labels) + ". Any other duty is someone else's: say whose from THE "
+                "OFFICE (list_duties for the detail), and that the owner, an admin or whoever is over the office's "
+                "lanes can move it.")
     if s["role"] == "manager":
         return ("Their jobs here: none of the office's duties yet. The owner or an admin gives a login its duties "
                 "(Logins & areas → Duties).")
     return "Their jobs here: none. A Member or Viewer login doesn't do the office's duties."
+
+
+# What whoever is over the lanes asks Chief to do for the team under them
+# (Kevin, 2026-11-17: "make sure Jessica has ability to request things from
+# chief in regards to admins etc like I would as well"). Each verb's own
+# handler decides for whom: church_duties.overseer_refusal, church_over.is_over.
+OVERSEER_DOES = (
+    "They're over the office's lanes: the Managers THE OFFICE lists under them answer to them (people_under reads "
+    "them too). For those Managers, do what they ask the way the owner would, and offer it yourself; never tell "
+    "them to ask the owner or an admin for it: get them ready for a one-on-one with one of them (\"prepare my "
+    "one-on-one with …\": one_on_one) or the weekly huddle (one_on_one for each), see someone's assignments (assignments_of), "
+    "hand out or take back an assignment (give_assignment, take_back_assignment), move or put back one of their "
+    "duties (move_duty, undo_duty: never a money duty, never the oversight duties, never to or from the owner or an "
+    "Admin), write or put back their job descriptions (set_job_description, undo_job_description), and read how "
+    "the team's week is going (team_week) and the monthly report's draft (monthly_report_draft). Money, logins and "
+    "what each login sees stay the owner's and the admins'.")
+
+
+def _overseer_line(biz: str, uid: str, s: Dict[str, Any]) -> str:
+    """The jobs line for whoever is over the lanes: their own duties (the
+    oversight two, and any moved to them by name or their own stored lane's),
+    that they cover the rest of the office's lanes, and what they ask Chief to
+    do for their team. The full list of every lane's duties would bury it."""
+    try:
+        moved = cd._moved(biz)
+    except HTTPException:
+        moved = {}
+    lanes = [ln for ln in s["lanes"] if ln != cd.EXEC]
+    own = [d["label"] for k, d in cd.CATALOG.items() if k in s["duties"] and (
+        k in cd.OVERSIGHT or uid in moved.get(k, ()) or any(k in cd.STARTER.get(ln, ()) for ln in lanes))]
+    covers = (" They also cover every other lane's duty that nobody moved away, never money."
+              if cd.EXEC in s["lanes"] else "")
+    return "Their jobs here: " + "; ".join(own) + "." + covers + " " + OVERSEER_DOES

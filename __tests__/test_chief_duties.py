@@ -108,9 +108,11 @@ def test_the_verbs_are_wired_classified_placed_and_in_the_prompt():
     ctl.reset_turn(writes_allowed=True)
     assert not {"move_duty", "undo_duty"} & {t["name"] for t in ctl.write_tool_definitions()}
     ctl.reset_turn()
-    # Placed: anyone who may open the duties page may ask; moving is the owner's and admins'.
+    # Placed: anyone who may open the duties page may ask. Moving is the owner's and admins', and since
+    # 2026-11-17 the Executive Pastor's for her team: every login reaches the handler, which decides.
     assert ca.VERBS["list_duties"] == (ca.ALL,)
-    assert {"move_duty", "undo_duty"} <= ca.OWNERS
+    assert ca.VERBS["move_duty"] == ca.VERBS["undo_duty"] == (ca.ALL,)
+    assert not {"move_duty", "undo_duty"} & ca.OWNERS
     src = chief_source()
     assert "list_duties" in src and '"type":"move_duty"' in src and '"type":"undo_duty"' in src
     assert "Jessica does the monthly report now" in src
@@ -165,19 +167,20 @@ def test_a_read_that_fails_still_answers_with_a_result_and_a_label(church, monke
 # ─── Who may move a duty ──────────────────────────────────────────────
 
 def test_a_manager_is_refused_a_move_plainly(church):
-    for uid in (NAIYA, JESS, MEM, STRANGER):
+    """A Manager that isn't over the lanes (Jessica is: test_chief_office has her moves)."""
+    assert chd.NOT_YOURS.startswith("Moving a duty is the owner's or an admin's;")
+    for uid in (NAIYA, TIARA, MEM, STRANGER):
         out = run("move_duty", ASK, uid)
-        assert out["failed"] and out["result"] == "Failed: Moving a duty is the owner's or an admin's.", uid
+        assert out["failed"] and out["result"] == "Failed: " + chd.NOT_YOURS, uid
         out = run("undo_duty", {"duty": "weekly_text"}, uid)
-        assert out["failed"] and out["result"] == "Failed: Moving a duty is the owner's or an admin's.", uid
+        assert out["failed"] and out["result"] == "Failed: " + chd.NOT_YOURS, uid
     assert run("move_duty", ASK, None)["failed"]
     assert run("move_duty", {**ASK, "_unattended": True}, OWNER)["failed"], "never on nobody's word"
     assert church.rpcs == []
-    # A login kept to its lane is stopped at the lane gate, in the same plain words.
+    # A login kept to its lane reaches the handler, which says the same plain words.
     care = {"areas": ["people_care", "kids_youth", "groups_classes"], "role": "manager", "lane": "people_care"}
-    for verb in ("move_duty", "undo_duty"):
-        assert ca.refusal(verb, {}, care).startswith("That's for the church's owner or an admin, not this login.")
-    assert ca.refusal("list_duties", {}, care) is None
+    for verb in ("move_duty", "undo_duty", "list_duties"):
+        assert ca.refusal(verb, {}, care) is None, verb
 
 
 def test_the_owner_moves_a_duty_by_name_and_hears_the_record(church):
