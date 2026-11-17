@@ -62,6 +62,23 @@ def test_off_unless_switched_on_configured_and_allowed(monkeypatch, on):
     assert not cf.enabled(BIZ)
 
 
+def test_on_for_every_business_unless_switched_off_or_listed(monkeypatch, on):
+    """Since 2026-11-17 the code's own default is on, for everyone: unset
+    CLIP_FINDER is on and unset CLIP_FINDER_BUSINESSES is '*'. The clip
+    service's url and token are still required."""
+    monkeypatch.delenv('CLIP_FINDER')
+    monkeypatch.delenv('CLIP_FINDER_BUSINESSES')
+    assert cf.switched_on() and cf.enabled() and cf.enabled(BIZ) and cf.enabled('00000000-0000-4000-8000-999999999999')
+    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', BIZ)
+    assert cf.enabled(BIZ) and not cf.enabled('00000000-0000-4000-8000-999999999999')
+    monkeypatch.delenv('CLIP_FINDER_BUSINESSES')
+    monkeypatch.delenv('CLIPPER_URL')
+    assert not cf.enabled(BIZ)
+    monkeypatch.setenv('CLIPPER_URL', 'https://clipper.example.test')
+    monkeypatch.setenv('CLIP_FINDER', 'off')
+    assert not cf.switched_on() and not cf.enabled(BIZ)
+
+
 @pytest.mark.parametrize('used_hours,hours,units', [
     (0, 1, 0),          # well inside the 10 included hours
     (9.5, 1, 38),       # half an hour over: ceil(0.5 * 75)
@@ -133,7 +150,7 @@ def test_upload_refused_when_nothing_could_use_the_recording(monkeypatch, on):
     assert caught.value.status_code == 402 and caught.value.detail['error'] == 'feature_locked'
     assert 'Solutionist' in caught.value.detail['message'] and not store.posts
     # Not switched on at all, and no hand cutter: say who can turn it on.
-    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '')
+    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '00000000-0000-4000-8000-999999999999')
     with pytest.raises(HTTPException) as caught:
         cf.start_upload(BIZ, upload(), USER)
     assert caught.value.status_code == 403 and 'support' in caught.value.detail and not store.posts
@@ -300,7 +317,7 @@ def test_run_needs_the_switch_the_plan_and_a_ready_recording(monkeypatch, on, ga
 
 
 def test_run_refused_when_switched_off_for_the_business(monkeypatch, on, gates):
-    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '')
+    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '00000000-0000-4000-8000-999999999999')
     monkeypatch.setattr(media, 'asset', lambda *a: ready_source())
     with pytest.raises(HTTPException) as caught:
         cf.start_run(BIZ, SOURCE, cf.FindClips(), USER)

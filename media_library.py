@@ -116,13 +116,18 @@ def crypto():
     return Fernet(base64.urlsafe_b64encode(derived))
 
 
+def processing_enabled():
+    """On unless MEDIA_PROCESSING=off (default on since 2026-11-17)."""
+    return (os.environ.get('MEDIA_PROCESSING') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
+
+
 def configuration():
     configured = bool(os.environ.get('GOOGLE_CLIENT_ID') and os.environ.get('GOOGLE_PICKER_API_KEY') and os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER'))
     return {'drive_configured': configured,
             'client_id': os.environ.get('GOOGLE_CLIENT_ID') if configured else None,
             'picker_key': os.environ.get('GOOGLE_PICKER_API_KEY') if configured else None,
             'project_number': os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER') if configured else None,
-            'processing_available': bool(shutil.which('ffmpeg') and shutil.which('ffprobe') and os.environ.get('MEDIA_PROCESSING') == 'on'),
+            'processing_available': bool(shutil.which('ffmpeg') and shutil.which('ffprobe') and processing_enabled()),
             'max_file_bytes': MAX_BYTES, 'max_recording_seconds': MAX_SECONDS,
             'clip_min_seconds': 5, 'clip_max_seconds': 90, 'automatic_publishing': False}
 
@@ -362,6 +367,6 @@ def work_once():
 
 
 async def tick():
-    if os.environ.get('MEDIA_PROCESSING', 'off') != 'on':
+    if not processing_enabled():
         return
     await asyncio.to_thread(work_once)

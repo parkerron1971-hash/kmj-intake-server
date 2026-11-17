@@ -43,9 +43,14 @@ def assets(b,p): return rows(f'/video_assets?business_id=eq.{key(b)}&project_id=
 def public_asset(a): return {k:v for k,v in a.items() if k not in ('object_path','created_by')}
 def public_revision(r):
     return {k:v for k,v in r.items() if k!='assets'}|{'composition_hash':Composition.model_validate(r['composition']).digest()}
+def _switch_on(name):
+    # On unless the switch says off (VIDEO_STUDIO_ENABLED / VIDEO_RENDER_ENABLED, default on since 2026-11-17).
+    return (os.getenv(name) or 'on').strip().lower() not in ('off','0','false','no')
+def studio_enabled(): return _switch_on('VIDEO_STUDIO_ENABLED')
+def render_enabled(): return _switch_on('VIDEO_RENDER_ENABLED')
 def configuration():
-    return {'planning_available':os.getenv('VIDEO_STUDIO_ENABLED')=='on',
-        'rendering_available':os.getenv('VIDEO_RENDER_ENABLED')=='on',
+    return {'planning_available':studio_enabled(),
+        'rendering_available':render_enabled(),
         'narration_available':bool(os.getenv('OPENAI_API_KEY')), 'max_upload_bytes':MAX_UPLOAD,
         'max_seconds':180,'daily_render_seconds':1800,'render_price_label':'Included during early access',
         'planning_price_label':'Uses your existing AI allowance','renderer':'hyperframes'}

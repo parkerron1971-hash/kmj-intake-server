@@ -94,12 +94,19 @@ class RunFailed(Exception):
 
 # ── switches and allowance ───────────────────────────────────────────
 
+def switched_on():
+    """CLIP_FINDER: on unless it says off (default on since 2026-11-17)."""
+    return (os.getenv('CLIP_FINDER') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
+
+
 def enabled(business_id=None):
-    if os.getenv('CLIP_FINDER', 'off') != 'on' or not os.getenv('CLIPPER_URL') or len(os.getenv('CLIPPER_TOKEN', '')) < 32:
+    if not switched_on() or not os.getenv('CLIPPER_URL') or len(os.getenv('CLIPPER_TOKEN', '')) < 32:
         return False
     if business_id is None:
         return True
-    allowed = {b.strip() for b in os.getenv('CLIP_FINDER_BUSINESSES', '').split(',') if b.strip()}
+    # CLIP_FINDER_BUSINESSES: unset means every business ("*", since
+    # 2026-11-17); comma-separated ids still limit it to those.
+    allowed = {b.strip() for b in (os.getenv('CLIP_FINDER_BUSINESSES') or '*').split(',') if b.strip()}
     return '*' in allowed or str(business_id) in allowed
 
 
@@ -839,7 +846,7 @@ def sweep():
 
 
 async def sweep_tick():
-    if os.getenv('CLIP_FINDER', 'off') != 'on':
+    if not switched_on():
         return
     import asyncio
     await asyncio.to_thread(sweep)
