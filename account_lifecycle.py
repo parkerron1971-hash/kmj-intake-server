@@ -234,6 +234,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Members' notification devices and choices (before contacts), the log
     # of what the church sent them, and what waits through quiet hours.
     "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
+    # From your church (church_threads.py): the inbox's notes, members'
+    # messages to the office and its replies, and read marks; before contacts.
+    "church_thread_notes", "church_thread_reads",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
     # Which days of the reading plan each member has read; before contacts.
@@ -864,6 +867,9 @@ _IMPORT_SKIP = {
     # the send log must not claim a restored church already notified anyone,
     # and a note that waited through last night's quiet hours isn't news.
     "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
+    # The inbox (church_threads) cites people and groups by id, and a
+    # restored church's read marks would mean nothing; kept in the archive.
+    "church_thread_notes", "church_thread_reads",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication

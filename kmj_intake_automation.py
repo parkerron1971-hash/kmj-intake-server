@@ -546,6 +546,14 @@ app.include_router(member_directory_router)
 # and pledge asks, and the office's choices. Before the site catch-all.
 from member_asks import router as member_asks_router
 app.include_router(member_asks_router)
+# Church threads (church_threads.py, CHURCH_THREADS off | owner | on): the
+# office's side of From your church (/church-threads/...), and the member's
+# message to the office (POST /my/inbox/church/send; the pages are
+# member_portal.serve's). Before the site catch-all.
+from church_threads import router as church_threads_router
+app.include_router(church_threads_router)
+from member_portal_threads import router as member_portal_threads_router
+app.include_router(member_portal_threads_router)
 # A group's own page in the member app: its Board, who's in it, asking to
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router
