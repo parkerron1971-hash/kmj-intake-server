@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-17: "yes to the other plans as well" (giving was left out of the church briefing because office logins that never see giving can open that page)'
 status: in review
-prs: []
+prs: [kmj-intake-server#1894]
 migrations: []
 left_undone:
   - "The letter's own words still do not mention giving: that would need a second model call or a letter per reader."
