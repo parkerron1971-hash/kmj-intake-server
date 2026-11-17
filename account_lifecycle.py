@@ -1098,6 +1098,12 @@ async def import_account(body: ImportBody,
         warnings.append("the export declares itself incomplete: " + bad)
 
     name = (body.business_name or src_biz.get("name") or "Imported business")
+    # The bundle is the caller's to write: its settings come in like the
+    # signup door's, without a key only the server sets (a founding place,
+    # a trial marker, extra logins, Chief's step-up limits ...), with the
+    # regulated default (launch_access.birth_settings).
+    import launch_access
+    settings = launch_access.birth_settings(src_biz.get("settings"), str(src_biz.get("type") or ""))
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         created = await client.post(
@@ -1105,7 +1111,7 @@ async def import_account(body: ImportBody,
             headers={**_service_headers(), "Prefer": "return=representation"},
             json={"name": str(name)[:200], "owner_id": str(user.id),
                   "type": src_biz.get("type"),
-                  "settings": src_biz.get("settings") or {}},
+                  "settings": settings},
         )
         if created.status_code >= 400:
             logger.error("import: business create failed: %s", created.text[:300])

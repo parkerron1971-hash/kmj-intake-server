@@ -149,13 +149,13 @@ def test_dns_check_remembers_mail_and_warns_when_a_switch_deletes_it(fake, monke
     txt = {"lovecityc.com": [EFWD_SPF]}
     _stub_resolver(monkeypatch, txt=txt, mx=mx, ns=NAMECHEAP_NS)
     writes = []
-    import sb_clients
-    real_patch = sb_clients.sb_patch_as_service
+    import business_settings
+    real_merge = business_settings.merge
 
-    def _patch(p, b):
-        writes.append(b)
-        return real_patch(p, b)
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", _patch)
+    def _merge(*a, **k):                  # settings.email_domain's one-key write
+        writes.append((a, k))
+        return real_merge(*a, **k)
+    monkeypatch.setattr(business_settings, "merge", _merge)
 
     out = asyncio.run(edr.dns_check("b1", _u("owner1")))
     assert out["provider"]["key"] == "namecheap"
@@ -182,8 +182,8 @@ def test_dns_check_remembers_mail_and_warns_when_a_switch_deletes_it(fake, monke
 def test_dns_check_survives_a_failed_snapshot_write(fake, monkeypatch):
     _stub_resolver(monkeypatch, txt={}, mx={"studiok.com": [(1, "aspmx.l.google.com")]},
                    ns=["ada.ns.cloudflare.com"])
-    import sb_clients
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: None)
+    import business_settings
+    monkeypatch.setattr(business_settings, "merge", lambda *a, **k: None)
     out = asyncio.run(edr.dns_check("b1", _u("owner1")))
     assert out["ok"] and out["mail_note"] is None
     assert out["mail"]["service"] == "Google Workspace"

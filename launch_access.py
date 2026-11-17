@@ -279,6 +279,33 @@ def _seed_new_business(row: Dict[str, Any], business_type: str,
     return out
 
 
+def birth_settings(client_settings: Any, btype: str) -> Dict[str, Any]:
+    """A new business's settings from what the app (or an account import)
+    sent for it.
+
+    Without any key only the server sets (business_settings.SERVER_KEYS):
+    nobody is born holding a founding place, a trial marker, extra logins, a
+    step-up spending limit or an autonomy already "acknowledged". The birth
+    keys (churchsavvy_only) stay.
+
+    Arc 20B Part 6 — regulated-vertical ruling: lawyer + therapist (and
+    counseling-adjacent) businesses ship with client-facing autonomy
+    DISABLED by default; enabling later requires explicit practitioner
+    acknowledgment (Phase C consumes these flags; set at birth so the
+    default exists before any autonomy ships)."""
+    import business_settings
+    settings = business_settings.for_new_business(client_settings or {})
+    bt_l = (btype or "").lower()
+    if any(k in bt_l for k in ("law", "therap", "counsel")):
+        settings.setdefault("autonomy", {
+            "client_facing_autonomy": "disabled",
+            "disabled_reason": "regulated_vertical_default",
+            "acknowledgment_required": True,
+            "acknowledged_at": None,
+        })
+    return settings
+
+
 @router.post("/businesses/create")
 def create_business(body: CreateBusinessBody,
                     user: AuthedUser = Depends(require_user),
@@ -320,20 +347,7 @@ def create_business(body: CreateBusinessBody,
     if vertical_scope.is_paused(btype):
         raise HTTPException(422, {"error": "vertical_paused",
                                   "message": vertical_scope.PAUSED_MESSAGE})
-    # Arc 20B Part 6 — regulated-vertical ruling: lawyer + therapist (and
-    # counseling-adjacent) businesses ship with client-facing autonomy
-    # DISABLED by default; enabling later requires explicit practitioner
-    # acknowledgment (Phase C consumes these flags; set at birth so the
-    # default exists before any autonomy ships).
-    settings = dict(body.settings or {})
-    bt_l = btype.lower()
-    if any(k in bt_l for k in ("law", "therap", "counsel")):
-        settings.setdefault("autonomy", {
-            "client_facing_autonomy": "disabled",
-            "disabled_reason": "regulated_vertical_default",
-            "acknowledgment_required": True,
-            "acknowledged_at": None,
-        })
+    settings = birth_settings(body.settings, btype)
     # Signup attribution — stamped once, at birth. The app's own blob
     # (direct signup with a tagged URL) wins; otherwise the funnel row
     # that shares this email (invite path) supplies it. Absent both,

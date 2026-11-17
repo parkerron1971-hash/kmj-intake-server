@@ -61,18 +61,21 @@ def _fresh(monkeypatch):
 
 @pytest.fixture
 def church(monkeypatch):
+    from settings_merge_fake import install
     state = {"biz": {"id": BIZ, "owner_id": "u-1", "comp_tier": None, "settings": {"other": "kept"}},
-             "taken": 3, "owner": False, "writes": []}
+             "taken": 3, "owner": False}
 
     async def load(bid):
         return state["biz"]
 
     async def patch(bid, body, match=None):
-        state["writes"].append(body)
+        raise AssertionError("a founding place is never a whole-row patch")
     monkeypatch.setattr(sb, "_load_business", load)
     monkeypatch.setattr(sb, "_patch_business", patch)
     monkeypatch.setattr(cf, "taken", lambda: state["taken"])
     monkeypatch.setattr(cf, "_owner_is_platform", lambda owner_id: state["owner"])
+    # The row as the database holds it: business_settings.merge's model.
+    state["writes"] = install(monkeypatch, lambda bid: state["biz"] if bid == BIZ else None)
     return state
 
 
@@ -84,7 +87,37 @@ def test_the_first_paid_month_takes_the_next_place(church):
     place = _claim()
     assert place["n"] == 4 and place["plan"] == GROWING and place["price_id"] == "price_grow" and place["at"]
     [write] = church["writes"]
-    assert write == {"settings": {"other": "kept", "founding_church": place}}   # nothing else touched
+    # Only its own key is sent; the database lays it over whatever is there.
+    assert write == {"id": BIZ, "set": {"founding_church": place}, "drop": [], "under": []}
+    assert church["biz"]["settings"] == {"other": "kept", "founding_church": place}
+
+
+def test_the_place_never_carries_a_copy_of_the_rest(church, monkeypatch):
+    """The first church's place was dropped (2026-11-16) by a write that sent
+    back a copy of the whole object read before the place. Here the claim
+    reads the row, another writer stamps a key while the claim decides, and
+    both keys are on the row after: the claim sent nothing but its own."""
+    import copy
+
+    async def load(bid):
+        return copy.deepcopy(church["biz"])
+
+    def taken():
+        church["biz"]["settings"]["rooms_visited"] = {"home": "just now"}
+        return 3
+    monkeypatch.setattr(sb, "_load_business", load)
+    monkeypatch.setattr(cf, "taken", taken)
+    place = _claim()
+    assert church["biz"]["settings"] == {"other": "kept", "rooms_visited": {"home": "just now"},
+                                         "founding_church": place}
+
+
+def test_a_place_that_did_not_save_says_so(church, monkeypatch):
+    from settings_merge_fake import install
+    install(monkeypatch, lambda bid: church["biz"], fail=lambda: True)
+    with pytest.raises(HTTPException) as e:
+        _claim()
+    assert e.value.status_code == 502 and "founding_church" not in church["biz"]["settings"]
 
 
 def test_a_place_is_written_once(church):

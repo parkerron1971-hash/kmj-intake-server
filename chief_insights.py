@@ -348,15 +348,18 @@ def _store(biz: Dict[str, Any], insights: List[Dict[str, str]]) -> int:
 
 
 def _mark_run(biz: Dict[str, Any], produced: int, skipped: Optional[str] = None) -> None:
-    settings = dict(biz.get("settings") or {})
-    settings["chief_insights"] = {
+    """settings.chief_insights, and only it. `biz` was read before the model
+    call, a minute or more ago: writing its whole settings back would undo
+    whatever changed meanwhile (business_settings)."""
+    import business_settings
+    marker = {
         "last_run_at": _iso(_now()),
         "last_count": produced,
         **({"last_skip": skipped} if skipped else {}),
     }
     try:
-        sb_clients.sb_patch_as_service(
-            f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+        if business_settings.merge(biz["id"], {"chief_insights": marker}) is None:
+            logger.warning(f"[insights] mark_run did not save for {biz.get('id')}")
     except Exception as e:
         logger.warning(f"[insights] mark_run failed for {biz.get('id')}: {e}")
 

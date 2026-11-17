@@ -75,7 +75,11 @@ class ParallelSignalsTests(unittest.TestCase):
         self.assertTrue(result['cached'])
         self.assertEqual(maturity.CACHE_TTL_SECONDS, 6 * 3600)
 
-    def test_cache_write_waits_for_all_signals_and_preserves_fresh_settings(self):
+    def test_cache_write_waits_for_all_signals_and_names_only_its_key(self):
+        """The cache is written after every signal is in, and the write names
+        settings.maturity alone (business_settings.merge, one UPDATE): there
+        is no copy of the rest of the object to go stale, so no second read."""
+        import business_settings
         barrier = threading.Barrier(5, timeout=5)
         completed = set()
         lock = threading.Lock()
@@ -84,30 +88,27 @@ class ParallelSignalsTests(unittest.TestCase):
         def read(path):
             if 'select=settings' in path:
                 settings_reads.append(path)
-                if len(settings_reads) == 1:
-                    return [{'settings': {'unrelated': 'old'}}]
-                self.assertEqual(len(completed), 5)
-                return [{'settings': {'unrelated': 'fresh'}}]
+                return [{'settings': {'unrelated': 'old'}}]
             rows = signal_rows(path)
             barrier.wait()
             with lock:
                 completed.add(path)
             return rows
 
-        def write(path, body):
+        def write(business_id, set=None, drop=(), under=()):
             self.assertEqual(len(completed), 5)
-            self.assertEqual(path, '/businesses?id=eq.business-a')
-            self.assertEqual(body['settings']['unrelated'], 'fresh')
-            self.assertEqual(body['settings']['maturity']['stage'], 'scaling')
-            self.assertEqual(body['settings']['maturity']['signals']['contact_count'], 12)
-            return [{}]
+            self.assertEqual(business_id, 'business-a')
+            self.assertEqual(list(set), ['maturity'])
+            self.assertEqual((list(drop), list(under)), ([], []))
+            self.assertEqual(set['maturity']['stage'], 'scaling')
+            self.assertEqual(set['maturity']['signals']['contact_count'], 12)
+            return {'unrelated': 'fresh', **set}
 
-        with patch.object(maturity.sb_clients, 'sb_get_as_service', side_effect=read), \
-             patch.object(maturity.sb_clients, 'sb_patch_as_service', side_effect=write) as patch_db, \
-             patch.object(maturity, 'datetime', FixedDateTime):
+        with patch.object(maturity.sb_clients, 'sb_get_as_service', side_effect=read),              patch.object(maturity.sb_clients, 'sb_patch_as_service',
+                          side_effect=AssertionError('never the whole object')),              patch.object(business_settings, 'merge', side_effect=write) as merge_db,              patch.object(maturity, 'datetime', FixedDateTime):
             result = maturity.compute_maturity('business-a')
-        patch_db.assert_called_once()
-        self.assertEqual(len(settings_reads), 2)
+        merge_db.assert_called_once()
+        self.assertEqual(len(settings_reads), 1)
         self.assertEqual(result['stage'], 'scaling')
         self.assertFalse(result['cached'])
 

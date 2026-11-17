@@ -225,19 +225,19 @@ def _payload(cfg: Dict[str, Any], biz: Dict[str, Any],
 
 
 def _write_settings(biz: Dict[str, Any], cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Persist settings.email_domain (or remove it when cfg is None).
+    """Persist settings.email_domain (or remove it when cfg is None), and no
+    other key: one UPDATE in the database (business_settings.merge), never
+    the whole object back from the row this request read.
     Raises 500 when the write doesn't land — callers roll back."""
-    settings = dict(biz.get("settings") or {})
+    import business_settings
     if cfg is None:
-        settings.pop(EMAIL_DOMAIN_SETTINGS_KEY, None)
+        res = business_settings.merge(biz["id"], drop=[EMAIL_DOMAIN_SETTINGS_KEY])
     else:
-        settings[EMAIL_DOMAIN_SETTINGS_KEY] = cfg
-    res = sb_clients.sb_patch_as_service(
-        f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+        res = business_settings.merge(biz["id"], {EMAIL_DOMAIN_SETTINGS_KEY: cfg})
     if res is None:
         raise HTTPException(500, "Couldn't save the email domain settings — "
                                  "nothing was changed. Try again.")
-    return settings
+    return res
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────

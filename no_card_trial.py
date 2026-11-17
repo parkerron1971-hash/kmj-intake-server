@@ -718,15 +718,15 @@ def verify_phone_code(business_id: str, phone: str, code: str, token: str) -> Di
         f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
     if not row:
         raise PhoneError("Couldn't save that just now — try again in a moment.")
-    settings = dict(row[0].get("settings") or {})
-    m = dict(settings.get(MARKER) or {})
-    if not m:
+    settings = row[0].get("settings") if isinstance(row[0].get("settings"), dict) else {}
+    if not settings.get(MARKER):
         return {"ok": True, "verified": True, "not_needed": True}
-    m["phone_hash"] = phone_hash(e164)
-    m["phone_verified_at"] = datetime.now(timezone.utc).isoformat()
-    settings[MARKER] = m
-    if sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
-                                      {"settings": settings}) is None:
+    # The two fields go into the marker in one UPDATE (business_settings),
+    # so a key written since the read above is never put back.
+    import business_settings
+    if business_settings.merge(business_id, {"phone_hash": phone_hash(e164),
+                                             "phone_verified_at": datetime.now(timezone.utc).isoformat()},
+                               under=[MARKER]) is None:
         raise PhoneError("Couldn't save that just now — try again in a moment.")
     forget(business_id)
     return {"ok": True, "verified": True}

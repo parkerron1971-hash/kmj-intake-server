@@ -464,6 +464,9 @@ def mail(monkeypatch):
         return [{"id": rows["row"]["id"], "settings": dict(rows["row"].get("settings") or {})}]
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: [b])
+    # The send's stamp (settings.lifecycle_emails.<kind>, business_settings.merge).
+    from settings_merge_fake import install
+    install(monkeypatch, lambda bid: rows["row"])
     m.rows = rows
     return m
 

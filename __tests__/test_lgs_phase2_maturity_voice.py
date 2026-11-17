@@ -8,6 +8,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import business_settings
 import maturity_engine
 import practitioner_voice
 
@@ -73,11 +74,14 @@ class ComputeMaturityCacheTests(unittest.TestCase):
             return []
 
         with patch.object(maturity_engine.sb_clients, "sb_get_as_service", side_effect=fake_get), \
-             patch.object(maturity_engine.sb_clients, "sb_patch_as_service", return_value=[{}]):
+             patch.object(maturity_engine.sb_clients, "sb_patch_as_service", return_value=[{}]),              patch.object(business_settings, "merge", return_value={}) as merge:
             out = maturity_engine.compute_maturity("biz-1")
         self.assertFalse(out["cached"])
         self.assertEqual(out["stage"], "idea")  # empty signals → idea
         self.assertIn("computed_at", out)
+        # The cache write names settings.maturity alone (business_settings.merge).
+        merge.assert_called_once()
+        self.assertEqual(list(merge.call_args.args[1]), ["maturity"])
 
     def test_force_bypasses_fresh_cache(self):
         fresh = {"stage": "scaling", "signals": {}, "computed_at": "2999-01-01T00:00:00Z"}
@@ -88,11 +92,12 @@ class ComputeMaturityCacheTests(unittest.TestCase):
             return []
 
         with patch.object(maturity_engine.sb_clients, "sb_get_as_service", side_effect=fake_get), \
-             patch.object(maturity_engine.sb_clients, "sb_patch_as_service", return_value=[{}]):
+             patch.object(maturity_engine.sb_clients, "sb_patch_as_service", return_value=[{}]),              patch.object(business_settings, "merge", return_value={}) as merge:
             out = maturity_engine.compute_maturity("biz-1", force=True)
         # forced recompute with empty signals → idea, not the cached 'scaling'
         self.assertEqual(out["stage"], "idea")
         self.assertFalse(out["cached"])
+        merge.assert_called_once()
 
 
 class VoiceComposerTests(unittest.TestCase):

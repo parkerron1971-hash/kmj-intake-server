@@ -139,11 +139,11 @@ async def _owner_email(owner_id: str) -> Optional[str]:
 
 
 def _write_cfg(biz: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
-    settings = dict(biz.get("settings") or {})
-    settings[EMAIL_DOMAIN_SETTINGS_KEY] = cfg
-    res = sb_clients.sb_patch_as_service(
-        f"/businesses?id=eq.{biz['id']}", {"settings": settings})
-    return res is not None
+    """settings.email_domain alone. The sweep read `biz` before its DNS
+    checks, so writing that row's whole settings back would undo whatever
+    the practitioner (or another job) changed meanwhile (business_settings)."""
+    import business_settings
+    return business_settings.merge(biz["id"], {EMAIL_DOMAIN_SETTINGS_KEY: cfg}) is not None
 
 
 def _drop_identity_cache(business_id: str) -> None:
