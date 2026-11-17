@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-17: "let''s work on those changes as well" (the church pages still in business words)'
 status: in review
-prs: []
+prs: [kmj-intake-server#1891]
 migrations: []
 left_undone: []
 decisions:
