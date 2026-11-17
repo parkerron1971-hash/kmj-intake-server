@@ -348,10 +348,17 @@ def test_the_meter_counts_recordings_classes_and_files(db, on):
 
 def test_files_not_counted_until_the_migration_and_classes_skip_quietly(db, on):
     db.session(1, size=300)
+    assert cs.used(BIZ)["complete"] is True
     db.files_missing = True
     db.fail.add("academy_courses")
     m = cs.used(BIZ)
     assert m["files_counted"] is False and m["parts"] == {"recordings": 300, "classes": 0, "files": 0}
+    assert m["complete"] is False                      # the page shows 0s; the rules decide nothing
+    db.files_missing = False
+    assert cs.used(BIZ)["complete"] is False           # classes still unread
+    assert cs.class_bytes(BIZ) is None
+    db.fail.clear()
+    assert cs.class_bytes(BIZ) == 0 and cs.used(BIZ)["complete"] is True
 
 
 def test_every_page_is_read(db, on):
@@ -832,6 +839,151 @@ def test_owner_mode_ticks_only_the_owners_churches(db, r2, monkeypatch):
     monkeypatch.setenv("CHURCH_STORAGE", "off")
     assert cs.storage_tick(now=T0) == {"churches": 0, "cleared": 0, "warned": 0, "removed": 0, "notices": 0,
                                        "errors": 0}
+
+
+# ─── 7b. A warning counts only once it reached the office ────────────
+
+def test_a_first_warning_that_didnt_save_is_not_counted_and_is_sent_next_run(db, r2, on):
+    _fill(db)
+    s = _end(db)
+    db.fail.add("chief_notifications")
+    assert cs.recording_ended(BIZ, s["id"], now=T0) == "held"
+    row = db.one(s["id"])
+    assert row["keep_until"] and row["warnings_sent"] == 0 and row["last_warned_at"] is None
+    assert db.notices() == []
+    db.fail.clear()
+    assert cs.storage_tick(now=_day(1))["warned"] == 1
+    row = db.one(s["id"])
+    assert row["warnings_sent"] == 1 and row["last_warned_at"] == _day(1).isoformat()
+    # The 14 days start when the church is told.
+    assert row["keep_until"] == (_day(1) + timedelta(days=14)).isoformat()
+    [n] = db.notices("held")
+    assert "kept until Monday, December 7" in n["body"]
+    cs.storage_tick(now=_day(2))
+    assert len(db.notices("held")) == 1
+
+
+def test_a_last_warning_that_didnt_save_is_not_counted_and_nothing_is_removed(db, r2, on):
+    _fill(db)
+    s = _end(db)
+    r2.add(BIZ, s["id"])
+    cs.recording_ended(BIZ, s["id"], now=T0)
+    for day in range(1, 14):
+        cs.storage_tick(now=_day(day))
+    assert db.one(s["id"])["warnings_sent"] == 2
+    db.fail.add("chief_notifications")
+    assert cs.storage_tick(now=_day(14))["warned"] == 0
+    row = db.one(s["id"])
+    assert row["warnings_sent"] == 2 and row["last_warned_at"] == _day(8).isoformat()   # rolled back
+    assert db.notices("last") == []
+    db.fail.clear()
+    out = cs.storage_tick(now=_day(15))            # past the date: the last warning, not a removal
+    assert out == {**out, "removed": 0, "warned": 1}
+    assert db.one(s["id"])["warnings_sent"] == 3 and len(r2.objects) == 4
+    assert len(db.notices("last")) == 1
+    assert cs.storage_tick(now=_day(16))["removed"] == 1
+    assert not r2.objects
+
+
+def test_a_claimed_warning_that_couldnt_be_undone_never_counts_and_is_sent_again(db, r2, on, monkeypatch):
+    _fill(db)
+    s = _end(db)
+    r2.add(BIZ, s["id"])
+    cs.recording_ended(BIZ, s["id"], now=T0)
+    for day in range(1, 14):
+        cs.storage_tick(now=_day(day))
+    real = db.patch
+
+    def no_undo(path, body):                       # the roll-back write fails too
+        if "last_warned_at=is.null" in path and body.get("warnings_sent") == 2:
+            return None
+        return real(path, body)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", no_undo)
+    db.fail.add("chief_notifications")
+    cs.storage_tick(now=_day(14))
+    row = db.one(s["id"])
+    assert row["warnings_sent"] == 3 and row["last_warned_at"] is None           # claimed, not delivered
+    db.fail.clear()
+    out = cs.storage_tick(now=_day(15))            # sent again, still not removed
+    assert out["removed"] == 0 and out["warned"] == 1 and len(r2.objects) == 4
+    assert db.one(s["id"])["last_warned_at"] == _day(15).isoformat()
+    assert len(db.notices("last")) == 1
+    assert cs.storage_tick(now=_day(16))["removed"] == 1
+
+
+def test_a_heads_up_that_didnt_save_is_tried_again(db, r2, on):
+    db.session(1, size=pct(85), started=T0 - timedelta(days=7))
+    db.fail.add("chief_notifications")
+    assert cs.storage_tick(now=_day(0))["notices"] == 0
+    db.fail.clear()
+    assert cs.storage_tick(now=_day(1))["notices"] == 1
+    assert len(db.notices("near")) == 1
+
+
+# ─── 7c. A failed read never releases, removes or holds ──────────────
+
+@pytest.mark.parametrize("unread", ["files", "classes"])
+def test_an_unread_part_never_releases_a_hold(db, r2, on, unread):
+    first = _fill(db)
+    s = _end(db)
+    cs.recording_ended(BIZ, s["id"], now=T0)
+    first["removed_at"] = _day(2).isoformat()      # room again, on what can be read
+    if unread == "files":
+        db.files_missing = True
+    else:
+        db.fail.add("academy_courses")
+    out = cs.storage_tick(now=_day(3))
+    assert out["cleared"] == 0 and out["errors"] == 2          # both churches: nothing decided
+    assert db.one(s["id"])["keep_until"]
+    db.files_missing = False
+    db.fail.clear()
+    assert cs.storage_tick(now=_day(4))["cleared"] == 1
+
+
+@pytest.mark.parametrize("unread", ["files", "classes"])
+def test_an_unread_part_never_removes(db, r2, on, unread):
+    _fill(db)
+    s = _end(db)
+    r2.add(BIZ, s["id"])
+    keep = T0 + timedelta(days=14)
+    s.update(keep_until=keep.isoformat(), warnings_sent=3, last_warned_at=(keep - timedelta(days=1)).isoformat())
+    if unread == "files":
+        db.files_missing = True
+    else:
+        db.fail.add("academy_courses")
+    assert cs.storage_tick(now=keep + timedelta(days=1))["removed"] == 0
+    assert len(r2.objects) == 4 and db.one(s["id"])["removed_at"] is None and db.notices() == []
+
+
+@pytest.mark.parametrize("unread", ["files", "classes"])
+def test_a_recording_end_with_an_unread_part_decides_nothing(db, r2, on, unread):
+    _fill(db)
+    s = _end(db)
+    if unread == "files":
+        db.files_missing = True
+    else:
+        db.fail.add("academy_courses")
+    assert cs.recording_ended(BIZ, s["id"], now=T0) is None
+    assert db.one(s["id"])["keep_until"] is None and db.notices() == []
+    near = db.session(3, size=1, started=T0 - timedelta(hours=1))
+    _fill_rows = [r for r in db.t["stream_sessions"] if r["id"] in (_sid(1), _sid(2))]
+    for r in _fill_rows:
+        r["bytes"] = pct(42)                         # 84%: a heads-up, if it could tell
+    assert cs.recording_ended(BIZ, near["id"], now=T0) is None
+    assert db.notices() == [] and db.t["church_storage_notes"] == []
+
+
+def test_failures_are_printed_for_the_logs(db, r2, on, capsys):
+    s = db.session(1)
+    r2.add(BIZ, s["id"])
+    r2.fail_delete.add(f"live/{BIZ}/{s['id']}/seg_000001.ts")
+    assert _app().delete(f"/church/storage/recordings/{s['id']}?business_id={BIZ}").status_code == 503
+    r2.fail_list = True
+    assert _app().delete(f"/church/storage/recordings/{s['id']}?business_id={BIZ}").status_code == 503
+    out = capsys.readouterr().out
+    assert "[church_storage] delete of" in out and "answered 500" in out
+    assert "[church_storage] listing answered 500" in out
+    assert "logger" not in pathlib.Path(cs.__file__).read_text(encoding="utf-8")
 
 
 # ─── 8. The 80% heads-up ─────────────────────────────────────────────

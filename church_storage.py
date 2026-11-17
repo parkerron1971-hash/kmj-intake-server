@@ -25,18 +25,21 @@ WHAT IS COUNTED (used)
   recordings  stream_sessions.bytes for the church's sessions not removed
               (the media bucket, private).
   classes     academy_live_sessions.recording_bytes for the church's
-              courses (the class recordings' own bucket). Skipped quietly,
-              as 0, when it can't be read.
+              courses (the class recordings' own bucket). Shown as 0 when
+              it can't be read.
   files       every Supabase Storage object whose path starts with
               "<business_id>/" (the convention nearly every bucket follows;
               account_lifecycle deletes by the same prefix), summed by the
               database function church_storage_files_bytes, since PostgREST
               doesn't expose storage.objects. Before
               APPLY-2026-11-17-church-storage.sql it isn't there:
-              files_counted is false and files count 0.
+              files_counted is false and files show as 0.
 Every read is paged (sb_get_all_as_service) past PostgREST's 1,000 rows.
-A read that fails only ever counts LESS, so it can never delete more: a
-recording is removed only from a whole read of the church's recordings.
+A read that fails decides nothing: with the files or the class recordings
+unread, the meter is incomplete (measure's `complete`), and that run
+neither holds, warns, releases, removes nor re-arms anything for the church
+(counted as 0 they would look like room, and a released hold is never held
+again). A failed read of the recordings or the sermons skips the church.
 
 A business not on a church plan (church_texts.church_plan_of: the comp tier,
 or the Stripe PRICE id businesses.subscription_plan holds) has no allowance
@@ -64,12 +67,16 @@ texting heads-up in church_texts)
   The 80% heads-up: once per church per crossing (church_storage_notes
   holds that it went out; it re-arms below 75%, so a church sitting at the
   line hears once), with how many Sundays of room are left.
-Every step is a conditional write (warnings_sent=eq.n, removed_at=is.null,
-near_noted_at=is.null), so two replicas or a retry never send twice.
+A warning counts only once its office notice is saved (_warn: claimed,
+then marked delivered; a notice that didn't save is rolled back and sent
+again next run), so a removal always follows three warnings that reached
+the office. Every step is a conditional write (warnings_sent=eq.n,
+last_warned_at=is.null, removed_at=is.null, near_noted_at=is.null), so two
+replicas or a retry never send twice. Everything worth knowing in
+production is print()ed with [church_storage] (Railway shows print only).
 """
 from __future__ import annotations
 
-import logging
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -79,8 +86,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 import sb_clients
-
-logger = logging.getLogger("church_storage")
 
 GB = 1024 ** 3
 NEAR_PERCENT = 80
@@ -225,12 +230,14 @@ def sessions_of(business_id: str) -> Optional[List[Dict[str, Any]]]:
         return sb_clients.sb_get_all_as_service(
             f"/stream_sessions?business_id=eq.{_q(business_id)}&select={SESSION_COLS}", key="id", strict=True)
     except Exception as e:  # noqa: BLE001  (PartialRead included)
-        logger.warning(f"[church_storage] sessions read failed: {type(e).__name__}")
+        print(f"[church_storage] sessions read failed: {type(e).__name__}", flush=True)
         return None
 
 
-def class_bytes(business_id: str) -> int:
-    """The church's class recordings. 0, quietly, when they can't be read."""
+def class_bytes(business_id: str) -> Optional[int]:
+    """The church's class recordings. None when they can't be read: the page
+    shows 0 for them, and the rules decide nothing from that church's meter
+    on that run."""
     try:
         courses = sb_clients.sb_get_all_as_service(
             f"/academy_courses?business_id=eq.{_q(business_id)}&select=id", key="id", strict=True) or []
@@ -244,8 +251,8 @@ def class_bytes(business_id: str) -> int:
             total += sum(_int(r.get("recording_bytes")) for r in rows)
         return total
     except Exception as e:  # noqa: BLE001
-        logger.info(f"[church_storage] class recordings not counted: {type(e).__name__}")
-        return 0
+        print(f"[church_storage] class recordings not counted: {type(e).__name__}", flush=True)
+        return None
 
 
 def files_bytes(business_id: str) -> Optional[int]:
@@ -274,18 +281,22 @@ def sunday_bytes(sessions: List[Dict[str, Any]]) -> int:
 
 
 def measure(business_id: str, sessions: List[Dict[str, Any]], row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The meter, from a whole read of the church's sessions and its row."""
+    """The meter, from a whole read of the church's sessions and its row.
+    `complete` (not on the page) is false when the files or the class
+    recordings couldn't be read: the meter then counts them as 0 for the
+    page, and nothing is held, released or removed from it."""
     allowance = allowance_bytes(row)
     recordings = sum(_int(s.get("bytes")) for s in sessions if not s.get("removed_at"))
     classes = class_bytes(business_id)
     files = files_bytes(business_id)
-    used_now = recordings + classes + (files or 0)
+    used_now = recordings + (classes or 0) + (files or 0)
     per_sunday = sunday_bytes(sessions)
     out: Dict[str, Any] = {
         "allowance_bytes": allowance, "extra_bytes": 0, "used_bytes": used_now,
-        "parts": {"recordings": recordings, "classes": classes, "files": files or 0},
+        "parts": {"recordings": recordings, "classes": classes or 0, "files": files or 0},
         "files_counted": files is not None, "percent": None, "state": "ok",
         "bytes_per_sunday": per_sunday, "sundays_left": None,
+        "complete": files is not None and classes is not None,
     }
     if allowance is not None:
         extra = extra_bytes(business_id)
@@ -328,7 +339,7 @@ def published_sessions(business_id: str) -> Optional[Set[str]]:
             f"/sermons?business_id=eq.{_q(business_id)}&published=eq.true"
             f"&video_url=like.{_q('*/stream-relay/watch/*')}&select=id,video_url", key="id", strict=True)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[church_storage] sermons read failed: {type(e).__name__}")
+        print(f"[church_storage] sermons read failed: {type(e).__name__}", flush=True)
         return None
     out: Set[str] = set()
     for r in rows or []:
@@ -352,7 +363,7 @@ def recording_prefix(business_id: str, s: Dict[str, Any]) -> Optional[str]:
     expected = sr.playlist_path(str(business_id).lower(), sid)
     stored = str(s.get("playlist_path") or "").strip() or expected
     if stored != expected:
-        logger.warning(f"[church_storage] recording {sid[:8]} has an unexpected path; not deleting it")
+        print(f"[church_storage] recording {sid[:8]} has an unexpected path; not deleting it", flush=True)
         return None
     return expected[: -len("index.m3u8")]
 
@@ -411,10 +422,10 @@ def _list(client: Any, prefix: str) -> Optional[List[str]]:
         try:
             r = client.request("GET", url)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[church_storage] listing failed: {type(e).__name__}")
+            print(f"[church_storage] listing failed: {type(e).__name__}", flush=True)
             return None
         if r.status_code != 200:
-            logger.warning(f"[church_storage] listing answered {r.status_code}")
+            print(f"[church_storage] listing answered {r.status_code}", flush=True)
             return None
         page = parse_listing(r.text)
         if page is None:
@@ -439,9 +450,13 @@ def _delete_all(client: Any, keys: List[str]) -> bool:
             return False
         try:
             r = client.request("DELETE", url)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            print(f"[church_storage] delete of {key[-40:]} failed: {type(e).__name__}", flush=True)
             return False
-        return r.status_code in (200, 204, 404)
+        if r.status_code in (200, 204, 404):
+            return True
+        print(f"[church_storage] delete of {key[-40:]} answered {r.status_code}", flush=True)
+        return False
 
     if not keys:
         return True
@@ -467,7 +482,7 @@ def _clear_drafts(business_id: str, sid: str, now: datetime) -> None:
         f"&video_url=like.{_q('*/stream-relay/watch/' + sid)}",
         {"video_url": "", "updated_at": _iso(now)})
     if got is None:
-        logger.warning(f"[church_storage] draft for {sid[:8]} kept its link")
+        print(f"[church_storage] draft for {sid[:8]} kept its link", flush=True)
 
 
 def remove_recording(business_id: str, s: Dict[str, Any], *, now: Optional[datetime] = None
@@ -558,8 +573,10 @@ def notice(kind: str, *, day: str = "", started: str = "", keep: str = "", perce
                    f"Recording never stops.")
 
 
-def _post(business_id: str, kind: str, title: str, body: str, now: datetime, data: Dict[str, Any]) -> None:
-    sb_clients.sb_post_as_service("/chief_notifications", {
+def _post(business_id: str, kind: str, title: str, body: str, now: datetime, data: Dict[str, Any]) -> bool:
+    """The office notice, saved. False when the insert failed (nothing
+    reached the office): a warning is then not counted, and is sent again."""
+    out = sb_clients.sb_post_as_service("/chief_notifications", {
         "business_id": business_id,
         "type": NOTICE_TYPE,
         "title": title,
@@ -568,49 +585,95 @@ def _post(business_id: str, kind: str, title: str, body: str, now: datetime, dat
         "status": "unread",
         "created_at": _iso(now),
         "data": {"kind": kind, **data},
-    }, prefer=None)
+    })
+    saved = isinstance(out, list) and bool(out)
+    if not saved:
+        print(f"[church_storage] {kind} notice for {str(business_id)[:8]} didn't save", flush=True)
+    return saved
 
 
 def _tell_about(business_id: str, kind: str, s: Dict[str, Any], now: datetime,
-                keep_until: Optional[datetime] = None) -> None:
+                keep_until: Optional[datetime] = None) -> bool:
     tz = _church_clock(business_id)
     start = (_at(s.get("started_at")) or now).astimezone(tz)
     keep = keep_until or _at(s.get("keep_until"))
     title, body = notice(kind, day=f"{start:%A}", started=_date_words(start),
                          keep=_day_words(keep.astimezone(tz)) if keep else "",
                          has_draft=bool(s.get("sermon_id")))
-    _post(business_id, kind, title, body, now, {"session_id": str(s.get("id")),
-                                                 "keep_until": _iso(keep) if keep else None})
+    return _post(business_id, kind, title, body, now, {"session_id": str(s.get("id")),
+                                                        "keep_until": _iso(keep) if keep else None})
 
 
-def _tell_near(business_id: str, used_now: int, total: int, per_sunday: int, now: datetime) -> None:
+def _tell_near(business_id: str, used_now: int, total: int, per_sunday: int, now: datetime) -> bool:
     pct = percent_of(used_now, total)
     sundays = max(0, total - used_now) // max(per_sunday, 1)
     title, body = notice("near", percent=pct, sundays=sundays)
-    _post(business_id, "near", title, body, now, {"percent": pct, "sundays_left": sundays,
-                                                  "used_bytes": used_now, "allowance_bytes": total})
+    return _post(business_id, "near", title, body, now, {"percent": pct, "sundays_left": sundays,
+                                                         "used_bytes": used_now, "allowance_bytes": total})
 
 
 # ─── The 14-day rule ─────────────────────────────────────────────────
 
 def _hold(business_id: str, sid: str, now: datetime) -> Optional[datetime]:
     """Keep a recording made while full for KEEP_DAYS, once: only a session
-    never held or warned before. The date when this call set it."""
+    never held or warned before. The date when this call set it. The first
+    warning is sent (and counted) separately, by _warn."""
     keep = now + timedelta(days=KEEP_DAYS)
     got = sb_clients.sb_patch_as_service(
-        f"/stream_sessions?id=eq.{_q(sid)}&business_id=eq.{_q(business_id)}&removed_at=is.null"
-        f"&keep_until=is.null&warnings_sent=eq.0",
-        {"keep_until": _iso(keep), "warnings_sent": 1, "last_warned_at": _iso(now)})
+        f"{_session_path(business_id, sid)}&removed_at=is.null&keep_until=is.null&warnings_sent=eq.0",
+        {"keep_until": _iso(keep)})
     return keep if isinstance(got, list) and got else None
 
 
-def _warned(business_id: str, sid: str, n: int, now: datetime) -> bool:
-    """Warning n is this call's to send (the count was n-1)."""
-    got = sb_clients.sb_patch_as_service(
-        f"/stream_sessions?id=eq.{_q(sid)}&business_id=eq.{_q(business_id)}&removed_at=is.null"
-        f"&keep_until=not.is.null&warnings_sent=eq.{n - 1}",
-        {"warnings_sent": n, "last_warned_at": _iso(now)})
-    return isinstance(got, list) and bool(got)
+def _session_path(business_id: str, sid: str) -> str:
+    return f"/stream_sessions?id=eq.{_q(sid)}&business_id=eq.{_q(business_id)}"
+
+
+WARNING_KINDS = {1: "held", 2: "second", 3: "last"}
+
+
+def _warn(business_id: str, s: Dict[str, Any], n: int, now: datetime) -> bool:
+    """Send warning n (1 kept, 2 a week left, 3 the last day), counted only
+    once its office notice is saved. True when it reached the office.
+
+    Two conditional steps, so replicas and retries never send twice: the
+    claim (warnings_sent n-1 -> n with last_warned_at null: claimed, not
+    yet delivered), then, once the notice is saved, last_warned_at = now
+    (delivered). A notice that didn't save rolls the claim back to what it
+    was claimed from, so the next run sends it again. If even that write
+    fails, the warning stays claimed-not-delivered (last_warned_at null):
+    it never counts toward the next warning or a removal, and the next run
+    sends it again. Warning 1 starts the 14 days from now, so a church
+    always gets them in full once it is told."""
+    sid = str(s.get("id") or "").lower()
+    path = _session_path(business_id, sid)
+    resend = _int(s.get("warnings_sent")) == n and not s.get("last_warned_at")
+    keep = _at(s.get("keep_until"))
+    if not resend:
+        claim: Dict[str, Any] = {"warnings_sent": n, "last_warned_at": None}
+        if n == 1:
+            keep = now + timedelta(days=KEEP_DAYS)
+            claim["keep_until"] = _iso(keep)
+        before = "&last_warned_at=not.is.null" if n > 1 else ""
+        got = sb_clients.sb_patch_as_service(
+            f"{path}&removed_at=is.null&keep_until=not.is.null&warnings_sent=eq.{n - 1}{before}", claim)
+        if not (isinstance(got, list) and got):
+            return False
+    if _tell_about(business_id, WARNING_KINDS[n], s, now, keep_until=keep):
+        done = sb_clients.sb_patch_as_service(f"{path}&warnings_sent=eq.{n}&last_warned_at=is.null",
+                                              {"last_warned_at": _iso(now)})
+        if not (isinstance(done, list) and done):
+            print(f"[church_storage] warning {n} for {sid[:8]} reached the office but wasn't marked; "
+                  f"it will be sent again", flush=True)
+        return True
+    if not resend:
+        back = sb_clients.sb_patch_as_service(
+            f"{path}&warnings_sent=eq.{n}&last_warned_at=is.null",
+            {"warnings_sent": n - 1, "last_warned_at": s.get("last_warned_at")})
+        if not (isinstance(back, list) and back):
+            print(f"[church_storage] warning {n} for {sid[:8]} couldn't be undone; it stays unsent "
+                  f"and is sent again next run", flush=True)
+    return False
 
 
 def _release(business_id: str, sid: str) -> bool:
@@ -663,19 +726,27 @@ def recording_ended(business_id: str, session_id: str, *, now: Optional[datetime
         s = next((x for x in sessions if str(x.get("id") or "").lower() == sid), None)
         if total is None or s is None or s.get("removed_at"):
             return None
+        if not meter["complete"]:
+            # Files or class recordings unreadable: can't tell whether it is
+            # over, so neither hold it nor say anything on a guess.
+            print(f"[church_storage] recording {sid[:8]} ended; storage couldn't be fully read, "
+                  f"nothing decided", flush=True)
+            return None
         if meter["used_bytes"] > total:
             keep = _hold(biz, sid, stamp)
             if keep is None:
                 return None
-            _tell_about(biz, "held", s, stamp, keep_until=keep)
-            _claim_near(biz, stamp)          # the warning says more than the heads-up would
+            held = {**s, "keep_until": _iso(keep), "warnings_sent": 0, "last_warned_at": None}
+            if _warn(biz, held, 1, stamp):
+                _claim_near(biz, stamp)      # the warning says more than the heads-up would
             return "held"
         if meter["state"] != "ok" and _claim_near(biz, stamp):
-            _tell_near(biz, meter["used_bytes"], total, meter["bytes_per_sunday"], stamp)
-            return "near"
+            if _tell_near(biz, meter["used_bytes"], total, meter["bytes_per_sunday"], stamp):
+                return "near"
+            _rearm(biz, stamp)               # not told: the next run tries again
         return None
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[church_storage] after a recording: {type(e).__name__}: {e}")
+        print(f"[church_storage] after a recording: {type(e).__name__}: {e}", flush=True)
         return None
 
 
@@ -694,6 +765,14 @@ def tick_church(business_id: str, row: Optional[Dict[str, Any]], noted: bool,
         out["errors"] += 1
         return out
     meter = measure(business_id, sessions, row)
+    if not meter["complete"]:
+        # Files or class recordings unreadable: counted as 0 they would look
+        # like room, and a hold released on that is never held again. Nothing
+        # is released, warned, removed or re-armed for this church today.
+        print(f"[church_storage] {business_id[:8]}: storage couldn't be fully read (files "
+              f"{'counted' if meter['files_counted'] else 'unread'}); nothing decided today", flush=True)
+        out["errors"] += 1
+        return out
     total = total_of(meter)
     used_now = int(meter["used_bytes"])
     held = sorted((s for s in sessions if s.get("keep_until") and not s.get("removed_at")),
@@ -710,7 +789,11 @@ def tick_church(business_id: str, row: Optional[Dict[str, Any]], noted: bool,
             continue
         sent = _int(s.get("warnings_sent"))
         last = _at(s.get("last_warned_at"))
-        if now >= keep and sent >= 3 and (last is None or last <= now - DELETE_GAP):
+        if sent == 0 or last is None:
+            # Never told, or a warning claimed whose notice never landed: (re)send it.
+            if _warn(business_id, s, min(max(sent, 1), 3), now):
+                out["warned"] += 1
+        elif now >= keep and sent >= 3 and last <= now - DELETE_GAP:
             fresh = _published_one(business_id, sid)        # once more, at the last moment
             if fresh is None:
                 out["errors"] += 1
@@ -727,18 +810,18 @@ def tick_church(business_id: str, row: Optional[Dict[str, Any]], noted: bool,
                 out["removed"] += 1
                 _tell_about(business_id, "removed", s, now)
         elif sent == 2 and now >= keep - timedelta(days=KEEP_DAYS - THIRD_WARNING_DAY):
-            if _warned(business_id, sid, 3, now):
+            if _warn(business_id, s, 3, now):
                 out["warned"] += 1
-                _tell_about(business_id, "last", s, now)
         elif sent == 1 and now >= keep - timedelta(days=KEEP_DAYS - SECOND_WARNING_DAY):
-            if _warned(business_id, sid, 2, now):
+            if _warn(business_id, s, 2, now):
                 out["warned"] += 1
-                _tell_about(business_id, "second", s, now)
     if total is not None:
         if used_now * 100 >= NEAR_PERCENT * total:
             if not noted and _claim_near(business_id, now):
-                out["notices"] += 1
-                _tell_near(business_id, used_now, total, int(meter["bytes_per_sunday"]), now)
+                if _tell_near(business_id, used_now, total, int(meter["bytes_per_sunday"]), now):
+                    out["notices"] += 1
+                else:
+                    _rearm(business_id, now)          # not told: tomorrow tries again
         elif noted and used_now * 100 < REARM_PERCENT * total:
             _rearm(business_id, now)
     return out
@@ -764,7 +847,7 @@ def storage_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         notes = sb_clients.sb_get_all_as_service(f"/{NOTES}?select=business_id,near_noted_at",
                                                  key="business_id", strict=True)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[church_storage] tick read failed: {type(e).__name__}")
+        print(f"[church_storage] tick read failed: {type(e).__name__}", flush=True)
         out["errors"] += 1
         return out
     by_id = {str(r.get("id")): r for r in rows or [] if r.get("id")}
@@ -782,7 +865,7 @@ def storage_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                 out[k] += v
         except Exception as e:  # noqa: BLE001
             out["errors"] += 1
-            logger.warning(f"[church_storage] tick failed for {biz[:8]}: {type(e).__name__}: {e}")
+            print(f"[church_storage] tick failed for {biz[:8]}: {type(e).__name__}: {e}", flush=True)
     if out["removed"] or out["warned"]:
         print(f"[church_storage] tick: {out}", flush=True)
     return out
