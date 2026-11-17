@@ -30,7 +30,8 @@ RE-CHECKED AT SEND TIME, whatever happened since the approval:
   * the posting pilot is on for the business (post_for_me.allowed_for). Off,
     the post is held, not failed: back to approved, saying why, no push; it
     goes out if the business is switched back on while its window is open.
-    A server with no posting key or an empty pilot list claims nothing;
+    A server with no posting key claims nothing (an unset pilot list is
+    every business since 2026-11-17);
   * a post Chief approved on the owner's standing OK (approved_via
     'standing', B13) is still covered by it (business_marketing_standing.
     send_check: the grant by the current owner, the real plan, client-facing
