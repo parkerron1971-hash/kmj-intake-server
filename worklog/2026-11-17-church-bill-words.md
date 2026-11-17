@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-17: "yes to the other plans as well" (the email a bill''s recipient gets still said Invoice)'
 status: in review
-prs: []
+prs: [kmj-intake-server#1893]
 migrations: []
 left_undone:
   - "Pay links already made keep the name 'Invoice …' on Stripe's page: only new links are named Bill (renaming would change live Stripe objects)."
