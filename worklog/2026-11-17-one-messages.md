@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17: "make sure that the section where the messages are in group chat are not two messaging chats in the system."'
 status: in review
-prs: [kmj-intake-server#PR]
+prs: [kmj-intake-server#1904]
 migrations: []
 left_undone:
   - "Only while CHURCH_THREADS is open for a church (owner by default). Churches with it closed keep Messages exactly as before: chats only, no count on the header icon, no Home card."
