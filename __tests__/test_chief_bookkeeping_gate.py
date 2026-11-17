@@ -40,6 +40,7 @@ def fake(monkeypatch):
     for k in ("BILLING_ENFORCE", "STRIPE_PRICE_ID_STARTER",
               "STRIPE_PRICE_ID_PROFESSIONAL", "STRIPE_PRICE_ID_PRACTICE"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
     # The gate is what's under test — stub the engine behind it.
     monkeypatch.setattr(chief_bookkeeping, "analyze_unmatched", lambda b: [])
     monkeypatch.setattr(chief_bookkeeping, "analyze_uncategorized", lambda b: [])

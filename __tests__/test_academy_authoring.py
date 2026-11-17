@@ -1,6 +1,8 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 import chief_academy_actions as academy
 
 
@@ -74,9 +76,21 @@ def test_actions_are_reachable_from_native_tools_and_dispatch():
         assert action_registry.may_expose_to_agent(verb, allow_writes=True)
 
 
-def test_legacy_links_and_posts_go_to_graded_classroom(monkeypatch):
+def test_the_graded_classroom_is_on_unless_switched_off(monkeypatch):
     import public_site
-    monkeypatch.setenv("ACADEMY_CLASSROOM_V2", "on")
+    monkeypatch.delenv("ACADEMY_CLASSROOM_V2", raising=False)
+    assert public_site._classroom_v2_on() is True
+    monkeypatch.setenv("ACADEMY_CLASSROOM_V2", "off")
+    assert public_site._classroom_v2_on() is False
+
+
+@pytest.mark.parametrize("value", ["on", None])
+def test_legacy_links_and_posts_go_to_graded_classroom(monkeypatch, value):
+    import public_site
+    if value is None:
+        monkeypatch.delenv("ACADEMY_CLASSROOM_V2", raising=False)
+    else:
+        monkeypatch.setenv("ACADEMY_CLASSROOM_V2", value)
     with patch.object(public_site, "_learn_load", AsyncMock()) as load:
         page = asyncio.run(public_site._serve_learner(f"learn/{COURSE}/lesson"))
         mark = asyncio.run(public_site.learner_mark(COURSE, None))

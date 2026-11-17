@@ -1140,7 +1140,8 @@ async def health_ready():
         "plaid": bool(os.environ.get("PLAID_CLIENT_ID")),
         "push_vapid": bool(os.environ.get("VAPID_PRIVATE_KEY")),
         "sentry": bool(os.environ.get("SENTRY_DSN")),
-        "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on",
+        "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "on").strip().lower()
+                           not in ("off", "0", "false", "no"),
     }
     # A WEB REPLICA HAS NO SCHEDULER, AND THAT IS NOT AN OUTAGE.
     #

@@ -40,6 +40,15 @@ os.environ.setdefault("MADE_UP_RECIPIENT_GUARD", "off")
 # thread must never outlive a test's fakes. Its own tests call it directly.
 os.environ.setdefault("SAMPLE_CHURCH_SEED", "off")
 
+# Billing is enforced by the code's default since 2026-11-17 (it had been on
+# in production through Railway for months). Most tests were written while
+# the default was off: their fake businesses have no plan, so with
+# enforcement on a Chief turn, a write or a sourcing run answers 402 before
+# reaching what the test is about. Unit tests run with it off unless they
+# turn it on (the billing tests do, and test_phasee_billing pins the default
+# by unsetting it).
+os.environ.setdefault("BILLING_ENFORCE", "off")
+
 
 # Chief's per-turn state lives in contextvars that a real turn resets at
 # its start and that a test which calls the door or the tool loop

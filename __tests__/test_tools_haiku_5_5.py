@@ -239,7 +239,7 @@ def test_ai_proxy_volume_tier(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     sent = []
 
     class _Client:

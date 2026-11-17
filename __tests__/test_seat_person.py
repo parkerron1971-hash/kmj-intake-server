@@ -46,6 +46,7 @@ def fb(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
     for k in ("BILLING_ENFORCE", "CHURCH_AREAS"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
     fb.rows("businesses").append({"id": "b1", "owner_id": "owner1", "name": "Love City Church",
                                   "type": "ministry", "settings": {"practitioner_name": "Kevin"}})
     FB_ROWS["seats"] = fb.rows("business_users")

@@ -284,7 +284,7 @@ def test_plan_includes_reads_the_real_plan_even_with_enforcement_off(monkeypatch
     """has_feature() lets everyone through while BILLING_ENFORCE is off;
     spending money unasked must not."""
     import feature_gates as fg
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     starter = {"comp_tier": "starter"}
     assert fg.has_feature(starter, "marketing_week") is True
     assert fg.plan_includes(starter, "marketing_week") is False

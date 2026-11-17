@@ -2,10 +2,10 @@
 billing_limits.py — Phase E v1.1 — the numeric-limit plumbing behind
 PLAN_LIMITS (business caps, Chief message metering, seat caps).
 
-Everything here is GATE-READY and DORMANT: with BILLING_ENFORCE off (the
-default until pricing locks), every check answers "allowed" and every limit
-reads as unlimited — but the counters are real, so the UI can already show
-honest usage and enforcement is one env flip.
+Everything here is enforced (BILLING_ENFORCE is on by default since
+2026-11-17). With BILLING_ENFORCE=off, the emergency switch, every check
+answers "allowed" and every limit reads as unlimited; the counters stay
+real either way, so the UI always shows honest usage.
 
 Plan resolution for caps is per-OWNER (a cap on "businesses" can't live on
 a single business row): the owner's best-ranked plan across their
@@ -41,8 +41,8 @@ def require_feature(business_id: str, feature: str) -> None:
     feature_gates.has_feature() (7/30 tier audit: the feature→tier map
     had ZERO callers, so every plan shipped identical software).
 
-    GATE-READY + DORMANT like everything in this module: with
-    BILLING_ENFORCE off has_feature() answers True and this never
+    Like everything in this module, with BILLING_ENFORCE=off (the
+    emergency switch) has_feature() answers True and this never
     raises. Grandfathered owners always pass. Fails OPEN on lookup
     errors — a billing hiccup must never take a feature down. The 402
     payload shape is the contract the frontend's upgrade prompt reads:

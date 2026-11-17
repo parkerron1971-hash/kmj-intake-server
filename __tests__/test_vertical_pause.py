@@ -70,6 +70,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
     for k in ("BILLING_ENFORCE", "LAUNCH_INVITE_ONLY", "STRIPE_PRICE_ID_STARTER"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
     return fb
 
 

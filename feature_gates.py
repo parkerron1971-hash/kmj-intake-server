@@ -1,11 +1,12 @@
 """
-feature_gates.py — Phase E — tier entitlements (gate-ready, UNENFORCED).
+feature_gates.py — Phase E — tier entitlements (ENFORCED).
 
-Per Kevin's pricing ruling: pricing is locked AFTER the full build, so every
-feature is free for all practitioners today. This module makes the gates
-REAL but DORMANT — has_feature() returns True unless BILLING_ENFORCE=on.
-The tier→feature map below is the gate-ready scaffold; final assignments are
-the pricing decision, changed here in one place.
+Billing is enforced: has_feature() answers from the business's plan and
+limit_for() returns the plan's limits. Production has enforced it for
+months (BILLING_ENFORCE=on on Railway); since 2026-11-17 that is also the
+code's own default. BILLING_ENFORCE=off is the emergency switch
+(docs/RUNBOOK.md): every feature opens and no limit applies. The
+tier→feature map below is where plan assignments change, in one place.
 
 Tiers resolve from businesses.subscription_plan (a Stripe price id) via the
 STRIPE_PRICE_ID_{STARTER,PROFESSIONAL,PRACTICE} env vars.
@@ -347,8 +348,8 @@ def _limits_of(plan: Optional[str]) -> Dict[str, Optional[int]]:
 
 
 def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[int]:
-    """The numeric limit for a business's tier; None = unlimited. Unenforced
-    (and unlimited) until BILLING_ENFORCE=on AND a plan exists."""
+    """The numeric limit for a business's tier; None = unlimited. Unlimited
+    while BILLING_ENFORCE=off; with no plan, Starter's limits."""
     if not enforcement_on():
         return None
     plan = plan_of(business_row)
@@ -650,7 +651,9 @@ def rehearsal():
 def enforcement_on() -> bool:
     if _REHEARSAL.get():
         return True
-    return (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on"
+    # On unless BILLING_ENFORCE=off (default on since 2026-11-17).
+    return (os.environ.get("BILLING_ENFORCE") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
 
 
 def has_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:

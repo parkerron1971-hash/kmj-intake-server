@@ -85,7 +85,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
                         lambda path, body: (fb.patch(path, body), fb.get(path))[1])
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", fb.delete)
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "owner1", "is_active": True,
         "name": "Acme Coaching", "type": "coach",

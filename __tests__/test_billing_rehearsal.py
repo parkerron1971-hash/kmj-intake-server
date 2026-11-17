@@ -42,7 +42,7 @@ def _row(**k):
 @pytest.fixture
 def quiet(monkeypatch):
     """No enforcement, no grandfathering, empty tables, no ledger writes."""
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     monkeypatch.setattr(fg, "price_to_plan", lambda: {"price_pro": "professional", "price_starter": "starter"})
     monkeypatch.setattr(um, "is_grandfathered_user", lambda uid: False)
     monkeypatch.setattr(um, "weighted_usage_this_month", lambda b: 0)

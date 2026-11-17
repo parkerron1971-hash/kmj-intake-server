@@ -519,9 +519,10 @@ def chat_price() -> int:
     This change does not preclude it; if the mean comes down, chat_price
     can come back down with it.
 
-    Nothing changes for a customer today: BILLING_ENFORCE is off in
-    production, so allowances are recorded and not enforced. This is
-    positioning for the day that flips, which is the safe moment to do it.
+    Nothing changed for a customer when this shipped: BILLING_ENFORCE was
+    off in production then, so allowances were recorded and not enforced.
+    It was positioning for the day that flipped (it has; enforcement is
+    the code's default since 2026-11-17).
     """
     return _dial("CHAT_PRICE", "PRICE_", 12)
 

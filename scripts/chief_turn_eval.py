@@ -722,6 +722,9 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
         return []
 
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+    # The eval measures Chief's answers, not billing: the fixture businesses
+    # have no plan, and enforcement is the code's default since 2026-11-17.
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     import sb_clients
     import practitioner_profile_agent
     import voice_depth_agent

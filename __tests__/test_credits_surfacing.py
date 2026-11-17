@@ -67,6 +67,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", fb.delete)
     for k in ("BILLING_ENFORCE",):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
     # The Starter grant became a DIAL on 2026-08-08 and its shipped
     # default moved 300 -> 3,000. Every case in this file is about the

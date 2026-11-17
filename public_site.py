@@ -6864,12 +6864,17 @@ async def _learn_load(client, token: str):
     return enr, crows[0], lessons, biz_name, accent, theme, skin_head
 
 
+def _classroom_v2_on() -> bool:
+    """ACADEMY_CLASSROOM_V2: on unless it says off (default on since 2026-11-17)."""
+    return (os.environ.get("ACADEMY_CLASSROOM_V2") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
 async def _serve_learner(path: str) -> HTMLResponse:
     """GET /learn/<token>[/<lesson_id>] — course home or lesson page."""
     parts = [p for p in path.split("/") if p]  # ['learn', token, lesson?]
     token = parts[1] if len(parts) >= 2 else ""
     lesson_id = parts[2] if len(parts) >= 3 else ""
-    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+    if _classroom_v2_on():
         if not _academy_valid_id(token):
             raise HTTPException(404, "Link not active")
         return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,
@@ -8357,7 +8362,7 @@ async def learner_mark(token: str, request: Request):
     write feeds the same enrollments.progress/homework the teaching
     view reads. Drip locks are enforced server-side."""
     # Retire the legacy completion shortcut when the graded classroom goes live.
-    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+    if _classroom_v2_on():
         if not _academy_valid_id(token):
             raise HTTPException(404, "Link not active")
         return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,

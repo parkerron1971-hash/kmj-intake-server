@@ -51,7 +51,7 @@ def proxy_env(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)   # gate disabled
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     monkeypatch.setattr(ai_proxy.httpx, "AsyncClient", _FakeClient)
     # api_usage logging is fire-and-best-effort; neutralize network.
     import api_usage_logger

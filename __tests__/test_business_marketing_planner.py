@@ -312,6 +312,7 @@ def quiet_signals(**over):
 def s(monkeypatch):
     for name in ('MARKETING_MAX_PER_TICK', 'BILLING_ENFORCE', 'PLATFORM_DEFAULT_TZ', 'MARKETING_DESK_PUBLISHING'):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('BILLING_ENFORCE', 'off')   # unset means enforced since 2026-11-17
     monkeypatch.setenv('MARKETING_DESK', '*')
     monkeypatch.setenv('POST_FOR_ME_API_KEY', 'pfm_test_key')
     monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', '*')

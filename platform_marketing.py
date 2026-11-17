@@ -203,11 +203,17 @@ def post_payload(row):
             'saveToDraft': False, 'aiAssisted': p.get('ai_assisted', False), 'metadata': metadata}
 
 
+def buffer_publishing_on():
+    """BUFFER_PUBLISHING: on unless it says off (default on since 2026-11-17).
+    BUFFER_API_KEY is still needed for anything to go out."""
+    return (os.environ.get('BUFFER_PUBLISHING') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
+
+
 @router.get('/status')
 async def status():
     cfg = await config()
     return {'configured': bool(os.environ.get('BUFFER_API_KEY', '').strip()),
-            'worker_enabled': os.environ.get('BUFFER_PUBLISHING', 'off').lower() == 'on',
+            'worker_enabled': buffer_publishing_on(),
             'config': cfg, 'supported_services': sorted(SUPPORTED)}
 
 
@@ -557,7 +563,7 @@ POST_NOW_LEAD = timedelta(minutes=2)    # the approve RPC needs a future time; t
 def publishing_ready(cfg):
     """Why a post cannot go out right away, or None. Checked before anything is
     approved, so "post now" never leaves an approved post waiting on a switch."""
-    if os.environ.get('BUFFER_PUBLISHING', 'off').lower() != 'on' or not os.environ.get('BUFFER_API_KEY', '').strip():
+    if not buffer_publishing_on() or not os.environ.get('BUFFER_API_KEY', '').strip():
         return 'Publishing is switched off on the server, so nothing can go out right away.'
     if cfg.get('paused'):
         return 'Publishing is paused. Resume it on the desk, then post again.'
@@ -878,7 +884,7 @@ async def dispatch(row, api):
 
 
 async def due_tick():
-    if os.environ.get('BUFFER_PUBLISHING', 'off').lower() != 'on' or not os.environ.get('BUFFER_API_KEY'):
+    if not buffer_publishing_on() or not os.environ.get('BUFFER_API_KEY'):
         return
     trouble = []
     try:

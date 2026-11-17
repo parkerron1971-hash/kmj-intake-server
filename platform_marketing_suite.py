@@ -259,7 +259,7 @@ async def drain(owner=Depends(require_owner)):
         'missed': sum(1 for r in rows if r.get('status') == 'approved' and r not in queued),
         'drafts': sum(1 for r in rows if r.get('status') == 'draft'),
     }
-    publishing = os.environ.get('BUFFER_PUBLISHING', 'off').lower() == 'on'
+    publishing = (os.environ.get('BUFFER_PUBLISHING') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
     active = await platform_suite.buffer_state_async() == 'closed'
     problem = await platform_suite.problem_async()
     # Only once the suite is in use is it safe to stop the Buffer desk's sender.

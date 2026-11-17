@@ -34,7 +34,7 @@ def fake(monkeypatch):
                         lambda p, b, prefer="rep": fb.post(p, b, prefer))
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", fb.delete)
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "owner1", "is_active": True, "name": "b1",
         "type": "coach", "settings": {}, "subscription_status": None,
