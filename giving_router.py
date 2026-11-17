@@ -1587,6 +1587,20 @@ def giving_amounts(business_id: str, year: Optional[int] = None, user: AuthedUse
             "year": year}
 
 
+# What the church was given in one week and the week before, for the
+# Briefing page (giving_week.py). The letter on that page is kept for the
+# whole church and read by logins that never see giving, so giving is never
+# in the letter: it is asked for here, by the same people as the amounts
+# above, when the page is opened. Counts and totals only, never a giver.
+@router.get("/giving/{business_id}/week")
+def giving_week(business_id: str, day: Optional[str] = None, user: AuthedUser = Depends(require_user)):
+    import giving_week as week
+    from giving_records import require_finance
+    biz_id = week.business_id_of(business_id)
+    require_finance(biz_id, user)
+    return week.read(biz_id, day)
+
+
 @router.get("/giving/{business_id}/ways")
 def giving_ways_menu(business_id: str, user: AuthedUser = Depends(require_user)):
     """The treasurer's lists: "how it was given" (Cash, Check, the church's
