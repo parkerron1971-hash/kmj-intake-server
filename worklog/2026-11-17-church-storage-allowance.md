@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: "build" (Kevin, approving a storage allowance per church instead of keeping service recordings forever)
 status: waiting on Kevin
-prs: [kmj-intake-server#PR]
+prs: [kmj-intake-server#1903]
 migrations: [supabase/APPLY-2026-11-17-church-storage.sql (NOT applied)]
 left_undone:
   - "Kevin: apply supabase/APPLY-2026-11-17-church-storage.sql BEFORE setting CHURCH_STORAGE (the meter reads the new stream_sessions columns)."
