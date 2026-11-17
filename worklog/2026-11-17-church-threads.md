@@ -44,6 +44,8 @@ a lock-screen blip that's gone once swiped.
 - `member_portal.py`: the routes, Home's card while something is unread,
   Me's "From your church" line.
 - `kmj_intake_automation.py`: both routers, before the site catch-all.
+- `account_lifecycle.py`: both tables are exported and deleted with the
+  business, and skipped on import (they cite people and groups by id).
 - `__tests__/test_church_threads.py`: 33 tests.
 
 Before building more here: the frontend's office screen is the other half,
