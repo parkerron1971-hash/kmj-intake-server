@@ -252,7 +252,20 @@ async def _gather_briefing_data(client: httpx.AsyncClient, biz: Dict) -> Dict:
     # briefing ({"sections": []}), it does not take the briefing down.
     vertical_stats = await briefing_verticals.gather(_sb, client, biz)
 
+    # A church's letter is about a church's week (church_weekly_briefing):
+    # the Sunday counts, first-time guests, follow-up, the places still
+    # open and what is coming, read from the church's own records. Read
+    # off the event loop (they are sync, service-role reads); it never
+    # raises, and a part that couldn't be read is left out, not zeroed.
+    import church_follow_up
+    church = church_follow_up.is_church(biz)
+    church_week = None
+    if church:
+        import church_weekly_briefing
+        church_week = await asyncio.to_thread(church_weekly_briefing.week, biz)
+
     return {
+        "church": church, "church_week": church_week,
         "window_start": window_start, "window_end": window_end,
         "new_contacts": new_contacts, "new_contact_count": len(new_contacts),
         "at_risk": at_risk, "thriving": thriving,
@@ -377,6 +390,18 @@ async def _draft_nurture_check_in(client: httpx.AsyncClient, biz: Dict, contact:
     days = _days_since(contact.get("last_interaction"))
     days_str = f"{days} days ago" if days is not None else "quite some time ago"
 
+    # One of a church's people is never "at-risk" with a "health score".
+    import church_follow_up
+    if church_follow_up.is_church(biz):
+        import church_weekly_briefing as cwb
+        sender = cwb.reader_of(biz) or "the church office"
+        system_prompt, user_msg, reasoning = cwb.check_in_prompts(biz, contact, days, sender, tone)
+        body = await _call_claude(client, system_prompt, user_msg, max_tokens=400)
+        if not body:
+            return None
+        return {"subject": "Checking in" if kind == "at-risk" else "Thinking of you",
+                "body": body, "reasoning": reasoning}
+
     system_prompt = f"""You are the Nurture Agent for {biz_name}. Draft a short re-engagement check-in from {practitioner} to {name}.
 
 {money_tone}
@@ -415,6 +440,18 @@ async def _draft_session_followup(client: httpx.AsyncClient, biz: Dict, contact:
     name = contact.get("name", "there")
     session_title = session.get("title") or "our recent session"
     session_notes = (session.get("notes") or "")[:400]
+
+    # A church has meetings, not sessions.
+    import church_follow_up
+    if church_follow_up.is_church(biz):
+        import church_weekly_briefing as cwb
+        sender = cwb.reader_of(biz) or "the church office"
+        system_prompt, user_msg, subject, reasoning = cwb.meeting_followup_prompts(
+            biz, contact, session.get("title") or "", session_notes, sender, tone)
+        body = await _call_claude(client, system_prompt, user_msg, max_tokens=400)
+        if not body:
+            return None
+        return {"subject": subject, "body": body, "reasoning": reasoning}
 
     system_prompt = f"""You are the Session Agent for {biz_name}. Draft a follow-up message from {practitioner} to {name} after the session they just completed.
 
@@ -471,6 +508,14 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
     def _is_minor(c: Dict) -> bool:
         return church and church_families.is_minor(c, minors)
 
+    def _why(c: Dict, business_words: str) -> str:
+        """Why this draft exists, as the briefing page shows it. A church
+        reads how long since anything was recorded, never a score."""
+        if not church:
+            return business_words
+        import church_weekly_briefing
+        return church_weekly_briefing.recorded_words(_days_since(c.get("last_interaction")))
+
     # ── 1. At-risk contacts (health < 40) ─────────────────────────────
     at_risk = [] if minors is None else await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&health_score=lt.40"
@@ -490,7 +535,7 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
                 "kind": "already_queued", "agent": "nurture", "action_type": "check_in",
                 "contact_id": c["id"], "contact_name": c["name"],
                 "queue_id": existing["id"], "existing_created_at": existing["created_at"],
-                "reason": f"health {c.get('health_score')}",
+                "reason": _why(c, f"health {c.get('health_score')}"),
             })
             total_skipped += 1
             continue
@@ -514,7 +559,7 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
                 "kind": "created", "agent": "nurture", "action_type": "check_in",
                 "contact_id": c["id"], "contact_name": c["name"],
                 "queue_id": inserted[0]["id"],
-                "reason": f"health {c.get('health_score')}",
+                "reason": _why(c, f"health {c.get('health_score')}"),
             })
             total_created += 1
 
@@ -538,7 +583,7 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
                 "kind": "already_queued", "agent": "nurture", "action_type": "check_in",
                 "contact_id": c["id"], "contact_name": c["name"],
                 "queue_id": existing["id"], "existing_created_at": existing["created_at"],
-                "reason": f"{_days_since(c.get('last_interaction'))}d inactive",
+                "reason": _why(c, f"{_days_since(c.get('last_interaction'))}d inactive"),
             })
             total_skipped += 1
             continue
@@ -560,7 +605,7 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
                 "kind": "created", "agent": "nurture", "action_type": "check_in",
                 "contact_id": c["id"], "contact_name": c["name"],
                 "queue_id": inserted[0]["id"],
-                "reason": f"{_days_since(c.get('last_interaction'))}d inactive",
+                "reason": _why(c, f"{_days_since(c.get('last_interaction'))}d inactive"),
             })
             total_created += 1
 
@@ -669,6 +714,14 @@ def _format_actions_section(actions: List[Dict], pending_proposals_count: int) -
     return "\n".join(lines)
 
 
+# What the business letter reads that a church's letter never says or
+# hands back: payments (giving), names, health scores.
+_NOT_A_CHURCHS = frozenset({
+    "new_contacts", "at_risk", "thriving", "event_counts", "total_events",
+    "payment_event_count", "payment_sum", "church_vertical_block", "vertical_shown",
+})
+
+
 async def run_growth_briefing(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
@@ -720,10 +773,28 @@ Rules:
 - Address {practitioner} by name at least once."""
 
         user_msg = _format_briefing_data_for_ai(stats)
+
+        # A church's letter: its own instructions and its own facts
+        # (church_weekly_briefing). Same model, same one call. Of the
+        # vertical sections only the deadline boards carry over (a
+        # church's Grants); the people and roster lines are said by the
+        # church's own week, in a church's words.
+        church = bool(stats.get("church"))
+        if church:
+            import church_weekly_briefing as cwb
+            vertical = stats.get("vertical") or {}
+            stats["vertical_shown"] = {**vertical, "sections": [
+                sec for sec in (vertical.get("sections") or []) if sec.get("key") == "pipeline"]}
+            stats["church_vertical_block"] = briefing_verticals.format_for_ai(stats["vertical_shown"])
+            system_prompt = cwb.system_prompt(biz)
+            user_msg = cwb.facts(stats)
+
         body = await _call_claude(client, system_prompt, user_msg, model=BRIEFING_MODEL, max_tokens=1400)
 
         body_fallback = not body
-        if body_fallback:
+        if body_fallback and church:
+            body = cwb.fallback_body()
+        elif body_fallback:
             body = ("## The Headline\n"
                     "Briefing text unavailable — but here are the actions I've queued based on your data.\n\n"
                     "## By The Numbers\n"
@@ -736,9 +807,17 @@ Rules:
         # Rendered from the same precomputed data the model saw. The
         # letter above is the model's; these lines never are, so a
         # deadline date cannot be paraphrased into a different date.
-        vertical_section = briefing_verticals.format_markdown(stats.get("vertical"))
-        if vertical_section:
-            body = body.rstrip() + "\n\n" + vertical_section + "\n"
+        if church:
+            # The church's numbers, places still open and calendar, printed
+            # as read; then its deadline boards.
+            for block in (cwb.numbers_markdown(stats),
+                          briefing_verticals.format_markdown(stats.get("vertical_shown"))):
+                if block:
+                    body = body.rstrip() + "\n\n" + block + "\n"
+        else:
+            vertical_section = briefing_verticals.format_markdown(stats.get("vertical"))
+            if vertical_section:
+                body = body.rstrip() + "\n\n" + vertical_section + "\n"
 
         # ── Action generation phase ───────────────────────────────────
         try:
@@ -747,10 +826,10 @@ Rules:
             logger.exception(f"Action generation failed: {e}")
             action_result = {"actions": [], "total_created": 0, "total_skipped": 0, "pending_proposals_count": 0}
 
-        actions_section = _format_actions_section(
-            action_result["actions"],
-            action_result["pending_proposals_count"],
-        )
+        actions_section = (
+            cwb.actions_markdown(action_result["actions"], action_result["pending_proposals_count"], _days_since)
+            if church else
+            _format_actions_section(action_result["actions"], action_result["pending_proposals_count"]))
         if actions_section:
             body = body.rstrip() + "\n\n" + actions_section + "\n"
 
@@ -767,7 +846,14 @@ Rules:
                 "window_start": stats["window_start"],
                 "window_end": stats["window_end"],
                 "body_fallback": body_fallback,
-                "stats": {
+                # One letter is kept for the whole church and the page opens
+                # to logins that never see giving or the roll: a church's
+                # kept numbers are its week's counts and nothing else.
+                "stats": ({
+                    "sessions_completed": stats["sessions_completed_count"],
+                    "sessions_upcoming": stats["sessions_upcoming_count"],
+                    "drafts_by_agent": stats["drafts_by_agent"],
+                } if church else {
                     "new_contacts": stats["new_contact_count"],
                     "at_risk": len(stats["at_risk"]),
                     "thriving": len(stats["thriving"]),
@@ -776,7 +862,8 @@ Rules:
                     "payment_sum": stats["payment_sum"],
                     "event_counts": stats["event_counts"],
                     "drafts_by_agent": stats["drafts_by_agent"],
-                },
+                }),
+                **({"church_week": stats.get("church_week")} if church else {}),
                 "vertical": stats.get("vertical"),
                 "outreach_suppressed": bool(action_result.get("outreach_suppressed")),
                 "actions_generated": action_result["actions"],
@@ -792,7 +879,10 @@ Rules:
             "title": title,
             "body": body,
             "date_range": date_range,
-            "stats": stats,
+            # Handed back to whoever pressed the button: for a church, never
+            # the payment lines or the names the business letter read.
+            "stats": ({k: v for k, v in stats.items() if k not in _NOT_A_CHURCHS}
+                      if church else stats),
             "actions_generated": action_result["total_created"],
             "actions_skipped": action_result["total_skipped"],
             "pending_proposals": action_result["pending_proposals_count"],
