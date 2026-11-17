@@ -202,7 +202,7 @@ def test_chat_ceiling_is_independent_of_billing_enforce(monkeypatch):
     """Abuse protection, not billing. Gating it behind BILLING_ENFORCE
     would ship it as a no-op on day one and leave the platform with no
     per-account runaway brake during the beta month it was built for."""
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)   # enforcement OFF
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # enforcement OFF
     monkeypatch.setenv("CHAT_DAILY_SOFT_CEILING", "3")
     import pricing_config
     importlib.reload(pricing_config)

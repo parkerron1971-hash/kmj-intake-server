@@ -266,7 +266,7 @@ def s(monkeypatch):
     monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', BIZ)
     monkeypatch.setenv('MARKETING_DESK_PUBLISHING', 'on')
     monkeypatch.delenv('PLATFORM_DEFAULT_TZ', raising=False)
-    monkeypatch.delenv('BILLING_ENFORCE', raising=False)
+    monkeypatch.setenv('BILLING_ENFORCE', 'off')
     db, svc = FakeStore(), FakeService()
     monkeypatch.setattr(store, 'request', db.request)
     monkeypatch.setattr(sb_clients, 'sb_get_as_service', svc.get)

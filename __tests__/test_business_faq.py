@@ -58,7 +58,7 @@ def fake(monkeypatch):
     # PostgREST answers a PATCH with the rows it changed; none means no save.
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
                         lambda path, body: (fb.patch(path, body), fb.get(path))[1])
-    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
     monkeypatch.setattr("site_composer.refresh_if_composed_async", lambda business_id: None)
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "owner1", "name": "Love City Church", "type": "ministry",

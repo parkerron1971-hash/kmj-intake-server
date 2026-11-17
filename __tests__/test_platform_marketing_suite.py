@@ -219,6 +219,7 @@ def mc(monkeypatch):
     monkeypatch.setenv('MARKETING_DESK_PUBLISHING', 'on')
     for name in ('MARKETING_DESK', 'PLATFORM_DEFAULT_TZ', 'BILLING_ENFORCE'):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('BILLING_ENFORCE', 'off')   # unset means enforced since 2026-11-17
     db, svc = SuiteStore(), api.FakeService()
     svc.businesses[PID] = platform_row()
     svc.connections += [api.connection(PFB, 'facebook', biz=PID), api.connection(PIG, 'instagram', biz=PID)]

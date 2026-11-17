@@ -248,6 +248,15 @@ def test_worker_disabled_makes_no_claims(state,monkeypatch):
     run(m.due_tick()); assert not state['writes']
 
 
+def test_buffer_publishing_is_on_unless_switched_off(monkeypatch):
+    monkeypatch.delenv('BUFFER_PUBLISHING', raising=False)
+    assert m.buffer_publishing_on() is True
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'off')
+    assert m.buffer_publishing_on() is False
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'on')
+    assert m.buffer_publishing_on() is True
+
+
 def test_fake_image_is_rejected_before_storage(state):
     f=UploadFile(io.BytesIO(b'<html>not a png</html>'),filename='fake.png',headers=Headers({'content-type':'image/png'}))
     with pytest.raises(HTTPException) as e: run(m.upload_asset(f))

@@ -60,6 +60,7 @@ def fb(monkeypatch):
     monkeypatch.setattr(email_sender, "send_via_resend", send)
     for k in ("BILLING_ENFORCE", "CHURCH_AREAS"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
     fb.rows("businesses").extend([
         {"id": "church1", "owner_id": "owner1", "name": "Love City Church", "type": "ministry",
          "settings": {"brand_kit": {"colors": {"primary": "#B0146A"}, "logo_url": "https://cdn.example/lc.png"}}},

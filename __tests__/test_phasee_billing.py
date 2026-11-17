@@ -1,4 +1,4 @@
-"""Phase E — billing tiers + feature gates (gate-ready, UNENFORCED)."""
+"""Phase E — billing tiers + feature gates (enforced unless BILLING_ENFORCE=off)."""
 from __future__ import annotations
 
 import sys
@@ -17,10 +17,24 @@ def _clean_env(monkeypatch):
     for k in ("BILLING_ENFORCE", "STRIPE_PRICE_ID_STARTER", "STRIPE_PRICE_ID_PROFESSIONAL",
               "STRIPE_PRICE_ID_PRACTICE", "STRIPE_PRICE_ID_DEFAULT", "BILLING_TRIAL_DAYS"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BILLING_ENFORCE", "off")   # unset means enforced since 2026-11-17
+
+
+def test_enforced_unless_switched_off(monkeypatch):
+    """Billing is enforced by the code's own default (2026-11-17; production
+    had it on through Railway for months). BILLING_ENFORCE=off is the
+    emergency switch."""
+    monkeypatch.delenv("BILLING_ENFORCE")
+    assert fg.enforcement_on() is True
+    for word in ("off", "OFF", "false", "0", "no"):
+        monkeypatch.setenv("BILLING_ENFORCE", word)
+        assert fg.enforcement_on() is False
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    assert fg.enforcement_on() is True
 
 
 def test_unenforced_everything_allowed():
-    """The pricing ruling: gates exist but are dormant — everyone gets
+    """BILLING_ENFORCE=off (the emergency switch): everyone gets
     everything, even with no subscription at all."""
     assert fg.enforcement_on() is False
     assert fg.has_feature(None, "general_ledger") is True
