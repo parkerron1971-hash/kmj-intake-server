@@ -99,6 +99,42 @@ Every `qual` should reference the owner (`owner_id = auth.uid()` or
 or a SECURITY DEFINER helper). If any is literally `true`, that table is
 open — drop that policy.
 
+## Rule 4 — the app's logins write only the owner's columns of `businesses`
+
+RLS decides whose row; it says nothing about which columns. Until
+2026-11-17 `authenticated` held UPDATE on every column of `businesses`,
+and RLS lets an owner and an office admin update their own row, so the
+app's login could comp its own plan (`comp_tier`), start a trial, move
+the Stripe ids, or (an admin) make itself the owner.
+`supabase/APPLY-2026-11-17-businesses-server-columns.sql` grants the
+app's logins UPDATE on nine columns only (`name`, `type`, `settings`,
+`voice_profile`, `cdi_vocabulary`, `brand_kit_history`,
+`brand_kit_draft`, `brand_kit_draft_at`, `updated_at`), takes INSERT away
+(every business is made by the server), and trigger
+`businesses_guard_server_columns` refuses the rest if a grant is ever
+widened again. The keys inside `settings` that are the server's are
+guarded the same way by `businesses_guard_server_settings`.
+
+**Adding a column to `businesses`:** it is closed to the app's logins
+until a migration grants it. If the app (or a server path that runs with
+the user's login: Chief's `_sb` in a chat, `brand_engine._sb_patch`)
+writes it, add `grant update (<column>) on public.businesses to
+authenticated;` and add it to `OWNER_COLUMNS` in
+`__tests__/test_businesses_server_columns.py`. If it is the server's,
+write it with the service role and add it to the trigger's list. Never
+`grant all` / `grant update` on the whole table to `anon` or
+`authenticated`: the trigger would still refuse the server's columns,
+but every new column would open.
+
+Verify live:
+```sql
+SELECT a.attname
+  FROM pg_attribute a
+ WHERE a.attrelid = 'public.businesses'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+   AND has_column_privilege('authenticated', 'public.businesses'::regclass, a.attname, 'UPDATE')
+ ORDER BY 1;
+```
+
 ## Adding a new tenant-scoped table (checklist)
 
 1. `ENABLE ROW LEVEL SECURITY`.

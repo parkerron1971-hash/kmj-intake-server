@@ -94,25 +94,31 @@ def _sb_anon() -> str:
     return os.environ.get("SUPABASE_ANON", "")
 
 
-def _sb_headers() -> Dict[str, str]:
+def _sb_headers(as_server: bool = False) -> Dict[str, str]:
     """RLS-readiness migration: returns user-JWT headers when a request
     context has bound one (via sb_clients.set_user_jwt), service-role
     headers otherwise. The three async helpers in this module
     (_sb_get / _sb_post / _sb_patch) all funnel through here so a single
     swap point migrates the whole file. Foundation flows are usually
     user-initiated (the 7-phase wizard), and the cron-driven legal-status
-    refresh path runs without a context — service-role fallback covers it."""
+    refresh path runs without a context — service-role fallback covers it.
+
+    `as_server` is for what only the server decides: businesses.in_the_clear
+    is the public "Business In The Clear" badge, and the app's logins can't
+    write it (APPLY-2026-11-17-businesses-server-columns.sql)."""
     import sb_clients
+    if as_server:
+        return sb_clients.sb_headers_service()
     user_jwt = sb_clients.get_current_user_jwt()
     if user_jwt:
         return sb_clients.sb_headers_user(user_jwt)
     return sb_clients.sb_headers_service()
 
 
-async def _sb_get(client: httpx.AsyncClient, path: str) -> Optional[Any]:
+async def _sb_get(client: httpx.AsyncClient, path: str, *, as_server: bool = False) -> Optional[Any]:
     try:
         r = await client.get(f"{_sb_url()}/rest/v1{path}",
-                             headers=_sb_headers(), timeout=HTTP_TIMEOUT)
+                             headers=_sb_headers(as_server), timeout=HTTP_TIMEOUT)
         if r.status_code >= 400:
             logger.warning(f"sb GET {path}: {r.status_code} {r.text[:200]}")
             return None
@@ -137,10 +143,11 @@ async def _sb_post(client: httpx.AsyncClient, path: str, body: Any) -> Optional[
         return None
 
 
-async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]) -> Optional[Any]:
+async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any],
+                    *, as_server: bool = False) -> Optional[Any]:
     try:
         r = await client.patch(f"{_sb_url()}/rest/v1{path}",
-                               headers=_sb_headers(),
+                               headers=_sb_headers(as_server),
                                content=json.dumps(body),
                                timeout=HTTP_TIMEOUT)
         if r.status_code >= 400:
@@ -298,31 +305,37 @@ async def phase_completed(business_id: str, phase: int) -> Dict[str, Any]:
 
 
 async def _recompute_in_the_clear(business_id: str) -> None:
-    """Set businesses.in_the_clear=true when all 7 phases are complete."""
+    """Set businesses.in_the_clear=true when all 7 phases are complete.
+
+    As the server, always: the flag is the public "Business In The Clear"
+    badge, the database refuses it to the app's logins
+    (APPLY-2026-11-17-businesses-server-columns.sql), and before 2026-11-17
+    this wrote it with the user's login whenever one was bound. Read as the
+    server too, so the badge follows the phases as they are, not as one
+    login sees them."""
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(
             client,
             f"/foundation_progress?business_id=eq.{business_id}&select=phase,status",
+            as_server=True,
         ) or []
         complete = {r["phase"] for r in rows if r.get("status") == "complete"}
         all_done = all(p in complete for p in PHASES)
         biz = await _sb_get(
             client,
             f"/businesses?id=eq.{business_id}&select=in_the_clear",
+            as_server=True,
         ) or []
         currently = bool((biz or [{}])[0].get("in_the_clear")) if biz else False
         if all_done and not currently:
-            await _sb_patch(
-                client,
-                f"/businesses?id=eq.{business_id}",
-                {"in_the_clear": True, "in_the_clear_at": datetime.now(timezone.utc).isoformat()},
-            )
+            patch = {"in_the_clear": True, "in_the_clear_at": datetime.now(timezone.utc).isoformat()}
         elif (not all_done) and currently:
-            await _sb_patch(
-                client,
-                f"/businesses?id=eq.{business_id}",
-                {"in_the_clear": False, "in_the_clear_at": None},
-            )
+            patch = {"in_the_clear": False, "in_the_clear_at": None}
+        else:
+            return
+        if await _sb_patch(client, f"/businesses?id=eq.{business_id}", patch, as_server=True) is None:
+            # Railway shows print() only.
+            print(f"[foundation] in_the_clear={patch['in_the_clear']} not saved for {business_id[:8]}", flush=True)
 
 
 # ──────────────────────────────────────────────────────────────
