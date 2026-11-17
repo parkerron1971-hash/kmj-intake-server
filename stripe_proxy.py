@@ -957,9 +957,8 @@ async def payments_connect(provider: str, business_id: Optional[str] = None):
         "provider": p,
         "business_id": business_id or None,
         "connectable_providers": [a.id for a in payments_core.REGISTRY.values() if a.connectable],
-        "message": f"{adapter.display_name} processing isn't wired yet — paste your "
-                   f"{adapter.display_name} payment link in BUILD → Integrations → "
-                   f"Payment Providers and it appears on invoices today.",
+        "message": f"{adapter.display_name} processing isn't available. Card payments run "
+                   f"through Stripe: connect it from OPERATE → Payments.",
     }
 
 
