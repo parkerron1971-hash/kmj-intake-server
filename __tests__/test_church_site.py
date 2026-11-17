@@ -443,11 +443,13 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
         assert f'data-m="{price}" data-y="{year}">{price}<' in html, price
     assert 'class="fband"' not in html and "Regular price" not in html
     for card, size, logins, texts, hours in zip(cards, _SIZES, (3, 8, 15, 35), ("500", "1,500", "3,000", "8,000"),
-                                                (2, 5, 10, 20)):
+                                                (0, 5, 10, 20)):
         assert f'<div class="pds">{size}.</div>' in card
         assert f"<span>{logins} office logins</span>" in card
         assert f"<span>{texts} texts a month</span>" in card
-        assert f"<span>Clips from {hours} hours of sermons a month</span>" in card
+        # Small includes no clip hours (2026-11-17): its card says what an hour costs.
+        clips = f"Clips from {hours} hours of sermons a month" if hours else "Sermon clips for 75 AI actions an hour"
+        assert f"<span>{clips}</span>" in card
         assert "<span>Your own texting number and text-to-give</span>" in card
         assert "<span>Full books, budgets and the donors report</span>" in card
     assert [("an audit trail" in c.lower()) for c in cards] == [False, False, True, True]
@@ -542,9 +544,11 @@ def test_the_plan_prose_is_held_to_the_gates(by_size):
     it, and name the plans that carry the rest."""
     import feature_gates as fg
     every = ("vertical_ledgers", "period_close", "vertical_reports", "reports_full", "chief_bookkeeping",
-             "site_concierge", "marketing_week", "ai_clips", "dedicated_sms_number")
+             "site_concierge", "marketing_suggestion", "ai_clips", "dedicated_sms_number")
     for feature in every:
         assert all(feature in fg.plan_features(p) for p in fg.CHURCH_PLANS), feature
+    # Chief's weekly plan starts at Growing (2026-11-17), and the pages say so.
+    assert [("marketing_week" in fg.plan_features(p)) for p in fg.CHURCH_PLANS] == [False, True, True, True]
     assert [("accountant_collaborator" in fg.plan_features(p)) for p in fg.CHURCH_PLANS] == [False, False, True, True]
     giving, books, site, app = (cs.render(s) for s in ("giving", "office-and-books", "website-and-sermons", "member-app"))
     assert "each gift stays counted in it, on every plan" in giving
@@ -555,6 +559,7 @@ def test_the_plan_prose_is_held_to_the_gates(by_size):
     assert "Established and Large add an audit trail and a seat for your accountant." in books
     assert books.count(">On every plan<") == 2                             # the close and Chief's sorting
     assert ">On every plan<" in site and "sermon clips are on every plan" in site
+    assert "From Growing up, clip hours come included and Chief plans your week of posts" in site
     assert "sign-in codes are texted from your church's own number" in app
 
 

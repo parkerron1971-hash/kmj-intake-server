@@ -261,9 +261,12 @@ def church_texts_monthly() -> Dict[str, int]:
 
 def church_clip_hours() -> Dict[str, int]:
     """Sermon clip hours a month (Find my best clips); past them, the same
-    actions per extra hour every plan pays."""
+    actions per extra hour every plan pays. Small includes none since
+    2026-11-17 (Kevin: "build", on the tier fences review
+    TQh5DcQHroy1LN9UGgfZQV): a small church still makes clips, and every
+    hour is paid from its credits, so no clip hour there goes uncounted."""
     return {
-        "church_small":       _dial("CHURCH_SMALL_CLIP_HOURS", "LIMIT_", 2),
+        "church_small":       _dial("CHURCH_SMALL_CLIP_HOURS", "LIMIT_", 0),
         "church_growing":     _dial("CHURCH_GROWING_CLIP_HOURS", "LIMIT_", 5),
         "church_established": _dial("CHURCH_ESTABLISHED_CLIP_HOURS", "LIMIT_", 10),
         "church_large":       _dial("CHURCH_LARGE_CLIP_HOURS", "LIMIT_", 20),

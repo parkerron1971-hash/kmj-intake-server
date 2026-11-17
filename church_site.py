@@ -390,6 +390,11 @@ def _people(plan: str) -> str:
 
 
 def _clips(hours: int) -> str:
+    """The clip line on a plan: the hours included, or, on a plan with none
+    (Small since 2026-11-17), what an hour of sermon costs in AI actions."""
+    if not hours:
+        import clip_finder
+        return f"Sermon clips for {clip_finder.UNITS_PER_EXTRA_HOUR} AI actions an hour"
     return f"Clips from {_count(hours, 'hour')} of sermons a month"
 
 
@@ -759,8 +764,8 @@ def _by_size() -> Dict[str, str]:
         "PRICING_H2": 'Priced by <b style="font-weight: 600">your church\'s size.</b>',
         "PRICING_LEDE": ("People, Giving, Kids, Groups, your app and your site come with every plan. Your plan is set "
                          "by how many people come on a Sunday, and it sets the room: office logins, texts, Chief's "
-                         "work and sermon clips, and from Established up, an audit trail, a seat for your accountant "
-                         "and hands-off marketing. "
+                         "work and sermon clips. From Growing up, Chief plans your week of posts. From Established "
+                         "up, you also get an audit trail, a seat for your accountant and hands-off marketing. "
                          "Leaders, volunteers and members use the member app free, on every plan."),
         "PLAN_CARDS": _plan_cards(),
         "FOUNDER": _promise_line() + _offer_line() + _founding_line(),
@@ -782,7 +787,8 @@ def _by_size() -> Dict[str, str]:
         "BOOKS_PLANS_LEDE": ("Every church sees its own full ledger, closes its months and has Chief sort the bank "
                              f"rows, on every plan. {accountant} add an audit trail and a seat for your accountant."),
         "SITE_PLANS_LEDE": ("The site, sermons and events, Chief's help with visitors and posts, and sermon clips are "
-                            "on every plan. A bigger church gets more hours of clips and more of Chief's work."),
+                            "on every plan. From Growing up, clip hours come included and Chief plans your week "
+                            "of posts. A bigger church gets more hours and more of Chief's work."),
         "APP_PLANS_LEDE": ("Every tab, every space and every alert is on every plan, for every member you have, and "
                            "sign-in codes are texted from your church's own number. The plans change how many people "
                            "sign in at the office and how many texts go out each month."),

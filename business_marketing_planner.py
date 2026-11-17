@@ -239,7 +239,7 @@ NO_PLAN = "Chief's weekly suggestion comes with every plan. Choose a plan to get
 WEEK_LEVEL = "Your plan comes with Chief's weekly plan of five posts, so Chief writes that instead of one suggestion."
 OPENINGS_LEVEL = ("Your plan comes with Chief's open-chairs week, made from your booking calendar, so Chief writes "
                   'that instead.')
-NOT_WEEK = "Chief's weekly plan of five posts comes with the Professional plan. Nothing was queued."
+NOT_WEEK = "Chief's weekly plan of five posts comes with a bigger plan. Nothing was queued."
 NOT_OPENINGS = ("Chief's open-chairs week comes with the Boss plan and a live booking calendar. Nothing was "
                 'queued.')
 NO_ACCESS = "Chief can't write a suggestion while the account needs attention. Check Settings, Billing."
