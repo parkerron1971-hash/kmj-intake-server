@@ -3,8 +3,8 @@ title: Church threads — the member app's notes read like texts, and members wr
 date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17: "the goal is not be a text message itself but using the app to push through as like a text", members "can respond and it not be an issue", then "group notifications for groups people are in specifically". "make this happen".'
-status: in review
-prs: [kmj-intake-server#1899]
+status: shipped
+prs: [kmj-intake-server#1899, kmj-intake-server#1902]
 migrations: [supabase/APPLY-2026-11-17-church-threads.sql (NOT APPLIED; Kevin applies it)]
 left_undone:
   - "The office's screen is the frontend's (solutionist-studio), built against the /church-threads API in parallel. The office's phone alert opens nav 'operate:church-threads': the frontend has to map that page."
@@ -50,3 +50,10 @@ a lock-screen blip that's gone once swiped.
 
 Before building more here: the frontend's office screen is the other half,
 and nothing in the app shows the inbox until the migration is applied.
+
+Polish after Kevin's first look at the screenshots (#1902): Home's card is
+titled "From your church" and shows the newest note as "<conversation>:
+<line>", so a group's note reads as the group's; a bubble's button word comes
+from where it goes (the Board, the prayer wall, the event, Watch, My serving;
+else "Open"), not from the note's kind; a group's page puts "Open the group
+chat" right under its notes instead of half a screen down.

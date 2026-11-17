@@ -547,7 +547,9 @@ def test_a_groups_conversation_is_for_its_members_only(fake, monkeypatch):
     ana = _app(fake, monkeypatch, ANA)
     page = ana.get(f"/my/inbox/group/{GROUP}")
     assert page.status_code == 200
-    assert "Cal posted: Bring a friend" in page.text and 'href="/my/groups/' + GROUP + '/board">Open the group' in page.text
+    assert "Cal posted: Bring a friend" in page.text and 'href="/my/groups/' + GROUP + '/board">Open the Board' in page.text
+    # The chat link sits right under the notes: the list doesn't hold half a screen open.
+    assert 'class="mb-chat ct-chat ct-group"' in page.text and ".mb-thread .ct-chat.ct-group{min-height:0;}" in mpt.THREAD_CSS
     assert "/my/inbox/church/send" not in page.text             # no box
     # Messaging is off at this church: no chat link. On, with the group's chat on: there is.
     assert "Open the group chat" not in page.text
@@ -585,9 +587,11 @@ def test_me_has_the_line_and_home_has_the_card_while_something_is_new(fake, monk
     assert mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"}) == ""     # nothing yet
     _seed_conversation(fake)
     card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
-    assert 'href="/my/inbox"' in card and "Love City Church" in card
-    assert "4 new" in card                                      # live, picnic, reply, the group's post
-    assert "Cal posted: Bring a friend" in card                 # the newest one
+    assert 'href="/my/inbox"' in card and "<strong>From your church</strong>" in card
+    assert "Love City Church" not in card
+    # How many are new (live, picnic, reply, the group's post), and the newest
+    # one as its conversation's: a group's note reads as the group's.
+    assert "4 new · Tuesday Night Group: Cal posted: Bring a friend" in card
     for t in ("church", f"group:{GROUP}"):
         ct.mark_read(BIZ, ANA, t)
     assert mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"}) == ""
@@ -840,3 +844,41 @@ def test_the_routes_are_mounted_before_the_catch_all():
     last = src.index("app.include_router(public_site_router)")
     assert src.index("app.include_router(church_threads_router)") < last
     assert src.index("app.include_router(member_portal_threads_router)") < last
+
+
+def test_homes_card_names_the_church_when_the_newest_is_the_churchs(fake, monkeypatch):
+    _seed_conversation(fake)
+    ct.mark_read(BIZ, ANA, f"group:{GROUP}")
+    card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
+    assert "<strong>From your church</strong>" in card
+    assert "3 new · Love City Church: Maria: Of course! See you there." in card
+    # A church note whose title is the church's name isn't said twice.
+    fake.note(contact_id=ANA, kind="news", title="Love City Church", body="Important: Service at 10",
+              url="/my/news/9", created_at=iso(NOW))
+    card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
+    assert "4 new · Love City Church: Important: Service at 10" in card
+
+
+def test_the_buttons_word_comes_from_where_it_goes():
+    g = GROUP
+    cases = {
+        "/my/events": "See the event", "/my/events?entry=1": "See the event",
+        f"/my/groups/{g}/board": "Open the Board", f"/my/groups/{g}/board#post-1": "Open the Board",
+        f"/my/groups/{g}/prayer": "Open the prayer wall", f"/my/groups/{g}/prayer?view=answered": "Open the prayer wall",
+        "/my/live": "Watch", "/my/sermons": "Watch", "/my/sermons/abc": "Watch", "/my/watch": "Watch",
+        "/my/serving": "See my serving", "/my/serving/swap": "See my serving",
+        "/my/space?to=kids": "Open", "/my/prayer": "Open", "/my/groups": "Open", "/my/eventsx": "Open",
+        f"/my/groups/{g}/boards": "Open", "": "Open", None: "Open",
+    }
+    for url, word in cases.items():
+        assert mpt.link_word(url) == word, url
+
+
+def test_the_button_on_a_bubble_follows_its_url_not_its_kind(fake, monkeypatch):
+    fake.note(contact_id=ANA, kind="announcements", title="Fall Festival", body="Saturday", url="/my/events",
+              created_at=iso(NOW - timedelta(hours=2)))
+    fake.note(contact_id=ANA, kind="prayer", title="Your group is praying with you", body="Someone is praying.",
+              url=f"/my/groups/{GROUP}/prayer", thread=f"group:{GROUP}", created_at=iso(NOW - timedelta(hours=1)))
+    c = _app(fake, monkeypatch, ANA)
+    assert 'href="/my/events">See the event' in c.get("/my/inbox/church").text
+    assert f'href="/my/groups/{GROUP}/prayer">Open the prayer wall' in c.get(f"/my/inbox/group/{GROUP}").text
