@@ -4,11 +4,11 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin approved Sweep 2 of the settings cleanup: make 'on' the code's default for the switches Railway turns on, keep each one as an off switch, then delete the Railway entries"
 status: in review
-prs: [kmj-intake-server#1884, kmj-intake-server#1886, kmj-intake-server#1885, kmj-intake-server#PR_MONEY, "kmj-intake-server#PR_PFM (draft, held for Kevin)"]
+prs: [kmj-intake-server#1884, kmj-intake-server#1886, kmj-intake-server#1885, kmj-intake-server#1888, "kmj-intake-server#1889 (draft, held for Kevin)"]
 migrations: []
 left_undone:
   - "Kevin deletes the Railway entries for these switches once the PRs are live (web and worker). Nothing here touched Railway."
-  - "POST_FOR_ME_PILOT_BUSINESSES (draft PR, held): the worker has no value for it, so today the worker's marketing sender claims nothing and every tenant's scheduled desk post waits. Making unset mean every business starts those sends on the worker the moment it deploys, and the claim RPC turns approved posts whose six-hour window has closed into failed. That changes behavior, so it waits for Kevin. Until it merges, keep POST_FOR_ME_PILOT_BUSINESSES=* on web."
+  - "POST_FOR_ME_PILOT_BUSINESSES (#1889, draft, held): the worker has no value for it, so today the worker's marketing sender claims nothing and every tenant's scheduled desk post waits. Making unset mean every business starts those sends on the worker the moment it deploys, and the claim RPC turns approved posts whose six-hour window has closed into failed. That changes behavior, so it waits for Kevin. Until it merges, keep POST_FOR_ME_PILOT_BUSINESSES=* on web."
   - "About 30 one-line comments still call a gate 'dormant behind BILLING_ENFORCE'; only the feature_gates, billing_limits and pricing_config docstrings were corrected here."
 decisions:
   - "One rule for every switch: (env or 'on').strip().lower() not in ('off', '0', 'false', 'no'), as CHIEF_KEEP_WARM and CACHE_DIAGNOSTICS already do. An empty value counts as unset."
@@ -30,11 +30,11 @@ its feature off with `=off`.
 - Media (#1885): MEDIA_PROCESSING, VIDEO_STUDIO_ENABLED, VIDEO_RENDER_ENABLED,
   CLIP_FINDER, CLIP_FINDER_BUSINESSES (unset = every business; CLIPPER_URL and
   CLIPPER_TOKEN still required).
-- Money, marketing, academy (this PR): BILLING_ENFORCE (feature_gates and the
+- Money, marketing, academy (#1888): BILLING_ENFORCE (feature_gates and the
   health dict in kmj_intake_automation), BUFFER_PUBLISHING (BUFFER_API_KEY still
   required), ACADEMY_CLASSROOM_V2.
 
 Worker drift found on the way (railway variables, switch values only): the
 worker has no BUILDER_V2_LOOP, DRO_DIRECTIONS, BUILDER_LOOP_MAX_TOOLS,
 ACADEMY_CLASSROOM_V2 or POST_FOR_ME_PILOT_BUSINESSES. The first four now match
-web by default; the last is the held PR above.
+web by default; the last is the held draft, #1889.
