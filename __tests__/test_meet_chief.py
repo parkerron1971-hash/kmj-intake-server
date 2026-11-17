@@ -96,6 +96,7 @@ def test_the_messages_come_from_the_dials_and_what_a_message_charges(section, mo
         return d
     monkeypatch.setattr(mp, "_tier_dials", dials)
     monkeypatch.setattr(pricing_config, "credits_per_message", lambda: 10)
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")   # the public ladder; church plans are on sale when unset
     html = SECTIONS[section].render("")
     assert "about 200 messages a month on Starter, 500 on Professional and 2,000 on Solutionist" in html
     assert "About 200 messages to Chief." in html and "About 500 messages, room to draft" in html

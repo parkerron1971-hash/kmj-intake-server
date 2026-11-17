@@ -71,7 +71,10 @@ def test_on_a_wide_screen_the_tab_bar_is_a_rail_down_the_left():
 
 # ─── The page ─────────────────────────────────────────────────────────
 
-def test_someone_with_no_role_is_told_plainly(db, shell):
+def test_someone_with_no_role_is_told_plainly(db, shell, monkeypatch):
+    monkeypatch.setenv("CHURCH_AREAS", "off")   # with login areas on the tab is Serve
+    monkeypatch.setenv("CHURCH_CHECKS", "off")   # no Get paid back door on this page
+    monkeypatch.setenv("CHURCH_BOARD", "off")
     html, status = asyncio.run(mpl.serve(_req(), BUSINESS, {}, _me(DANA), "/my/lead"))
     assert status == 200 and "You don’t lead anything at Love City Church yet" in html
     assert shell["tab"] == "lead"
@@ -102,7 +105,8 @@ def test_a_leader_sees_their_people_the_late_one_first_and_chief_names_them(db, 
     assert "Dana Rivers" not in other and "Nobody is waiting on you" in other
 
 
-def test_one_person_shows_what_they_wrote_the_path_and_the_note_form(db, shell):
+def test_one_person_shows_what_they_wrote_the_path_and_the_note_form(db, shell, monkeypatch):
+    monkeypatch.setenv("CHURCH_AREAS", "off")   # with login areas on the tab is Serve
     f = _open(db, SERVE, DANA, team="Hospitality Team", nmo="Not yet")
     html, status = asyncio.run(mpl.serve(_req(), BUSINESS, {}, _me(TASHA), f"/my/lead/{f['id']}"))
     assert status == 200 and shell["back"] == ("/my/lead", "Lead")
