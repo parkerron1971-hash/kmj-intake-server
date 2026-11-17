@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: "creating a way for chief to be more proactive in helping those navigate... go with your picks"
 status: shipped
-prs: [kmj-intake-server#1883, solutionist-studio#1590]
+prs: [kmj-intake-server#1883, kmj-intake-server#1884, solutionist-studio#1590]
 migrations: []
 left_undone: ["Chief does not speak first yet (the three quiet offers: looks lost, first time in a room, after an upgrade)", "room_orientation.ROOMS still lacks most church rooms", "searches that find nothing are not saved yet", "a duty can add a page to a login's menu beyond its areas; the menu block does not say so page by page"]
 decisions: ["church_findway.json is the frontend's export and is never edited by hand", "the whole church's menu sits in the per-business cached part of the prompt, tagged with who sees each page; it is not cut per login, so it caches", "the turn's answers are cut to the login's areas, and money pages are never a lane's", "the matcher is the frontend's, line for line, with the same list of test questions on both sides", "CHIEF_FINDWAY=off turns both blocks off"]
@@ -33,3 +33,10 @@ Before building more here: when a page is added to a church's menu, export
 the map again in the same piece of work, or Chief will not know the page.
 `__tests__/test_church_findway.py` fails if the map names a page the page
 list does not have.
+
+Tried on the live app the same day (Love City, the owner): "Where do I pay
+Deacon Ray back for the paint he bought?" Chief said it was a check request
+and opened Check requests, but called the place "Operate, in the Checks
+section", because it repeats the open-page action's label. `handle_navigate`
+now labels a church's page by its place on the menu
+(`church_findway.place_of`: "Opened Office › Money out › Check requests").

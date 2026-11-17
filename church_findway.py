@@ -138,6 +138,22 @@ def _path(page: Dict[str, Any]) -> str:
     return f"{page.get('tab')}/{page.get('sub')}"
 
 
+def place_of(biz: Optional[Dict[str, Any]], tab: Optional[str], leaf: Optional[str]) -> Optional[str]:
+    """Where a page sits on a church's menu, in the menu's words: "Office ›
+    Money out › Check requests". None for a business that isn't a church,
+    a page the map does not have, or the switch off. handle_navigate labels
+    what it opened with this, and Chief repeats the label."""
+    if mode() == "off" or not _is_church(biz):
+        return None
+    tab = (tab or "").lower().strip()
+    if tab == "home":
+        return "Home"
+    for page in _pages():
+        if page.get("tab") == tab and page.get("sub") == leaf:
+            return page["where"]
+    return None
+
+
 # ─── The menu, for the per-business part of the prompt ────────────────
 
 def menu_block(biz: Optional[Dict[str, Any]]) -> str:
@@ -180,7 +196,9 @@ def _menu_text() -> str:
         "has the page: [money] is the owner, admins and the treasurer only; [owner] the owner and admins; any other "
         "tag names the areas whose logins have it; no tag is every login. For a login kept to a lane, never point "
         "to a page its areas do not have: say who handles it. The Help Center (operate/help-center) has the "
-        "written answers; when a HELP CENTER ANSWERS block is in this turn, use it.\n"
+        "written answers; when a HELP CENTER ANSWERS block is in this turn, use it. When you open a page, the action "
+        "comes back saying where it is (\"Opened Office › Money out › Check requests\"): say the place in those "
+        "words, door first, and never as Operate, Grow or Build.\n"
     )
 
 
