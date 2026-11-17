@@ -4,7 +4,7 @@ date: 2026-11-16
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-16, after asking me to check that the first church''s payment arrived: "can we build notification on through mission control that will let me know when someone new subscribe and payment went through"'
 status: in review
-prs: [kmj-intake-server#TBD, solutionist-studio#TBD]
+prs: [kmj-intake-server#1876, solutionist-studio#1585]
 migrations: []
 left_undone:
   - "Receipts: Stripe has NOT emailed customers a receipt (the first church's charge has receipt_number null). The switch is in Stripe's Dashboard (Settings, Customer emails, Successful payments), not in our code. Kevin's call, asked 11-16."
