@@ -221,6 +221,22 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
+# An event's volunteers, beside `data` on an event_roster module's entry
+# (chief_roster gives each role the id the room reads; ignored elsewhere).
+_ROSTER_PROPS: Dict[str, Any] = {
+    "roles": {"type": "array", "description": "Events only: the volunteer roles the event needs.",
+              "items": {"type": "object", "properties": {"label": {"type": "string"},
+                                                         "needed": {"type": "integer", "minimum": 1,
+                                                                    "maximum": 50}},
+                        "required": ["label"]}},
+    "volunteers": {"type": "array", "description": "Events only: people already serving, each on a role.",
+                   "items": {"type": "object", "properties": {"name": {"type": "string"},
+                                                              "role": {"type": "string"},
+                                                              "contact_id": {"type": "string"}},
+                             "required": ["name"]}},
+}
+
+
 from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA, SLIDES_WRITE_SCHEMA as ACADEMY_SLIDES_SCHEMA
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
@@ -769,14 +785,18 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "data": {"type": "object",
                        "description": "Field values, keyed by the module's "
                                       "field names.",
-                       "additionalProperties": True}},
+                       "additionalProperties": True},
+              **_ROSTER_PROPS},
              ["module_id", "data"])),
     "update_module_entry": (
         "Patch fields on one custom-module row. Fields you do not pass are "
-        "kept.",
+        "kept. On an event (an event_roster module), a role you name is "
+        "added or takes its new number, and the other roles stay.",
         _obj({"entry_id": {"type": "string"},
               "data": {"type": "object", "additionalProperties": True,
-                       "description": "Only the fields to change."}},
+                       "description": "Only the fields to change ({} when "
+                                      "only roles or volunteers change)."},
+              **_ROSTER_PROPS},
              ["entry_id", "data"])),
     "delete_module_entry": (
         "Remove one custom-module row. A soft delete — the row is hidden, "
