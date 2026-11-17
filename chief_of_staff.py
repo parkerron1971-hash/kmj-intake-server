@@ -15697,6 +15697,19 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"marketing desk block failed: {e}")
 
+            # FINDING THE WAY (church_findway): when a church's message reads
+            # like "where is" or "how do I", the Help Center's own answers
+            # that match it, cut to what the login's areas show. It comes and
+            # goes with the message, so it rides the per-message tail.
+            try:
+                import church_findway as _findway
+                _way_block = _findway.turn_block(biz, req.message or "", chief_areas.TURN.get())
+                if _way_block:
+                    chief_truth.record('context:help_center', _way_block, kind='context')
+                    growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _way_block).strip() + "\n"
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"church findway block failed: {e}")
+
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
             _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
