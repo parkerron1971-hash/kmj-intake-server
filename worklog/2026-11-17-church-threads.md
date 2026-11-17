@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17: "the goal is not be a text message itself but using the app to push through as like a text", members "can respond and it not be an issue", then "group notifications for groups people are in specifically". "make this happen".'
 status: in review
-prs: [kmj-intake-server#PR]
+prs: [kmj-intake-server#1899]
 migrations: [supabase/APPLY-2026-11-17-church-threads.sql (NOT APPLIED; Kevin applies it)]
 left_undone:
   - "The office's screen is the frontend's (solutionist-studio), built against the /church-threads API in parallel. The office's phone alert opens nav 'operate:church-threads': the frontend has to map that page."
