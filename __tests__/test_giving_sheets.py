@@ -216,3 +216,77 @@ def test_many_long_app_names_stay_on_one_line_of_boxes(db):
     assert "A Very Long Giving App N" in first_line and "Third App" not in first_line
     assert "td.apps { font-size: 10px; line-height: 1.25; }" in page        # the cell wraps
 
+
+# ─── The sheet for a service that hasn't come yet (Kevin, 2026-11-16) ──
+# A count is made when its day comes, so a church that has just added its
+# services had no sheet to print before Sunday morning.
+
+SUNDAY = "5e000000-0000-4000-8000-000000000001"
+
+
+def _church_now():
+    from datetime import datetime
+    return datetime.now(gs.zone_of({"settings": {"timezone": "America/New_York"}})).date()
+
+
+def _next(weekday: int, after: int = 1):
+    """The next day with this weekday (Monday is 0), at least `after` days from today."""
+    from datetime import timedelta
+    day = _church_now() + timedelta(days=after)
+    while day.weekday() != weekday:
+        day += timedelta(days=1)
+    return day
+
+
+@pytest.fixture
+def coming(db):
+    db.t["giving_services"] = [{"id": SUNDAY, "business_id": BIZ, "name": "Sunday Worship", "kind": "weekly",
+                                "weekday": 6, "on_date": None, "start_time": "11:00", "collects_online": True,
+                                "created_at": "2026-11-16T15:00:00+00:00", "updated_at": "2026-11-16T15:00:00+00:00",
+                                "archived_at": None}]
+    return db
+
+
+def test_a_coming_service_prints_its_sheet_before_its_day(coming):
+    day = _next(6)
+    before = [dict(c) for c in coming.t["giving_counts"]]
+    resp = sh.coming_sheet(BIZ, SUNDAY, day.isoformat(), USER)
+    page = resp.body.decode()
+    assert "Love City Church" in page and "Sunday Worship" in page and sh.dayLabel_long(day.isoformat()) in page
+    assert "Printed ahead of the day" in page
+    assert page.count('<td class="n">') == sh.SHEET_LINES + sh.APP_LINES and "Tithes · Building · Missions" in page
+    assert resp.headers["cache-control"] == "no-store"
+    # It is paper only: no count is made and nothing is recorded.
+    assert coming.t["giving_counts"] == before
+
+
+def test_the_sheet_of_a_count_still_carries_the_counts_code(coming):
+    page = sh.count_sheet(BIZ, COUNT, USER).body.decode()
+    assert COUNT[:8].upper() in page and "Printed ahead of the day" not in page
+
+
+@pytest.mark.parametrize("which", ["another weekday", "past the days listed", "yesterday"])
+def test_only_a_day_the_service_is_coming_up_on(coming, which):
+    from datetime import timedelta
+    day = {"another weekday": _next(2), "past the days listed": _next(6, after=gs.COMING_DAYS + 1),
+           "yesterday": _church_now() - timedelta(days=1)}[which]
+    with pytest.raises(HTTPException) as e:
+        sh.coming_sheet(BIZ, SUNDAY, day.isoformat(), USER)
+    assert e.value.status_code == 404 and "isn't coming up" in e.value.detail
+
+
+def test_a_day_that_does_not_read_and_a_service_that_is_not_theirs(coming):
+    with pytest.raises(HTTPException) as e:
+        sh.coming_sheet(BIZ, SUNDAY, "next sunday", USER)
+    assert e.value.status_code == 422
+    for other in ("5e000000-0000-4000-8000-0000000000ff", "not-an-id"):
+        with pytest.raises(HTTPException) as e:
+            sh.coming_sheet(BIZ, other, _next(6).isoformat(), USER)
+        assert e.value.status_code == 404
+
+
+def test_the_coming_sheet_is_behind_the_same_gate(coming, monkeypatch):
+    monkeypatch.setattr(giving_ways, "switched_on", lambda b: False)
+    with pytest.raises(HTTPException) as e:
+        sh.coming_sheet(BIZ, SUNDAY, _next(6).isoformat(), USER)
+    assert e.value.status_code == 404

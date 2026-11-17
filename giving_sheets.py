@@ -48,7 +48,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -59,7 +59,7 @@ import sb_clients
 from auth_supabase import AuthedUser, require_user
 # The same gate, count read and helpers as the counts (by name, so the
 # access sweep follows the gate into giving_services).
-from giving_services import UUID_RE, _count, _gate, _need, _q
+from giving_services import COMING_DAYS, UUID_RE, _count, _gate, _need, _q, _services, occurrences, zone_of
 
 logger = logging.getLogger("giving_sheets")
 router = APIRouter(tags=["giving"])
@@ -154,7 +154,7 @@ td.apps {{ font-size: 10px; line-height: 1.25; }}
 <button class="print" onclick="window.print()">Print</button>
 <div class="bar"><div><h1>{name}</h1>
 <p class="sub">{e(count.get('name'))} · {e(dayLabel_long(str(count.get('service_date'))[:10]))}</p></div>
-<div class="code">Count sheet<br>{e(str(count.get('id'))[:8].upper())}</div></div>
+<div class="code">Count sheet<br>{e(str(count.get('id'))[:8].upper()) if count.get('id') else 'Printed ahead of the day'}</div></div>
 <p class="funds"><strong>Funds:</strong> {funds}. Write one per line; leave Fund empty for {e(_funds(business)[0])}.</p>
 <h2>In the plate</h2>
 <table><thead><tr><th>#</th><th>Name (or "Loose offering")</th><th>Fund</th><th class="m">Cash</th><th class="m">Check</th><th>Check #</th></tr></thead>
@@ -190,6 +190,36 @@ def count_sheet(business_id: str, count_id: str, user: AuthedUser = Depends(requ
     count = _count(business_id, count_id)
     names = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=name&limit=1") or []
     page = sheet_html({**biz, "name": (names[0] if names else {}).get("name")}, count)
+    return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+# A service that hasn't come yet has no count: a count is made when its day
+# comes. The counters still need the paper before Sunday morning (Kevin,
+# 2026-11-16, about a church that had just subscribed: the sheet "was in my
+# giving area. i didn't see it for their church"). So the same sheet prints
+# for any service listed as coming up, under its name and day. It makes no
+# count and records nothing; on the day, its photo goes into that day's count
+# as any other does.
+@router.get("/giving/{business_id}/services/{service_id}/sheet", response_class=HTMLResponse)
+def coming_sheet(business_id: str, service_id: str, date: str, user: AuthedUser = Depends(require_user)):
+    """The printable sheet for one coming day of a service: ?date=YYYY-MM-DD,
+    a day this service meets from today through the days listed as coming up."""
+    biz = _gate(business_id, user)
+    if not UUID_RE.match(str(service_id or "")):
+        raise HTTPException(404, "Service not found")
+    try:
+        day = _date.fromisoformat(str(date)[:10])
+    except ValueError:
+        raise HTTPException(422, "The day should read like 2026-11-22.")
+    tz = zone_of(biz)
+    today = datetime.now(tz).date()
+    mine = [s for s in _services(business_id) if str(s.get("id")) == str(service_id)]
+    meets = [o for o in occurrences(mine, tz, today, today + timedelta(days=COMING_DAYS)) if o["date"] == day]
+    if not meets:
+        raise HTTPException(404, "That service isn't coming up on that day.")
+    names = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=name&limit=1") or []
+    page = sheet_html({**biz, "name": (names[0] if names else {}).get("name")},
+                      {"name": meets[0]["name"], "service_date": day.isoformat()})
     return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
 
