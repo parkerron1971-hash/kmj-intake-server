@@ -35,6 +35,11 @@ churches do on Sunday ("New here? Text NEW to ..."), done our way:
                time. All on the church's clock, between 9 AM and 8 PM.
   THE ROOM     GET/PUT /new-here/{business_id}: the church's word, number and
                texts, and this week's guests with where each one stands.
+               POST /new-here/{business_id}/screen: its slide on Sunday's
+               announcements (waiting for Media & Communications when the
+               login doesn't plan Sunday). Who changes them: _may_edit (the
+               weekly text's login, and since 2026-11-17 the first-time
+               guests', church_duties first_guests).
 
 Who: NEW_HERE = off | owner | on; unset is "owner", the platform's own
 church (member_asks.platform_church). A church also turns it on itself
@@ -80,6 +85,12 @@ FALLBACK_TZ = ZoneInfo("America/New_York")
 MAX_TEXT = 480
 FIRST_NAME = "{first name}"
 CARD_LINK = "{card link}"
+FIRST_GUESTS = "first_guests"           # church_duties: who changes New here beside the weekly text
+NOT_YOURS = ("Only the owner, an admin, or whoever does the first-time guests or the weekly text "
+             "changes New here.")
+SCREEN_REF = "new_here"                 # worship_announcements.source_ref of the room's Sunday slide
+SCREEN_TITLE = "New here? We’d love to meet you."
+SCREEN_QR_LABEL = "Scan, then send the text"
 
 DEFAULTS: Dict[str, Any] = {
     "on": False,
@@ -673,12 +684,35 @@ def _may_read(business_id: str, user: AuthedUser) -> None:
 
 def _may_edit(business_id: str, user: AuthedUser) -> bool:
     """Who changes it: who sends announcements (the owner, an admin, or the
-    office login that does the weekly text)."""
+    office login that does the weekly text), and the church Manager that
+    does the first-time guests (church_duties FIRST_GUESTS: People & Care's
+    by default, or whoever it was given to). Kevin, 2026-11-17: "make sure
+    that Tiara also has the ability to make sure that things like qr code and
+    stuff is made for guest as well." The weekly text itself stays the
+    Office's (sms_routing._may_announce is unchanged). A duty that can't be
+    read is a 503, never a yes."""
     import sms_routing
     try:
         sms_routing._may_announce(business_id, user)
         return True
-    except HTTPException:
+    except HTTPException as no:
+        if no.status_code == 503:
+            raise
+        if no.status_code != 403:
+            return False            # below a Manager, or not a church: no duty decides it
+    # A church's Manager that doesn't do the weekly text (its 403).
+    import church_duties
+    return church_duties.holds(business_id, user, FIRST_GUESTS)
+
+
+def _may_edit_quietly(business_id: str, user: AuthedUser) -> bool:
+    """The room's can_edit: a duty that can't be read hides the buttons and
+    the room still reads (a change asks again, and is a 503)."""
+    try:
+        return _may_edit(business_id, user)
+    except HTTPException as e:
+        if e.status_code != 503:
+            raise
         return False
 
 
@@ -795,7 +829,7 @@ def get_new_here(business_id: str, user: AuthedUser = Depends(require_user)):
         raise HTTPException(503, "The church couldn't be read just now. Try again in a minute.")
     if not is_church(business):
         raise HTTPException(404, "New here is for churches.")
-    return overview(business, can_edit=_may_edit(biz, user))
+    return overview(business, can_edit=_may_edit_quietly(biz, user))
 
 
 class StepIn(BaseModel):
@@ -843,7 +877,7 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
     biz = _uuid(business_id)
     _may_read(biz, user)
     if not _may_edit(biz, user):
-        raise HTTPException(403, "Only someone who sends the church's announcements can change New here.")
+        raise HTTPException(403, NOT_YOURS)
     business = _business(biz)
     if not business:
         raise HTTPException(503, "The church couldn't be read just now. Try again in a minute.")
@@ -854,6 +888,106 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
     if sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz)}", {"settings": settings}) is None:
         raise HTTPException(503, "That didn't save just now. Try again in a minute.")
     return overview({**business, "settings": settings}, can_edit=True)
+
+
+# ─── "Put it on Sunday's screen" ──────────────────────────────────────
+
+def _asker(biz: str, user: AuthedUser) -> str:
+    """Who sent the slide, as the app greets them, for the board's Waiting
+    for you; the part of their email before the @ when no name is found."""
+    try:
+        import business_users_router
+        name = str((business_users_router.seat_person(biz, str(user.id)) or {}).get("name") or "").strip()
+    except Exception:  # noqa: BLE001 — a name is a courtesy; the request still goes
+        name = ""
+    return (name or (user.email or "").split("@")[0] or "Someone on the team")[:80]
+
+
+def screen_slide(business: Dict[str, Any], number: str, today: date) -> Dict[str, Any]:
+    """The room's slide as an announcement (worship_announce.clean): the
+    church's word and number, a QR code to its /new when the church has an
+    https address, in the room and the lobby, from today until it's taken off."""
+    import worship_announce as wa
+    word = settings_of(business)["word"]
+    raw: Dict[str, Any] = {
+        "title": SCREEN_TITLE, "body": f"Text {word} to {pretty_phone(number)}", "design": "side",
+        "shows": {"room": True, "lobby": True, "online": False, "phones": False},
+        "show_from": today.isoformat(),
+    }
+    home = f"{_origin(str(business['id']))}{CARD_PATH}"
+    if home.startswith("https://"):
+        raw["qr"] = {"kind": "link", "url": home, "label": SCREEN_QR_LABEL}
+    return wa.clean(raw)
+
+
+@router.post("/new-here/{business_id}/screen")
+def put_on_screen(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The room's "Put it on Sunday's screen": its slide on the announcements
+    board (worship_announce_router). Whoever plans Sunday (the plan's part: a
+    planner, the worship leader, an admin, the owner) puts it straight on, as
+    the board itself does. Whoever else changes New here (the first-time
+    guests' login, the weekly text's) sends it waiting, and whoever plans
+    Sunday puts it on from the board's Waiting for you (its decide route, the
+    plan's part, unchanged). Sunday's announcements stay Media &
+    Communications' job: this asks, it never approves. Only this slide: its
+    words are the room's, never the caller's, and one waits at a time."""
+    import church_duties
+    import worship_announce as wa
+    import worship_announce_router as war
+    import worship_router
+    import worship_team
+    biz = _uuid(business_id)
+    _may_read(biz, user)
+    if not _may_edit(biz, user):
+        raise HTTPException(403, NOT_YOURS)
+    business = _business(biz)
+    if not business:
+        raise HTTPException(503, "The church couldn't be read just now. Try again in a minute.")
+    if not is_church(business):
+        raise HTTPException(404, "New here is for churches.")
+    number = own_number(biz)
+    if not number:
+        raise HTTPException(409, "New here works on your church’s own texting number. Set one up in Texting "
+                                 "settings first.")
+    if not worship_router.open_to(user):
+        raise HTTPException(404, "Sunday’s screens aren’t open for your church yet.")
+    # The parts the board goes by (a 503 when they can't be read; a 402 when a
+    # church on ChurchSavvy alone hasn't the screens in its plan).
+    plans = worship_team.can(worship_team.roles_of(biz, user), "plan")
+    media = church_duties.lane_label("media_comms")
+    today = war.church_today(biz)
+    try:
+        row = screen_slide(business, number, today)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    have = war._read(f"/worship_announcements?business_id=eq.{_q(biz)}&archived_at=is.null"
+                     f"&select=id,status,source_ref,show_from,show_until&limit={wa.MAX_PER_CHURCH}",
+                     "The announcements")
+    if not plans:
+        mine = [a for a in have if a.get("source_ref") == SCREEN_REF]
+        if any(a.get("status") == "waiting" for a in mine):
+            return {"status": "waiting", "already": True,
+                    "said": f"It’s already waiting for {media} to put on Sunday’s screen."}
+        if any(a.get("status") == "on" and wa.state(a, today) in ("now", "soon") for a in mine):
+            return {"status": "on", "already": True, "said": "It’s already on Sunday’s screen."}
+    if len(have) >= wa.MAX_PER_CHURCH:
+        raise HTTPException(400, f"A church keeps up to {wa.MAX_PER_CHURCH} announcements. Take a few old ones "
+                                 "off first.")
+    now = war._now()
+    status = "on" if plans else "waiting"
+    rec: Dict[str, Any] = {"business_id": biz, **row, "status": status, "source": "typed",
+                           "source_ref": SCREEN_REF, "created_at": now, "updated_at": now}
+    if not plans:
+        rec["sent_by"] = {"ministry": "New here", "name": _asker(biz, user), "at": now}
+    saved = sb_clients.sb_post_as_service("/worship_announcements?select=id,status", rec,
+                                          prefer="return=representation")
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "It wasn’t sent just now. Try again.")
+    if plans:
+        return {"status": "on", "already": False,
+                "said": "Added to your announcements. It shows on Sunday’s screen until you take it off."}
+    return {"status": "waiting", "already": False,
+            "said": f"Sent to {media} to put on Sunday’s screen. It shows once they put it on."}
 
 
 class ResendIn(BaseModel):

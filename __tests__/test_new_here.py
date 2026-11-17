@@ -424,6 +424,107 @@ def test_the_room_reads_and_saves(room, db):
     assert c.get(f"/new-here/{BIZ}").status_code == 404
 
 
+def test_a_duty_that_cant_be_read_hides_the_buttons_and_never_saves(room, db, monkeypatch):
+    # Who changes it by the duties is pinned in test_sms_announcements (the
+    # office fixture): here, what the room does when they can't be read.
+    c, who = room
+
+    def unread(biz, user):
+        raise HTTPException(503, "Who does what couldn't be read just now. Try again.")
+    monkeypatch.setattr(nh, "_may_edit", unread)
+    got = c.get(f"/new-here/{BIZ}")
+    assert got.status_code == 200 and got.json()["can_edit"] is False      # the room still reads
+    assert c.put(f"/new-here/{BIZ}", json=_body().model_dump()).status_code == 503
+    assert c.post(f"/new-here/{BIZ}/screen").status_code == 503
+    assert not [p for p, _ in db["patches"] if p.startswith("/businesses")]
+    assert not [p for p, _ in db["posts"] if p.startswith("/worship_announcements")]
+
+
+# "Put it on Sunday's screen" (Kevin 2026-11-17: Tiara makes sure the QR code
+# and the rest are made for guests): whoever plans Sunday puts it straight on;
+# the guests' login (and the weekly text's) sends it waiting for Media &
+# Communications, who put it on from the board.
+
+@pytest.fixture
+def screen(room, db, monkeypatch):
+    from datetime import date
+    import business_users_router
+    import worship_announce_router as war
+    import worship_router
+    import worship_team
+    c, who = room
+    state = {"open": True, "parts": set(), "board": []}
+    monkeypatch.setattr(worship_router, "open_to", lambda user: state["open"])
+    monkeypatch.setattr(worship_team, "roles_of", lambda biz, user, part="screens": set(state["parts"]))
+    monkeypatch.setattr(war, "_read", lambda path, what: list(state["board"]))
+    monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 11, 15))
+    monkeypatch.setattr(business_users_router, "seat_person", lambda biz, uid: {"name": "Tiara Jones"})
+    return c, who, state
+
+
+def _slides(db):
+    return [row for path, row in db["posts"] if path.startswith("/worship_announcements")]
+
+
+def test_whoever_plans_sunday_puts_the_slide_straight_on(screen, db):
+    c, who, state = screen
+    state["parts"] = {"planner"}
+    r = c.post(f"/new-here/{BIZ}/screen")
+    assert r.status_code == 200 and r.json()["status"] == "on" and "until you take it off" in r.json()["said"]
+    (row,) = _slides(db)
+    assert row["status"] == "on" and row["source"] == "typed" and row["source_ref"] == nh.SCREEN_REF
+    assert row["title"] == nh.SCREEN_TITLE and row["body"] == "Text NEW to (231) 555-0199"
+    assert row["qr"] == {"kind": "link", "url": "https://gracehill.church/new", "label": nh.SCREEN_QR_LABEL}
+    assert row["shows"] == {"room": True, "lobby": True, "online": False, "phones": False}
+    assert row["show_from"] == "2026-11-15" and row["business_id"] == BIZ and "sent_by" not in row
+
+
+def test_the_guests_login_sends_it_waiting_for_media(screen, db):
+    c, who, state = screen
+    r = c.post(f"/new-here/{BIZ}/screen", json={"title": "Not this", "status": "on"})   # a body changes nothing
+    assert r.status_code == 200
+    out = r.json()
+    assert out["status"] == "waiting" and out["already"] is False
+    assert out["said"] == "Sent to Media & Communications to put on Sunday’s screen. It shows once they put it on."
+    (row,) = _slides(db)
+    assert row["status"] == "waiting" and row["title"] == nh.SCREEN_TITLE and row["source"] == "typed"
+    assert row["sent_by"]["ministry"] == "New here" and row["sent_by"]["name"] == "Tiara Jones"
+    # One waits at a time: pressing again asks nothing more of Media.
+    state["board"] = [{"id": "a1", "status": "waiting", "source_ref": nh.SCREEN_REF}]
+    again = c.post(f"/new-here/{BIZ}/screen").json()
+    assert again["status"] == "waiting" and again["already"] is True and len(_slides(db)) == 1
+    # Already showing: it says so.
+    state["board"] = [{"id": "a1", "status": "on", "source_ref": nh.SCREEN_REF, "show_from": "2026-11-15"}]
+    on = c.post(f"/new-here/{BIZ}/screen").json()
+    assert on == {"status": "on", "already": True, "said": "It’s already on Sunday’s screen."}
+    # Left off last time, or retired: it can ask again. Another announcement isn't this slide.
+    state["board"] = [{"id": "a1", "status": "declined", "source_ref": nh.SCREEN_REF},
+                      {"id": "a2", "status": "on", "source_ref": nh.SCREEN_REF, "show_until": "2026-11-01"},
+                      {"id": "a3", "status": "waiting", "source_ref": ""}]
+    assert c.post(f"/new-here/{BIZ}/screen").json()["already"] is False and len(_slides(db)) == 2
+
+
+def test_the_slide_asks_only_of_who_changes_new_here(screen, db, monkeypatch):
+    c, who, state = screen
+    who["edit"] = False
+    r = c.post(f"/new-here/{BIZ}/screen")
+    assert r.status_code == 403 and r.json()["detail"] == nh.NOT_YOURS
+    who["edit"] = True
+    state["open"] = False
+    assert c.post(f"/new-here/{BIZ}/screen").status_code == 404                  # Sunday's screens are shut
+    state["open"] = True
+    monkeypatch.setattr(nh, "own_number", lambda biz: "")
+    assert c.post(f"/new-here/{BIZ}/screen").status_code == 409
+    monkeypatch.setattr(nh, "own_number", lambda biz: "+12315550199")
+    db["biz"] = {**CHURCH, "type": "salon"}
+    assert c.post(f"/new-here/{BIZ}/screen").status_code == 404
+    assert not _slides(db)
+    # No https address for the church: the slide goes without its QR code.
+    db["biz"] = dict(CHURCH)
+    monkeypatch.setattr(nh, "_origin", lambda bid: "")
+    assert c.post(f"/new-here/{BIZ}/screen").status_code == 200 and _slides(db)[0]["qr"] == {}
+
+
 # ── 7. the wiring ─────────────────────────────────────────────────────
 
 def _src(name):

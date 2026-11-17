@@ -353,10 +353,56 @@ def _may(biz, uid):
 def test_in_a_church_whoever_does_the_weekly_text_sends_announcements(office):
     import church_duties
     assert [_may(CHURCH, u) for u in (OWNER_ID, ADMIN_ID, NAIYA_ID)] == ["owner", "admin", "manager"]
+    # Deliberately still refused (2026-11-17): Tiara changes New here and asks
+    # for its Sunday slide by the first-time guests (below), but the weekly
+    # text and the church's announcements by text stay the Office's.
     assert _may(CHURCH, TIARA_ID) == (403, church_duties.refusal(CHURCH, "weekly_text"))
     assert "Office & Leadership" in _may(CHURCH, TIARA_ID)[1]
     # Below a Manager, and a stranger: the same 404 as before.
     assert _may(CHURCH, MEMBER_ID) == _may(CHURCH, STRANGER_ID) == (404, "business not found")
+
+
+# ─── New here: the first-time guests' login changes it too ───────────
+# Kevin, 2026-11-17: "can you make sure that Tiara also has the ability to make
+# sure that things like qr code and stuff is made for guest as well."
+
+def _edits(biz, uid):
+    import new_here
+    from fastapi import HTTPException
+    try:
+        return new_here._may_edit(biz, _who(uid))
+    except HTTPException as e:
+        return e.status_code
+
+
+def test_new_here_opens_to_whoever_does_the_first_time_guests(office):
+    assert [_edits(CHURCH, u) for u in (OWNER_ID, ADMIN_ID, NAIYA_ID, TIARA_ID)] == [True, True, True, True]
+    assert _edits(CHURCH, MEMBER_ID) is False and _edits(CHURCH, STRANGER_ID) is False
+    # Any other business: the admin gate alone, as before.
+    assert [_edits(SHOP, u) for u in (OWNER_ID, ADMIN_ID, NAIYA_ID, TIARA_ID, MEMBER_ID)] == [True, True, False, False, False]
+
+
+def test_new_here_follows_the_first_time_guests_when_they_move(office):
+    import church_duties
+    office.t["church_duty_holders"] = [{"business_id": CHURCH, "duty": "first_guests", "user_id": NAIYA_ID}]
+    church_duties._CACHE.clear()
+    assert _edits(CHURCH, TIARA_ID) is False                     # moved away from People & Care
+    assert _edits(CHURCH, NAIYA_ID) is True and _edits(CHURCH, ADMIN_ID) is True
+    # Both moved off Naiya's lane (the weekly text to the admin): only the guests decide it.
+    office.t["church_duty_holders"] = [{"business_id": CHURCH, "duty": "first_guests", "user_id": TIARA_ID},
+                                       {"business_id": CHURCH, "duty": "weekly_text", "user_id": ADMIN_ID}]
+    church_duties._CACHE.clear()
+    assert _edits(CHURCH, TIARA_ID) is True and _edits(CHURCH, NAIYA_ID) is False
+
+
+def test_a_first_time_guests_duty_that_cant_be_read_is_a_503_never_a_yes(office, monkeypatch):
+    import new_here
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith("/church_duty_holders") else office.get(p, **k))
+    assert _edits(CHURCH, TIARA_ID) == 503 and _edits(CHURCH, NAIYA_ID) == 503
+    assert new_here._may_edit_quietly(CHURCH, _who(TIARA_ID)) is False       # the room reads, no buttons
+    assert _edits(CHURCH, ADMIN_ID) is True
 
 
 def test_any_other_business_keeps_its_admin_gate(office):
