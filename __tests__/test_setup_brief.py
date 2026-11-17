@@ -199,7 +199,10 @@ def test_the_step_is_the_first_undone_unblocked_one(probes):
     p = sbf.plan(_biz(1.5), now=NOW)
     assert p["step"]["key"] == "payments"
     assert 'Tap "Take me there" to open the right page' in p["notification"]["body"]
-    assert p["notification"]["action_payload"]["page"] == "integrations"
+    # Stripe is connected on Payments, not Integrations (2026-11-17).
+    assert p["notification"]["action_payload"]["tab"] == "operate"
+    assert p["notification"]["action_payload"]["sub"] == "payments"
+    assert sbf._push_nav(p["step"]["nav"]) == "operate:payments"
 
 
 def test_a_blocked_step_is_never_offered(probes):
