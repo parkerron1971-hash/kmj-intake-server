@@ -13,7 +13,13 @@ A manager or the owner (the stream relay's check, kids_router.require):
            sundays_left, can_delete, can_download (false until downloads
            ship), recordings: [{session_id, started_at, duration_s, bytes,
            published, sermon_id, keep_until}] (ended, not removed, newest
-           first, at most 50)}.
+           first, at most 50),
+           extra_offer: {gb, cents, every, blocks, can_buy, trial}} (2026-11-17:
+           more room is bought in blocks of `gb` (100) for `cents` each time
+           the plan bills, `every` month, quarter or year; `blocks` is what
+           the church bought, null when that can't be read; `can_buy` only
+           for the owner, with the price set, on a paid church plan. The
+           purchase itself is POST /billing/church/extra-storage).
   DELETE  /church/storage/recordings/{session_id}?business_id=
           404 while switched off or when the recording isn't this church's;
           409 while it is still being recorded, or when a published sermon
@@ -50,7 +56,7 @@ def _unavailable() -> HTTPException:
 @router.get("/church/storage")
 def storage_overview(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business_id")
-    require(biz, user, "manager")
+    role = require(biz, user, "manager")
     if not cs.switched_on(biz):
         return {"enabled": False}
     row, sessions = cs.business_row(biz), cs.sessions_of(biz)
@@ -74,6 +80,7 @@ def storage_overview(business_id: str = Query(...), user: AuthedUser = Depends(r
         "sermon_id": s.get("sermon_id"),
         "keep_until": s.get("keep_until"),
     } for s in shown]
+    out["extra_offer"] = cs.extra_offer(row, owner=role == "owner")
     return out
 
 

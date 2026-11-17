@@ -51,7 +51,7 @@ await db.exec(sql);   // safe twice
 checks++;
 
 const keys = (await db.query('select public.business_settings_server_keys() as k')).rows[0].k;
-assert.equal(keys.length, 42); checks++;
+assert.equal(keys.length, 43); checks++;
 for (const k of ['founding_church', 'no_card_trial', 'extra_logins', 'church_move', 'lifecycle_emails',
                  'sample_church', 'churchsavvy_only', 'computer', 'autonomy']) {
   assert.ok(keys.includes(k), k); checks++;

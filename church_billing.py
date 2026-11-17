@@ -1,4 +1,4 @@
-"""church_billing.py — the two extras around the church plans.
+"""church_billing.py — the extras around the church plans.
 
 Kevin, 2026-11-03 ("I agree with the plan"; the review artifact
 Pdg8hF4pB5n6efoFQmzd8d):
@@ -17,10 +17,24 @@ Pdg8hF4pB5n6efoFQmzd8d):
     lands in Mission Control as a support ticket, and the church's settings
     keep where it stands (businesses.settings.church_move).
 
+Kevin, 2026-11-17 ("build"):
+
+  * 100 GB more storage, $5 a month a block (pricing_config.extra_storage_offer),
+    on top of the plan's storage allowance (church_storage). Built exactly as
+    the login is: another item on the church's subscription, quantity = the
+    number of blocks, a price per term (STORAGE_PRICE_ENVS), paid the day it
+    is added, the webhook keeping the count (businesses.settings.extra_storage),
+    which church_storage.extra_bytes adds to the allowance. One difference: an
+    unreadable count is never read as 0 there (extra_storage_blocks answers
+    None), so the storage rules decide nothing on a guess. Taking blocks off
+    is allowed even when it puts the church over; the answer says what that
+    means (the 14-day rule for a recording made while over).
+
 Only for a church on a church plan (feature_gates.CHURCH_PLANS); every route
 is the owner's (stripe_billing._require_owner_of). Nothing here is sold
 until the church plans are: the extra-login price needs
-STRIPE_PRICE_ID_EXTRA_LOGIN, and the move needs a church plan.
+STRIPE_PRICE_ID_EXTRA_LOGIN, extra storage STRIPE_PRICE_ID_EXTRA_STORAGE,
+and the move needs a church plan.
 """
 from __future__ import annotations
 
@@ -44,7 +58,9 @@ logger = logging.getLogger("church_billing")
 router = APIRouter(prefix="/billing/church", tags=["billing"])
 
 EXTRA_LOGINS = "extra_logins"   # businesses.settings[EXTRA_LOGINS]: int
+EXTRA_STORAGE = "extra_storage"  # businesses.settings[EXTRA_STORAGE]: int, blocks of 100 GB bought
 MOVE = "church_move"            # businesses.settings[MOVE]: where the move stands
+MAX_STORAGE_BLOCKS = 100        # 10 TB on top of a plan: far past any church today
 
 
 # ─── Small readers ────────────────────────────────────────────────────
@@ -62,6 +78,39 @@ def extra_logins(biz: Optional[Dict[str, Any]]) -> int:
         return 0
 
 
+def storage_blocks_value(v: Any) -> Optional[int]:
+    """A stored count of storage blocks: a whole number 0 or more (a
+    numeric string too, as extra_logins reads); nothing stored is 0. None
+    for anything else: unreadable, never taken as 0."""
+    if v is None:
+        return 0
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v >= 0 else None
+    if isinstance(v, float):
+        return int(v) if v.is_integer() and v >= 0 else None
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    return None
+
+
+def extra_storage_blocks(biz: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Blocks of 100 GB the church bought on top of its plan's storage
+    (businesses.settings.extra_storage). 0 when none. None when it can't be
+    told (no row, no settings read, a value that isn't a count): unlike a
+    login, never read as 0, because 0 would make the church look fuller
+    than it is and the storage rules hold and remove recordings on it."""
+    if not isinstance(biz, dict) or "settings" not in biz:
+        return None
+    s = biz.get("settings")
+    if s is None:
+        return 0
+    if not isinstance(s, dict):
+        return None
+    return storage_blocks_value(s.get(EXTRA_STORAGE))
+
+
 def is_church(biz: Optional[Dict[str, Any]]) -> bool:
     import vertical_registry
     return vertical_registry.resolve((biz or {}).get("type") or "") == "ministry"
@@ -74,24 +123,23 @@ YEARLY = ("year", 1)
 LOGIN_PRICE_ENVS = {MONTHLY: "STRIPE_PRICE_ID_EXTRA_LOGIN",
                     QUARTERLY: "STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY",
                     YEARLY: "STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL"}
+STORAGE_PRICE_ENVS = {MONTHLY: "STRIPE_PRICE_ID_EXTRA_STORAGE",
+                      QUARTERLY: "STRIPE_PRICE_ID_EXTRA_STORAGE_QUARTERLY",
+                      YEARLY: "STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL"}
 
 
-def extra_login_price(term: tuple = MONTHLY) -> str:
-    """The login's Stripe price for a plan billed on this term, or ""."""
-    env = LOGIN_PRICE_ENVS.get(tuple(term))
+def _price_on(envs: Dict[tuple, str], term: tuple) -> str:
+    env = envs.get(tuple(term))
     return (os.environ.get(env) or "").strip() if env else ""
 
 
-def extra_login_prices() -> set:
-    """Every login price that is set, whichever term it bills on."""
-    return {p for term in LOGIN_PRICE_ENVS if (p := extra_login_price(term))}
+def _prices_on(envs: Dict[tuple, str]) -> set:
+    return {p for term in envs if (p := _price_on(envs, term))}
 
 
-def extra_login_cents(term: tuple = MONTHLY) -> int:
-    """What one extra login costs each time a plan on this term bills: the
-    monthly price, three of it every three months, or ten months of it for
-    a year, as the plans are."""
-    cents = pricing_config.extra_login_cents()
+def _per_term(cents: int, term: tuple) -> int:
+    """A monthly price as a plan on this term bills it: three of it every
+    three months, or ten months of it for a year, as the plans are."""
     if tuple(term) == YEARLY:
         import marketing_pages as mp
         return cents * mp.ANNUAL_MONTHS
@@ -100,16 +148,61 @@ def extra_login_cents(term: tuple = MONTHLY) -> int:
     return cents
 
 
+def every_word(term: tuple) -> str:
+    """How the answer names a term: month, quarter (every three months) or year."""
+    return "quarter" if tuple(term) == QUARTERLY else tuple(term)[0]
+
+
+def extra_login_price(term: tuple = MONTHLY) -> str:
+    """The login's Stripe price for a plan billed on this term, or ""."""
+    return _price_on(LOGIN_PRICE_ENVS, term)
+
+
+def extra_login_prices() -> set:
+    """Every login price that is set, whichever term it bills on."""
+    return _prices_on(LOGIN_PRICE_ENVS)
+
+
+def extra_login_cents(term: tuple = MONTHLY) -> int:
+    """What one extra login costs each time a plan on this term bills: the
+    monthly price, three of it every three months, or ten months of it for
+    a year, as the plans are."""
+    return _per_term(pricing_config.extra_login_cents(), term)
+
+
+def extra_storage_price(term: tuple = MONTHLY) -> str:
+    """The storage block's Stripe price for a plan billed on this term, or ""."""
+    return _price_on(STORAGE_PRICE_ENVS, term)
+
+
+def extra_storage_prices() -> set:
+    """Every storage price that is set, whichever term it bills on."""
+    return _prices_on(STORAGE_PRICE_ENVS)
+
+
+def extra_storage_cents(term: tuple = MONTHLY) -> int:
+    """What one block of storage costs each time a plan on this term bills."""
+    return _per_term(pricing_config.extra_storage_offer()["cents"], term)
+
+
 def _price_id(item) -> Optional[str]:
     return ((item or {}).get("price") or {}).get("id")
 
 
-def extra_login_quantity(items) -> int:
-    """How many extra logins a subscription's items carry."""
-    prices = extra_login_prices()
+def _quantity_on(prices: set, items) -> int:
     if not prices:
         return 0
     return sum(int(it.get("quantity") or 0) for it in (items or []) if _price_id(it) in prices)
+
+
+def extra_login_quantity(items) -> int:
+    """How many extra logins a subscription's items carry."""
+    return _quantity_on(extra_login_prices(), items)
+
+
+def extra_storage_quantity(items) -> int:
+    """How many blocks of storage a subscription's items carry."""
+    return _quantity_on(extra_storage_prices(), items)
 
 
 def plan_term(items) -> tuple:
@@ -122,19 +215,42 @@ def plan_term(items) -> tuple:
     return term if term[0] else MONTHLY
 
 
+def row_term(biz: Optional[Dict[str, Any]]) -> tuple:
+    """The term the church's plan bills on, from the plan price its row
+    holds (stripe_billing._price_plans reads the env names; Stripe is not
+    asked). Monthly when it can't be told, as plan_term."""
+    import stripe_billing as sb
+    pid = str((biz or {}).get("subscription_plan") or "").strip()
+    every = (sb._price_plans().get(pid) or {}).get("every") if pid else None
+    return {"year": YEARLY, "quarter": QUARTERLY}.get(every or "", MONTHLY)
+
+
+def _follow_term(envs: Dict[tuple, str], items, term: tuple, refusal: str) -> list:
+    prices = _prices_on(envs)
+    held = [it for it in (items or []) if _price_id(it) in prices]
+    if not held:
+        return []
+    to = _price_on(envs, term)
+    if not to:
+        raise HTTPException(409, refusal)
+    return [{"id": it["id"], "price": to} for it in held if _price_id(it) != to]
+
+
 def logins_for_term(items, term: tuple) -> list:
     """A plan is changing term (monthly to yearly, or back): the item changes
     that take its extra logins along, [] when it has none. Refused, before
     Stripe is asked, when the logins have no price on the new term."""
-    prices = extra_login_prices()
-    held = [it for it in (items or []) if _price_id(it) in prices]
-    if not held:
-        return []
-    to = extra_login_price(term)
-    if not to:
-        raise HTTPException(409, "Your extra office logins can't follow that change from here yet. "
-                                 "Write to us and we'll switch you over.")
-    return [{"id": it["id"], "price": to} for it in held if _price_id(it) != to]
+    return _follow_term(LOGIN_PRICE_ENVS, items, term,
+                        "Your extra office logins can't follow that change from here yet. "
+                        "Write to us and we'll switch you over.")
+
+
+def storage_for_term(items, term: tuple) -> list:
+    """The same for the church's extra storage: its blocks move to the
+    price on the new term, or the change is refused before Stripe is asked."""
+    return _follow_term(STORAGE_PRICE_ENVS, items, term,
+                        "Your extra storage can't follow that change from here yet. "
+                        "Write to us and we'll switch you over.")
 
 
 async def _merge_setting(business_id: str, key: str, value: Any) -> None:
@@ -168,6 +284,23 @@ async def sync_extra_logins(business_id: str, items, status: Optional[str]) -> N
         logger.warning(f"extra logins sync for {business_id} failed (non-fatal): {e}")
 
 
+async def sync_extra_storage(business_id: str, items, status: Optional[str]) -> None:
+    """The same for extra storage: the blocks the subscription carries, 0
+    once it is cancelled. Writes only when it changed (a stored value that
+    isn't a count is written over). Never raises."""
+    try:
+        count = 0 if status == "canceled" else extra_storage_quantity(items)
+        import stripe_billing as sb
+        biz = await sb._load_business(business_id)
+        if extra_storage_blocks(biz) == count:
+            return
+        await _merge_setting(business_id, EXTRA_STORAGE, count or None)
+        print(f"[church_billing] extra storage for {str(business_id)[:8]}: {count} blocks", flush=True)
+    except Exception as e:
+        print(f"[church_billing] extra storage sync for {str(business_id)[:8]} failed (non-fatal): "
+              f"{type(e).__name__}: {e}", flush=True)
+
+
 # ─── One more login ───────────────────────────────────────────────────
 
 class ExtraLoginsBody(BaseModel):
@@ -175,12 +308,14 @@ class ExtraLoginsBody(BaseModel):
     count: int = Field(ge=0, le=100)
 
 
-async def _church_on_a_plan(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+async def _church_on_a_plan(business_id: str, user: AuthedUser,
+                            refusal: str = "Extra office logins and the move come with the church plans."
+                            ) -> Dict[str, Any]:
     import stripe_billing as sb
     biz = await sb._load_business(business_id)
     sb._require_owner_of(user, biz)
     if feature_gates.plan_of(biz) not in feature_gates.CHURCH_PLANS:
-        raise HTTPException(409, "Extra office logins and the move come with the church plans.")
+        raise HTTPException(409, refusal)
     return biz
 
 
@@ -239,8 +374,123 @@ async def set_extra_logins(body: ExtraLoginsBody, user: AuthedUser = Depends(req
     return {"ok": True, "extra_logins": body.count,
             "max_seats": (base + body.count) if base is not None else None,
             "cents_each": extra_login_cents(term),
-            "every": "quarter" if term == QUARTERLY else term[0],
+            "every": every_word(term),
             "charged_today": paid_today}
+
+
+# ─── More storage ─────────────────────────────────────────────────────
+
+class ExtraStorageBody(BaseModel):
+    business_id: str
+    blocks: int = Field(ge=0, le=MAX_STORAGE_BLOCKS)
+
+
+def _storage_unchanged(business_id: str, e: HTTPException) -> HTTPException:
+    """Stripe refused or couldn't be reached: the church reads plain words
+    (never Stripe's own text, which is printed for Railway instead), with
+    the same status."""
+    print(f"[church_billing] extra storage for {str(business_id)[:8]} unchanged: {e.status_code} "
+          f"{str(e.detail)[:200]}", flush=True)
+    return HTTPException(e.status_code if 400 <= e.status_code < 600 else 502,
+                         "Your storage didn't change. Try again in a minute, or write to us.")
+
+
+def _over_after(business_id: str, blocks: int) -> tuple:
+    """After blocks were taken off: (over, words). over is True when the
+    church now uses more than its plan's storage plus `blocks`, False when
+    it doesn't, None when that couldn't be measured (or storage isn't
+    switched on for it: then nothing is held either). The words say what
+    the 14-day rule means for it, or None when there's nothing to say."""
+    import church_storage as cs
+    try:
+        if not cs.switched_on(business_id):
+            return None, None
+        meter = cs.used(business_id)
+        allowance = (meter or {}).get("allowance_bytes")
+        if meter is None or allowance is None or not meter.get("complete"):
+            return None, cs.fewer_blocks_words(None)
+        total = int(allowance) + blocks * cs.block_bytes()
+        if int(meter["used_bytes"]) > total:
+            return True, cs.fewer_blocks_words(True)
+        return False, None
+    except Exception as e:  # noqa: BLE001  (the change is made; the answer still says what it can)
+        print(f"[church_billing] storage after fewer blocks unread for {str(business_id)[:8]}: "
+              f"{type(e).__name__}", flush=True)
+        return None, cs.fewer_blocks_words(None)
+
+
+@router.post("/extra-storage")
+async def set_extra_storage(body: ExtraStorageBody, user: AuthedUser = Depends(require_user)):
+    """Set how many blocks of 100 GB the church buys on top of its plan's
+    storage, the way set_extra_logins sets logins: an item on its
+    subscription, priced for the term the plan bills on ($5 a month a block,
+    ten months of that for a year). More is paid for today, for what is left
+    of the term, and only added if the card takes it; fewer leave a credit
+    for the next bill. Fewer is allowed even when it puts the church over
+    its storage: nothing is deleted then, and the answer says (`over`,
+    `note`) that a recording made while over is kept 14 days, then deleted
+    unless room is made (church_storage's rule). More needs storage to be
+    switched on for the church (church_storage.switched_on)."""
+    import stripe_billing as sb
+    import church_storage as cs
+    biz = await _church_on_a_plan(body.business_id, user, "Extra storage comes with the church plans.")
+    bid = str(biz["id"])
+    held = extra_storage_prices()
+    if not held:
+        raise HTTPException(409, "Extra storage isn't open yet.")
+    sub_id = (biz.get("stripe_subscription_id") or "").strip()
+    if not sub_id:
+        raise HTTPException(409, "Extra storage is added to a paid church plan.")
+    try:
+        sub = await sb._stripe_get(f"/subscriptions/{quote(sub_id, safe='')}", [])
+    except HTTPException as e:
+        raise _storage_unchanged(bid, e)
+    items = ((sub.get("items") or {}).get("data")) or []
+    term = plan_term(items)
+    price = extra_storage_price(term)
+    item = next((it for it in items if _price_id(it) in held), None)
+    had = int((item or {}).get("quantity") or 0)
+    if body.blocks > had:
+        if not price:
+            raise HTTPException(409, "Extra storage isn't open on a plan paid this way yet. "
+                                     "Write to us and we'll add it for you.")
+        if not await asyncio.to_thread(cs.switched_on, bid):
+            raise HTTPException(409, "Extra storage isn't open yet.")
+    paid_today = body.blocks > had and sub.get("status") == "active"
+    how = dict(sb.PAID_TODAY) if paid_today else {"proration_behavior": "create_prorations"}
+    try:
+        if item and body.blocks == 0:
+            await _stripe_delete(f"/subscription_items/{item['id']}")
+        elif item:
+            await sb._stripe_post(f"/subscription_items/{item['id']}", {"quantity": body.blocks, **how})
+        elif body.blocks > 0:
+            await sb._stripe_post("/subscription_items", {"subscription": sub_id, "price": price,
+                                                         "quantity": body.blocks, **how})
+    except HTTPException as e:
+        if paid_today and e.status_code == 402:
+            raise HTTPException(402, sb.CARD_REFUSED)
+        raise _storage_unchanged(bid, e)
+    # The webhook writes the same number when Stripe confirms; this makes the
+    # room count now instead of a webhook later. The subscription has changed
+    # by here, so a write that fails doesn't say the change failed: the
+    # webhook's sync_extra_storage writes the count from the subscription.
+    try:
+        await _merge_setting(bid, EXTRA_STORAGE, body.blocks or None)
+    except HTTPException:
+        print(f"[church_billing] extra storage for {bid[:8]} is {body.blocks} blocks at Stripe; "
+              f"the count waits for the webhook", flush=True)
+    over, note = (None, None)
+    if body.blocks < had:
+        over, note = await asyncio.to_thread(_over_after, bid, body.blocks)
+    print(f"[church_billing] extra storage for {bid[:8]}: {had} -> {body.blocks} blocks"
+          f"{' (over)' if over else ''}", flush=True)
+    return {"ok": True, "extra_storage": body.blocks,
+            "extra_bytes": body.blocks * cs.block_bytes(),
+            "gb_each": pricing_config.extra_storage_offer()["gb"],
+            "cents_each": extra_storage_cents(term),
+            "every": every_word(term),
+            "charged_today": paid_today,
+            "over": over, "note": note}
 
 
 # ─── The move ─────────────────────────────────────────────────────────

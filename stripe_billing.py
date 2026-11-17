@@ -753,8 +753,9 @@ async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
     this writes it now so the page shows it at once.
 
     A dearer price on the same term is charged today (PAID_TODAY). A change
-    of term takes a church's extra office logins with it, because Stripe
-    holds one subscription to one billing term (church_billing.logins_for_term)."""
+    of term takes a church's extra office logins and extra storage with it,
+    because Stripe holds one subscription to one billing term
+    (church_billing.logins_for_term, storage_for_term)."""
     import billing_limits
     import feature_gates
     path = f"/subscriptions/{quote(sub_id, safe='')}"
@@ -783,7 +784,8 @@ async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
     if new_price is not None and _term_of(new_price)[0]:
         if _term_of(new_price) != _term_of(old_price):
             import church_billing
-            form["items"] += church_billing.logins_for_term(items, _term_of(new_price))
+            form["items"] += (church_billing.logins_for_term(items, _term_of(new_price))
+                              + church_billing.storage_for_term(items, _term_of(new_price)))
         elif sub.get("status") == "active" and _costs_more(old_price, new_price):
             form.update(PAID_TODAY)
             charged_today = True
@@ -1706,6 +1708,9 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     import church_billing
     if plan_key in fg.CHURCH_PLANS or church_billing.extra_login_quantity(items):
         await church_billing.sync_extra_logins(business_id, items, status_value)
+    # And the blocks of storage it bought (church_storage adds them to its room).
+    if plan_key in fg.CHURCH_PLANS or church_billing.extra_storage_quantity(items):
+        await church_billing.sync_extra_storage(business_id, items, status_value)
     # Its first paid month on a church plan takes a founding place while one
     # is left (church_founding). Never fails the webhook: the patch above is
     # what it exists for, and every renewal tries again.
@@ -2118,6 +2123,14 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_QUARTERLY_FOUNDING", "solutionist_church_established_quarterly_founding", "Solutionist Established Church", 119700, "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE_QUARTERLY_FOUNDING",       "solutionist_church_large_quarterly_founding",       "Solutionist Large Church",       209700, "quarter"),
     ("STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY",                 "solutionist_extra_login_quarterly",                 "Solutionist extra office login", 4500,   "quarter"),
+    # 100 GB more storage on a church plan, $5 a month a block (Kevin,
+    # 2026-11-17: "build"; church_billing, church_storage). Quantity = blocks.
+    # Priced per term like the login: one subscription, one billing term.
+    # Creating them sells nothing: the storage page offers it only once
+    # STRIPE_PRICE_ID_EXTRA_STORAGE is set and CHURCH_STORAGE is on.
+    ("STRIPE_PRICE_ID_EXTRA_STORAGE",             "solutionist_extra_storage_monthly",      "Solutionist extra storage, 100 GB", 500,  "month"),
+    ("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL",      "solutionist_extra_storage_annual",       "Solutionist extra storage, 100 GB", 5000, "year"),
+    ("STRIPE_PRICE_ID_EXTRA_STORAGE_QUARTERLY",   "solutionist_extra_storage_quarterly",    "Solutionist extra storage, 100 GB", 1500, "quarter"),
 ]
 
 

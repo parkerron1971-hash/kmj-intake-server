@@ -20,6 +20,10 @@ Pinned here:
      room again or it gets published; nothing twice; recording never stops.
   8. The 80% heads-up: once per crossing, again only after dropping below 75%.
   9. Practitioner words never name the bucket, its provider or the database.
+ 10. More room, bought (church_billing's extra storage): blocks join the
+     allowance; an unreadable count is never 0 and decides nothing; the page
+     offers it to the owner only, priced for the plan's term; the warnings
+     say "or add storage" once it is sold.
 """
 from __future__ import annotations
 
@@ -89,11 +93,13 @@ class DB:
     def __init__(self):
         self.t = {k: [] for k in ("stream_sessions", "academy_courses", "academy_live_sessions", "sermons",
                                   "chief_notifications", "church_storage_notes", "business_users")}
+        # settings stands for the extra_storage column business_row reads out
+        # of it (this fake hands back whole rows, whatever the select).
         self.t["businesses"] = [
             {"id": BIZ, "owner_id": OWNER, "comp_tier": "church_small", "subscription_plan": None,
-             "subscription_status": "active"},
+             "subscription_status": "active", "stripe_subscription_id": None, "settings": {}},
             {"id": OTHER, "owner_id": STRANGER, "comp_tier": "church_small", "subscription_plan": None,
-             "subscription_status": "active"}]
+             "subscription_status": "active", "stripe_subscription_id": None, "settings": {}}]
         self.t["business_users"] = [
             {"business_id": BIZ, "user_id": MANAGER, "status": "active", "role": "manager"},
             {"business_id": BIZ, "user_id": MEMBER, "status": "active", "role": "member"}]
@@ -441,7 +447,9 @@ def test_the_page_contract(db, r2, on):
     got = _app().get(f"/church/storage?business_id={BIZ}").json()
     assert list(got) == ["enabled", "allowance_bytes", "extra_bytes", "used_bytes", "parts", "files_counted",
                          "percent", "state", "bytes_per_sunday", "sundays_left", "can_delete", "can_download",
-                         "recordings"]
+                         "recordings", "extra_offer"]
+    assert got["extra_offer"] == {"gb": 100, "cents": 500, "every": "month", "blocks": 0, "can_buy": False,
+                                 "trial": False}
     assert got["enabled"] is True and got["allowance_bytes"] == GIB and got["used_bytes"] == 650
     assert got["parts"] == {"recordings": 600, "classes": 0, "files": 50}
     assert got["can_delete"] is True and got["can_download"] is False
@@ -1034,7 +1042,189 @@ def test_practitioner_words_never_name_the_machinery():
     import re
     texts += re.findall(r'HTTPException\(\d+, "([^"]+)"\)', src)
     texts += re.findall(r'HTTPException\(\d+, "([^"]+)"', pathlib.Path(cs.__file__).read_text(encoding="utf-8"))
+    texts += [cs.fewer_blocks_words(True), cs.fewer_blocks_words(None)]
+    import church_billing
+    billing = pathlib.Path(church_billing.__file__).read_text(encoding="utf-8")
+    texts += [t for t in re.findall(r'HTTPException\(\d+, "([^"]+)"', billing) if "storage" in t.lower()]
+    texts += re.findall(r'"(Your storage didn[^"]+)"', billing)
     assert len(texts) > 20
     for t in texts:
         low = t.lower()
         assert not any(re.search(rf"\b{w}\b", low) for w in FORBIDDEN), t
+
+
+# ─── 10. More room, bought (2026-11-17) ───────────────────────────────
+
+@pytest.fixture
+def blocks(monkeypatch):
+    monkeypatch.setenv("LIMIT_EXTRA_STORAGE_GB", "1")          # a block of 1 GiB: small numbers
+
+
+def _bought(db, value, biz=BIZ):
+    next(b for b in db.t["businesses"] if b["id"] == biz)["settings"] = {"extra_storage": value}
+
+
+def test_blocks_bought_join_the_allowance(db, on, blocks):
+    db.session(1, size=pct(170))
+    _bought(db, 1)
+    m = cs.used(BIZ)
+    assert m["allowance_bytes"] == GIB and m["extra_bytes"] == GIB and cs.total_of(m) == 2 * GIB
+    assert m["complete"] is True and m["state"] == "near" and m["percent"] == 85
+    _bought(db, 0)
+    assert cs.used(BIZ)["state"] == "full"
+
+
+@pytest.mark.parametrize("value", ["lots", -1, True, 1.5, {"n": 1}])
+def test_an_unreadable_count_is_never_zero(db, on, blocks, value):
+    db.session(1, size=pct(150))
+    _bought(db, value)
+    m = cs.used(BIZ)
+    assert m["complete"] is False and m["extra_bytes"] == 0      # the page shows the plan's room; the rules wait
+
+
+def test_bought_room_keeps_a_recording_from_being_held(db, r2, on, blocks):
+    _fill(db)
+    _bought(db, 1)
+    s = _end(db)                                                   # 110% of the plan, 55% of the room
+    assert cs.recording_ended(BIZ, s["id"], now=T0) is None
+    assert db.one(s["id"])["keep_until"] is None and db.notices() == []
+
+
+def test_an_unreadable_count_holds_releases_and_removes_nothing(db, r2, on, blocks):
+    _fill(db)
+    s = _end(db)
+    r2.add(BIZ, s["id"])
+    _bought(db, "lots")
+    assert cs.recording_ended(BIZ, s["id"], now=T0) is None       # over the plan alone, but not told
+    assert db.one(s["id"])["keep_until"] is None and db.notices() == []
+    # One already kept past its day, with three warnings sent: neither deleted nor let go.
+    keep = T0 + timedelta(days=14)
+    s.update(keep_until=keep.isoformat(), warnings_sent=3, last_warned_at=(keep - timedelta(days=1)).isoformat())
+    out = cs.storage_tick(now=keep + timedelta(days=1))
+    assert out["removed"] == 0 and out["cleared"] == 0 and out["errors"] >= 1
+    assert db.one(s["id"])["keep_until"] == keep.isoformat() and len(r2.objects) == 4
+    assert db.notices() == []
+    _bought(db, 0)                                                 # read again: nothing bought, the rule goes on
+    assert cs.storage_tick(now=keep + timedelta(days=2))["removed"] == 1
+
+
+def test_buying_room_lets_a_held_recording_go_at_the_next_run(db, r2, on, blocks):
+    _fill(db)
+    s = _end(db)
+    assert cs.recording_ended(BIZ, s["id"], now=T0) == "held"
+    _bought(db, 1)
+    out = cs.storage_tick(now=_day(1))
+    assert out["cleared"] == 1 and db.one(s["id"])["keep_until"] is None
+    assert len(db.notices()) == 1                                  # only the first warning, ever
+
+
+def test_a_church_off_its_plan_is_let_go_whatever_its_count_says(db, r2, on, blocks):
+    _fill(db)
+    s = _end(db)
+    cs.recording_ended(BIZ, s["id"], now=T0)
+    db.t["businesses"][0].update(comp_tier=None, settings={"extra_storage": "lots"})
+    assert cs.storage_tick(now=_day(1))["cleared"] == 1
+    assert db.one(s["id"])["keep_until"] is None
+
+
+def test_the_row_carries_the_count_or_it_is_read(db, on):
+    assert cs.business_row(BIZ) is not None
+    [read] = [g for g in db.gets if g.startswith("/businesses?")]
+    assert "stripe_subscription_id" in read and "extra_storage:settings->extra_storage" in read
+    assert cs.extra_blocks(BIZ, {"extra_storage": 3}) == 3        # the column business_row asks for
+    assert cs.extra_blocks(BIZ, {"extra_storage": None}) == 0     # nothing bought
+    assert cs.extra_blocks(BIZ, {"extra_storage": "x"}) is None
+    assert cs.extra_blocks(BIZ, {"settings": None}) == 0
+    assert cs.extra_blocks(BIZ, {"settings": "broken"}) is None
+    _bought(db, 4)
+    before = len(db.gets)
+    assert cs.extra_blocks(BIZ, {"id": BIZ}) == 4 and len(db.gets) == before + 1      # a row without it: read
+    db.fail.add("businesses")
+    assert cs.extra_blocks(BIZ, {"id": BIZ}) is None
+    assert cs.extra_bytes(BIZ, {"id": BIZ}) is None
+
+
+@pytest.fixture
+def paid(db, monkeypatch):
+    """The church pays for Small through its subscription, has two blocks,
+    and storage is sold."""
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_SMALL", "price_small")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL", "price_small_y")
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", "price_store")
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL", raising=False)
+    db.t["businesses"][0].update(comp_tier=None, subscription_plan="price_small", stripe_subscription_id="sub_1",
+                                 settings={"extra_storage": 2})
+    return db
+
+
+def _offer(uid=OWNER):
+    return _app(uid).get(f"/church/storage?business_id={BIZ}").json()
+
+
+def test_the_page_offers_more_room_to_the_owner_only(paid, on):
+    got = _offer()
+    assert got["extra_offer"] == {"gb": 100, "cents": 500, "every": "month", "blocks": 2, "can_buy": True,
+                                    "trial": False}
+    assert got["extra_bytes"] == 200 * GIB and got["allowance_bytes"] == GIB
+    # A manager sees the room bought, never the button.
+    assert _offer(MANAGER)["extra_offer"] == {"gb": 100, "cents": 500, "every": "month", "blocks": 2,
+                                              "can_buy": False, "trial": False}
+
+
+def test_a_church_on_its_trial_is_told_nothing_is_charged_yet(paid, on):
+    paid.t["businesses"][0]["subscription_status"] = "trialing"
+    offer = _offer()["extra_offer"]
+    assert offer["trial"] is True and offer["can_buy"] is True
+
+
+@pytest.mark.parametrize("change", [
+    {"stripe_subscription_id": None},                 # no subscription to add it to (a comp, a no-card trial)
+    {"subscription_status": "past_due"},              # not in good standing
+    {"subscription_plan": "price_small_y"},           # paid by the year, and no yearly price is set
+])
+def test_nothing_to_buy_unless_everything_lines_up(paid, on, change):
+    paid.t["businesses"][0].update(change)
+    got = _offer()
+    assert got["enabled"] is True and got["extra_offer"]["can_buy"] is False
+
+
+def test_nothing_to_buy_before_the_price_is_set(paid, on, monkeypatch):
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE")
+    assert _offer()["extra_offer"]["can_buy"] is False
+
+
+def test_an_unreadable_count_offers_nothing_and_says_so(paid, on):
+    paid.t["businesses"][0]["settings"] = {"extra_storage": "lots"}
+    offer = _offer()["extra_offer"]
+    assert offer["blocks"] is None and offer["can_buy"] is False
+
+
+def test_a_yearly_church_is_offered_a_year_of_it(paid, on, monkeypatch):
+    paid.t["businesses"][0]["subscription_plan"] = "price_small_y"
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL", "price_store_y")
+    assert _offer()["extra_offer"] == {"gb": 100, "cents": 5000, "every": "year", "blocks": 2, "can_buy": True,
+                                       "trial": False}
+
+
+def test_the_warnings_offer_more_room_once_it_is_sold(db, r2, on, monkeypatch):
+    for env in ("STRIPE_PRICE_ID_EXTRA_STORAGE", "STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL",
+                "STRIPE_PRICE_ID_EXTRA_STORAGE_QUARTERLY"):
+        monkeypatch.delenv(env, raising=False)
+    assert cs.add_storage_sold() is False
+    assert "Make room to keep it." in cs.notice("held", day="Sunday", keep="Sunday, December 6")[1]
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", "price_store")
+    assert cs.add_storage_sold() is True
+    _fill(db)
+    s = _end(db)
+    assert cs.recording_ended(BIZ, s["id"], now=T0) == "held"
+    [n] = db.notices("held")
+    assert "Make room or add storage to keep it." in n["body"]
+
+
+def test_taking_storage_off_says_the_rule_plainly():
+    over, maybe = cs.fewer_blocks_words(True), cs.fewer_blocks_words(None)
+    assert over.startswith("Your church now uses more storage than it has. Nothing is deleted now.")
+    assert maybe.startswith("If your church now uses more storage than it has")
+    for words in (over, maybe):
+        assert f"kept {cs.KEEP_DAYS} days" in words and words.endswith("Published sermons are never deleted.")
+    assert cs.fewer_blocks_words(False) is None
