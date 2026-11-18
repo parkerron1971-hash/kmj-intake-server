@@ -208,6 +208,7 @@ def build(monkeypatch, *, mode: str = "on", **kw):
     monkeypatch.setattr(cs, "_now", lambda: NOW)
     monkeypatch.setattr(cs, "_FORCE", True)
     monkeypatch.setattr(cs, "_KEPT", {})
+    monkeypatch.setattr(cs, "_WAITING", {})
     # What a write hands on to be told (church_schedule._after) waits here, as
     # it waits for its own thread in production: never run inside the write.
     import member_push

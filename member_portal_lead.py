@@ -26,6 +26,9 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
     GET  /my/lead/tasks           the tasks the office handed to me (My tasks
                                   for leaders, church_leader_tasks)
     POST /my/lead/tasks/<id>/done mark one done
+    GET  /my/lead/dates           time away, for someone on the leaders
+                                  schedule (member_portal_dates; its writes
+                                  are that module's own routes)
 
 A leader only ever sees the follow-ups handed to them (church_follow_up
 checks every read and write against leader_contact_id), and never another
@@ -74,6 +77,11 @@ TASKS: ContextVar[Optional[Dict[str, int]]] = ContextVar("lead_tasks", default=N
 # for the church, Tasks is Assignments (theirs, their people's, what was sent
 # up to them and what the office sent them), read once per request.
 ASSIGN: ContextVar[bool] = ContextVar("lead_assign", default=False)
+# The leaders schedule (member_portal_dates, 2026-11-18): {"waiting": n} for
+# someone on it, or with an ask waiting for their yes, read once per request
+# from what church_schedule keeps (section); None for everyone else, and
+# while the switch is closed or its tables aren't there: no Dates entry.
+DATES: ContextVar[Optional[Dict[str, int]]] = ContextVar("lead_dates", default=None)
 
 
 def _word() -> str:
@@ -262,6 +270,12 @@ body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
 .ld-seg a{display:flex;align-items:center;justify-content:center;min-height:42px;border-radius:10px;font-size:14.5px;font-weight:600;
   color:var(--fg2);text-decoration:none;}
 .ld-seg a[aria-current]{background:var(--s3);color:var(--fg);}
+/* With Dates in it (member_portal_dates) the switcher can hold six: each entry keeps its words on one line
+   and the row scrolls inside itself on a phone, never the page. */
+.ld-seg.fit{grid-auto-columns:minmax(max-content,1fr);max-width:min(100%,640px);overflow-x:auto;scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;box-sizing:border-box;}
+.ld-seg.fit::-webkit-scrollbar{display:none;}
+.ld-seg.fit a{padding:0 12px;white-space:nowrap;}
 .ld-prs{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;max-width:760px;}
 @media (min-width:1000px){.ld-prs{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none;}}
 .ld-pr{background:var(--s1);border-radius:var(--r-lg);padding:16px;display:flex;flex-direction:column;gap:10px;}
@@ -655,6 +669,9 @@ async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) ->
     ASSIGN.set(got is not None)
     if got is not None:
         TASKS.set(got)
+    # The leaders schedule (member_portal_dates): Dates, for someone on it.
+    import church_schedule
+    DATES.set(await asyncio.to_thread(church_schedule.section, biz, str(me["id"])))
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
@@ -669,6 +686,13 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             import member_portal_assign
             return await member_portal_assign.serve(request, biz, site, me)
         return await serve_tasks(request, biz, site, me)
+    # Time away, for someone on the leaders schedule (member_portal_dates).
+    # None: not a page for them, and the 404 below answers.
+    if selected == "dates":
+        import member_portal_dates
+        out = await member_portal_dates.serve(request, biz, site, me)
+        if out is not None:
+            return out
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
         import member_portal_leading
@@ -710,6 +734,14 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             and not any(r["status"] in ("active", "invited") for r in my_roles)):
         # Only tasks the office handed them: the tab opens on them.
         return await serve_tasks(request, biz, site, me)
+    if (DATES.get() is not None and not selected and tab == "people"
+            and not any(r["status"] in ("active", "invited") for r in my_roles)):
+        # Only a place on the leaders schedule (someone in the office who
+        # leads nothing else): the tab opens on their dates.
+        import member_portal_dates
+        out = await member_portal_dates.serve(request, biz, site, me)
+        if out is not None:
+            return out
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
@@ -824,8 +856,8 @@ def _ago(days: Optional[int]) -> str:
 
 
 def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: int = 0) -> str:
-    """My group | Sundays | People | Prayer | Tasks | Families: only the ones
-    this leader has, and only when there is more than one."""
+    """My group | Sundays | People | Prayer | Tasks | Dates | Families: only
+    the ones this leader has, and only when there is more than one."""
     tabs = []
     if groups:
         tabs.append(("groups", "/my/lead/groups", "My groups" if groups > 1 else "My group"))
@@ -839,6 +871,10 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: i
     if tasks is not None:
         word = "Assignments" if ASSIGN.get() else "Tasks"
         tabs.append(("tasks", "/my/lead/tasks", f"{word} · {tasks['open']}" if tasks.get("open") else word))
+    dates = DATES.get()
+    if dates is not None:
+        n = int(dates.get("waiting") or 0)      # asks waiting for this person's yes
+        tabs.append(("dates", "/my/lead/dates", f"Dates · {n}" if n else "Dates"))
     if fams:
         tabs.append(("families", "/my/lead/families", f"Families · {fams}"))
     p = PARTS.get()
@@ -850,7 +886,7 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: i
         return ""
     here = ' aria-current="page"'
     links = "".join(f'<a href="{href}"{here if key == tab else ""}>{_e(label)}</a>' for key, href, label in tabs)
-    return f'<nav class="ld-seg" aria-label="{_word()}">{links}</nav>'
+    return f'<nav class="ld-seg{" fit" if dates is not None else ""}" aria-label="{_word()}">{links}</nav>'
 
 
 def _fam_link(f: Dict[str, Any], biz: Dict[str, Any]) -> str:

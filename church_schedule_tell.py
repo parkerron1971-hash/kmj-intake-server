@@ -52,8 +52,9 @@ open for, and never a sample church. For each:
   * untold asks older than two minutes, and untold "can't make it"s
   * untold answers from the last week
   * the one nudge
-  * the reason is cleared 90 days after the last day (reasons can be
-    medical). Only the reason: the ask stays
+  * the reason, and the note that came with the answer, are cleared 90
+    days after the last day (a reason can be medical, and the note can say
+    why). Only those two: the ask and its answer stay
 
 Every read carries its own state filter (the untold index keeps answered and
 withdrawn rows too) and goes page by page.
@@ -75,10 +76,11 @@ logger = logging.getLogger("church_schedule_tell")
 
 KIND = "serving"            # member_push's kind: it lands in the church's conversation (decision 5)
 NUDGE_DAYS = 3
-REASON_DAYS = 90            # a private reason is kept this long after the last day (decision 14)
+REASON_DAYS = 90            # a private reason and an answer's note are kept this long after the last day (decision 14)
 SETTLE_SECONDS = 120        # the sweep leaves an ask this new to the write's own notice
 ANSWER_DAYS = 7             # an answer nobody could be told of in a week is left untold
-MEMBER_PAGE = "/my/lead"    # the Lead tab: the nearest page leaders have today. S1-5 moves this to Dates
+MEMBER_PAGE = "/my/lead/dates"      # Dates on the Lead tab (member_portal_dates): where a person asks and answers
+MEMBER_LINK = "Open your dates"     # the email's button
 OFFICE = "The church office"
 _NO_NAME = {"", "Someone", "The owner", "An office login"}      # the stand-ins a notice never says
 # What a notice may know of an ask. Never `reason`, never `decided_note`.
@@ -302,7 +304,7 @@ def to_person(biz: Dict[str, Any], cid: str, *, title: str, body: str, ref: str,
         if email:
             try:
                 link = _member_link(b)
-                label = link_label or f"Open your {clt._tab_word()} tab"
+                label = link_label or MEMBER_LINK
                 html = clt.render_email(biz, text, title, link, label)
                 clt.deliver(biz, email, name, subject, html, ref, reply_to=clt._office_email(biz))
                 mailed = 1
@@ -565,15 +567,21 @@ def _move(ch: co.Church, ask: Dict[str, Any], want: Dict[str, str], now: datetim
     return True
 
 
+PRIVATE = "or=(reason.not.is.null,decided_note.not.is.null)"     # an ask that still holds either private text
+
+
 def _clear_reasons(b: str, ids: Iterable[str], cutoff: date) -> int:
-    """Clear the reason, and only the reason, on asks whose last day is more
-    than REASON_DAYS past. The write names the rule again, so a row that
-    changed since it was read is left alone; nothing is asked back but ids."""
+    """Clear the reason and the note that came with the answer (it can say
+    why, so it is as private), and only those two, on asks whose last day is
+    more than REASON_DAYS past. The write names the rule again, so a row
+    that changed since it was read is left alone; nothing is asked back but
+    ids."""
     done = 0
     for part in co._chunks(ids, co.IDS_PER_READ):
         got = sb_clients.sb_patch_as_service(
             f"/church_away_asks?business_id=eq.{_q(b)}&id=in.({','.join(_q(i) for i in part)})"
-            f"&reason=not.is.null&ends_on=lt.{cutoff.isoformat()}&select=id", {"reason": None}, redact=True)
+            f"&{PRIVATE}&ends_on=lt.{cutoff.isoformat()}&select=id", {"reason": None, "decided_note": None},
+            redact=True)
         done += len(got) if isinstance(got, list) else 0
     return done
 
@@ -627,7 +635,7 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
 def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     """Hourly, on the worker (kmj_intake_automation): asks sent on to whoever
     is over the asker now, untold asks and answers told, the one nudge, and
-    reasons cleared 90 days after the last day. Quiet (not one read) with the
+    reasons and answers' notes cleared 90 days after the last day. Quiet (not one read) with the
     switch off, and before the migration (only church_schedule.ready's own
     check). Only the churches church_assignments._open_churches() gives that
     CHURCH_SCHEDULE is open for too; never a sample church. A church that
@@ -658,7 +666,7 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                     f"&decided_at=gte.{_q(cs._iso(now - timedelta(days=ANSWER_DAYS)))}"
                     f"&or=(decided_by_user_id.not.is.null,decided_by_contact_id.not.is.null){scope}&select={FIELDS}",
                     "the untold answers") or []
-    old = _all(f"/church_away_asks?reason=not.is.null&ends_on=lt.{(day - timedelta(days=REASON_DAYS - 1)).isoformat()}"
+    old = _all(f"/church_away_asks?{PRIVATE}&ends_on=lt.{(day - timedelta(days=REASON_DAYS - 1)).isoformat()}"
                f"{scope}&select=id,business_id,ends_on", "the reasons to clear") or []
     work: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     for kind, rows in (("waiting", waiting), ("cant", cant), ("answered", answered), ("old", old)):

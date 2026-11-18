@@ -26,12 +26,13 @@ Pins:
   * one nudge three days on, never a second
   * a waiting ask follows whoever is over the asker now; never one that
     needs no yes; it stays put while its `to` is still one of those over them
-  * the reason, and only the reason, goes 90 days after the last day
+  * the reason and the note that came with the answer, and only those, go
+    90 days after the last day
   * the sweep's reads name their state and go page by page
   * taken back: by the asker, whoever had been told hears; by the owner, the
     asker hears; sent once, never tried again
-  * where a notice points: the Lead tab for a person, the office app for a
-    login
+  * where a notice points: Dates on the Lead tab for a person, the office
+    app for a login
   * two sweeps at once, or the write's notice and the sweep, tell once
   * a sample church is told nothing; before the migration, and with the
     switch off, the sweep reads nothing; on `owner` only the platform
@@ -672,21 +673,31 @@ def test_it_stays_where_it_is_while_its_to_is_still_one_of_those_over_them(app, 
 
 # ─── The reason goes after ninety days ────────────────────────────────
 
-def test_the_reason_goes_ninety_days_after_the_last_day_and_only_the_reason(app, db):
+def test_the_reason_and_the_answers_note_go_ninety_days_after_the_last_day_and_only_those(app, db):
+    """The note that came with an answer can say why, so it is as private as
+    the reason and goes with it (the review of #1934)."""
     done = dict(state="yes", decided_at="2026-07-01T12:00:00+00:00", decided_by_user_id=owner(db),
                 decided_note=NOTE, told_at="2026-07-01T12:00:00+00:00", answer_told_at="2026-07-01T12:00:00+00:00")
     old = raw(db, "elena", reason=SECRET, starts_on=day(-100), ends_on=day(-91), **done)
     edge = raw(db, "yusuf", reason=SECRET, starts_on=day(-95), ends_on=day(-90), **done)
-    never = raw(db, "amara", reason=None, starts_on=day(-200), ends_on=day(-190), **done)
+    noted = raw(db, "esther", reason=None, starts_on=day(-150), ends_on=day(-140), **done)      # a note, no reason
+    said = raw(db, "kara", reason=SECRET, starts_on=day(-150), ends_on=day(-140), **{**done, "decided_note": None})
+    never = raw(db, "amara", reason=None, starts_on=day(-200), ends_on=day(-190), **{**done, "decided_note": None})
     waiting = ask(app, "elena", reason=SECRET)
-    before = [dict(old), dict(edge), dict(never)]
-    assert tell.sweep_tick(NOW + HOUR)["cleared"] == 1
-    assert old == {**before[0], "reason": None}, "only the reason: the ask, its answer and its marks stay"
-    assert edge == before[1], "ninety days exactly: one more day"
-    assert never == before[2] and row(db, waiting["id"])["reason"] == SECRET
-    assert tell.sweep_tick(NOW + timedelta(days=1, hours=1))["cleared"] == 1 and edge["reason"] is None
+    before = [dict(r) for r in (old, edge, noted, said, never)]
+    assert tell.sweep_tick(NOW + HOUR)["cleared"] == 3
+    gone = {"reason": None, "decided_note": None}
+    assert old == {**before[0], **gone}, "only those two: the ask, its answer and its marks stay"
+    assert edge == before[1], "ninety days exactly: one more day, for the reason and the note alike"
+    assert noted == {**before[2], **gone}, "a note with no reason is found and cleared too"
+    assert said == {**before[3], **gone} and never == before[4]
+    assert row(db, waiting["id"])["reason"] == SECRET
+    assert tell.sweep_tick(NOW + timedelta(days=1, hours=1))["cleared"] == 1
+    assert edge["reason"] is None and edge["decided_note"] is None
     assert tell.sweep_tick(NOW + timedelta(days=1, hours=2))["cleared"] == 0
-    assert len(db.t["church_away_asks"]) == 4
+    assert len(db.t["church_away_asks"]) == 6
+    kept = json.dumps([r for r in db.t["church_away_asks"] if r["id"] != waiting["id"]])
+    assert SECRET not in kept and NOTE not in kept
 
 
 # ─── What the sweep reads ─────────────────────────────────────────────
@@ -702,7 +713,8 @@ def test_every_read_of_the_sweep_names_its_state_and_goes_page_by_page(app, db):
         q = dict(part.partition("=")[::2] for part in path.partition("?")[2].split("&"))
         assert ("order", "limit") <= tuple(k for k in q if k in ("order", "limit")) and q["limit"] == "1000", path
         assert q["order"] == "id.asc", path
-        assert q.get("state", "").startswith(("eq.", "in.")) or q.get("reason") == "not.is.null", path
+        assert q.get("state", "").startswith(("eq.", "in.")) or q.get("or") == (
+            "(reason.not.is.null,decided_note.not.is.null)"), path
         assert "reason" not in q["select"].split(",") and "decided_note" not in q["select"].split(","), path
     assert sum(1 for p in asks if "state=eq.asked" in p) == 1
 
@@ -809,16 +821,20 @@ def test_a_take_back_is_sent_once_and_never_tried_again(app, db):
 
 # ─── Where a notice points ────────────────────────────────────────────
 
-def test_a_person_is_pointed_at_the_lead_tab_and_a_login_at_the_office_app(app, db):
+def test_a_person_is_pointed_at_their_dates_and_a_login_at_the_office_app(app, db):
+    """Dates on the Lead tab (member_portal_dates) is where a person answers
+    and asks, so that is where their notice opens; the button says so."""
     w = db.who[HOPE]
     desk(db, w["owen@"])
     ask(app, "elena")
     ask(app, "sunny")
     fake.later(db)
     to_person, to_login = db.mail
-    assert 'href="https://new-hope.mysolutionist.app/my/lead"' in to_person["html"]
-    assert notes(db)[0]["url"] == "/my/lead" == tell.MEMBER_PAGE
+    assert 'href="https://new-hope.mysolutionist.app/my/lead/dates"' in to_person["html"]
+    assert "Open your dates</a>" in to_person["html"] and " tab</a>" not in to_person["html"]
+    assert notes(db)[0]["url"] == "/my/lead/dates" == tell.MEMBER_PAGE
     assert f'href="{app_base.app_base_url()}' in to_login["html"] and "/my/lead" not in to_login["html"]
+    assert "Open your dates" not in to_login["html"]
     assert db.rang[0]["nav"] == cas.NAV
 
 
