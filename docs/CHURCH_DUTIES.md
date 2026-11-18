@@ -161,6 +161,38 @@ and `_may_write` (Sunday › Serving, which is only for churches):
 - Moving `background_checks` moves both: named to Tiara alone, Laquesha (and the Executive Pastor's
   default) no longer record or, by the duty, read them.
 
+### New here (2026-11-17)
+
+Kevin, 2026-11-17: "can you make sure that Tiara also has the ability to make sure that things like
+qr code and stuff is made for guest as well." `new_here._may_edit` (Text › New here):
+
+- **Changing New here** (`PUT /new-here/{business_id}`: the welcome and the three texts, the word,
+  on or off) and the room's `can_edit`: the owner, an Admin, a Manager that does `weekly_text`
+  (as before), **or** a Manager that `holds()` `first_guests` (People & Care's by default, so Tiara;
+  whoever it was moved to). The weekly text itself (`sms_routing._may_announce`) stays the Office's.
+- **"Put it on Sunday's screen"** (`POST /new-here/{business_id}/screen`, the same gate): the server
+  makes the room's slide (the word, the number, a QR code to the church's `/new`), never the caller's
+  words. A login with the plan's part (worship_team: a planner, the worship leader, an admin; a
+  Manager by `sunday_plan`, `production_schedule` or `churchsavvy_team`) puts it straight on. Anyone
+  else the gate lets through sends it `waiting` (`source` typed, `source_ref` new_here, `sent_by`
+  New here and their name), and whoever plans Sunday puts it on from Announcements' Waiting for you
+  (the decide route, the plan's part, unchanged). One waits at a time. Sunday's announcements stay
+  Media & Communications' job: the guests' login asks, it never approves.
+- **Who hears it's waiting** (Kevin approved, 2026-11-17): `new_here.deciders`, the Manager logins
+  whose duties give the plan's part and the ChurchSavvy team's planners, worship leaders and admins
+  (the owner when there's no one else), get one push after the answer ("A guest slide from People &
+  Care is waiting for you to put on Sunday's screen.", opening Announcements), never the sender. And
+  while it waits, My week has that line (`kind` screen, "Before Sunday") for every login that
+  `new_here.decides` (the same gate, the owner and admins included). A read that fails leaves the
+  line out and the push quiet; the week stands.
+- **The first-time guests' Sunday** (Kevin approved, 2026-11-17): a login that holds `first_guests`
+  has a Sunday line in How your week goes, "The New here cards": the cards (QR) out on the welcome
+  table and the seats, opening Text on New here (`DOOR["new_here"]`, `view` new-here), and while the
+  church has New here off, switch it on first. Not a duty (`church_my_week.SUNDAY_CARDS`): never
+  judged done, never moved, not in the count, and only where the NEW_HERE switch is open for the church.
+- A failed duties read is a 503 on the change and the slide; the room still reads, without its
+  buttons. Texting hours (`texting_hours._may_edit`) stays the weekly text's.
+
 ## Moving a duty
 
 - `PUT /church/duties/{duty}` with `{business_id, user_ids}`. `[]` or `null` puts the duty back to

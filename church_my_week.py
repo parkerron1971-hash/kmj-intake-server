@@ -130,7 +130,14 @@ DOOR = {
     "books": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
     "pay": {"area": "operate", "id": "checks", "label": "Open Check requests"},
     "store": {"area": "operate", "id": "offerings-manager", "label": "Open the store"},
+    # Not a duty: Text, opened on New here (`view`; the app's door hand-off),
+    # for the first-time guests' Sunday cards line (SUNDAY_CARDS).
+    "new_here": {"area": "operate", "id": "sms", "label": "Open New here", "view": "new-here"},
 }
+# The first-time guests' Sunday line (new_here.sunday_cards, Kevin approved
+# 2026-11-17): not a duty of its own, so never judged, never moved, and not
+# in the count.
+SUNDAY_CARDS = "first_guests_cards"
 
 
 def _q(v: Any) -> str:
@@ -325,10 +332,16 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
     report = church_monthly_report.week_item(business, user_id, role, today)
     if report:
         needs.append(report)
+    # A New here guest slide waiting for whoever puts it on Sunday's screen
+    # (new_here.week_item). A read that fails leaves it out; the week stands.
+    import new_here
+    slide = new_here.week_item(business, user_id, role)
+    if slide:
+        needs.append(slide)
 
     handed = _handed(biz, now, whole, set(mine_areas))
     order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "raised_done": 3,
-             "gap": 4, "late": 5, "logins": 6}
+             "screen": 3, "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     out = {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
@@ -775,6 +788,16 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
                 item.update(state=state, state_text=STATE_TEXT[state], detail=judged[key]["text"])
         for g in (days if group in WEEKDAYS else [group]):
             groups[g].append(item)
+    # The first-time guests' Sunday: the New here cards out (SUNDAY_CARDS).
+    if "first_guests" in held:
+        import new_here
+        cards = new_here.sunday_cards(business)
+        if cards:
+            item = {"key": SUNDAY_CARDS, **cards, "area": church_duties.CATALOG["first_guests"]["area"],
+                    "when": "Sundays", "days": ["Sun"], "door": DOOR["new_here"], "today": key_today == "Sun"}
+            if assign:
+                item["movable"] = False
+            groups["Sun"].append(item)
     out_days = [{"key": g, "label": GROUP_LABEL[g], "today": g == key_today or (g == MONTH and any(i["today"] for i in groups[g])),
                  "items": groups[g]} for g in GROUP_ORDER if groups[g]]
     out = {
