@@ -3,15 +3,16 @@ title: Church tier fences - Small without the weekly plan, clips paid from credi
 date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: '"the 79/99 dollar tier for churches have access to do many tools ... I dont want to loose money because these are not accounted for", then storage instead of time ("we allocate storage amount to each church and if storage become full they would have to delete it"), then "build"'
-status: in progress
-prs: [kmj-intake-server (this PR) - Small plan fences]
-migrations: []
+status: waiting on Kevin
+prs: [kmj-intake-server#1900, kmj-intake-server#1903, kmj-intake-server#1910, kmj-intake-server#1909, solutionist-studio#1614, solutionist-studio#1615, solutionist-studio#1618]
+migrations: [supabase/APPLY-2026-11-17-church-storage.sql (not applied), supabase/APPLY-2026-11-17-recording-small-copy.sql (not applied)]
 left_undone:
-  - "Storage allowance per church: 100 GB / 250 GB / 500 GB / 1 TB covering every file (recordings, sermons, clips, uploads; records never count), the meter shown in Sundays, a recording made while full kept 14 days then removed after three warnings, nothing published ever deleted by us"
-  - "Delete and Download for a recording; R2 deletes need a write-capable credential on Railway (today Railway holds the read-only R2 token)"
-  - "A smaller copy of each recording two weeks after the service (about 1.3 GB instead of 6)"
-  - "Extra storage: +100 GB for $5 a month (a Stripe price, like the extra login)"
-  - "Frontend: the clip lines say '0 hours' for Small (BillingPanel, ClipStudio, MediaLibrary, audiencePlans.ts) and should say clips are paid from AI actions"
+  - "Kevin: apply APPLY-2026-11-17-church-storage.sql, then APPLY-2026-11-17-recording-small-copy.sql (the first was staged in the SQL editor on 11-17; the Run click is his)"
+  - "Kevin: an R2 token with Object Read & Write on solutionist-media; STREAM_R2_WRITE_ACCESS_KEY_ID and STREAM_R2_WRITE_SECRET_ACCESS_KEY on kmj-intake-server and kmj-intake-worker. Without it nothing is deleted and no church is warned"
+  - "Kevin: CLIPPER_COPY_HOSTS on solutionist-clipper = the R2 endpoint's hostname (the clipper's /health says copies:false until then)"
+  - "Kevin: create the three extra-storage Stripe prices (stripe_billing.bootstrap_prices narrowed to STRIPE_PRICE_ID_EXTRA_STORAGE*, via railway run; the run was refused to the agent) and set the three STRIPE_PRICE_ID_EXTRA_STORAGE* ids on kmj-intake-server and kmj-intake-worker"
+  - "Thursday 2026-11-19: CHURCH_STORAGE=owner then on, CHURCH_STORAGE_SMALL_COPY=owner then on (both services); a What's New entry for the storage card and extra storage the same day"
+  - "Small Church's founding/regular prices were not changed; the fences are features only"
 decisions:
   - "Small = Growing minus marketing_week: the weekly plan's five flyers are included work no credit pays for (creative_director billing='included'); Small keeps marketing_suggestion, and any post or flyer the church asks for is charged from its credits"
   - "Small includes 0 clip hours (CHURCH_SMALL_CLIP_HOURS default 0): clip_finder charges 75 credits an hour from the first second; a plan-lookup error still falls back to the ten free hours, as before"
@@ -34,3 +35,12 @@ plan and included clip hours start at Growing. NOT_WEEK no longer names
 the Professional plan to a church. With these fences and a capped storage
 allowance, a fully used plan keeps about 43% / 42% / 44% / 38% at the
 founding prices and 51-55% at the regular prices.
+
+Built the same day (Kevin: "build"): #1903 the storage allowance (meter in
+Sundays, Delete, the 14-day rule with three delivered warnings, the 80%
+heads-up, CHURCH_STORAGE off); #1910 the smaller copy per recording, made
+by the clip service and also the download, the full recording removed at
+day 14, never counted twice against a church (CHURCH_STORAGE_SMALL_COPY
+off); #1909 + FE #1618 more room at $5 per 100 GB a month on the
+church's subscription, like extra logins; FE #1614 Small's clip wording,
+FE #1615 the storage card on the Live page. Each has its own worklog.
