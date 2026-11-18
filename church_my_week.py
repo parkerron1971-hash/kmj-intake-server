@@ -111,9 +111,11 @@ DOOR = {
     "new_volunteers": {"area": "operate", "id": "serve-teams", "label": "Open Teams"},
     "background_checks": {"area": "operate", "id": "serving", "label": "Open Serving"},
     "serving_thanks": {"area": "operate", "id": "serving", "label": "Open Serving"},
-    # The sign-ups an event takes are set on the events page (the app's
-    # search sends "sign up" there too).
-    "events": {"area": "build", "id": "events-page", "label": "Open the events page"},
+    # An event's volunteers, sign-ups and roles are set on the event, in the
+    # church's events room (Sunday › Services & Events: a module, so its id is
+    # read with the week, ROSTER); the events page only switches the public
+    # page on, and it is the website's (2026-11-18).
+    "events": {"area": "operate", "id": "@roster", "label": "Open Services & Events"},
     "outreach_nights": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
     "attendance": {"area": "operate", "id": "attendance", "label": "Open Attendance"},
     # Media & Communications: ChurchSavvy and production. The order is built
@@ -142,6 +144,35 @@ DOOR = {
     # for the first-time guests' Sunday cards line (SUNDAY_CARDS).
     "new_here": {"area": "operate", "id": "sms", "label": "Open New here", "view": "new-here"},
 }
+# A door whose page is the church's events room (Services & Events): its own
+# id is the room's module, read when the week is (room_door).
+ROSTER = "@roster"
+# No events room yet: an event goes on the calendar.
+NO_ROSTER = {"area": "operate", "id": "calendar", "label": "Open the calendar"}
+
+
+def room_door(business: Dict[str, Any], door: Optional[Dict[str, Any]], memo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A door as the app opens it: the events room's (ROSTER) by its module
+    (`module:<id>`, the room's own name), read once a week's build (memo);
+    the calendar when the church has no room or it can't be read. Any
+    other door as it is."""
+    if not door or door.get("id") != ROSTER:
+        return door
+    if "room" not in memo:
+        try:
+            import events_rsvp_router
+            rooms = [m for m in events_rsvp_router.roster_modules_for(str(business["id"])) if isinstance(m, dict) and m.get("id")]
+        except Exception:  # noqa: BLE001 — the calendar rather than no door
+            logger.warning("my week: the events room wasn't read (%s)", str(business.get("id"))[:8])
+            rooms = []
+        memo["room"] = rooms[0] if rooms else None
+    room = memo["room"]
+    if not room:
+        return dict(NO_ROSTER)
+    name = " ".join(str(room.get("name") or "").split()) or "Services & Events"
+    return {"area": "operate", "id": f"module:{room['id']}", "label": f"Open {name}"}
+
+
 # The first-time guests' Sunday line (new_here.sunday_cards, Kevin approved
 # 2026-11-17): not a duty of its own, so never judged, never moved, and not
 # in the count.
@@ -774,6 +805,7 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     done = {k: v["done"] for k, v in judged.items()}
     monday = today - timedelta(days=today.weekday())
     groups: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
+    rooms: Dict[str, Any] = {}          # the events room, read once for its door (room_door)
     for key, d in church_duties.CATALOG.items():
         if key not in held:
             continue
@@ -784,7 +816,7 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
         else:
             is_today = key_today in days
         item = {"key": key, "label": d["label"], "does": d["does"], "area": d["area"], "when": said, "days": days,
-                "door": DOOR.get(key), "today": is_today}
+                "door": room_door(business, DOOR.get(key), rooms), "today": is_today}
         if assign:
             item["movable"] = cas.movable(key)
         if pick:
