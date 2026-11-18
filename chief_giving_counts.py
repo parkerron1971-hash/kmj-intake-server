@@ -55,7 +55,11 @@ def _money(cents: int) -> str:
     return f"${cents / 100:,.2f}"
 
 
-def _chief(biz: Dict[str, Any], atype: str) -> Tuple[Optional[Dict[str, Any]], Any]:
+def _chief(biz: Dict[str, Any], atype: str, need: str = "see") -> Tuple[Optional[Dict[str, Any]], Any]:
+    """The giving gate for one of Chief's count verbs. `need`: "see" for a
+    verb that reads the counts, "work" for one that records or undoes gifts
+    (church_money_gate, "giving": a login that only Sees giving is refused
+    the write)."""
     import giving_services as gs
     from chief_of_staff import _TURN_USER_ID
     uid = _TURN_USER_ID.get()
@@ -63,7 +67,7 @@ def _chief(biz: Dict[str, Any], atype: str) -> Tuple[Optional[Dict[str, Any]], A
         return _fail(atype, "giving by service is only for a signed-in person who keeps the giving records"), None
     user = SimpleNamespace(id=uid)
     try:
-        gs._gate(str(biz["id"]), user)
+        gs._gate(str(biz["id"]), user, need)
     except HTTPException as e:
         if e.status_code == 404:
             return _fail(atype, "giving by service isn't switched on for this church yet"), None
@@ -191,7 +195,7 @@ def record_sync(biz_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     import giving_ways
     from giving_router import giving_settings
     atype = "record_service_gifts"
-    fail, user = _chief({"id": biz_id}, atype)
+    fail, user = _chief({"id": biz_id}, atype, "work")
     if fail:
         return fail
     gifts = action.get("gifts")
@@ -282,7 +286,7 @@ def undo_sync(biz_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     import giving_services as gs
     import period_lock
     atype = "undo_service_gifts"
-    fail, user = _chief({"id": biz_id}, atype)
+    fail, user = _chief({"id": biz_id}, atype, "work")
     if fail:
         return fail
     since = (datetime.now(timezone.utc) - timedelta(days=UNDO_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")

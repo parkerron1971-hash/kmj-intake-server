@@ -69,14 +69,35 @@ def _giving_wall(biz: str, user: AuthedUser) -> None:
     The totals stay open."""
     import church_keys
     church_keys.wall(biz, user, "giving_money")
+    _names_wall(biz, user)
+
+
+def _names_wall(biz: str, user: AuthedUser) -> None:
+    """With giving as its own tick switched on: a report that names givers,
+    or shows one person's giving, and can't be shown without them, is refused
+    to a login that Sees the books without "who gave" (church_money_gate
+    .sees_givers). Switched off, nothing is asked."""
+    import church_money_gate
+    if not church_money_gate.sees_givers(biz, user):
+        raise HTTPException(403, church_money_gate.GIVERS_403)
+
+
+def _bank_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
+    """The bank's own wall for a report that reads it: in a church the
+    owner, an Admin, the accountant or the "bank and payouts" tick."""
+    import church_keys
+    church_keys.wall(biz, user, "giving_money")
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, biz_row, part="bank")
 
 
 def _givers_hidden(biz: str, user: AuthedUser, data: Dict[str, Any]) -> Dict[str, Any]:
     """Revenue and profitability keep their totals behind the Giving lock;
     only the per-giver rows (by_customer) are left out."""
     import church_keys
+    import church_money_gate
     if isinstance(data, dict) and data.get("by_customer") \
-            and not church_keys.is_open(biz, user, "giving_money"):
+            and not (church_keys.is_open(biz, user, "giving_money") and church_money_gate.sees_givers(biz, user)):
         return {**data, "by_customer": [], "givers_locked": True}
     return data
 
@@ -287,6 +308,7 @@ def general_ledger(biz: str, account: Optional[str] = None,
                    from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
+    _names_wall(biz, user)   # its lines can name a giver; it has no nameless form
     billing_limits.require_feature(biz, "reports_full")
     if period and not (from_ or to):
         s, e = reports_engine.period_bounds(period)
@@ -569,6 +591,7 @@ async def accountant_send(biz: str, year: Optional[int] = None,
 def journal(biz: str, limit: int = 50, offset: int = 0,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
+    _names_wall(biz, user)   # its lines can name a giver; it has no nameless form
     billing_limits.require_feature(biz, "reports_full")
     if not gl_reports.gl_active(biz):
         return {"ok": True, "report": "journal", "entries": [], "has_more": False,
@@ -674,7 +697,11 @@ def put_budgets(biz: str, body: BudgetsBody,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     # Seat-access arc (7/31 matrix): budgets are everyday operator work —
     # member+ writes (matches the business_budgets RLS write policy).
-    _owner_or_reader(biz, user)
+    row = _owner_or_reader(biz, user)
+    # A budget is a change to the books: a login let in by a giving tick
+    # that only Sees is refused (the church wall at "work").
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, row, need="work")
     from business_users_router import require_role
     require_role(biz, str(user.id), "member")
     billing_limits.require_feature(biz, "reports_full")
@@ -838,7 +865,7 @@ def bank_reconciliation(biz: str, period: str = "this_month",
                         from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner_or_reader(biz, user)
-    _giving_wall(biz, user)
+    _bank_wall(biz, user, biz_row)
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return gl_reports_t4.bank_reconciliation(biz, period, from_, to)
@@ -852,6 +879,7 @@ def audit_trail_report(biz: str, source_type: Optional[str] = None,
                        to: Optional[str] = None,
                        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
+    _names_wall(biz, user)   # its lines can name a giver; it has no nameless form
     billing_limits.require_feature(biz, "audit_trail")
     return gl_reports_t4.audit_trail(biz, source_type=source_type,
                                      date_from=from_, date_to=to)
@@ -1041,8 +1069,12 @@ def export(biz: str, report: str, format: str = "csv",
     if report in ("donors", "funds"):
         from giving_records import require_finance
         require_finance(biz, user)
-    if report in ("donors", "funds", "customer_statement", "bank_reconciliation"):
+    if report in ("donors", "funds", "customer_statement"):
         _giving_wall(biz, user)
+    if report == "bank_reconciliation":
+        _bank_wall(biz, user, biz_row)
+    if report in ("general_ledger", "audit_trail"):
+        _names_wall(biz, user)   # as their screens: the lines can name a giver
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     # Exports gate exactly like their screens; Starter reports (P&L,

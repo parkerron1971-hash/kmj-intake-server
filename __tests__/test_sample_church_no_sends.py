@@ -171,6 +171,9 @@ TICKS = {
     # Not business-scoped: the platform's own database readings and weekly
     # verdict; its church count already leaves samples out (is_sample).
     "db_health": "db_health:tick",
+    # Requests for giving access: off by default; switched on, it reminds a
+    # church's owner once and skips a sample church (church_money_ticks._sample).
+    "church_money_asks": "church_money_ticks:tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {

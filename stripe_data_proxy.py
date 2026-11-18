@@ -54,9 +54,15 @@ def _secret_key() -> str:
     return k
 
 
-def _require_owner_with_acct(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+def _require_owner_with_acct(business_id: str, user: AuthedUser, door: str = "charges") -> Dict[str, Any]:
     """Owner gate + ensure the business has a connected Stripe account.
-    Returns the business row so callers reuse the stripe_account_id."""
+    Returns the business row so callers reuse the stripe_account_id.
+
+    `door`: with giving as its own tick switched on for the church
+    (church_money_gate.TICK_DOORS), whoever the owner ticked "bank and
+    payouts" for reads the payouts and the refunds ("payouts"), and the
+    charges and customers too when they may also see who gave ("charges":
+    a charge names its giver). Switched off, the owner alone, as before."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=id,name,owner_id,stripe_account_id&limit=1"
     ) or []
@@ -64,7 +70,9 @@ def _require_owner_with_acct(business_id: str, user: AuthedUser) -> Dict[str, An
         raise HTTPException(404, "business not found")
     biz = rows[0]
     if str(biz.get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
+        import church_money_gate
+        if not church_money_gate.tick_admits(business_id, user, "see", door):
+            raise HTTPException(403, "not authorized")
     # Charges, customers, refunds and payouts are who gave what and the
     # payouts: a church's Giving keeper holds the owner to the key too.
     church_keys.wall(business_id, user, "giving_money")
@@ -178,7 +186,7 @@ async def list_payouts(
     arrival_date_lte: Optional[int] = None,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    biz_row = _require_owner_with_acct(biz, user)
+    biz_row = _require_owner_with_acct(biz, user, "payouts")
 
     params: Dict[str, Any] = {
         "limit": _clamp_limit(limit),
@@ -258,7 +266,7 @@ async def list_refunds(
     cursor pagination. Stripe caps limit at 100; we clamp to
     DEFAULT_LIMIT=25 to match the other tabs.
     """
-    biz_row = _require_owner_with_acct(biz, user)
+    biz_row = _require_owner_with_acct(biz, user, "payouts")
 
     params: Dict[str, Any] = {
         "limit": _clamp_limit(limit),

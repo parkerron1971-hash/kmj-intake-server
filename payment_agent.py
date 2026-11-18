@@ -309,10 +309,17 @@ Keep it to 2-3 sentences. Sign off as {practitioner}."""
             "ai_model": DRAFT_MODEL,
         })
 
+        # A thank-you for a GIFT names the giver and the amount, so it is a
+        # giving event ("giving_..."), read only by whoever may see who gave
+        # (the events policy's giving class; 2026-11-18, the giving tick: a
+        # login that only Sees the books reads the invoice and payment class,
+        # and "payment_thankyou_created" put a giver and an amount there).
+        trigger = str(ev.get("event_type") or "")
+        for_gift = trigger.startswith(("giving", "donation"))
         await _sb(client, "POST", "/events", {
             "business_id": biz_id,
             "contact_id": contact_id,
-            "event_type": "payment_thankyou_created",
+            "event_type": "giving_thankyou_created" if for_gift else "payment_thankyou_created",
             "data": {"amount": amount, "trigger_event": ev.get("event_type")},
             "source": "payment_agent",
         })

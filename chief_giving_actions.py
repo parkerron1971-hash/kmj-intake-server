@@ -17,7 +17,9 @@ from typing import Any, Dict, Optional
 import giving_statements as gs
 
 
-def _authorize(biz):
+def _authorize(biz, need="see"):
+    """`need`: "see" for a verb that reads giving (both statement verbs
+    read), "work" for one that changes it (church_money_gate, "giving")."""
     from chief_of_staff import _TURN_USER_ID
     from giving_records import require_finance
     from types import SimpleNamespace
@@ -25,7 +27,7 @@ def _authorize(biz):
     if not user_id:
         from fastapi import HTTPException
         raise HTTPException(403, "A signed-in finance user must request giving statements.")
-    require_finance(biz["id"], SimpleNamespace(id=user_id))
+    require_finance(biz["id"], SimpleNamespace(id=user_id), need=need)
     import church_keys
     if not church_keys.is_open(str(biz["id"]), SimpleNamespace(id=user_id), "giving_money"):
         from fastapi import HTTPException

@@ -25,9 +25,14 @@ people, the same status code, the same words.
                      giving_records.require_ministry_finance and
                      require_money_writer() below keep their signatures and
                      ask here, so the routes that call them didn't change
-    THE TICK ....... not here yet. When giving is its own tick it becomes
-                     one more standing in _Facts.has() and one more name in
-                     the rows that take it; no door changes again
+    THE TICK ....... giving as its own tick on a person's sheet (2026-11-18,
+                     church_money_ticks): eight more standings in
+                     _Facts.has() and one more name in the rows that take
+                     it (RULES_ON). It is read only while CHURCH_MONEY_TICKS
+                     is on for the church; off, RULES alone decides, exactly
+                     as before, and nothing more is read. The tick's
+                     standings come last in every row, so the owner, an
+                     Admin and the accountant pass as they always did
     THE CHURCH WALL  "books" and "bank" at "see" are NOT a full answer. They
                      are only the wall a church or nonprofit puts in front
                      of its ledger, reports and bank; every other business
@@ -77,6 +82,19 @@ SEAT = "seat"                # any active seat, Viewer and up
 # role). The giving tick replaces this row; until it exists the row stays,
 # because a treasurer somewhere may be working by it.
 MONEY_AREA = "money_area"
+
+# THE GIVING TICK (church_money_ticks, church_money_holders): what the owner
+# ticked on this login's sheet. Read only while the switch is on for the
+# church. "Work" is never a Viewer seat's, whatever its row says.
+TICK = "tick"                        # holds giving at any level: See and up
+TICK_WORK = "tick_work"              # Work or Lead, on a seat that may change rows
+TICK_LEAD = "tick_lead"              # Lead, on such a seat
+TICK_WHO = "tick_who"                # ... and may see who gave
+TICK_WHO_WORK = "tick_who_work"      # ... who gave, and works it
+TICK_BANK = "tick_bank"              # ... and the bank and payouts
+TICK_BANK_WORK = "tick_bank_work"    # ... the bank and payouts, and works them
+TICK_BANK_WHO = "tick_bank_who"      # ... the bank and who gave (a charge names its giver)
+TICKS = (TICK, TICK_WORK, TICK_LEAD, TICK_WHO, TICK_WHO_WORK, TICK_BANK, TICK_BANK_WORK, TICK_BANK_WHO)
 
 NEEDS = ("see", "work")
 PARTS = ("giving", "books", "bank", "bills", "store", "checks", "help", "rentals", "my_week", "count_reopen",
@@ -192,6 +210,60 @@ RULES: Dict[Tuple[str, str], Rule] = {
     ("setup", "work"): _OWNER_ONLY,
 }
 
+
+
+def _and(rule: Rule, *more: str, drop: Tuple[str, ...] = ()) -> Rule:
+    return rule._replace(who=tuple(s for s in rule.who if s not in drop) + more)
+
+
+# The same rows WITH THE GIVING TICK SWITCHED ON for the church
+# (church_money_ticks.open_for). Each is its RULES row with the tick's
+# standing added last, so nobody who passed before is asked anything new.
+#   giving ......... the gift records, statements, pledges, counts and
+#                    giving reports all name the giver, so they take the
+#                    "who gave" tick; a login that only Sees giving reads
+#                    the books, the bills and what is owed, not who gave
+#   books, bills,
+#   store, rentals,
+#   my week ........ any tick reads; Work or Lead changes
+#   bank ........... only with "bank and payouts"
+#   checks, help ... the LEGACY area row is gone (it admitted nobody in
+#                    production on 2026-11-18): the tick is the treasurer
+#   reopen a count . Lead
+#   setup .......... the owner alone, as ever
+RULES_ON: Dict[Tuple[str, str], Rule] = {
+    ("giving", "see"): _and(_FINANCE, TICK_WHO),
+    ("giving", "work"): _and(_FINANCE, TICK_WHO_WORK),
+    ("books", "see"): _and(_CHURCH_WALL_ONLY, TICK),
+    ("books", "work"): _and(_WRITER, TICK_WORK),
+    ("bank", "see"): _and(_CHURCH_WALL_ONLY, TICK_BANK),
+    ("bank", "work"): _and(_WRITER, TICK_BANK_WORK),
+    ("bills", "see"): _and(RULES[("bills", "see")], TICK),
+    ("bills", "work"): _and(_WRITER, TICK_WORK),
+    ("store", "see"): _and(_WRITER, TICK),
+    ("store", "work"): _and(_WRITER, TICK_WORK),
+    ("checks", "see"): _and(_TREASURER, TICK, drop=(MONEY_AREA,)),
+    ("checks", "work"): _and(_TREASURER, TICK_WORK, drop=(MONEY_AREA,)),
+    ("help", "see"): Rule(who=(TICK,)),
+    ("help", "work"): Rule(who=(TICK_WORK,)),
+    ("rentals", "see"): _and(RULES[("rentals", "see")], TICK),
+    ("rentals", "work"): _and(RULES[("rentals", "work")], TICK_WORK),
+    ("my_week", "see"): _and(_TOP, TICK),
+    ("my_week", "work"): _and(_TOP, TICK_WORK),
+    ("count_reopen", "work"): _and(RULES[("count_reopen", "work")], TICK_LEAD),
+    ("setup", "see"): _OWNER_ONLY,
+    ("setup", "work"): _OWNER_ONLY,
+}
+
+# Doors that are not rows of RULES (they stay the owner's while the switch
+# is off, each by its own line): what a holder's OWN tick opens there when
+# it is on. tick_admits() answers; the door still asks about the owner itself.
+TICK_DOORS: Dict[Tuple[str, str], str] = {
+    ("payouts", "see"): TICK_BANK,           # the payouts and refunds lists
+    ("payouts", "work"): TICK_BANK_WORK,     # a refund
+    ("charges", "see"): TICK_BANK_WHO,       # charges and customers name the giver
+}
+
 _UNREAD = object()
 
 
@@ -232,6 +304,7 @@ class _Facts:
         self._areas = areas
         self.given = business if isinstance(business, dict) and business else None
         self._read: Optional[Dict[str, Any]] = None
+        self._tick: Any = _UNREAD
 
     @property
     def role(self) -> Optional[str]:
@@ -286,7 +359,31 @@ class _Facts:
             return _ROLE_RANK.get(self.role or "", 0) >= _ROLE_RANK["viewer"]
         if standing == MONEY_AREA:
             return self.money_area()
+        if standing in TICKS:
+            return self.ticked(standing)
         return False
+
+    def ticked(self, standing: str) -> bool:
+        """What this login's own giving tick opens (church_money_ticks
+        .holder: None with the switch off, with no row, on a seat that is
+        gone, or when the read failed)."""
+        if self._tick is _UNREAD:
+            import church_money_ticks
+            self._tick = church_money_ticks.holder(self.business_id, self.uid)
+        t = self._tick
+        if not t:
+            return False
+        # An Admin seat works giving and sees who gave by its own standing;
+        # the one thing its row adds is the bank and payouts. So for an
+        # Admin only `bank` is read from the row, and the row never stores
+        # more than that (church_money_ticks.plan).
+        admin = t.get("seat_role") == ADMIN
+        work = t.get("can_work") is True or admin
+        who = t.get("who_gave") is True or admin
+        bank = t.get("bank") is True
+        return {TICK: True, TICK_WORK: work, TICK_LEAD: work and t.get("level") == "lead", TICK_WHO: who,
+                TICK_WHO_WORK: who and work, TICK_BANK: bank, TICK_BANK_WORK: bank and work,
+                TICK_BANK_WHO: bank and who}.get(standing, False)
 
     def money_area(self) -> bool:
         """The LEGACY row (see MONEY_AREA). A login with every area, or none
@@ -305,6 +402,68 @@ class _Facts:
         return isinstance(areas, list) and MONEY_AREA_KEY in areas
 
 
+def _ticks_on(business_id: Any) -> bool:
+    """Whether the giving tick is switched on for this church. Off (the
+    default) is answered from the environment alone: nothing is read."""
+    import church_money_ticks
+    return church_money_ticks.mode() != "off" and church_money_ticks.open_for(business_id)
+
+
+def tick_admits(business_id: Any, user: Any, need: str, door: str) -> bool:
+    """For a door outside RULES (TICK_DOORS): whether this login's OWN
+    giving tick opens it. False with the switch off (nothing is read), for
+    anyone with no tick, and for the owner or an Admin as such: the door
+    asks about those itself."""
+    standing = TICK_DOORS.get((door, need))
+    if standing is None:
+        raise ValueError(f"church_money_gate has no tick door {door!r} / {need!r}")
+    if not _ticks_on(business_id):
+        return False
+    return _Facts(business_id, user, None, False, None).ticked(standing)
+
+
+GIVERS_403 = ("Who gave is kept for the owner, an admin, the accountant, or a login the owner ticked "
+              "“who gave” for.")
+SEES_ONLY_403 = "This login sees Giving & money but doesn't change it."
+
+
+def sees_givers(business_id: Any, user: Any, business: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a door that this person has ALREADY passed may put a name
+    beside a gift, or show any one person's giving.
+
+    With the giving tick switched off for the business: yes, always (each
+    door and the Giving keeper decide, exactly as before; nothing is read).
+    Switched on: in a church or nonprofit, the giving rule ("giving" at
+    "see": the owner, an Admin, the accountant, or the "who gave" tick); in
+    any other business, yes. A read that fails is a no."""
+    if not _ticks_on(business_id):
+        return True
+    try:
+        by, _rule_, _f, _out = _decide(business_id, user, "see", "books", _UNREAD, None, business)
+        if by == NOT_ASKED:
+            return True
+        return _decide(business_id, user, "see", "giving", _UNREAD, None, business)[0] is not None
+    except HTTPException:
+        return False
+
+
+def require_church_wall(business_id: Any, user: Any, need: str = "see", part: str = "books",
+                        business: Optional[Dict[str, Any]] = None) -> Pass:
+    """The church wall in front of a door that has its OWN seat ladder (the
+    ledger, the reports, payroll, contractors, the periods, the bank's
+    reads). At "see" it is require_money exactly. At "work" (the door is
+    about to change something) a login that got through the wall only by
+    its giving tick must hold Work there: the door's ladder would let a
+    Manager seat write, and a tick that only Sees must not ride on it. The
+    owner, an Admin and the accountant pass as they always did."""
+    p = require_money(business_id, user, "see", part, business=business)
+    if need == "work" and p.by in TICKS:
+        want = TICK_BANK_WORK if part == "bank" else TICK_WORK
+        if not _Facts(business_id, user, None, False, None).ticked(want):
+            raise HTTPException(403, SEES_ONLY_403)
+    return p
+
+
 def _rule(need: str, part: str) -> Rule:
     rule = RULES.get((part, need))
     if rule is None:
@@ -317,6 +476,8 @@ def _decide(business_id: Any, user: Any, need: str, part: str, role: Any, accoun
     """(the standing that passed or None, the rule, the facts, whether the
     business is outside the rule's `split`)."""
     rule = _rule(need, part)
+    if _ticks_on(business_id):
+        rule = RULES_ON.get((part, need), rule)
     f = _Facts(business_id, user, role, accountant, business, areas)
     if rule.owner_by == "row":
         f.row(rule, "owner_id")                 # no such business is a 404 before anything else

@@ -180,5 +180,5 @@ def test_the_three_ask_the_wall_before_anything_else():
         src = (_here.parent / f"{name}.py").read_text(encoding="utf-8")
         body = src[src.index("def _access("):]
         body = body[:body.index("\ndef ", 10)]
-        wall = body.index("require_ministry_finance(biz, user, row)")
+        wall = body.index('require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")')
         assert wall < body.index('str(row.get("owner_id"))') and wall < body.index("require_role("), name

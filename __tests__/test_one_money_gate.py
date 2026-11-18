@@ -846,6 +846,8 @@ def test_the_gates_that_kept_their_names_only_ask_the_one_gate():
     for fn in (giving_records.require_finance, giving_records.require_ministry_finance, gate.require_money_writer,
                gate.require_owner):
         body = inspect.getsource(fn)
-        assert "require_money(" in body, fn.__name__
+        # The church wall's wrapper asks through require_church_wall, which is
+        # require_money at "see" and holds a tick to Work at "work".
+        assert "require_money(" in body or "require_church_wall(" in body, fn.__name__
         code = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith(("#", '"""')))
         assert "role_of(" not in code and "is_active_accountant(" not in code and "HTTPException(" not in code

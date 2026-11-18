@@ -42,7 +42,11 @@ Who:
               login, as a tick on the sheet's duties
 
   GET    /church/sheet?business_id=&user_id=
-  PUT    /church/sheet        {business_id, user_id, level?, job?, areas?, duties?: {add, remove}}
+  PUT    /church/sheet        {business_id, user_id, level?, job?, areas?, duties?: {add, remove},
+                               money?: {level: null|see|work|lead, who_gave, bank}}
+                              (`money`: giving as its own tick, church_money_ticks; the owner's
+                              change is saved, an Admin's or a holder's is sent to the owner as a
+                              request and opens nothing)
   GET    /church/sheet/jobs?business_id=      the jobs, always (see below)
   POST   /church/jobs         {business_id, label, does, description, role, areas, duties}
   PUT    /church/jobs/{key}   the same body (one of the church's own)
@@ -446,7 +450,15 @@ def compose(business: Dict[str, Any], viewer: str, target: str) -> Dict[str, Any
             # The jobs (their descriptions too) are the office's: a Manager and up.
             "jobs": cj.jobs(ch.b) if st["viewer_role"] in ("owner", "admin", "manager") else [], **locks(st),
             "level_options": level_options(st),
+            # Giving as its own tick (church_money_ticks): None while it is
+            # switched off for this church, and the app shows nothing new.
+            "money": _money_block(business, ch, st, target),
         }
+
+
+def _money_block(business: Dict[str, Any], ch: co.Church, st: Dict[str, Any], target: str) -> Optional[Dict[str, Any]]:
+    import church_money_ticks
+    return church_money_ticks.block(business, ch, st, target)
 
 
 # ─── Changing one sheet ───────────────────────────────────────────────
@@ -858,7 +870,15 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         if e["shown_then"] is None and e["shown_now"] is not None:
             raise HTTPException(403, BACK_TO_GUESS)
 
-    widens = bool(more_areas or more_duties or e["level_up"] or gives_grant)
+    # Giving as its own tick: checked here with everything else, before
+    # the first write. The owner's own raise is "more" (the password, always);
+    # an Admin's or a holder's is only a request to the owner, opens nothing
+    # and asks for no password.
+    import church_money_ticks as cmt
+    money = cmt.plan(business, ch, st, viewer, target, body, level)
+    money_more = bool(money and money["kind"] == "grant" and money["more"])
+
+    widens = bool(more_areas or more_duties or e["level_up"] or gives_grant or money_more)
     if widens and widening is not None:
         widening()
 
@@ -893,6 +913,9 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
     #    changed: a move that fails here stops the save with the level, the
     #    areas and the job untouched. (The duties module writes one duty a
     #    call; there is no all-at-once write to ask for.)
+    if money and money["first"]:
+        cmt.apply(money, business, viewer, ch.login_name(viewer), target)
+        said.append(money["said"])
     for key, to in kept_plan:
         try:
             cd.move(business, key, to, viewer)
@@ -911,6 +934,12 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
             raise HTTPException(503, "That didn't save. Nothing changed. Try again.")
     # 2. The level, the areas and the job, in one row write: never a new
     #    level with the old areas.
+    if level_changes and not cmt.role_lowered(ch.b, target, trole, level):
+        # A login moved down keeps no more giving than the owner gave it at
+        # the level it will have (an Admin's row is cleared, a Viewer's is
+        # lowered to See), BEFORE the level is written. If that can't be
+        # saved, the level isn't either.
+        raise HTTPException(503, "That didn't save. Their level, job and areas are as they were. Try again.")
     if level_changes or areas_set or job_arg is not keep:
         church_areas.set_login(ch.b, target, level, areas=areas if areas_set else keep, job=job_arg,
                                level=level if level_changes else keep)
@@ -922,6 +951,16 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         cj.set_grant(business, target, True, viewer)
     if gives_grant:
         said.append(f"gave “{cj.GRANT_LABEL}”")
+    # 5. Giving, raised or asked for, LAST: the level it rides on is saved.
+    #    If this one write fails, everything above is saved and recorded,
+    #    and the refusal says which part to try again.
+    money_failed: Optional[HTTPException] = None
+    if money and not money["first"]:
+        try:
+            cmt.apply(money, business, viewer, ch.login_name(viewer), target)
+            said.append(money["said"])
+        except HTTPException as err:
+            money_failed = err
     try:
         import chief_areas
         chief_areas.forget(ch.b)
@@ -937,10 +976,20 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
                            "duties": {"add": add, "remove": remove}, "grant": grant,
                            "more": {"areas": more_areas, "duties": more_duties},
                            "less": {"areas": less_areas, "duties": less_duties},
-                           "kept_by_name": kept_duties})
+                           "kept_by_name": kept_duties,
+                           "money": ({"kind": money["kind"], "wants": money["wants"], "was": money["now"]}
+                                     if money and money_failed is None else None)})
+    if money_failed is not None:
+        raise HTTPException(money_failed.status_code,
+                            (str(money_failed.detail) + " Everything else on the sheet saved.") if said
+                            else money_failed.detail)
+    asked = bool(money and money["kind"] == "ask")
     # A holder's change is sent to the owner (cj.changed); the app says so.
-    return {"widens": widens, "summary": summary, "changed": bool(said),
-            "owner_told": bool(said) and ed == "holder"}
+    out = {"widens": widens, "summary": summary, "changed": bool(said),
+           "owner_told": bool(said) and (ed == "holder" or asked)}
+    if money:
+        out["money_asked"] = asked
+    return out
 
 
 # ─── The jobs, for the people who set them up ─────────────────────────
@@ -1039,7 +1088,7 @@ def put_sheet(body: Dict[str, Any], request: Request, session: UserSession = Dep
     got = change(business, str(user.id), target, body, widening=lambda: ledger_unlock.require_unlock(
         request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz))
     return {**compose(business, str(user.id), target), "changed": got["changed"], "summary": got["summary"],
-            "owner_told": got["owner_told"]}
+            "owner_told": got["owner_told"], "money_asked": got.get("money_asked", False)}
 
 
 @router.get("/sheet/jobs")

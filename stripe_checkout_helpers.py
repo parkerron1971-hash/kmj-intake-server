@@ -880,8 +880,12 @@ async def create_refund(
     charge_id: str,
     amount_cents: Optional[int] = None,
     reason: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Issue a refund against a charge on the connected account.
+
+    `idempotency_key`: Stripe makes the same refund once for the same key (a
+    double press, a retry after a timeout).
 
     Stripe-supported reasons: duplicate, fraudulent, requested_by_customer.
     Other values are passed as-is but Stripe will reject unknown ones.
@@ -898,7 +902,8 @@ async def create_refund(
         resp = await client.post(
             f"{STRIPE_API_BASE}/refunds",
             auth=(_secret_key(), ""),
-            headers={"Stripe-Account": stripe_account_id},
+            headers={"Stripe-Account": stripe_account_id,
+                     **({"Idempotency-Key": idempotency_key} if idempotency_key else {})},
             data=form,
         )
     if resp.status_code >= 400:
