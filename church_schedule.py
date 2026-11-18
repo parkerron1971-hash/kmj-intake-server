@@ -782,7 +782,8 @@ def on_schedule(biz: Any, cid: Any) -> Optional[bool]:
     for the church, its tables aren't there (asked first, so nothing else is
     read before the migration), or they aren't on it. None: the switch is
     open and the roster couldn't be read, so it can't be told. NEVER RAISES.
-    A page shows its leaders' part only on True; a write asks takes().
+    A page shows its leaders' part only on True; a write asks takes(), which
+    reads "couldn't tell" as "not on it" (a volunteer comes first).
 
     When the minute is up and the roster can't be read again, the last one
     this replica read answers (_LAST), however old: a blip never stands
@@ -812,12 +813,20 @@ def takes(biz: Any, cid: Any) -> bool:
     everyone else, with no read where the switch is closed or before the
     migration: a volunteer's Away is exactly what it always was.
 
-    Where the switch is open and the roster couldn't be read, it can't be
-    told who is asking, and guessing "a volunteer" would hand a leader an
-    away date nobody said yes to: a 503 ("try again"), nothing saved."""
+    A VOLUNTEER'S AWAY NEVER FAILS BECAUSE OF THIS. Where it can't be told
+    (the switch is open, and this replica has never read the church's roster
+    and can't read it now) the answer is "not on the leaders schedule", and
+    the Away is saved at once, exactly as it always was: no 503, no "try
+    again". The cost is that in that one corner a leader's Away from the
+    Serve page is saved at once too, which is what happened before the
+    leaders schedule and harms nothing. One line is logged when it happens
+    (the church, never a name). NEVER RAISES."""
     got = on_schedule(biz, cid)
     if got is None:
-        raise HTTPException(503, UNREAD)
+        b = str(biz.get("id") if isinstance(biz, dict) else biz)
+        print(f"[church_schedule] {b[:8]}: who is on the leaders schedule couldn't be read, so an Away is saved at "
+              f"once, as anyone's is", flush=True)
+        return False
     return got
 
 

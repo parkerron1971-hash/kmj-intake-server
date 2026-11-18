@@ -30,6 +30,8 @@ routes (member_portal_serving). Pins:
     * someone on the leaders schedule can't get an away date at once from
       that form: it is asked for through the engine, with its rules, and the
       page says so in plain words with a way to their Dates page
+    * a volunteer's Away never fails because of this: where who is on the
+      schedule can't be told, it is saved at once, as it always was
     * "Can't make it" on a place they agreed to works as before for everyone
 
   TAKING AN AWAY DATE OFF
@@ -726,20 +728,33 @@ def test_the_one_person_nobody_is_over_is_set_at_once_by_the_engines_own_rule(db
     assert "Saved. Nobody asks you on those days." in text(page(db, "nathan", b"done=away"))
 
 
-def test_a_roster_that_cant_be_read_saves_nothing_and_someone_just_taken_off_is_a_volunteer(db, app):
-    """Open, and who is on the schedule couldn't be read: it can't be told
-    whether this is a leader, so nothing is saved and they are asked to try
-    again (never a guess that hands a leader a date nobody said yes to)."""
+def test_a_roster_that_cant_be_read_never_stops_an_away_and_someone_just_taken_off_is_a_volunteer(db, app, capsys):
+    """A VOLUNTEER'S AWAY NEVER FAILS BECAUSE OF THIS. Open, and a replica
+    that has never read who is on the schedule can't read it now: it can't
+    be told whether this is a leader, so the Away is saved at once, exactly
+    as it always was. No "try again". In that one corner a leader's is saved
+    at once too, as it was before the leaders schedule. One line is logged
+    each time, with the church and no name."""
     db.fail = {"get": "/church_schedule_people"}
     assert cs.on_schedule(biz(db), cid(db, "elena")) is None
-    for who in ("elena", "n024"):
+    capsys.readouterr()
+    for who in ("n024", "elena"):
         as_(app, who)
-        assert post(app, "/my/serving/away", start=day(30), end=day(31)) == "/my/serving?err=error"
-    assert facts(db) == [] and asks(db) == []
+        assert post(app, "/my/serving/away", start=day(30), end=day(31)) == "/my/serving?done=away"
+    assert asks(db) == [] and db.rpcs == [] and db.later == []
+    assert [(f["contact_id"], f["starts_on"], f["ends_on"], f.get("ask_id")) for f in facts(db)] == \
+        [(cid(db, who), day(30), day(31), None) for who in ("n024", "elena")], "saved at once, as plain away dates"
+    logged = [line for line in capsys.readouterr().out.splitlines() if "couldn't be read, so an Away is saved" in line]
+    assert len(logged) == 2 and all(HOPE[:8] in line for line in logged)
+    for line in logged:
+        for private in ("Elena", "Ruiz", "N024", cid(db, "elena"), cid(db, "n024"), HOPE):
+            assert private not in line, (private, line)
+    assert cs.takes(biz(db), cid(db, "elena")) is False and cs.takes(biz(db), cid(db, "n024")) is False
     db.fail = {}
+    db.t["serve_away"].clear()
     # That is only a replica that has never read this church's roster. One that has read it once answers from
-    # the last one it read when the minute is up and it can't be read again: a blip never stands between a
-    # volunteer and their Away, and a leader's still isn't saved at once (the engine reads fresh, and can't).
+    # the last one it read when the minute is up and it can't be read again: a volunteer's Away is saved as
+    # always, and a leader's still isn't saved at once (the engine reads fresh, can't, and says try again).
     assert cs.takes(biz(db), cid(db, "elena")) is True and cs.takes(biz(db), cid(db, "n024")) is False
     cs._KEPT.clear()                             # (the minute is up)
     db.fail = {"get": "/church_schedule_people"}
