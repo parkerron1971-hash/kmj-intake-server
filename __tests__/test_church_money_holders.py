@@ -3,22 +3,28 @@ person", piece 2 of 7): supabase/APPLY-2026-11-18-church-money-holders.sql,
 its rollback, and the two closed reads in church_money_holders.py. Kevin,
 2026-11-18: "yes build with C".
 
-What the file does on a real Postgres (nobody's answer changes with no
-holder; what each tick opens; only the owner's word) is
-__tests__/church_money_holders_db.mjs, run by CI's database checks. This file
-pins the things that one cannot see:
+What the file does on a real Postgres (the one narrowing with no holder;
+what each tick opens; only the owner's word; an older file run again only
+narrows) is __tests__/church_money_holders_db.mjs, run by CI's database
+checks. This file pins the things that one cannot see:
 
   * the file's shape: one transaction, a lock timeout, safe to run twice,
-    nothing dropped that it does not make again, and it touches none of the
-    objects it promises to leave alone
-  * the copied text really is the copy: the base is the 2026-09-29 body, the
-    walled list is the 2026-09-29 list, the nine tables are the 2026-09-29
-    nine, and the rollback's two bodies are their files' own
+    nothing dropped that it does not make again, a missing table stops it,
+    and it touches none of the objects it promises to leave alone
+  * the old name is never widened: ministry_finance_access is not made
+    here, and the tick is read only by functions this file makes or replaces
+  * the copied text really is the copy: the guard is the 2026-09-29 text
+    with one clause added, the walled list is the 2026-09-29 list, the nine
+    tables are the 2026-09-29 nine, the money rows in events and alerts are
+    the two kinds the 2026-10-27 policies hide, and the rollback's two
+    bodies are their files' own
   * every function has a fixed search_path; the ones a policy reads are
-    SECURITY DEFINER; the two the server runs are the server's alone
+    SECURITY DEFINER; the three the server runs are the server's alone
   * the two new tables are server-only and carry no policy
   * the rollback undoes each object the apply adds and leaves the tables
-  * the ledger, the export decision and CI know about it
+  * what the people who run it are told: the narrowing, the signed-out
+    role, the checks to read before applying, and a warning on the older
+    files; the ledger, the export decision and CI know about it
   * the server's reads: a read that fails, a table that is not there, a seat
     that ended, a tick given to another seat, or an id that is not an id is
     "no holder", and nothing here raises
@@ -46,22 +52,28 @@ APPLY = ROOT / "supabase" / "APPLY-2026-11-18-church-money-holders.sql"
 ROLLBACK = ROOT / "supabase" / "ROLLBACK-2026-11-18-church-money-holders.sql"
 READINESS = ROOT / "supabase" / "APPLY-2026-09-29-ministry-readiness.sql"
 GIFT_ROWS = ROOT / "supabase" / "APPLY-2026-10-27-church-keys-gift-rows.sql"
+GIFT_ROWS_BACK = ROOT / "supabase" / "ROLLBACK-2026-10-27-church-keys-gift-rows.sql"
 
 TABLES = ("church_money_holders", "church_money_asks")
-POLICY_FUNCTIONS = ("ministry_finance_base", "ministry_finance_walled", "church_money_tick",
-                    "ministry_finance_access", "ministry_giving_access", "ministry_finance_write_guard",
-                    "ministry_finance_bank_guard")
-SERVER_FUNCTIONS = ("church_money_grant", "church_money_answer")
-NEW_FUNCTIONS = tuple(f for f in POLICY_FUNCTIONS if f not in ("ministry_finance_access", "ministry_giving_access")
-                      ) + SERVER_FUNCTIONS
-NEW_POLICIES = ("ministry_financial_write_insert", "ministry_financial_write_update",
-                "ministry_financial_write_delete", "church_money_bank")
+# Functions a policy reads (the two replaced ones among them).
+POLICY_FUNCTIONS = ("ministry_finance_walled", "church_money_tick", "ministry_finance_guard",
+                    "ministry_giving_access", "ministry_finance_write_guard", "ministry_finance_bank_guard",
+                    "church_money_giving_write")
+REPLACED = ("ministry_finance_guard", "ministry_giving_access")
+SERVER_FUNCTIONS = ("church_money_grant", "church_money_answer", "church_money_ask")
+NEW_FUNCTIONS = tuple(f for f in POLICY_FUNCTIONS if f not in REPLACED) + SERVER_FUNCTIONS
+LOOP_POLICIES = ("ministry_financial_write_insert", "ministry_financial_write_update",
+                 "ministry_financial_write_delete", "church_money_bank")
+BESIDE_POLICIES = {"church_money_event_update": "events", "church_money_event_delete": "events",
+                   "church_money_alert_update": "chief_notifications",
+                   "church_money_alert_delete": "chief_notifications"}
+NEW_POLICIES = LOOP_POLICIES + tuple(BESIDE_POLICIES)
 # What the file promises not to touch.
-LEFT_ALONE_FUNCTIONS = ("ministry_finance_guard", "church_giving_open", "protect_gift_classification",
+LEFT_ALONE_FUNCTIONS = ("ministry_finance_access", "church_giving_open", "protect_gift_classification",
                         "is_business_writer", "is_business_member")
 LEFT_ALONE_POLICIES = ("ministry_financial_privacy", "gift_row_privacy", "church_giving_bank",
                        "ministry_financial_events", "ministry_financial_notifications", "tenant_writer_write",
-                       "tenant_member_read")
+                       "tenant_member_read", "business_expenses_all")
 
 
 def _read(path: pathlib.Path) -> str:
@@ -73,21 +85,26 @@ def _code(sql: str) -> str:
     return "\n".join(line.split("--", 1)[0] for line in sql.splitlines()).lower()
 
 
+def _start(sql: str, name: str) -> int:
+    return sql.index(f"create or replace function public.{name}(")
+
+
 def _body(sql: str, name: str) -> str:
-    """One function's body, spaces folded."""
-    start = sql.index(f"create or replace function public.{name}(")
-    a = sql.index("as $$", start) + 5
-    return re.sub(r"\s+", " ", sql[a:sql.index("$$", a)]).strip()
+    """One function's body, spaces folded. The body's quote is whatever
+    follows `as` ($$ or a named one inside a DO block)."""
+    m = re.compile(r"\bas (\$\w*\$)").search(sql, _start(sql, name))
+    a = m.end()
+    return re.sub(r"\s+", " ", sql[a:sql.index(m.group(1), a)]).strip()
 
 
 def _head(sql: str, name: str) -> str:
     """One function's header: from its name to its body."""
-    start = sql.index(f"create or replace function public.{name}(")
-    return re.sub(r"\s+", " ", sql[start:sql.index("as $$", start)]).lower()
+    start = _start(sql, name)
+    return re.sub(r"\s+", " ", sql[start:re.compile(r"\bas \$\w*\$").search(sql, start).start()]).lower()
 
 
 def _array(sql: str, first: str) -> list:
-    """The text[] literal that starts with `first`."""
+    """The first text[] literal that starts with `first`."""
     m = re.search(r"array\[(%s[^\]]*)\]" % re.escape("'" + first + "'"), sql)
     assert m, first
     return re.findall(r"'([a-z_]+)'", m.group(1))
@@ -95,8 +112,7 @@ def _array(sql: str, first: str) -> list:
 
 def _type_list(sql: str, after: str) -> list:
     """The business types of the wall, from the function named `after`."""
-    start = sql.index(f"create or replace function public.{after}(")
-    m = re.search(r"\(('ministry','ministries'[^)]*)\)", sql[start:])
+    m = re.search(r"\(('ministry','ministries'[^)]*)\)", sql[_start(sql, after):])
     assert m, after
     return re.findall(r"'([a-z_]+)'", m.group(1))
 
@@ -122,14 +138,18 @@ def test_it_is_safe_to_run_twice():
     # Each constraint is added behind its own pg_constraint check.
     for name in re.findall(r"add constraint (\w+)", code):
         assert f"where conname = '{name}'" in code, name
-    # Each policy it makes it first removes, in the same statement block.
-    for name in NEW_POLICIES:
+    # Each policy it makes it first removes, just before.
+    for name in LOOP_POLICIES:
         assert code.count(f"drop policy if exists {name} on public.%i") == 1, name
         assert code.count(f"create policy {name} on public.%i") == 1, name
+    for name, table in BESIDE_POLICIES.items():
+        assert code.count(f"drop policy if exists {name} on public.{table};") == 1, name
+        assert code.count(f"create policy {name} on public.{table} ") == 1, name
+    for name in NEW_POLICIES:
         assert code.index(f"drop policy if exists {name} ") < code.index(f"create policy {name} ")
 
 
-def test_nothing_is_dropped_that_it_does_not_make_again():
+def test_nothing_is_dropped_that_it_does_not_make_again_and_a_missing_table_stops_it():
     code = _code(_read(APPLY))
     drops = re.findall(r"\bdrop\s+(\w+)(?:\s+if\s+exists)?\s+([\w.]+)", code)
     assert drops and all(kind == "policy" for kind, _ in drops), drops
@@ -139,11 +159,18 @@ def test_nothing_is_dropped_that_it_does_not_make_again():
     # The file deletes no row when it runs: the one `delete` is inside the
     # server's own function (taking a tick away), and nowhere else.
     assert code.count("delete from") == 1
-    assert "delete from public.church_money_holders where business_id = p_business and user_id = p_user;" in re.sub(
-        r"\s+", " ", _body(_read(APPLY), "church_money_grant"))
+    assert "delete from public.church_money_holders where business_id = p_business and user_id = p_user;" in _body(
+        _read(APPLY), "church_money_grant")
     # No existing table is altered: only the two new ones.
     for table in re.findall(r"alter table (?:public\.)?(\w+)", code):
         assert table in TABLES, table
+    # A table that is not there stops the file; none is skipped.
+    flat = re.sub(r"\s+", " ", code)
+    assert ("if to_regclass('public.'||t) is null then raise exception 'church_money: public.% is missing; "
+            "nothing was applied', t; end if;") in flat
+    assert "is not null then" not in flat.split("-- ")[0].split("create policy")[0].split("do $$ declare t text;")[1]
+    eleven = _array(code, "invoices")
+    assert len(eleven) == 11 and eleven[-2:] == ["events", "chief_notifications"]
 
 
 def test_it_leaves_alone_what_it_says_it_leaves_alone():
@@ -153,53 +180,112 @@ def test_it_leaves_alone_what_it_says_it_leaves_alone():
     for name in LEFT_ALONE_POLICIES:
         assert f"policy {name} " not in code and f"policy if exists {name} " not in code, name
     assert "create trigger" not in code
-    # Every policy it adds only narrows.
-    for line in re.findall(r"create policy [^;]+", code):
+    # Every policy it adds only narrows, and is the signed-in role's.
+    made = [re.sub(r"\s+", " ", m) for m in re.findall(r"create policy [^;]+", code)]
+    assert len(made) == len(NEW_POLICIES)
+    for line in made:
         assert " as restrictive " in line and " to authenticated " in line, line
+        assert " for insert " not in line or "ministry_financial_write_insert" in line, line
     assert " as permissive " not in code and "using (true)" not in code and "using(true)" not in code
+    # No policy of its own on events or alerts is for INSERT (the header says why).
+    for name in BESIDE_POLICIES:
+        assert re.search(rf"create policy {name} on public\.\w+ as restrictive for (update|delete) to authenticated", code), name
 
 
 # ─── The copies are copies ────────────────────────────────────────────
 
-def test_the_base_is_the_september_body_word_for_word():
+def test_the_old_name_is_never_widened():
+    """ministry_finance_access stays the owner, an Admin seat and the
+    accountant: the file does not make it, and nothing it makes is called by
+    that name. So an older file that names it can only narrow."""
+    apply, code = _read(APPLY), _code(_read(APPLY))
+    assert "function public.ministry_finance_access(" not in code
+    assert "ministry_finance_base" not in code
+    # The tick is read only by functions this file makes or replaces.
+    readers = [n for n in POLICY_FUNCTIONS if "church_money_tick(" in _body(apply, n)]
+    assert sorted(readers) == sorted(["ministry_finance_guard", "ministry_giving_access",
+                                      "ministry_finance_write_guard", "ministry_finance_bank_guard",
+                                      "church_money_giving_write"])
+    # Each of them names the narrow rule beside it.
+    for name in readers:
+        assert "public.ministry_finance_access(b_id)" in _body(apply, name), name
+
+
+def test_the_guard_is_the_september_text_with_one_clause_added():
     apply, old = _read(APPLY), _read(READINESS)
-    assert _body(apply, "ministry_finance_base") == _body(old, "ministry_finance_access")
-    assert _head(apply, "ministry_finance_base") == _head(old, "ministry_finance_access").replace(
-        "ministry_finance_access", "ministry_finance_base")
+    was, now = _body(old, "ministry_finance_guard"), _body(apply, "ministry_finance_guard")
+    assert was.endswith("or public.ministry_finance_access(b_id)));")
+    assert now == was[:-len("));")] + " or public.church_money_tick(b_id, 'any')));"
+    assert _head(apply, "ministry_finance_guard") == _head(old, "ministry_finance_guard")
+    # The rollback's is the September text exactly.
+    assert _body(_read(ROLLBACK), "ministry_finance_guard") == was
 
 
 def test_the_wall_stands_in_front_of_the_same_businesses_and_tables():
     apply, old = _read(APPLY), _read(READINESS)
-    assert _type_list(apply, "ministry_finance_walled") == _type_list(old, "ministry_finance_guard")
-    assert len(_type_list(apply, "ministry_finance_walled")) == 18
+    types = _type_list(old, "ministry_finance_guard")
+    assert len(types) == 18
+    for name in ("ministry_finance_walled", "ministry_finance_guard", "ministry_finance_write_guard",
+                 "ministry_finance_bank_guard"):
+        assert _type_list(apply, name) == types, name
+    assert apply.count("'ministry','ministries'") == 4
+    assert _type_list(_read(ROLLBACK), "ministry_finance_guard") == types
     # The same fold of the type's spelling.
     fold = "lower(regexp_replace(trim(coalesce(b.type,'')), '[-[:space:]]+', '_', 'g'))"
     assert fold in _body(apply, "ministry_finance_walled") and fold in _body(old, "ministry_finance_guard")
     nine = _array(old, "invoices")
-    assert len(nine) == 9 and _array(apply, "invoices") == nine
-    assert _array(apply, "plaid_transactions") == ["plaid_transactions", "plaid_accounts"]
+    assert len(nine) == 9
+    code = _code(apply)                                                 # the header's check queries name them too
+    assert _array(code, "invoices")[:9] == nine                         # the missing-table check, then two more
+    loop = re.findall(r"array\['invoices'[^\]]*\]", code)
+    assert len(loop) == 2 and re.findall(r"'([a-z_]+)'", loop[1]) == nine
+    assert _array(code, "plaid_transactions") == ["plaid_transactions", "plaid_accounts"]
     assert _array(_read(GIFT_ROWS), "plaid_transactions") == ["plaid_transactions", "plaid_accounts"]
 
 
-def test_the_replaced_functions_say_what_the_header_says():
+def test_the_money_rows_beside_them_are_the_two_kinds_the_select_policies_hide():
+    """The update and delete policies on events and alerts name the same
+    two kinds, by the same tests, as the SELECT-only policies of 2026-10-27."""
+    code, old = re.sub(r"\s+", " ", _code(_read(APPLY))), re.sub(r"\s+", " ", _code(_read(GIFT_ROWS)))
+    event = ("case when event_type ~ '^giving' then public.church_money_giving_write(business_id) "
+             "when event_type ~ '^(invoice|payment)' then public.ministry_finance_write_guard(business_id) else true end")
+    alert = ("case when data->>'kind' in ('gift_received','recurring_gift_ended') then "
+             "public.church_money_giving_write(business_id) when data->>'kind'='invoice_paid' then "
+             "public.ministry_finance_write_guard(business_id) else true end")
+    assert code.count(event) == 3 and code.count(alert) == 3        # update using + with check, delete using
+    assert (event.replace("church_money_giving_write", "ministry_giving_access")
+            .replace("ministry_finance_write_guard", "ministry_finance_guard")) in old
+    assert (alert.replace("church_money_giving_write", "ministry_giving_access")
+            .replace("ministry_finance_write_guard", "ministry_finance_guard")) in old
+
+
+def test_the_replaced_and_new_functions_say_what_the_header_says():
     apply = _read(APPLY)
-    assert _body(apply, "ministry_finance_access") == (
-        "select public.ministry_finance_base(b_id) or public.church_money_tick(b_id, 'any');")
     giving = _body(apply, "ministry_giving_access")
-    assert giving == ("select (public.ministry_finance_base(b_id) or public.church_money_tick(b_id, 'who_gave')) "
+    assert giving == ("select (public.ministry_finance_access(b_id) or public.church_money_tick(b_id, 'who_gave')) "
                       "and public.church_giving_open(b_id);")
-    # Giving never takes the widened access: any holder would see who gave.
-    assert "ministry_finance_access" not in giving
-    # Same names and arguments as the functions they replace (create or
-    # replace cannot rename an argument).
-    assert "public.ministry_finance_access(b_id uuid) returns boolean" in _head(apply, "ministry_finance_access")
+    # Same name and argument as the function it replaces (create or replace
+    # cannot rename an argument), and only while the keeper's function exists.
     assert "public.ministry_giving_access(b_id uuid) returns boolean" in _head(apply, "ministry_giving_access")
-    write, bank = _body(apply, "ministry_finance_write_guard"), _body(apply, "ministry_finance_bank_guard")
-    assert "church_money_tick(b_id, 'work')" in write and "'any'" not in write and "'bank'" not in write
-    assert "church_money_tick(b_id, 'bank')" in bank and "'any'" not in bank and "'work'" not in bank
-    for guard in (write, bank):
-        assert guard.startswith("select exists(select 1 from businesses b where b.id=b_id) and (not "
-                                "public.ministry_finance_walled(b_id) or public.ministry_finance_base(b_id) or ")
+    flat = re.sub(r"\s+", " ", apply)
+    assert ("if to_regprocedure('public.church_giving_open(uuid)') is not null then execute $f$ "
+            "create or replace function public.ministry_giving_access(b_id uuid)") in flat
+    assert flat.count("create or replace function public.ministry_giving_access(") == 1
+    # The two new guards are the read guard's own text with the tick's part
+    # changed: the same businesses, the same narrow rule, another tick.
+    read = _body(apply, "ministry_finance_guard")
+    assert read.count("'any'") == 1
+    assert _body(apply, "ministry_finance_write_guard") == read.replace("'any'", "'work'")
+    assert _body(apply, "ministry_finance_bank_guard") == read.replace("'any'", "'bank'")
+    # Changing a giving row: who may see who gave, AND base or Work; and it
+    # still answers, narrowly, when the 2026-10-27 file has been rolled back.
+    gw = _body(apply, "church_money_giving_write")
+    assert "if to_regprocedure('public.ministry_giving_access(uuid)') is null then return " \
+           "public.ministry_finance_access(b_id); end if;" in gw
+    assert "execute 'select public.ministry_giving_access($1)' into v_sees using b_id;" in gw
+    assert ("return coalesce(v_sees, false) and (public.ministry_finance_access(b_id) or "
+            "public.church_money_tick(b_id, 'work'));") in gw
+    assert "church_giving_open" not in gw
 
 
 def test_the_tick_counts_only_on_the_active_seat_it_was_given_to():
@@ -223,7 +309,7 @@ def test_every_function_has_a_fixed_search_path_and_the_right_rights():
     for name in POLICY_FUNCTIONS:
         head = _head(apply, name)
         assert "security definer" in head and "set search_path=public" in head and " stable " in head, name
-        assert "language sql" in head, name
+        assert ("language plpgsql" if name == "church_money_giving_write" else "language sql") in head, name
     for name in SERVER_FUNCTIONS:
         head = _head(apply, name)
         assert "set search_path=public" in head and "security definer" not in head, name
@@ -233,32 +319,48 @@ def test_every_function_has_a_fixed_search_path_and_the_right_rights():
         read = set(re.findall(r"(?:from|join)\s+(\w+)", _body(apply, name)))
         assert read <= {"businesses", "business_users", "business_collaborators", "church_money_holders"}, (name, read)
     flat = re.sub(r"\s+", " ", code)
-    assert ("revoke all on function public.church_money_grant(uuid, uuid, text, boolean, boolean, uuid, uuid), "
-            "public.church_money_answer(uuid, boolean, uuid) from public, anon, authenticated;") in flat
-    assert ("grant execute on function public.church_money_grant(uuid, uuid, text, boolean, boolean, uuid, uuid), "
-            "public.church_money_answer(uuid, boolean, uuid) to service_role;") in flat
-    assert ("revoke all on function public.ministry_finance_base(uuid), public.ministry_finance_walled(uuid), "
-            "public.church_money_tick(uuid, text) from public, anon, authenticated;") in flat
-    assert ("revoke all on function public.ministry_finance_write_guard(uuid), "
-            "public.ministry_finance_bank_guard(uuid) from public, anon;") in flat
+    three = ("public.church_money_grant(uuid, uuid, text, boolean, boolean, uuid, uuid), "
+             "public.church_money_answer(uuid, boolean, uuid), "
+             "public.church_money_ask(uuid, uuid, uuid, text, boolean, boolean)")
+    assert f"revoke all on function {three} from public, anon, authenticated;" in flat
+    assert f"grant execute on function {three} to service_role;" in flat
+    assert ("revoke all on function public.ministry_finance_walled(uuid), public.church_money_tick(uuid, text) "
+            "from public, anon, authenticated;") in flat
+    guards = ("public.ministry_finance_write_guard(uuid), public.ministry_finance_bank_guard(uuid), "
+              "public.church_money_giving_write(uuid)")
+    assert f"revoke all on function {guards} from public, anon;" in flat
+    assert f"grant execute on function {guards} to authenticated, service_role;" in flat
     # Nothing is ever granted to the signed-out role.
     assert not re.search(r"grant [^;]* to [^;]*\banon\b", flat)
 
 
 def test_only_the_owner_makes_a_holder():
     apply = _read(APPLY)
-    grant, answer = _body(apply, "church_money_grant"), _body(apply, "church_money_answer")
+    grant, answer, ask = (_body(apply, n) for n in SERVER_FUNCTIONS)
     owner_check = "if v_owner is null or p_by is null or v_owner <> p_by then raise exception"
     assert owner_check in grant and owner_check in answer
     assert "select b.owner_id into v_owner from public.businesses b where b.id = p_business;" in grant
     assert "select b.owner_id into v_owner from public.businesses b where b.id = a.business_id;" in answer
     # The owner check comes before the first write in each.
     assert grant.index(owner_check) < grant.index("delete from") < grant.index("insert into")
-    assert answer.index(owner_check) < answer.index("church_money_grant(") < answer.index("update public.church_money_asks")
-    assert "for update" in answer and "a.status <> 'asked'" in answer and "a.expires_at <= now()" in answer
-    assert "a.asked_by = a.user_id" in answer
+    assert answer.index(owner_check) < answer.index("update public.church_money_asks") < answer.index("church_money_grant(")
+    assert "for update" in answer and "a.status <> 'asked'" in answer and "a.asked_by = a.user_id" in answer
+    # An ask that ran out is marked and said, never answered.
+    late = answer.index("if a.expires_at <= now() then update public.church_money_asks set status = 'expired'")
+    assert late < answer.index("church_money_grant(")
+    assert "return jsonb_build_object('ok', false, 'status', 'expired', 'holder', null);" in answer
     assert "v_role = 'viewer' and p_level <> 'see'" in grant and "u.status = 'active'" in grant
     assert "not public.ministry_finance_walled(p_business)" in grant
+    # A grant cannot be pinned on someone else's ask.
+    assert ("if p_ask is not null and not exists (select 1 from public.church_money_asks a where a.id = p_ask "
+            "and a.business_id = p_business and a.user_id = p_user) then raise exception") in grant
+    # Opening an ask gives nothing: it writes only the asks table, and first
+    # clears one that ran out so the one-open index does not hold its place.
+    assert "church_money_holders" not in ask and "church_money_grant" not in ask
+    assert ask.index("set status = 'expired' where business_id = p_business and user_id = p_user and status = "
+                     "'asked' and expires_at <= now();") < ask.index("insert into public.church_money_asks")
+    assert "p_by = p_user" in ask and "v_role = 'viewer' and p_level <> 'see'" in ask
+    assert "not public.ministry_finance_walled(p_business)" in ask
 
 
 # ─── The tables ───────────────────────────────────────────────────────
@@ -291,14 +393,18 @@ def test_the_rollback_restores_each_object_the_apply_replaces_and_removes_each_i
     back, code = _read(ROLLBACK), _code(_read(ROLLBACK))
     assert len(re.findall(r"^\s*begin;", code, re.M)) == 1 and len(re.findall(r"^\s*commit;", code, re.M)) == 1
     assert "set local lock_timeout = '5s';" in code
-    assert _body(back, "ministry_finance_access") == _body(_read(READINESS), "ministry_finance_access")
-    assert _head(back, "ministry_finance_access") == _head(_read(READINESS), "ministry_finance_access")
+    assert _body(back, "ministry_finance_guard") == _body(_read(READINESS), "ministry_finance_guard")
+    assert _head(back, "ministry_finance_guard") == _head(_read(READINESS), "ministry_finance_guard")
     assert _body(back, "ministry_giving_access") == _body(_read(GIFT_ROWS), "ministry_giving_access")
     assert _head(back, "ministry_giving_access") == _head(_read(GIFT_ROWS), "ministry_giving_access")
-    assert sorted(re.findall(r"create or replace function public\.(\w+)\(", code)) == [
-        "ministry_finance_access", "ministry_giving_access"]
-    for name in NEW_POLICIES:
+    assert sorted(re.findall(r"create or replace function public\.(\w+)\(", code)) == sorted(REPLACED)
+    # The giving function is only put back while the keeper's exists.
+    assert ("if to_regprocedure('public.church_giving_open(uuid)') is not null then execute $f$ "
+            "create or replace function public.ministry_giving_access(") in re.sub(r"\s+", " ", back)
+    for name in LOOP_POLICIES:
         assert f"drop policy if exists {name} on public.%i" in code, name
+    for name, table in BESIDE_POLICIES.items():
+        assert f"drop policy if exists {name} on public.{table};" in code, name
     for name in NEW_FUNCTIONS:
         assert f"drop function if exists public.{name}(" in code, name
     assert sorted(re.findall(r"drop function if exists public\.(\w+)\(", code)) == sorted(NEW_FUNCTIONS)
@@ -309,12 +415,41 @@ def test_the_rollback_restores_each_object_the_apply_replaces_and_removes_each_i
     assert "drop table" not in code and "delete from" not in code and "create policy" not in code
     assert "-- drop table if exists public.church_money_holders;" in back
     assert "delete from public.church_money_holders;" in back          # the instant stop, said
-    assert _array(back, "invoices") == _array(_read(APPLY), "invoices")
+    assert _array(back, "invoices") == _array(_read(READINESS), "invoices")
     for name in LEFT_ALONE_POLICIES + LEFT_ALONE_FUNCTIONS:
         assert f"policy if exists {name} " not in code and f"function if exists public.{name}(" not in code, name
+        assert f"function public.{name}(" not in code, name
+    # It says what the rollback brings back.
+    assert "the unfiltered write the apply file closed" in back
 
 
-# ─── The ledger and CI ────────────────────────────────────────────────
+# ─── What the people who run it are told ──────────────────────────────
+
+def test_the_file_says_what_changes_with_no_holder_and_what_to_check_first():
+    apply = _read(APPLY)
+    assert "ONE DELIBERATE NARROWING" in apply and "THE OLD NAMES STAY NARROW" in apply
+    assert "THE SIGNED-OUT ROLE (anon)" in apply and "business_expenses_all" in apply
+    assert "RUNNING AN OLDER FILE AGAIN" in apply
+    before = apply[apply.index("-- Check before applying"):apply.index("\nbegin;")]
+    for q in ("Q1.", "Q2.", "Q3.", "Q4.", "Q5.", "Q6.", "Q7."):
+        assert f"--   -- {q}" in before, q
+    # Six expected hashes, each one a real md5 (the database test holds them
+    # equal to the repo's own files), and no placeholder left anywhere.
+    assert len(re.findall(r"^--   --       \w+\((?:uuid)?\)\s+[0-9a-f]{32}$", before, re.M)) == 6
+    assert "@@" not in apply
+    # Every line of the pre-apply block is a comment: nothing in it runs.
+    assert all(line.startswith("--") for line in before.splitlines() if line.strip())
+    # Read-only: no statement in the block writes.
+    assert not re.search(r"\b(insert|update|delete|drop|alter|create|grant|revoke|truncate)\b",
+                         "\n".join(l for l in before.splitlines() if re.match(r"^--   (?!--)", l)).lower())
+
+
+def test_the_older_files_warn_whoever_runs_them_again():
+    for path in (READINESS, GIFT_ROWS, GIFT_ROWS_BACK):
+        head = re.sub(r"\s+--\s*", " ", _read(path)[:1600])
+        assert "APPLY-2026-11-18-church-money-holders.sql" in head, path.name
+        assert "run that file again" in head, path.name
+
 
 def test_the_ledger_and_ci_know_about_it():
     ledger = _read(ROOT / "docs" / "MIGRATIONS.md")
@@ -322,6 +457,11 @@ def test_the_ledger_and_ci_know_about_it():
     assert len(rows) == 1
     assert "| **NOT APPLIED** |" in rows[0] or "| **APPLIED 20" in rows[0]
     assert "ROLLBACK-2026-11-18-church-money-holders.sql" in rows[0]
+    assert "unfiltered" in rows[0] and "Check before applying" in rows[0]
+    # The two older rows say what running them again does now.
+    for name in ("APPLY-2026-10-27-church-keys-gift-rows.sql", "APPLY-2026-09-29-ministry-readiness.sql"):
+        row = next(ln for ln in ledger.splitlines() if ln.startswith(f"| `supabase/{name}`"))
+        assert "APPLY-2026-11-18-church-money-holders.sql" in row, name
     ci = _read(ROOT / ".github" / "workflows" / "ci.yml")
     assert "node __tests__/church_money_holders_db.mjs" in ci
     assert (ROOT / "__tests__" / "church_money_holders_db.mjs").exists()
