@@ -27,40 +27,29 @@ import sb_clients  # noqa: E402
 
 ROOT = _here.parent
 MIGRATION = ROOT / "supabase" / "APPLY-2026-11-17-settings-server-keys.sql"
-# The list of keys as it stands: the newest file that replaces
-# business_settings_server_keys(). A key added later ships as a file that
-# replaces that one function, and this points at it.
-KEYS_MIGRATION = ROOT / "supabase" / "APPLY-2026-11-18-church-structure-key.sql"
 BIZ = "c4a0c4a0-0000-4000-8000-0000000000aa"
 
 
-def _sql(path: pathlib.Path = MIGRATION) -> str:
+def _sql() -> str:
     """The file's statements, comments stripped."""
-    return "\n".join(line.split("--", 1)[0] for line in path.read_text(encoding="utf-8").splitlines())
+    return "\n".join(line.split("--", 1)[0] for line in MIGRATION.read_text(encoding="utf-8").splitlines())
 
 
-def _fn(name: str, path: pathlib.Path = MIGRATION) -> str:
-    sql = _sql(path).lower()
+def _fn(name: str) -> str:
+    sql = _sql().lower()
     body = sql[sql.index(f"create or replace function public.{name}("):]
     return body[:body.index("$$;") + 3]
 
 
-def _array(fn: str, path: pathlib.Path = MIGRATION) -> list:
-    return re.findall(r"'([a-z_]+)'", _fn(fn, path).split("array[", 1)[1].split("]", 1)[0])
+def _array(fn: str) -> list:
+    return re.findall(r"'([a-z_]+)'", _fn(fn).split("array[", 1)[1].split("]", 1)[0])
 
 
 # ─── 1. one list, in Python and in SQL ───────────────────────────────
 
 def test_the_sql_list_is_the_python_list():
-    assert sorted(_array("business_settings_server_keys", KEYS_MIGRATION)) == sorted(bs.SERVER_KEYS)
-    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 44
-    # The first file's list is the same one, less the keys added since.
-    assert sorted(_array("business_settings_server_keys")) == sorted(set(bs.SERVER_KEYS) - {"church_structure"})
-    # The later file replaces that one function the same way and nothing else.
-    later = _sql(KEYS_MIGRATION).lower()
-    assert "language sql immutable parallel safe set search_path = public" in later
-    assert later.count("create or replace function") == 1 and "create trigger" not in later
-    assert "drop " not in later and "security definer" not in later
+    assert sorted(_array("business_settings_server_keys")) == sorted(bs.SERVER_KEYS)
+    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 43
     assert set(_array("business_settings_birth_keys")) == set(bs.BIRTH_KEYS) == {"churchsavvy_only"}
     assert bs.BIRTH_KEYS <= set(bs.SERVER_KEYS)
 

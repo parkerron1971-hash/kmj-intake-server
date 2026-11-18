@@ -19,8 +19,12 @@ Pins:
     login set up differently, done
   * every gap, in the draft and in the standing check
   * a draft from the planning course, and its refusals
-  * who may draft, read and clear; the draft is one per church, kept as a
-    server key, and grants nothing
+  * who may draft, read and clear; the draft is one per church, kept in its
+    own server-only table (never in settings), and grants nothing
+  * before that table is there: no draft, `ready` false, the standing check
+    still answers, and a write is a plain 503
+  * a login on one of the church's own jobs holds only the duties given on
+    its sheet
   * Chief's two verbs, where they are placed, the hold on a tainted turn,
     the navigate flag, the instructions, and the planning coach's one offer
 
@@ -41,7 +45,6 @@ for p in (ROOT, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-import business_settings as bs  # noqa: E402
 import church_areas as ca  # noqa: E402
 import church_duties as cd  # noqa: E402
 import church_job_defs as cj  # noqa: E402
@@ -66,17 +69,16 @@ C_LEE_2 = "e4000000-0000-4000-8000-0000000000e4"
 
 
 class StructDB(DutyDB):
-    """The duties' fake, plus merge_business_settings as the migration writes it."""
+    """The duties' fake, plus the drafts' upsert on the church's own row
+    (POST ?on_conflict=business_id with resolution=merge-duplicates)."""
 
     def post(self, path, body, prefer=None, **kw):
-        if path.startswith("/rpc/merge_business_settings"):
-            row = next((b for b in self.t["businesses"] if b["id"] == body["p_business"]), None)
-            if row is None:
-                return None
-            row["settings"] = bs.merge_at(row.get("settings"), body.get("p_under") or [], body.get("p_set") or {},
-                                          body.get("p_drop") or [])
-            self.merges = getattr(self, "merges", 0) + 1
-            return dict(row["settings"])
+        if path.startswith(f"/{st.TABLE}"):
+            assert "on_conflict=business_id" in path and "resolution=merge-duplicates" in (prefer or "")
+            rows = self.t.setdefault(st.TABLE, [])
+            self.t[st.TABLE] = [r for r in rows if r["business_id"] != body["business_id"]] + [dict(body)]
+            self.keeps = getattr(self, "keeps", 0) + 1
+            return [dict(body)]
         return super().post(path, body, prefer, **kw)
 
 
@@ -102,6 +104,7 @@ def db(monkeypatch):
                   _contact(C_LEE_2, "Lee Carter", "lee2@hopechapel.example")],
         church_role_defs=[], church_leader_roles=[], church_role_settings=[], church_area_places=[],
         church_duty_holders=[], church_duty_changes=[], church_jobs=[], church_sheet_changes=[], strategy_tracks=[],
+        church_structure_drafts=[],
     )
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.get)
     monkeypatch.setattr(sb_clients, "sb_post_as_service", fake.post)
@@ -116,7 +119,6 @@ def db(monkeypatch):
     monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: "")
     monkeypatch.setattr(messaging_router, "owner_email_read", lambda uid: "pastor@hopechapel.example")
     monkeypatch.setattr(cj, "tell_owner", lambda business, title, body, tag: None)
-    monkeypatch.setattr(bs, "_missing", {"until": 0.0})
     return fake
 
 
@@ -398,26 +400,67 @@ def test_a_title_the_church_already_uses_is_that_job_and_a_new_title_is_one_it_w
     # A title that points nowhere is still the church's own job, with nothing on it yet.
     ike = _p(d, "Ike Dunn")
     assert ike["job_label"] == "Armor Bearer" and ike["areas"] == [] and ike["duties"] == []
+    assert ike["role"] == "viewer"
 
 
-def test_with_no_title_the_work_picks_a_ready_made_job_and_says_it_opens_more(db):
+def test_with_no_title_a_person_gets_a_job_of_the_churchs_own_with_only_what_they_need(db):
+    """Kevin, 2026-11-18: never a ready-made job that opens more than they
+    described. A person with no title is given a job the church would make,
+    named in plain words from the work, carrying only that work's areas and
+    duties."""
     d = _draft(db, {"leads": "pastor", "people": [
         {"name": "Maria Lopez", "does": "calls every guest and runs the prayer chain"},
         {"name": "Tom Reyes", "does": "runs the livestream and the slides"},
-        {"name": "Ana Bell", "does": "schedules the ushers for worship"},
         {"name": "Nia Cole", "does": "keeps the calendar and the office"},
+        {"name": "Cy Hale", "does": "helps with the youth"},
+        {"name": "Val Roy", "does": "kids", "role": "member"},
+        {"name": "Ida Poe", "does": "all of care", "areas": list(ca.LANES["people_care"]["areas"]),
+         "duties": list(cd.STARTER["people_care"])},
         {"name": "Bo Finch", "does": "helps out"},
     ]})
-    assert _p(d, "Maria Lopez")["job_key"] == "people_care"
-    assert _p(d, "Maria Lopez")["areas"] == ca.LANES["people_care"]["areas"]
-    assert st.WIDER_NOTE.format(job="People & Care") in _p(d, "Maria Lopez")["notes"]
-    assert _p(d, "Tom Reyes")["job_key"] == "media_comms"
-    assert _p(d, "Ana Bell")["job_key"] == "sunday_serving"
-    assert _p(d, "Nia Cole")["job_key"] == "office_leadership"
+    by = {j["label"]: j for j in d["jobs"]}
+    maria = _p(d, "Maria Lopez")
+    assert maria["job_label"] == "Guest follow-up and prayer" and maria["job_key"] is None
+    assert maria["areas"] == ["people_care"] and maria["duties"] == ["first_guests", "prayer"]
+    assert set(maria["duties"]) < set(cd.STARTER["people_care"])         # far less than People & Care opens
+    assert st.NAMED_NOTE.format(job="Guest follow-up and prayer") in maria["notes"]
+    assert maria["why"].startswith("No title was given, so this is a job your church would make, with only what")
+    job = by["Guest follow-up and prayer"]
+    assert job["custom"] and not job["exists"] and job["areas"] == ["people_care"]
+    assert job["duties"] == ["first_guests", "prayer"] and cj.clean(job, "owner")["duties"] == job["duties"]
+    tom = _p(d, "Tom Reyes")
+    assert tom["areas"] == ["worship_media"] and tom["duties"] == ["production_schedule", "stream"]
+    assert _p(d, "Nia Cole")["job_label"] == "Calendar" and _p(d, "Nia Cole")["duties"] == ["calendar"]
+    assert _p(d, "Nia Cole")["areas"] == ["office"]                      # not Messages & safety, not 14 duties
+    assert _p(d, "Cy Hale")["job_label"] == "Youth" and _p(d, "Cy Hale")["duties"] == ["youth"]
+    val = _p(d, "Val Roy")                                               # no duty matched: named by its area
+    assert val["job_label"] == "Kids & youth helper" and val["role"] == "member" and val["duties"] == []
+    assert by["Kids & youth helper"]["role"] == "member" and by["Kids & youth helper"]["areas"] == ["kids_youth"]
+    # Nobody without a title was handed a ready-made job, except the one whose areas and duties ARE that job.
+    assert [p["name"] for p in d["people"] if p["job_key"] in ca.LANES] == ["Ida Poe"]
+    assert _p(d, "Ida Poe")["why"] == "What they do is People & Care, the ready-made job, exactly."
+    for name in ("Maria Lopez", "Tom Reyes", "Nia Cole", "Cy Hale", "Val Roy"):
+        p = _p(d, name)
+        made = cj.clean(by[p["job_label"]], "owner")                     # each is a job the church could make
+        assert set(made["areas"]) == set(p["areas"]) and set(made["duties"]) == set(p["duties"])
     bo = _p(d, "Bo Finch")
     assert bo["job_key"] is None and bo["job_label"] == "" and bo["areas"] == []
     assert bo["role"] == "viewer" and not bo["no_login"]         # nothing to switch on: the least a login can be
     assert "couldn't tell what they do" in bo["why"] and st.NO_JOB_NOTE.format(name="Bo Finch") in bo["notes"]
+    # A ready-made job nobody holds is not a gap any more; a job the draft proposes that nobody holds is.
+    assert "job_unheld" not in _keys(d["gaps"])
+    board = _draft(db, {"leads": "pastor_board", "people": []})
+    assert [g["line"] for g in board["gaps"] if g["key"] == "job_unheld"] == ["No one holds Board member yet."]
+
+
+def test_a_job_with_no_areas_is_nothing_switched_on_whatever_it_is_called(db):
+    d = _draft(db, {"leads": "pastor", "people": [
+        {"name": "Ike Dunn", "title": "Armor Bearer", "does": "carries the bags on Sunday",
+         "email": "ike@hopechapel.example"}]})
+    ike = _p(d, "Ike Dunn")
+    assert ike["job_label"] == "Armor Bearer" and ike["areas"] == [] and ike["role"] == "viewer"
+    assert st.EMPTY_JOB_NOTE.format(job="Armor Bearer", name="Ike Dunn") in ike["notes"]
+    assert "Nothing is switched on for Ike Dunn yet." in [g["line"] for g in d["gaps"]]
 
 
 def test_a_body_title_and_whoever_is_over_the_office_get_their_own_jobs(db):
@@ -503,7 +546,8 @@ def test_a_wildcard_in_a_name_or_an_email_finds_nobody(db, monkeypatch):
 # ─── A person's state, as the church changes ──────────────────────────
 
 def test_state_follows_the_church_from_needing_an_email_to_done(db):
-    answers = {"leads": "pastor", "people": [{"name": "Zed Novak", "does": "calls every guest"}]}
+    answers = {"leads": "pastor", "people": [{"name": "Zed Novak", "title": "People & Care",
+                                              "does": "calls every guest"}]}
     assert _p(_draft(db, answers), "Zed Novak")["state"] == "needs_email"
     answers["people"][0]["email"] = "zed@hopechapel.example"
     d = _draft(db, answers)
@@ -529,7 +573,7 @@ def test_state_follows_the_church_from_needing_an_email_to_done(db):
 
 def test_an_email_typed_on_review_reaches_the_draft_and_ties_the_invitation_and_the_login(db):
     d = _draft(db, {"leads": "pastor", "people": [
-        {"name": "Zed Novak", "does": "calls every guest", "email": "zed at home"},
+        {"name": "Zed Novak", "title": "People & Care", "does": "calls every guest", "email": "zed at home"},
         {"name": "Maria Lopez", "does": "runs the prayer chain"},
         {"name": "Ivy Shaw", "does": "keeps the calendar and the office"}]})
     zed = _p(d, "Zed Novak")
@@ -662,7 +706,9 @@ def test_a_church_with_only_its_pastor_is_told_so_and_nothing_heavy_is_read(db, 
         "logins": 0, "placed": 0, "gaps": [st._gap("pastor_only", "You are the only login.",
                                                    got["status"]["gaps"][0]["fix"])]}
     d = _draft(db, {"leads": "pastor", "people": []})
-    assert _keys(d["gaps"])[:2] == ["pastor_only", "no_giving"] and _keys(d["gaps"])[-1] == "job_unheld"
+    assert _keys(d["gaps"])[:2] == ["pastor_only", "no_giving"] and "job_unheld" not in _keys(d["gaps"])
+    board = _draft(db, {"leads": "pastor_board", "people": []})
+    assert _keys(board["gaps"])[:2] == ["pastor_only", "no_giving"] and _keys(board["gaps"])[-1] == "job_unheld"
 
 
 def test_the_drafts_gaps_name_what_is_still_missing_each_with_its_fix(db):
@@ -680,8 +726,7 @@ def test_the_drafts_gaps_name_what_is_still_missing_each_with_its_fix(db):
     assert by["counts_and_deposits"]["line"] == "Dana Reed both counts the offering and deposits it."
     assert "Two people on the money" in by["counts_and_deposits"]["fix"]
     assert all(g["line"] and g["fix"] for g in d["gaps"])
-    unheld = [g["line"] for g in d["gaps"] if g["key"] == "job_unheld"]
-    assert unheld == ["No one holds Office & Leadership yet.", "No one holds People & Care yet."]   # Treasurer said once
+    assert "job_unheld" not in keys                              # a ready-made job nobody holds is no gap
     # The pastor doing it all is said in their own words.
     mine = _draft(db, {"leads": "pastor", "money": {"counts": ["me"], "deposits": "Pastor Daniel Brooks", "books": "I"},
                        "guests": "me", "people": []})
@@ -696,11 +741,11 @@ def test_the_drafts_gaps_name_what_is_still_missing_each_with_its_fix(db):
     assert "Zed Novak should hear when a guest comes, but isn't set up to." in [g["line"] for g in gone["gaps"]]
 
 
-def test_a_full_small_church_leaves_only_the_jobs_nobody_holds(db):
+def test_a_full_small_church_has_nothing_missing(db):
     d = _draft(db, SMALL)
-    assert _keys(d["gaps"]) == ["job_unheld"] and d["gaps"][0]["line"] == "No one holds Office & Leadership yet."
+    assert d["gaps"] == []
     maria = _p(d, "Maria Lopez")
-    assert "first_guests" in maria["duties"] and maria["job_key"] == "people_care"
+    assert maria["duties"] == ["first_guests", "prayer"] and maria["job_label"] == "Guest follow-up and prayer"
 
 
 def test_the_standing_check_reads_the_church_as_it_is_with_or_without_a_draft(db):
@@ -760,10 +805,17 @@ def test_a_draft_from_the_plan_maps_what_is_written_and_says_the_rest(db, monkey
     assert [p["name"] for p in d["people"]] == ["Maria Lopez", "Tom Reyes", "Ana Bell", "Rita Vance"]
     maria = _p(d, "Maria Lopez")
     assert maria["does"] == "Leads Welcome Team and Kids Church" and maria["contact_id"] == C_MARIA
-    assert "first_guests" in maria["duties"]                 # the Welcome Team's leader hears about guests
-    assert _p(d, "Tom Reyes")["job_key"] == "media_comms" and _p(d, "Ana Bell")["job_key"] == "media_comms"
+    # The plan gives no titles, so each job is called by what they lead, with only what that needs.
+    assert maria["job_label"] == "Welcome Team and Kids Church leader" and maria["job_key"] is None
+    assert maria["areas"] == ["people_care", "kids_youth"] and maria["duties"] == ["first_guests", "kids"]
+    tom, ana = _p(d, "Tom Reyes"), _p(d, "Ana Bell")
+    assert tom["job_label"] == ana["job_label"] == "Media Team leader" and tom["areas"] == ["worship_media"]
+    assert tom["duties"] == [] and _labels(d).count("Media Team leader") == 1
+    assert not [p for p in d["people"] if p["job_key"] in ca.LANES]      # nobody is handed a ready-made job
     rita = _p(d, "Rita Vance")                               # leading the finance team is not an Admin login
-    assert rita["role"] != "admin" and rita["areas"] == [] and st.MONEY_WORDS_NOTE.format(name="Rita Vance") in rita["notes"]
+    assert rita["role"] == "viewer" and rita["areas"] == [] and rita["job_label"] == "Finance Team leader"
+    assert st.MONEY_WORDS_NOTE.format(name="Rita Vance") in rita["notes"]
+    assert st.EMPTY_JOB_NOTE.format(job="Finance Team leader", name="Rita Vance") in rita["notes"]
     notes = " ".join(d["notes"])
     assert "Deacons has no leader named in your plan" in notes
     assert "Men's Breakfast is marked pause in your plan" in notes
@@ -799,8 +851,13 @@ def test_a_draft_from_the_plan_is_refused_until_leaders_is_written_and_to_whoeve
     assert KEY_NOT_KEPT(db)
 
 
+def _row(db, biz=BIZ):
+    """The church's kept draft row, or None."""
+    return next((r for r in db.t[st.TABLE] if r["business_id"] == biz), None)
+
+
 def KEY_NOT_KEPT(db):
-    return st.KEY not in (_biz(db).get("settings") or {})
+    return _row(db) is None
 
 
 def test_nothing_said_is_a_400_and_nothing_is_kept(db):
@@ -813,31 +870,99 @@ def test_nothing_said_is_a_400_and_nothing_is_kept(db):
 
 # ─── How it is kept ───────────────────────────────────────────────────
 
-def test_the_draft_is_one_per_church_kept_as_a_server_key_and_nothing_else_is_written(db):
-    assert st.KEY in bs.SERVER_KEYS and bs.server_owned(st.KEY)
-    before = {t: [dict(r) for r in rows] for t, rows in db.t.items() if t != "businesses"}
+def test_the_draft_is_one_per_church_in_its_own_table_and_nothing_else_is_written(db):
+    before = {t: [dict(r) for r in rows] for t, rows in db.t.items() if t != st.TABLE}
     first = _draft(db, SMALL)
-    second = _draft(db, {"leads": "pastor_board", "people": [{"name": "Zed Novak", "does": "guests"}]})
-    settings = _biz(db)["settings"]
-    assert settings["theme"] == "light" and settings["practitioner_name"] == "Pastor Daniel Brooks"
-    assert settings[st.KEY]["id"] == second["id"] != first["id"]
-    assert [p["name"] for p in settings[st.KEY]["people"]] == ["Zed Novak"]
-    assert db.merges == 2
-    # No login, no invitation, no job, no sheet change: every other table is as it was.
-    after = {t: rows for t, rows in db.t.items() if t not in ("businesses", "church_role_defs")}
+    second = _draft(db, {"leads": "pastor_board", "people": [{"name": "Zed Novak", "title": "Usher", "does": "guests"}]})
+    assert len(db.t[st.TABLE]) == 1 and db.keeps == 2
+    row = _row(db)
+    assert set(row) == {"business_id", "draft", "made_by", "made_at", "updated_at"} and row["made_by"] == OWNER
+    assert row["draft"]["id"] == second["id"] != first["id"]
+    assert [p["name"] for p in row["draft"]["people"]] == ["Zed Novak"]
+    # No login, no invitation, no job, no sheet change, and nothing in the church's settings: every other
+    # table is as it was (the role library aside, which the Logins & areas page fills when it is first read).
+    after = {t: rows for t, rows in db.t.items() if t not in (st.TABLE, "church_role_defs")}
     assert after == {t: rows for t, rows in before.items() if t != "church_role_defs"}
+    assert _biz(db)["settings"] == {"practitioner_name": "Pastor Daniel Brooks", "theme": "light"}
     assert db.t["business_users"] == [] and db.t["church_jobs"] == [] and db.t["church_sheet_changes"] == []
     st.discard(_biz(db))
-    assert KEY_NOT_KEPT(db) and _biz(db)["settings"]["theme"] == "light"
+    assert KEY_NOT_KEPT(db)
     st.discard(_biz(db))                                    # nothing to clear is not a failure
-    assert db.merges == 3
+
+
+def test_nothing_about_a_draft_is_ever_in_settings():
+    import business_settings
+    src = (pathlib.Path(ROOT) / "church_structure.py").read_text(encoding="utf-8")
+    assert "business_settings" not in src.split('"""', 2)[2] and "merge_business_settings" not in src
+    assert "church_structure" not in business_settings.SERVER_KEYS
+    assert not (pathlib.Path(ROOT) / "supabase" / "APPLY-2026-11-18-church-structure-key.sql").exists()
 
 
 def test_a_draft_that_doesnt_save_is_a_503_never_a_draft(db, monkeypatch):
-    monkeypatch.setattr(bs, "merge", lambda *a, **k: None)
+    real = db.post
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, prefer=None, **kw: None if path.startswith(f"/{st.TABLE}")
+                        else real(path, body, prefer, **kw))
     with pytest.raises(HTTPException) as e:
         _draft(db, SMALL)
-    assert e.value.status_code == 503 and e.value.detail == st.UNSAVED
+    assert e.value.status_code == 503 and e.value.detail == st.UNSAVED and KEY_NOT_KEPT(db)
+
+
+def _table_gone(db, monkeypatch):
+    """The drafts' table before its file is applied: PostgREST answers an
+    error, which the service helpers hand back as None."""
+    get, post = db.get, db.post
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith(f"/{st.TABLE}") else get(path, **kw))
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, prefer=None, **kw: None if path.startswith(f"/{st.TABLE}")
+                        else post(path, body, prefer, **kw))
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service",
+                        lambda path, **kw: False if path.startswith(f"/{st.TABLE}") else db.delete(path, **kw))
+
+
+def test_before_the_table_is_there_nothing_is_drafted_and_the_standing_check_still_answers(db, monkeypatch):
+    _office(db)
+    _table_gone(db, monkeypatch)
+    got = _read(db)
+    assert got["ready"] is False and got["draft"] is None and got["can_draft"] is True
+    assert got["status"]["logins"] == 4 and _keys(got["status"]["gaps"]) == ["sees_everything"]
+    business = _biz(db)
+    for go in (lambda: _draft(db, SMALL), lambda: st.set_email(business, co.Church(business), "p1", "a@b.example"),
+               lambda: st.discard(business)):
+        with pytest.raises(HTTPException) as e:
+            go()
+        assert e.value.status_code == 503 and e.value.detail == st.NOT_READY
+    assert st.NOT_READY == "Team setup is being switched on. Try again shortly."
+    # Chief relays the sentence and never says a draft was made; the status read still works.
+    no = chief(db, OWNER, "draft_church_structure", answers=SMALL)
+    assert no["failed"] and no["result"] == f"Failed: {st.NOT_READY.rstrip('.')}. No draft was made."
+    status = chief(db, OWNER, "church_structure_status")
+    assert not status.get("failed") and "4 logins besides the owner; 3 placed" in status["result"]
+    assert "isn't switched on here yet" in status["result"] and "draft_church_structure" not in status["result"]
+    assert st.coach_block(business).count("A draft of the office team") == 0
+
+
+def test_the_migration_is_one_server_only_table_and_the_export_knows_it():
+    import account_lifecycle
+    sql = (pathlib.Path(ROOT) / "supabase" / "APPLY-2026-11-18-church-structure-drafts.sql").read_text(encoding="utf-8")
+    code = "\n".join(line.split("--", 1)[0] for line in sql.splitlines()).lower()
+    assert code.count("create table if not exists public.church_structure_drafts(") == 1
+    assert "business_id uuid primary key references public.businesses(id) on delete cascade" in code
+    for col in ("draft jsonb not null", "made_by uuid", "made_at timestamptz not null default now()",
+                "updated_at timestamptz not null default now()"):
+        assert col in code, col
+    assert "alter table public.church_structure_drafts enable row level security;" in code
+    assert "revoke all on public.church_structure_drafts from public, anon, authenticated;" in code
+    assert "grant all on public.church_structure_drafts to service_role;" in code
+    assert "create policy" not in code and "drop " not in code and "security definer" not in code
+    assert code.index("begin;") < code.index("create table") < code.index("commit;")
+    assert "-- Check:" in sql and "-- Rollback" in sql and "drop table if exists public.church_structure_drafts;" in sql
+    assert st.TABLE in account_lifecycle.BUSINESS_CHILD_TABLES and st.TABLE in account_lifecycle._IMPORT_SKIP
+    assert st.TABLE not in account_lifecycle.EXPORT_EXCLUDED
+    ledger = (pathlib.Path(ROOT) / "docs" / "MIGRATIONS.md").read_text(encoding="utf-8")
+    row = next(ln for ln in ledger.splitlines() if "APPLY-2026-11-18-church-structure-drafts.sql" in ln)
+    assert row.rstrip().endswith("| **NOT APPLIED** |") and "church-structure-key" not in ledger
 
 
 def test_a_church_that_cant_be_read_is_a_503_with_nothing_kept(db, monkeypatch):
@@ -854,9 +979,11 @@ def test_a_church_that_cant_be_read_is_a_503_with_nothing_kept(db, monkeypatch):
 
 
 def test_what_is_kept_is_cleaned_again_on_every_read_so_a_forged_draft_opens_nothing(db):
-    """Until the key's migration is applied an owner's or Admin's own login
-    could write it: what comes back is still a proposal inside the rules."""
-    _biz(db)["settings"][st.KEY] = {
+    """Only the server writes the table, and what it reads back is still
+    cleaned: whatever a row holds, what comes out is a proposal inside the
+    rules."""
+    db.t[st.TABLE].append({"business_id": BIZ, "draft": None})
+    _row(db)["draft"] = {
         "id": "x", "made_at": "2026-11-18T10:00:00+00:00", "made_by_name": "Someone", "source": "elsewhere",
         "shape": {"key": "theocracy", "why": "w" * 5000},
         "jobs": [{"label": "Money Friend", "role": "manager", "areas": ["giving_money", "office"],
@@ -877,8 +1004,113 @@ def test_what_is_kept_is_cleaned_again_on_every_read_so_a_forged_draft_opens_not
     assert zed["email"] is None and zed["state"] == "needs_email" and len(zed["notes"][0]) <= st.NOTE_MAX
     assert ivy["role"] == "manager" and ivy["areas"] == [] and ivy["duties"] == []
     for junk in (None, "draft", {"people": "many"}, {"people": [], "jobs": None}):
-        _biz(db)["settings"][st.KEY] = junk
-        assert _read(db)["draft"] is None
+        _row(db)["draft"] = junk
+        got = _read(db)
+        assert got["draft"] is None and got["ready"] is True
+
+
+# ─── A church job brings only the duties given on the sheet ───────────
+# Kevin, 2026-11-18. Found while building this: a login on one of the
+# church's own jobs whose areas were exactly a starting job's areas held that
+# starting job's duties (church_duties._seat_lane fell back to the lane the
+# areas spell), and any other login on a church job held every duty in its
+# areas.
+
+TOM = "c7000000-0000-4000-8000-000000000007"
+PAT = "c7100000-0000-4000-8000-000000000071"
+KAY = "c7200000-0000-4000-8000-000000000072"
+
+
+def _held(db, uid):
+    cd._CACHE.clear()
+    ca._MY_CACHE.clear()
+    ch = co.Church(_biz(db))
+    return set(ch.held(uid)), set(cd.standing(BIZ, uid)["duties"]), ch.lanes(uid)
+
+
+def test_a_login_on_a_church_job_holds_only_the_duties_given_on_its_sheet(db):
+    job = cj.create(_biz(db), {"label": "Minister of Music", "role": "manager", "areas": ["worship_media"],
+                               "duties": ["sunday_plan"]}, OWNER, "owner")["job"]
+    assert ca.LANES["sunday_serving"]["areas"] == ["worship_media"]      # the same areas as a starting job
+    db.t["business_users"] += [
+        _seat(TOM, "manager", "tom@hopechapel.example", "Tom Reyes", lane=job["key"], areas=["worship_media"]),
+        _seat(PAT, "manager", "pat@hopechapel.example", "Pat Shaw", areas=["worship_media"]),
+        _seat(KAY, "manager", "kay@hopechapel.example", "Kay Odum", areas=["kids_youth"]),
+    ]
+    tom = next(x for x in db.t["business_users"] if x["user_id"] == TOM)
+    assert cd.own_job_seat(tom) and cd._seat_lane(tom) is None
+    # Tom, on the church's own job: nothing from Sunday & Serving, nothing from the area, nothing from the
+    # job's own list. A job is a starting point for a sheet, never the sheet.
+    assert _held(db, TOM) == (set(), set(), [])
+    page = {d["key"]: d for d in cd.build(_biz(db))["duties"]}
+    assert all(TOM not in [h["user_id"] for h in d["holders"]] for d in page.values())
+    # Given on his sheet, it is his: exactly that.
+    cs.change(_biz(db), OWNER, TOM, {"duties": {"add": ["sunday_plan"]}})
+    assert _held(db, TOM)[:2] == ({"sunday_plan"}, {"sunday_plan"})
+    sheet = cs.compose(_biz(db), OWNER, TOM)
+    assert sheet["job"] == {"key": job["key"], "label": "Minister of Music", "custom": True}
+    assert {d["key"] for d in sheet["duties"] if d["held"]} == {"sunday_plan"}
+    # Pat has no job, and her picked areas spell Sunday & Serving: that lane's duties, as before.
+    pat = next(x for x in db.t["business_users"] if x["user_id"] == PAT)
+    assert not cd.own_job_seat(pat) and cd._seat_lane(pat) == "sunday_serving"
+    held, standing, lanes = _held(db, PAT)
+    assert held == standing == set(cd.STARTER["sunday_serving"]) and lanes == ["sunday_serving"]
+    # Kay has no job and areas no lane spells: the duties in her areas, as before.
+    held, standing, lanes = _held(db, KAY)
+    assert held == standing == {"kids", "youth", "background_checks"} and lanes == []
+    # A starting job stored on a login is still that job's duties (less the one that moved to Tom by name).
+    pat.update(lane="media_comms", areas=list(ca.LANES["media_comms"]["areas"]))
+    assert _held(db, PAT)[0] == set(cd.STARTER["media_comms"]) - {"sunday_plan"}
+
+
+def test_putting_someone_on_a_church_job_keeps_the_duties_their_sheet_showed_by_name(db):
+    """A save that leaves a Manager on a church job must not quietly take
+    away what they did by their areas: each duty is given to them by name."""
+    job = cj.create(_biz(db), {"label": "Kids Director", "role": "manager", "areas": ["kids_youth"],
+                               "duties": ["kids"]}, OWNER, "owner")["job"]
+    db.t["business_users"].append(_seat(KAY, "manager", "kay@hopechapel.example", "Kay Odum", areas=["kids_youth"]))
+    before = _held(db, KAY)[0]
+    assert before == {"kids", "youth", "background_checks"}
+    asked = []
+    got = cs.change(_biz(db), OWNER, KAY, {"job": job["key"]}, widening=lambda: asked.append(1))
+    assert asked == [] and not got["widens"] and got["summary"] == "changed Kay Odum's sheet: job: Kids Director"
+    assert _held(db, KAY)[0] == before
+    named = {r["duty"] for r in db.t["church_duty_holders"] if r["user_id"] == KAY}
+    assert named == before                                   # by name now, not by her areas
+    # Widening her areas afterwards brings no duty with it: a church job never does.
+    cs.change(_biz(db), OWNER, KAY, {"areas": ["kids_youth", "groups_classes"]})
+    assert _held(db, KAY)[0] == before
+
+
+def test_after_accepting_a_job_gives_done_only_when_nothing_more_is_drafted(db):
+    """What the app reads right after an invitation is accepted (the invite
+    stores the job's key and its areas): a ready-made job brings its duties,
+    a church job brings none. So `done` is straight away for a ready-made job
+    held as it is and for a church job with no duties drafted; a drafted duty
+    on a church job is `login` until the sheet is saved."""
+    d = _draft(db, {"leads": "pastor_board", "people": [
+        {"name": "Ida Poe", "title": "People & Care", "does": "all of care", "email": "ida@hopechapel.example"},
+        {"name": "Sol Marsh", "title": "Board member", "does": "sits on the board", "email": "sol@hopechapel.example"},
+        {"name": "Ruth Okoye", "title": "Deacon", "does": "visits the sick", "email": "ruth@hopechapel.example"}]})
+    made = {}
+    for j in d["jobs"]:
+        if not j["exists"]:
+            made[j["label"]] = cj.create(_biz(db), j, OWNER, "owner")["job"]["key"]
+    for n, (name, email, key) in enumerate((("Ida Poe", "ida@hopechapel.example", "people_care"),
+                                            ("Sol Marsh", "sol@hopechapel.example", made["Board member"]),
+                                            ("Ruth Okoye", "ruth@hopechapel.example", made["Deacon"]))):
+        lane = ca.lane(key, BIZ)                              # what make_invite_row stores
+        db.t["business_users"].append(_seat(f"c8{n}00000-0000-4000-8000-00000000008{n}", lane["role"], email, name,
+                                            lane=lane["key"], areas=lane["areas"]))
+    cd._CACHE.clear()
+    got = _read(db)["draft"]
+    assert _p(got, "Ida Poe")["state"] == "done"             # a ready-made job, held as it is
+    assert _p(got, "Sol Marsh")["state"] == "done"           # a church job with no duties drafted
+    ruth = _p(got, "Ruth Okoye")
+    assert ruth["state"] == "login" and ruth["duties"] == ["care_visits", "help_requests"]
+    cs.change(_biz(db), OWNER, ruth["user_id"], {"duties": {"add": ruth["duties"]}})
+    cd._CACHE.clear()
+    assert _p(_read(db)["draft"], "Ruth Okoye")["state"] == "done"
 
 
 # ─── The routes ───────────────────────────────────────────────────────
@@ -940,7 +1172,7 @@ def test_the_owner_an_admin_and_whoever_sets_up_jobs_draft_read_and_clear(office
         r = office.post("/church/structure/draft", json={"business_id": BIZ, "answers": SMALL})
         assert r.status_code == 200 and r.json()["ok"] and r.json()["draft"]["shape"]["key"] == "pastor_helpers"
         got = office.get(f"/church/structure?business_id={BIZ}").json()
-        assert got["ok"] and got["can_draft"] and got["draft"]["id"] == r.json()["draft"]["id"]
+        assert got["ok"] and got["can_draft"] and got["ready"] and got["draft"]["id"] == r.json()["draft"]["id"]
         assert got["status"]["logins"] == 4 and got["plan"]["can_use"] == (uid != HOLDER)
         assert set(got["draft"]) >= {"id", "made_at", "made_by_name", "source", "shape", "jobs", "people", "gaps"}
         person = got["draft"]["people"][0]
@@ -958,15 +1190,15 @@ def test_the_owner_an_admin_and_whoever_sets_up_jobs_draft_read_and_clear(office
 
 def test_everyone_else_is_refused_and_a_plain_login_reads_nothing_of_it(office, db):
     office.post("/church/structure/draft", json={"business_id": BIZ, "answers": SMALL})
-    kept = dict(_biz(db)["settings"][st.KEY])
+    kept = dict(_row(db)["draft"])
     office.who["id"] = MANAGER
     r = office.post("/church/structure/draft", json={"business_id": BIZ, "answers": SMALL})
     assert r.status_code == 403 and r.json()["detail"] == st.NOT_YOURS
     assert office.delete(f"/church/structure?business_id={BIZ}").status_code == 403
     got = office.get(f"/church/structure?business_id={BIZ}").json()
     assert got == {"ok": True, "draft": None, "status": {"logins": 0, "placed": 0, "gaps": []}, "can_draft": False,
-                   "plan": {"leaders_written": False, "can_use": False}}
-    assert _biz(db)["settings"][st.KEY] == kept
+                   "ready": False, "plan": {"leaders_written": False, "can_use": False}}
+    assert _row(db)["draft"] == kept
     office.who["id"] = STRANGER
     assert office.get(f"/church/structure?business_id={BIZ}").status_code == 404
     assert office.post("/church/structure/draft", json={"business_id": BIZ, "answers": SMALL}).status_code == 404
@@ -1044,9 +1276,11 @@ def test_chief_drafts_reads_the_proposal_back_and_points_at_the_review(db):
     assert "Shape: Pastor and helpers." in text and "People (3):" in text
     assert "- Alma Price: Treasurer, Admin login; opens the whole church, giving included. Now: not invited yet." in text
     assert "- Dana Reed: no login needed today; nothing is switched on. Counting the offering needs no login" in text
-    assert "Still missing:" in text and "No one holds Office & Leadership yet." in text
+    assert "- Maria Lopez: Guest follow-up and prayer (a job the church would make first), Manager login" in text
+    assert "Jobs the church would make first, on review: Guest follow-up and prayer." in text
+    assert "Still missing:" not in text                     # a full small church has nothing missing
     assert got["nav"] == {"tab": "operate", "sub": "areas", "setup": 1} and got["label"].endswith("3 people to review")
-    assert got["type"] == "draft_church_structure" and _biz(db)["settings"][st.KEY]["id"] == got["draft_id"]
+    assert got["type"] == "draft_church_structure" and _row(db)["draft"]["id"] == got["draft_id"]
     assert db.t["business_users"] == []                     # nobody was invited
     # The answers laid flat, as a tag may send them, are the same draft.
     flat = chief(db, OWNER, "draft_church_structure", **SMALL)
@@ -1069,14 +1303,14 @@ def test_chief_keeps_both_verbs_to_whoever_sets_the_office_up(db):
     for uid in (ADMIN, HOLDER):
         assert not chief(db, uid, "draft_church_structure", answers=SMALL).get("failed")
         assert not chief(db, uid, "church_structure_status").get("failed")
-    before = dict(_biz(db)["settings"][st.KEY])
+    before = dict(_row(db)["draft"])
     for verb in ("draft_church_structure", "church_structure_status"):
         no = chief(db, MANAGER, verb, answers=SMALL)
         assert no["failed"] and "whoever sets up jobs and people's sheets" in no["result"] and no["label"]
         assert "signed in" in chief(db, "", verb, answers=SMALL)["result"]
         assert chief(db, STRANGER, verb, answers=SMALL)["failed"]
         assert chief(db, OWNER, verb, answers=SMALL, _unattended=True)["failed"]
-    assert _biz(db)["settings"][st.KEY] == before
+    assert _row(db)["draft"] == before
     no = chief(db, HOLDER, "draft_church_structure", from_plan=True)
     assert no["failed"] and st.PLAN_NOT_YOURS.rstrip(".") in no["result"] and "No draft was made." in no["result"]
     empty = chief(db, OWNER, "draft_church_structure")
@@ -1111,7 +1345,9 @@ def test_chiefs_instructions_ask_the_five_questions_and_say_the_draft_changes_no
                  "ONE OR TWO AT A TIME", "who leads the church", "who counts the offering",
                  "a board, elders, deacons or trustees", "is anyone paid", "who should hear when a guest comes",
                  "THE DRAFT CHANGES NOTHING", "you never invite anyone and never change a sheet",
-                 "never push the church planning course", "assume no", "two-person rule"):
+                 "never push the church planning course", "assume no", "two-person rule",
+                 "ALWAYS what the church calls each one", "two or three plain words",
+                 "never a bigger ready-made one", "a title for EVERY person"):
         assert said in block, said
     # Universal manual: above the per-business split, so it is cached once for everyone.
     assert text.index("SETTING UP THE TEAM") < text.index("[[CHIEF_GLOBAL_SPLIT]]\n\n{archetype_block}")

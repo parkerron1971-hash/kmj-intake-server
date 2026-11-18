@@ -60,8 +60,9 @@ _PERSON = {
         "name": {"type": "string", "description": "Their name, as the person said it"},
         "email": {"type": "string", "description": "Only if the person gave it"},
         "does": {"type": "string", "description": "What they do week to week, in the person's own words"},
-        "title": {"type": "string", "description": "What the church calls them (Treasurer, Kids Director, Deacon), "
-                                                   "if they have a title"},
+        "title": {"type": "string", "description": "What the church calls them (Treasurer, Kids Director, Deacon). "
+                                                   "Always pass one: where they have no title, two or three "
+                                                   "plain words for what they do (Guest follow-up)"},
         "role": {"type": "string", "enum": ["viewer", "member", "manager", "admin"],
                  "description": "Leave out unless the person asked for a level"},
         "areas": {"type": "array", "items": {"type": "string"}, "description": "Area keys from draft_church_job, "
@@ -265,7 +266,10 @@ def _status(business: Dict[str, Any], ch: co.Church, uid: str, ed: str, action: 
         lines += _gap_lines(s["gaps"])
     else:
         lines.append("Nothing is missing in the office as it stands today.")
-    if d:
+    if not got["ready"]:
+        lines.append(f"The team's draft isn't switched on here yet ({st.NOT_READY.split('.')[0].lower()}), so don't "
+                     "offer to draft the team until it is. The check above still stands.")
+    elif d:
         by = {k: sum(1 for p in d["people"] if p["state"] == k) for k in STATE_WORDS}
         counts = "; ".join(f"{STATE_WORDS[k]}: {v}" for k, v in by.items() if v)
         lines.append(f"A draft is waiting for review (made {d['made_at'][:10]} by {_own(d['made_by_name'])}, from "
@@ -275,7 +279,7 @@ def _status(business: Dict[str, Any], ch: co.Church, uid: str, ed: str, action: 
     else:
         lines.append("No draft yet. Ask the five questions, then the names and what each person does, and call "
                      "draft_church_structure.")
-    if got["plan"]["can_use"]:
+    if got["plan"]["can_use"] and got["ready"]:
         lines.append("The planning course's Leaders page is written, so a draft can also be made from the plan "
                      "(from_plan true)." if got["plan"]["leaders_written"] else
                      "The planning course's Leaders page isn't written, so a draft comes from the five questions.")

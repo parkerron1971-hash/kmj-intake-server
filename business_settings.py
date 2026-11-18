@@ -19,8 +19,7 @@ Two pieces fix it:
 
   1. SERVER_KEYS: the keys only the server writes. The database keeps them
      (trigger businesses_guard_server_settings,
-     supabase/APPLY-2026-11-17-settings-server-keys.sql; the list as it
-     stands is in APPLY-2026-11-18-church-structure-key.sql): a write from the
+     supabase/APPLY-2026-11-17-settings-server-keys.sql): a write from the
      app's own logins (anon, authenticated) can neither set, change nor drop
      one; its other keys land as sent. The service role and the SQL editor
      are not held. The list is the inventory in
@@ -78,7 +77,6 @@ SERVER_KEYS: Tuple[str, ...] = (
     "church_leaders_note",  # church_leaders_note: the last send
     "church_team_rollup",   # church_team_week: the last roll-up
     "interview_events",     # site_composer: the builder interview's events
-    "church_structure",     # church_structure: the structure draft (a proposal; it opens nothing)
     # Settings with their own checked endpoint; the app never writes them here.
     "availability", "booking_page", "business_picture", "church_serving", "churchsavvy",
     "client_sources", "concierge", "doc_defaults", "giving", "journeys", "member_portal",

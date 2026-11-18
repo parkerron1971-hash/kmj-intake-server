@@ -518,7 +518,9 @@ def _held(ch: co.Church, target: str, role: Optional[str], lane: Any, picked: Op
     if is_exec:
         lanes.add(cd.EXEC)
     by_area = None
-    if not lanes:
+    if not lanes and cd.own_job_seat({"lane": lane}):
+        by_area = frozenset()           # one of the church's own jobs: only the duties given on the sheet
+    elif not lanes:
         every = frozenset(k for k, d in cd.CATALOG.items() if not d["money"] and k not in cd.OVERSIGHT)
         by_area = every if (shown is None or church_areas.mode() != "on") else frozenset(
             k for k in every if cd.CATALOG[k]["area"] in shown)
@@ -808,6 +810,31 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
     e = effect(business, ch, target, level=level if level_changes else keep,
                areas=areas if areas_set else keep, job=job_arg,
                moves={key: to for key, to in plan})
+    # One of the church's own jobs brings only the duties given on the sheet
+    # (church_duties.own_job_seat): none from its areas, none from a starting
+    # job its areas happen to spell. So a save that leaves a Manager on one
+    # must not quietly take away what their sheet showed ticked: each duty
+    # they did and weren't asked to drop is given to them by name, with
+    # everyone who does it now, in the same save. One that can't be (the duty
+    # already names the most logins it takes) is left to the record below,
+    # which says it was taken away.
+    if e["role_then"] == "manager" and cd.own_job_seat({"lane": e["lane_then"]}):
+        planned = {key for key, _to in plan}
+        keeping = [k for k in e["less_duties"] if k not in remove and k not in planned and not cd.CATALOG[k]["money"]]
+        if keeping:
+            page = {d["key"]: d for d in cd.build(business)["duties"]}
+            kept_by_name: List[Tuple[str, List[str]]] = []
+            for k in keeping:
+                doing = [h["user_id"] for h in page[k]["holders"] if h.get("active")]
+                to = sorted(set(doing) | {target})
+                if len(to) > cd.MAX_HOLDERS or cd._check(ch.b, business, [u for u in to if u != target], k):
+                    continue
+                kept_by_name.append((k, to))
+            if kept_by_name:
+                plan = plan + kept_by_name
+                e = effect(business, ch, target, level=level if level_changes else keep,
+                           areas=areas if areas_set else keep, job=job_arg,
+                           moves={key: to for key, to in plan})
     stored_areas = e["stored_areas"]
     more_areas, more_duties = e["more_areas"], e["more_duties"]
     less_areas, less_duties = e["less_areas"], e["less_duties"]

@@ -604,7 +604,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                          "chief_only": True},
     # The standard start (chief_church_structure): a church's office team drafted for review, and the standing
     # check. The draft is a read to Chief (it reads the proposal back in the same turn) that also KEEPS the
-    # proposal at settings.church_structure in place of the one before; nothing else is written, and no login,
+    # proposal in church_structure_drafts in place of the one before; nothing else is written, and no login,
     # invitation, job or sheet changes. Its handler holds it on a turn that read someone else's words.
     "draft_church_structure": {**_r("drafts a church's office team from the pastor's answers or the planning "
                                     "course (shape, jobs, each person's proposed login, the gaps) and keeps it as "

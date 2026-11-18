@@ -52,15 +52,6 @@ checks++;
 
 const keys = (await db.query('select public.business_settings_server_keys() as k')).rows[0].k;
 assert.equal(keys.length, 43); checks++;
-// A key added since ships as a file that replaces that one function: the
-// structure draft's (supabase/APPLY-2026-11-18-church-structure-key.sql).
-const later = await readFile(new URL('../supabase/APPLY-2026-11-18-church-structure-key.sql', import.meta.url), 'utf8');
-await db.exec(later);
-await db.exec(later);   // safe twice
-const keysNow = (await db.query('select public.business_settings_server_keys() as k')).rows[0].k;
-assert.equal(keysNow.length, 44); checks++;
-assert.ok(keysNow.includes('church_structure')); checks++;
-assert.ok(keys.every(k => keysNow.includes(k))); checks++;
 for (const k of ['founding_church', 'no_card_trial', 'extra_logins', 'church_move', 'lifecycle_emails',
                  'sample_church', 'churchsavvy_only', 'computer', 'autonomy']) {
   assert.ok(keys.includes(k), k); checks++;

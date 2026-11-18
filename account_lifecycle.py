@@ -310,6 +310,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # does, its areas and duties. They cite no row; who made and last
     # changed each is a sign-in user id.
     "church_jobs",
+    # A church's structure draft (church_structure.py): the one proposal of
+    # its office team waiting for review. It cites no row by a key another
+    # table holds; the people in it are named in words.
+    "church_structure_drafts",
     # The map (church_areas): which area the church put a role or a team in.
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
@@ -947,6 +951,11 @@ _IMPORT_SKIP = {
     # export keeps each job's words, areas and duties; a restored church
     # sets its jobs up again (Chief drafts them).
     "church_jobs",
+    # A structure draft ties each person to a login by sign-in user id and
+    # to a member by contact id, and proposes jobs by title for logins that
+    # aren't restored; same reason. The export keeps what was proposed; a
+    # restored church drafts its team again (Chief asks the five questions).
+    "church_structure_drafts",
     # The leaders map's departments cite their leader and overseer by
     # contact id, and their units cite groups, roles, boards and ministries
     # by id; same reason. A restored church draws its map again.

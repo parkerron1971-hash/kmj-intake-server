@@ -298,8 +298,9 @@ def office_team_block(track: Optional[Dict[str, Any]], structure: str = "") -> s
            "set up your office team from what you just told me? You'd review each person before anything "
            "changes.\" If RECENT SESSIONS shows you already offered, or they said no, do not offer again.\n")
         + "- On a yes, emit silently, with the people THEY named in this conversation and what each does, in "
-        "their words (a title only if they said one; never a name they did not say; leave money out unless "
-        "they told you who counts, who deposits and who keeps the books):\n"
+        "their words (always a title: theirs, or two or three plain words for what they do when they named "
+        "none; never a name they did not say; leave money out unless they told you who counts, who "
+        "deposits and who keeps the books):\n"
         '  [ACTION:{"type":"draft_church_structure","answers":{"leads":"pastor|pastor_board|elders|staff",'
         '"people":[{"name":"...","title":"...","does":"..."}],"guests":"..."}}]\n'
         "  It makes a DRAFT and nothing else: no login, no invitation, no job and no sheet. Then say in one "
