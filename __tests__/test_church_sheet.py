@@ -309,8 +309,9 @@ def test_the_owner_changes_areas_a_job_and_duties_through_the_writes_they_alread
     s = cs.compose(_biz(db), OWNER, SARAH)
     assert s["job"] == {"key": "kids_director", "label": "Kids Director", "custom": True}
     assert {d["key"] for d in s["duties"] if d["held"]} >= {"weekly_text", "kids"}
-    assert got["summary"] == ("changed Sarah Okafor's sheet: job: Kids Director; added Groups & classes; "
-                              f"gave “{cd.CATALOG['weekly_text']['label']}”")
+    # The record says what really changed, the duties her new area brings too.
+    assert got["summary"].startswith("changed Sarah Okafor's sheet: job: Kids Director; added Groups & classes; gave ")
+    assert f"“{cd.CATALOG['weekly_text']['label']}”" in got["summary"]
     # Recorded, and the owner isn't told about their own change.
     rec = db.t["church_sheet_changes"][-1]
     assert rec["kind"] == "sheet" and rec["subject_user_id"] == SARAH and rec["changed_by"] == OWNER
@@ -365,9 +366,10 @@ def test_a_member_logins_duties_stay_locked_but_its_areas_can_be_set(db):
 
 def test_giving_more_asks_for_the_password_and_taking_away_never_does(db):
     asked = []
-    cs.change(_biz(db), OWNER, JORDAN, {"areas": ["worship_media"]}, widening=lambda: asked.append(1))
-    assert asked == []                                                # an area taken off
-    cs.change(_biz(db), OWNER, JORDAN, {"areas": ["worship_media", "office"]}, widening=lambda: asked.append(1))
+    _seat_of(db, SARAH)["areas"] = ["kids_youth", "website_outreach"]
+    got = cs.change(_biz(db), OWNER, SARAH, {"areas": ["kids_youth"]}, widening=lambda: asked.append(1))
+    assert asked == [] and not got["widens"] and got["changed"]       # an area taken off, and nothing gained
+    cs.change(_biz(db), OWNER, SARAH, {"areas": ["kids_youth", "office"]}, widening=lambda: asked.append(1))
     assert asked == [1]
 
     def locked():
@@ -568,12 +570,22 @@ def test_the_sheet_route_answers_its_readers_and_refuses_the_rest(office, db):
 
 
 def test_the_put_asks_for_the_password_only_when_it_gives_more(office, db):
-    body = {"business_id": BIZ, "user_id": JORDAN, "areas": ["worship_media"]}
+    _seat_of(db, SARAH)["areas"] = ["kids_youth", "website_outreach"]
+    body = {"business_id": BIZ, "user_id": SARAH, "areas": ["kids_youth"]}
     r = office.put("/church/sheet", json=body)                       # an area taken off: no password
-    assert r.status_code == 200 and r.json()["areas"]["picked"] == ["worship_media"] and r.json()["changed"]
-    r = office.put("/church/sheet", json={**body, "areas": ["worship_media", "office"]})
+    assert r.status_code == 200 and r.json()["areas"]["picked"] == ["kids_youth"] and r.json()["changed"]
+    assert r.json()["owner_told"] is False
+    r = office.put("/church/sheet", json={**body, "areas": ["kids_youth", "office"]})
     assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
-    assert _seat_of(db, JORDAN)["areas"] == ["worship_media"]
+    assert _seat_of(db, SARAH)["areas"] == ["kids_youth"]
+    # With the password just re-proved (the invite's own unlock), it saves.
+    import ledger_unlock
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-sheet")
+    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]
+    r = office.put("/church/sheet", json={**body, "areas": ["kids_youth", "office"]},
+                   headers={ledger_unlock.UNLOCK_HEADER: token})
+    assert r.status_code == 200 and _seat_of(db, SARAH)["areas"] == ["kids_youth", "office"]
+    body = {"business_id": BIZ, "user_id": SARAH}
     office.who["id"] = JORDAN
     r = office.put("/church/sheet", json={**body, "user_id": SARAH})
     assert r.status_code == 403 and r.json()["detail"] == cs.NOT_AN_EDITOR
@@ -760,3 +772,324 @@ def test_navigate_carries_a_login_id_to_logins_and_areas_and_nothing_else(db):
     assert go(tab="operate", sub="areas", sheet=JORDAN)["nav"]["sheet"] == JORDAN
     assert "sheet" not in go(tab="operate", sub="areas", sheet="open the books")["nav"]
     assert "sheet" not in go(tab="operate", sub="tasks", sheet=JORDAN)["nav"]
+
+
+# ─── The security review (2026-11-17): "more" is judged by the result ──
+
+def _lane_spelled_apart(db):
+    """Sarah's stored job is Office & Leadership while her areas spell People & Care."""
+    _seat_of(db, SARAH).update(lane="office_leadership", areas=["people_care", "kids_youth", "groups_classes"])
+
+
+def _taking_away_that_gives_more(db):
+    """Three changes that read as taking away and leave the login with more:
+    (who, body, what it gains)."""
+    return [
+        # Back to Chief's guess: nothing places Sarah, so she would see the whole church.
+        (SARAH, {"areas": None}, "the whole church"),
+        # One area off Media & Communications spells Sunday & Serving, and brings its duties.
+        (JORDAN, {"areas": ["worship_media"]}, "background_checks"),
+        # No job: the lane her areas spell takes over, with its duties.
+        ("spelled", {"job": None}, "first_guests"),
+    ]
+
+
+@pytest.mark.parametrize("case", [0, 1, 2])
+def test_a_change_that_reads_as_taking_away_but_gives_more_asks_the_owner_for_the_password(db, case):
+    who, body, gains = _taking_away_that_gives_more(db)[case]
+    if who == "spelled":
+        _lane_spelled_apart(db)
+        who = SARAH
+    before = dict(_seat_of(db, who))
+    held = set(cd.standing(BIZ, who)["duties"])
+
+    def locked():
+        raise HTTPException(403, {"code": "ledger_locked"})
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, who, body, widening=locked)
+    assert e.value.detail == {"code": "ledger_locked"}
+    assert _seat_of(db, who) == before and db.t["church_duty_holders"] == []      # nothing was written
+    # With the password re-proved it saves, and the login really has more.
+    asked = []
+    got = cs.change(_biz(db), OWNER, who, body, widening=lambda: asked.append(1))
+    assert asked == [1] and got["widens"]
+    for c in (cd._CACHE, ca._MY_CACHE):
+        c.clear()
+    after = set(cd.standing(BIZ, who)["duties"])
+    assert after - held, "it gained duties"
+    if gains != "the whole church":
+        assert gains in after - held
+    else:
+        assert cs.compose(_biz(db), OWNER, who)["areas"]["shown"] is None
+        assert "areas back to Chief's guess" in got["summary"]
+
+
+def test_a_holder_never_sends_a_login_back_to_chiefs_guess(db):
+    _give_grant(db)
+    db.told.clear()
+    before = dict(_seat_of(db, SARAH))
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), RUTH, SARAH, {"areas": None})
+    assert e.value.status_code == 403 and e.value.detail == cs.BACK_TO_GUESS
+    assert _seat_of(db, SARAH) == before and db.told == []
+
+
+@pytest.mark.parametrize("case", [1, 2])
+def test_a_holder_needs_the_password_too_when_taking_away_gives_more(db, case):
+    _give_grant(db)
+    who, body, gains = _taking_away_that_gives_more(db)[case]
+    if who == "spelled":
+        _lane_spelled_apart(db)
+        who = SARAH
+    before = dict(_seat_of(db, who))
+
+    def locked():
+        raise HTTPException(403, {"code": "ledger_locked"})
+    with pytest.raises(HTTPException):
+        cs.change(_biz(db), RUTH, who, body, widening=locked)
+    assert _seat_of(db, who) == before
+    asked = []
+    got = cs.change(_biz(db), RUTH, who, body, widening=lambda: asked.append(1))
+    assert asked == [1] and got["owner_told"]
+    assert "; gave " in " ".join(db.told[-1])                     # the owner reads that it came with duties
+
+
+def test_a_holders_ceiling_is_held_on_what_the_change_leaves_the_login_with(db, monkeypatch):
+    # However a change comes to give the lanes' oversight (here: forced), a holder's is refused before any write.
+    _give_grant(db)
+    real = cs._held
+    calls = []
+
+    def held(*a, **k):
+        calls.append(1)
+        out = real(*a, **k)
+        return out | {"oversee_lanes"} if len(calls) == 2 else out          # the "after" answer
+    monkeypatch.setattr(cs, "_held", held)
+    before = dict(_seat_of(db, SARAH))
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), RUTH, SARAH, {"areas": ["kids_youth", "office"]})
+    assert e.value.status_code == 403 and e.value.detail == cs.OVERSIGHT_LOCKED
+    assert _seat_of(db, SARAH) == before
+
+
+def test_the_sheets_reckoning_of_a_logins_duties_is_the_churchs_own(db):
+    ch = co.Church(_biz(db))
+    for uid in (ADMIN, RUTH, JORDAN, SARAH, MARK):
+        seat = ch.seats[uid]
+        shown = None if seat["role"] == "admin" else cs._areas(_biz(db), ch, uid)["shown"]
+        picked = seat["areas"] if isinstance(seat["areas"], list) else None
+        assert cs._held(ch, uid, seat["role"], seat["lane"], picked, shown, ch.moved) == ch.held(uid), uid
+        assert set(ch.held(uid)) == set(cd.standing(BIZ, uid)["duties"])
+
+
+def test_a_job_alone_is_a_label_and_asks_for_no_password(db):
+    cj.create(_biz(db), {**JOB, "areas": ["kids_youth"], "duties": []}, OWNER, "owner")
+    asked = []
+    got = cs.change(_biz(db), OWNER, SARAH, {"job": "kids_director"}, widening=lambda: asked.append(1))
+    assert asked == [] and not got["widens"] and got["summary"].endswith("job: Kids Director")
+
+
+def test_changing_only_the_areas_keeps_a_churchs_own_job_on_the_login(db):
+    cj.create(_biz(db), JOB, OWNER, "owner")
+    cs.change(_biz(db), OWNER, SARAH, {"job": "kids_director"})
+    cs.change(_biz(db), OWNER, SARAH, {"areas": ["kids_youth", "people_care"]})
+    assert _seat_of(db, SARAH)["lane"] == "kids_director"
+    # The older Logins & areas route picking a lane makes that lane the job.
+    assert ca.set_login(BIZ, SARAH, "manager", areas=list(ca.LANES["people_care"]["areas"]),
+                        job="people_care") == "people_care"
+    cs.change(_biz(db), OWNER, SARAH, {"job": "kids_director", "areas": ["kids_youth", "people_care"]})
+    # A removed job stays too: she still reads as it.
+    cj.remove(_biz(db), "kids_director", OWNER, "owner")
+    cs.change(_biz(db), OWNER, SARAH, {"areas": ["kids_youth"]})
+    assert _seat_of(db, SARAH)["lane"] == "kids_director"
+    # A lane is still the lane the areas spell, as it always was.
+    cs.change(_biz(db), OWNER, JORDAN, {"areas": ["worship_media"]})
+    assert _seat_of(db, JORDAN)["lane"] == "sunday_serving"
+    # And "no job" clears a church's own job.
+    cs.change(_biz(db), OWNER, SARAH, {"job": None})
+    assert _seat_of(db, SARAH)["lane"] is None
+
+
+def test_a_member_or_viewer_reading_their_own_sheet_isnt_sent_the_churchs_jobs(db):
+    cj.create(_biz(db), JOB, OWNER, "owner")
+    assert cs.compose(_biz(db), MARK, MARK)["jobs"] == []
+    assert len(cs.compose(_biz(db), JORDAN, JORDAN)["jobs"]) == 6
+    for uid in (MARK, STRANGER):
+        with pytest.raises(HTTPException) as e:
+            cs.jobs_view(_biz(db), uid)
+        assert e.value.status_code == 403
+
+
+@pytest.mark.parametrize("body", [
+    {"areas": [[]]}, {"areas": [{}]}, {"areas": "office"}, {"areas": [5]},
+    {"duties": {"add": 5}}, {"duties": {"add": [[]]}}, {"duties": {"remove": [{}]}}, {"duties": "website"},
+    {"duties": {"add": "website"}}, {"job": {}}, {"job": ["kids_director"]}, {"job": 5},
+])
+def test_a_malformed_change_is_a_400_and_never_a_crash(db, body):
+    before = dict(_seat_of(db, JORDAN))
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, JORDAN, body)
+    assert e.value.status_code == 400 and isinstance(e.value.detail, str) and e.value.detail
+    assert _seat_of(db, JORDAN) == before
+
+
+@pytest.mark.parametrize("change", [{"areas": [[]]}, {"areas": [{}]}, {"duties": [{}]}, {"duties": [[]]},
+                                    {"duties": "kids"}, {"role": []}, {"role": {}}, {"areas": "office"}])
+def test_a_malformed_job_is_a_400_and_never_a_crash(db, change):
+    with pytest.raises(HTTPException) as e:
+        cj.clean({**JOB, **change}, "owner")
+    assert e.value.status_code == 400
+
+
+def test_a_grant_that_cant_be_read_refuses_before_anything_is_written(db, monkeypatch):
+    monkeypatch.setattr(cj, "grant_holders", lambda biz: None)
+    before = dict(_seat_of(db, SARAH))
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, SARAH, {"areas": ["kids_youth", "office"],
+                                           "duties": {"add": ["first_guests", cj.GRANT]}})
+    assert e.value.status_code == 503
+    assert _seat_of(db, SARAH) == before and db.t["church_duty_holders"] == []
+
+
+# ─── A grant never comes back with the person ─────────────────────────
+
+def test_a_login_taken_off_the_team_loses_the_grant_and_a_reinvite_isnt_a_holder(db):
+    import business_users_router as bu
+    _give_grant(db)
+    seat = _seat_of(db, RUTH)
+    seat["status"] = "revoked"
+    out = bu.hand_back_login(BIZ, RUTH)
+    assert out["failed"] == 0 and cj.grant_holders(BIZ) == set()
+    assert db.t["church_duty_changes"][-1]["duty"] == cj.GRANT and db.t["church_duty_changes"][-1]["to_holders"] is None
+    # Invited again as a Manager: not a holder until the owner gives it again.
+    seat["status"] = "active"
+    assert not cj.holds_grant(BIZ, RUTH, "manager") and cj.editor(BIZ, RUTH, "manager") is None
+
+
+def test_a_login_that_just_joined_holds_no_grant_left_from_before(db):
+    import business_users_router as bu
+    NEW = "b8000000-0000-4000-8000-000000000008"
+    db.t["church_duty_holders"].append({"business_id": BIZ, "duty": cj.GRANT, "user_id": NEW})     # left behind
+    db.t["business_users"].append({"id": "i1", "business_id": BIZ, "invited_email": "ines@gracefellowship.example",
+                                   "role": "manager", "status": "invited", "token": "tok-1", "user_id": None,
+                                   "contact_id": None, "name": None, "lane": None, "areas": None})
+    bu.accept(bu.AcceptBody(token="tok-1", name="Ines Abara"), SimpleNamespace(id=NEW, email="ines@gracefellowship.example"))
+    assert _seat_of(db, NEW)["status"] == "active"
+    assert cj.grant_holders(BIZ) == set() and not cj.holds_grant(BIZ, NEW, "manager")
+
+
+def test_dropping_a_grant_says_when_it_couldnt(db, monkeypatch):
+    assert cj.drop_grant(BIZ, MARK) is None                     # held none
+    _give_grant(db)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda *a, **k: None)
+    assert cj.drop_grant(BIZ, RUTH) is False and cj.grant_holders(BIZ) == {RUTH}
+
+
+# ─── Re-proving the password works for whoever is acting ──────────────
+
+def test_who_may_re_prove_their_password_to_change_who_can_get_in(db):
+    import ledger_unlock as L
+    _give_grant(db)
+    db.t["business_users"].append(_seat("b0000000-0000-4000-8000-00000000000a", "viewer",
+                                        "view@gracefellowship.example", "Vera Lund"))
+    OTHER = "0be00000-0000-4000-8000-00000000000b"
+    db.t["businesses"].append({"id": OTHER, "name": "Another Church", "type": "church", "owner_id": STRANGER})
+    for uid in (OWNER, ADMIN, RUTH):                              # the owner, an Admin, a holder
+        assert L._require_actor(BIZ, uid, L.SCOPE_ACCESS)["id"] == BIZ
+    for uid in (JORDAN, MARK, "b0000000-0000-4000-8000-00000000000a", STRANGER):
+        with pytest.raises(HTTPException) as e:                   # a plain Manager, a Member, a Viewer, another church's owner
+            L._require_actor(BIZ, uid, L.SCOPE_ACCESS)
+        assert e.value.status_code == 403
+    # Danger stays the owner's alone.
+    assert L._require_actor(BIZ, OWNER, L.SCOPE_DANGER)["id"] == BIZ
+    for uid in (ADMIN, RUTH, JORDAN):
+        with pytest.raises(HTTPException) as e:
+            L._require_actor(BIZ, uid, L.SCOPE_DANGER)
+        assert e.value.status_code == 403
+    # A seat that was taken away, and a grant that can't be read, are never a yes.
+    _seat_of(db, ADMIN)["status"] = "revoked"
+    with pytest.raises(HTTPException):
+        L._require_actor(BIZ, ADMIN, L.SCOPE_ACCESS)
+    import church_job_defs
+    real = church_job_defs.grant_holders
+    church_job_defs.grant_holders = lambda biz: None
+    try:
+        with pytest.raises(HTTPException):
+            L._require_actor(BIZ, RUTH, L.SCOPE_ACCESS)
+    finally:
+        church_job_defs.grant_holders = real
+    with pytest.raises(HTTPException) as e:
+        L._require_actor(OTHER, OWNER, L.SCOPE_ACCESS)            # this church's owner at someone else's
+    assert e.value.status_code == 403
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-uuid", BIZ + "#", BIZ + "&select=*", "../x", None])
+def test_the_step_ups_business_id_is_a_uuid_before_it_reaches_a_path(bad):
+    import ledger_unlock as L
+    with pytest.raises(HTTPException) as e:
+        L._business_uuid(bad)
+    assert e.value.status_code == 400
+    assert L._business_uuid(BIZ.upper()) == BIZ
+
+
+def test_the_step_up_route_keeps_its_limit_its_fail_closed_check_and_both_ledger_rows(db, monkeypatch):
+    import asyncio
+    import audit_log
+    import ledger_unlock as L
+    import rate_limit
+    rows, ok, allow = [], {"v": True}, {"v": True}
+
+    async def check(email, password):
+        return ok["v"]
+    monkeypatch.setattr(L, "check_password", check)
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda name, key: allow["v"])
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: rows.append((biz, kw["verb"])))
+    monkeypatch.setenv("AUDITOR_LINK_SECRET", "test-secret")
+
+    def go(uid, scope, biz=BIZ):
+        return asyncio.run(L.step_up(L._StepUpBody(business_id=biz, password="pw", scope=scope),
+                                     SimpleNamespace(id=uid, email="someone@example.com")))
+    out = go(ADMIN, "access")                                     # an Admin can confirm now
+    assert out["ok"] and L.verify(out["token"], ADMIN, L.SCOPE_ACCESS)
+    assert not L.verify(out["token"], ADMIN, L.SCOPE_DANGER) and rows[-1] == (BIZ, "stepup:access")
+    for uid, scope, status in ((ADMIN, "danger", 403), (JORDAN, "access", 403), (OWNER, "ledger", 400)):
+        with pytest.raises(HTTPException) as e:
+            go(uid, scope)
+        assert e.value.status_code == status
+    with pytest.raises(HTTPException) as e:
+        go(OWNER, "access", BIZ + "%23")
+    assert e.value.status_code == 400
+    ok["v"] = False
+    with pytest.raises(HTTPException) as e:
+        go(ADMIN, "access")
+    assert e.value.status_code == 403 and rows[-1] == (BIZ, "stepup:access_failed")
+    allow["v"] = False                                            # the limiter says no: never a pass
+    with pytest.raises(HTTPException) as e:
+        go(OWNER, "access")
+    assert e.value.status_code == 429
+
+
+# ─── The two reads take a real business id ────────────────────────────
+
+@pytest.mark.parametrize("path", ["/church/sheet?user_id=" + JORDAN + "&business_id=", "/church/sheet/jobs?business_id="])
+def test_the_reads_refuse_a_business_id_that_isnt_a_uuid_before_anything_is_read(office, db, monkeypatch, path):
+    seen = []
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p, **k: (seen.append(p), real(p, **k))[1])
+    for bad in (BIZ + "%23", BIZ + "%26select%3D*", "not-a-uuid"):
+        r = office.get(path + bad)
+        assert r.status_code == 400, (bad, r.status_code)
+    assert seen == []                                              # nothing reached the database
+    assert office.get(path + BIZ).status_code == 200
+
+
+# ─── What leaves with the church, and what a restore brings back ───────
+
+def test_the_jobs_are_exported_and_their_change_record_is_not():
+    import account_lifecycle as al
+    assert "church_jobs" in al.BUSINESS_CHILD_TABLES, "a church's own jobs are its data: exported, and deleted with it"
+    assert "church_jobs" in al._IMPORT_SKIP, "they name logins by sign-in id: a restored church sets them up again"
+    assert "church_sheet_changes" in al.EXPORT_EXCLUDED and "church_sheet_changes" not in al.BUSINESS_CHILD_TABLES
+    sql = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "supabase",
+                            "APPLY-2026-11-17-church-jobs.sql"), encoding="utf-8").read()
+    assert sql.count("references public.businesses(id) on delete cascade") == 2      # both go with the church

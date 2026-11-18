@@ -226,8 +226,24 @@ def require_unlock(request: Request, user_id: str,
 #
 # This route answers the other two: before letting someone re-prove a
 # password in order to grant access or do something irreversible, the
-# pre-check is OWNERSHIP. A viewer seat should never be handed a
-# password oracle for an account-deletion gate.
+# pre-check is WHO IS ACTING.
+#
+#   danger ... the OWNER, and nobody else. A viewer seat should never be
+#              handed a password oracle for an account-deletion gate.
+#   access ... the owner, an ACTIVE Admin seat on that business, or an
+#              ACTIVE Manager seat the owner or an Admin gave "Sets up
+#              jobs and people's sheets" (church_job_defs.GRANT).
+#
+# Why access is wider (2026-11-17). Re-proving your own password is the
+# protection against an unlocked laptop, so it has to work for whoever
+# is acting. It was the owner's alone, which meant an Admin could never
+# confirm an invite the app said Admins may send, and a login given the
+# grant could never give anyone an area: the gate in front of the
+# action was one they had no way through. The people let in are exactly
+# the ones the action's own route already lets act; each route still
+# decides what they may do, and this adds nothing to that. Every lower
+# seat (a Manager without the grant, a Member, a Viewer) and a login
+# from another business stay out, for the oracle reason above.
 
 from auth_supabase import AuthedUser, require_user  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
@@ -252,6 +268,48 @@ def _require_owner(business_id: str, user_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def _business_uuid(business_id: Any) -> str:
+    """The business id as a UUID, or a 400: it goes into a PostgREST path,
+    where anything else could rewrite the filter."""
+    import uuid
+    try:
+        return str(uuid.UUID(str(business_id or "")))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "That business id isn't valid.")
+
+
+def _require_actor(business_id: str, user_id: str, scope: str) -> Dict[str, Any]:
+    """Who may re-prove their password here for this scope (see the note
+    above): the owner for either; for `access` also an active Admin seat,
+    or an active Manager seat that holds the jobs-and-sheets grant, on
+    this business. Everyone else is a 403; a read that fails is a 403
+    too, never a pass. `business_id` is already a UUID."""
+    import sb_clients
+    from urllib.parse import quote
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) == str(user_id):
+        return rows[0]
+    if scope != SCOPE_ACCESS:
+        raise HTTPException(403, "not authorized")
+    seat = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{business_id}&user_id=eq.{quote(str(user_id), safe='')}"
+        "&status=eq.active&select=role&limit=1")
+    role = seat[0].get("role") if isinstance(seat, list) and seat else None
+    if role == "admin":
+        return rows[0]
+    if role == "manager":
+        try:
+            import church_job_defs
+            if church_job_defs.holds_grant(business_id, user_id, role):
+                return rows[0]
+        except Exception:  # noqa: BLE001 — unread is not a yes
+            logger.warning("[step_up] the grant couldn't be read for %s", str(business_id)[:8])
+    raise HTTPException(403, "not authorized")
+
+
 @router.post("/auth/step-up")
 async def step_up(body: _StepUpBody,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
@@ -274,7 +332,8 @@ async def step_up(body: _StepUpBody,
         # with its own, correct, read-based pre-check.
         raise HTTPException(400, "unknown step-up scope")
 
-    _require_owner(body.business_id, str(user.id))
+    business_id = _business_uuid(body.business_id)
+    _require_actor(business_id, str(user.id), scope)
 
     if not rate_limit.allow_strict("step_up", str(user.id)):
         raise HTTPException(429, "Too many attempts. Wait a moment.")
@@ -284,7 +343,7 @@ async def step_up(body: _StepUpBody,
     from audit_log import record
     if not await check_password(user.email, body.password):
         try:
-            record(body.business_id, actor_type="user", actor_id=str(user.id),
+            record(business_id, actor_type="user", actor_id=str(user.id),
                    verb=f"stepup:{scope}_failed", ok=False,
                    summary=f"Failed password confirmation for a {scope} action",
                    authorized_by="step_up")
@@ -294,7 +353,7 @@ async def step_up(body: _StepUpBody,
 
     out = mint(str(user.id), scope)
     try:
-        record(body.business_id, actor_type="user", actor_id=str(user.id),
+        record(business_id, actor_type="user", actor_id=str(user.id),
                verb=f"stepup:{scope}",
                summary=f"Confirmed password for {scope} actions",
                authorized_by="step_up")

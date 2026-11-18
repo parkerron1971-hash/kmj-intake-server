@@ -493,6 +493,13 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
     sb_clients.sb_patch_as_service(
         f"/business_users?id=eq.{inv['id']}",
         {"status": "active", "user_id": str(user.id), "joined_at": _now_iso()})
+    # A login that has just joined was given nothing yet: a grant left from
+    # an earlier time on this team (before a revoke cleared it) goes now.
+    try:
+        import church_job_defs
+        church_job_defs.drop_grant(str(inv.get("business_id")), str(user.id))
+    except Exception:  # noqa: BLE001 — the accept is done
+        logger.warning("[team] an old jobs grant couldn't be cleared on accept", exc_info=True)
     # Then who they are, on its own write: a seat that can't be named still
     # gets in. The invite's email finds their record, else the address they
     # signed up with.
@@ -578,4 +585,15 @@ def hand_back_login(biz: str, user_id: Any) -> Dict[str, int]:
         else:
             out["failed"] += 1
             logger.warning("revoke: %s still with a removed login on %s", table, str(biz)[:8])
+    # "Sets up jobs and people's sheets" goes with the login (church_job_defs):
+    # left behind, the same person invited again as a Manager would hold it
+    # without the owner giving it.
+    try:
+        import church_job_defs
+        if church_job_defs.drop_grant(biz, user_id) is False:
+            out["failed"] += 1
+            logger.warning("revoke: a removed login still sets up jobs on %s", str(biz)[:8])
+    except Exception:  # noqa: BLE001 — the revoke itself is done; this is counted and said in the log
+        out["failed"] += 1
+        logger.warning("revoke: the jobs grant couldn't be cleared on %s", str(biz)[:8], exc_info=True)
     return out

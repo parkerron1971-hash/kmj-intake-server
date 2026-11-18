@@ -973,6 +973,7 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
     if seat[0].get("role") in KEEPS_ALL:
         raise HTTPException(400, "Admins see the whole church")
     areas = body.get("areas")
+    picked = None
     if body.get("lane") is not None:
         picked = lane(body.get("lane"))
         if picked["role"] != "manager":
@@ -980,7 +981,9 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
                                      f"{picked['label']} from Logins & areas.")
         areas = picked["areas"]
     areas = clean_login_areas(areas)
-    kept = set_login(biz, uid, seat[0].get("role"), areas=areas)
+    # A lane picked here is the login's job from now on (one of the church's
+    # own jobs would otherwise stay on it: set_login keeps those by name).
+    kept = set_login(biz, uid, seat[0].get("role"), areas=areas, job=picked["key"] if picked else KEEP)
     return {"ok": True, "user_id": uid, "areas": areas, "lane": kept}
 
 
@@ -989,7 +992,7 @@ def clean_login_areas(areas: Any) -> Optional[List[str]]:
     400. Giving opens only to admins and the accountant, so it is never one."""
     if areas is None:
         return None
-    if not isinstance(areas, list) or not areas or any(a not in AREAS for a in areas):
+    if not isinstance(areas, list) or not areas or any(not isinstance(a, str) or a not in AREAS for a in areas):
         raise HTTPException(400, "Pick at least one of the areas")
     if FINANCE_ONLY in areas:
         raise HTTPException(400, "Giving opens only for admins and the accountant")
@@ -997,6 +1000,32 @@ def clean_login_areas(areas: Any) -> Optional[List[str]]:
 
 
 KEEP = object()        # set_login: leave this part of the login as it is
+
+
+def own_job(biz: Any, key: Any) -> bool:
+    """Whether a stored job key is one of the church's own jobs
+    (church_job_defs), a removed one too: never one of the lanes."""
+    if not key or key in LANES:
+        return False
+    import church_job_defs as cj
+    return cj.label_of(biz, key) is not None
+
+
+def lane_after(role: Optional[str], stored: Any, stored_areas: Any, *, areas: Any = KEEP, job: Any = KEEP,
+               own: bool = False) -> Optional[str]:
+    """The job a login is left with by one write of set_login, worked out
+    without writing (a person's sheet asks it first, to see what a change
+    would give). A job named is the job. No job named (`job` None): the
+    lane the areas are exactly, or none. Left as it is (KEEP): one of the
+    church's own jobs stays with the login when only its areas change
+    (`own`); a lane is the lane the areas are exactly, as it always was."""
+    if job is not KEEP and job:
+        return str(job)
+    now = stored_areas if areas is KEEP else areas
+    spelled = lane_of(role, now if isinstance(now, list) else None)
+    if job is KEEP and own:
+        return str(stored)
+    return spelled
 
 
 def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job: Any = KEEP) -> Optional[str]:
@@ -1014,14 +1043,12 @@ def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job
     if job is not KEEP and job:
         fields["lane"] = job
     else:
-        now = areas
-        if areas is KEEP:
-            got = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
-                                               "&status=eq.active&select=areas&limit=1")
-            if not isinstance(got, list) or not got:
-                raise HTTPException(503, "That didn't save. Try again.")
-            now = got[0].get("areas")
-        fields["lane"] = lane_of(role, now if isinstance(now, list) else None)
+        got = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
+                                           "&status=eq.active&select=areas,lane&limit=1")
+        if not isinstance(got, list) or not got:
+            raise HTTPException(503, "That didn't save. Try again.")
+        fields["lane"] = lane_after(role, got[0].get("lane"), got[0].get("areas"), areas=areas, job=job,
+                                    own=own_job(biz, got[0].get("lane")))
     saved = sb_clients.sb_patch_as_service(
         f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", fields)
     if not isinstance(saved, list) or not saved:

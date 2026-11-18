@@ -105,6 +105,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "church_duty_changes": "the log of those moves, from and to as sign-in user ids (church_duties.py): meaningless in another business, and nothing to restore once the moves are gone; cascade on business deletion",
     "church_duty_days": "the day each office login picked for one of its duties (church_assignments.py): keyed by sign-in user ids that can't mean anything in another business; a restored church's logins pick their days again, and until they do each duty falls on its catalog day; cascade on business and login deletion",
     "church_job_description_changes": "the log of changes to a church's job descriptions (church_job_descriptions.py): who changed each as a sign-in user id that can't mean anything in another business, and an undo a restore must not offer; the descriptions themselves are exported; cascade on business and person deletion",
+    "church_sheet_changes": "the record of who changed whose sheet, or which of the church's own jobs (church_job_defs.py): the changer and the login changed are sign-in user ids that can't mean anything in another business, and a restored church's logins and sheets are set up again, so there is nothing to restore; the jobs themselves are exported; cascade on business deletion",
     "church_handovers": "what the office sent a leader for their area (church_handovers.py): the sender a sign-in user id that can't mean anything in another business, and seen and told marks a restore must not claim; never a task, nothing to restore; cascade on business and person deletion",
     "church_mailboxes": "a church's own email addresses (church_mail.py): the login each names is a sign-in user id that can't mean anything in another business, and an address only works at a domain whose mail reaches this system; a restored church gives its addresses out again; cascade on business deletion",
     "church_mail": "mail that came in to a church address (church_mail.py): kept for the address's history, its rows tied to boxes that aren't restored; never Chief's; cascade on business deletion",
@@ -305,6 +306,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # A church's job descriptions (church_job_descriptions.py): each cites
     # its person by contact id (or a login by user id); before contacts.
     "church_job_descriptions",
+    # A church's own jobs (church_job_defs.py): the job's name, what it
+    # does, its areas and duties. They cite no row; who made and last
+    # changed each is a sign-in user id.
+    "church_jobs",
     # The map (church_areas): which area the church put a role or a team in.
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
@@ -937,6 +942,11 @@ _IMPORT_SKIP = {
     # id; same reason. The export keeps the church's words; a restored
     # church saves them again (Chief drafts from what it does).
     "church_job_descriptions",
+    # A church's own job names who made and last changed it by sign-in user
+    # id, and the logins that held it aren't restored; same reason. The
+    # export keeps each job's words, areas and duties; a restored church
+    # sets its jobs up again (Chief drafts them).
+    "church_jobs",
     # The leaders map's departments cite their leader and overseer by
     # contact id, and their units cite groups, roles, boards and ministries
     # by id; same reason. A restored church draws its map again.

@@ -46,9 +46,10 @@ Who:
 
 GET /church/jobs is the job descriptions' roster (church_job_descriptions);
 it carries `jobs` too, but only where that page opens, so /church/sheet/jobs
-is the read that always answers. Widening a login (an area or a duty added, a
-job given) asks for the password again, as an invite does; narrowing one
-never does. Switched with Logins & areas (CHURCH_AREAS). A read that fails is
+is the read that always answers. A change that leaves a login with more (an
+area it is shown, a duty it holds, however the change was asked) asks for the
+password again, as an invite does; one that leaves it with less never does:
+change() works out what the login has before and after. Switched with Logins & areas (CHURCH_AREAS). A read that fails is
 a 503, never an empty sheet.
 """
 from __future__ import annotations
@@ -83,6 +84,7 @@ GIVING_LOCKED = "Giving & money opens only for an Admin login. Only the owner or
 MONEY_DUTY = "A money job goes only to an Admin login. Only the owner or an Admin gives one."
 GRANT_LOCKED = f"Only the owner or an Admin can give or take away “{cj.GRANT_LABEL}”."
 OVERSIGHT_LOCKED = "Only the owner or an Admin moves the monthly report and Over the lanes."
+BACK_TO_GUESS = "Only the owner or an Admin can send a login back to Chief's guess: it can open the whole church."
 ADMIN_JOB = "That job is an Admin login. Only the owner makes someone an Admin: invite them as an Admin."
 KEEPS_ALL_WHY = "An Admin login sees the whole church and does every duty."
 NO_OFFICE_JOBS = "A Member or Viewer login doesn't do office jobs. Make them a Manager login first."
@@ -393,7 +395,8 @@ def compose(business: Dict[str, Any], viewer: str, target: str) -> Dict[str, Any
             "person": _person(ch, st, target), "job": job, "areas": areas, "duties": duties, "guarded": guarded,
             "description": _description(ch, viewer, target),
             "chief": chief_words(ch, target, areas["shown"], job, duties, guarded),
-            "jobs": cj.jobs(ch.b), **locks(st),
+            # The jobs (their descriptions too) are the office's: a Manager and up.
+            "jobs": cj.jobs(ch.b) if st["viewer_role"] in ("owner", "admin", "manager") else [], **locks(st),
         }
 
 
@@ -425,14 +428,72 @@ def _duty_plan(ch: co.Church, business: Dict[str, Any], target: str, add: List[s
     return plan
 
 
+def _shown(picked: Optional[List[str]], guess: List[str]) -> Optional[List[str]]:
+    """What a login is shown with these picked areas, as
+    church_areas.login_view decides it: the pick; with none, Chief's guess;
+    with neither, the whole church (None)."""
+    if isinstance(picked, list) and picked:
+        return [a for a in church_areas.AREA_ORDER if a in picked]
+    if guess:
+        return [a for a in church_areas.AREA_ORDER if a in guess]
+    return None
+
+
+def _held(ch: co.Church, target: str, role: Optional[str], lane: Any, picked: Optional[List[str]],
+          shown: Optional[List[str]], moved: Dict[str, List[str]]) -> frozenset:
+    """The duties a login holds with this job, these areas and these moves:
+    church_duties.standing's rule, worked out for a login as it is or as a
+    change would leave it. The owner and the Admins hold every duty; a
+    Manager its lane's (the stored one, else the lane its picked areas are
+    exactly, and the Executive Pastor's where their person holds that role),
+    or with no lane the duties in the areas it is shown, until a duty moves;
+    never money. A Member or a Viewer holds none."""
+    if role in church_areas.KEEPS_ALL:
+        return cd.ALL
+    if role != "manager":
+        return frozenset()
+    lanes = set()
+    ln = cd._seat_lane({"role": role, "lane": lane, "areas": picked})
+    if ln:
+        lanes.add(ln)
+    if target in ch.exec_users:
+        lanes.add(cd.EXEC)
+    by_area = None
+    if not lanes:
+        every = frozenset(k for k, d in cd.CATALOG.items() if not d["money"] and k not in cd.OVERSIGHT)
+        by_area = every if (shown is None or church_areas.mode() != "on") else frozenset(
+            k for k in every if cd.CATALOG[k]["area"] in shown)
+    return cd._manager_duties(lanes, target, moved, by_area)
+
+
+def _str_list(v: Any, what: str) -> List[str]:
+    """A list of plain words from a request, or a 400."""
+    if v is None:
+        return []
+    if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+        raise HTTPException(400, f"Send {what} as a list of names.")
+    return list(v)
+
+
 def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, Any], *,
            widening=None) -> Dict[str, Any]:
     """Change a person's sheet: its job, its areas, its duties, each through
-    the write it already had. Everything is checked before anything is
-    written. Returns {widens, summary, changed}. `widening` is called once,
-    before any write, when the change gives the login more (the route's
-    password check, which raises); nothing is asked for a change that only
-    takes away."""
+    the write it already had. Everything that can refuse is checked before
+    anything is written.
+
+    Whether a change gives the login more is judged by its RESULT, never by
+    how it was asked: what the login is shown and the duties it holds now are
+    worked out, then what they would be after the write (its job as
+    set_login would leave it, the duties that job or those areas bring), and
+    anything that grew is "more". Taking an area off can re-spell a lane and
+    bring that lane's duties; sending a login back to Chief's guess can open
+    the whole church; clearing a job can do the same. `widening` (the route's
+    password check, which raises) is called once before any write when
+    anything grew; a change that leaves the login with less asks for nothing.
+    A holder's ceiling is applied to the result too: nothing it leaves the
+    login with may be one of the things only the owner or an Admin gives.
+    Returns {widens, summary, changed, owner_told}."""
+    body = body if isinstance(body, dict) else {}
     ch = co.Church(business)
     st = standing(ch, viewer, target)
     if not st["can_edit"]:
@@ -442,23 +503,19 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
     seat = ch.seats.get(target) or {}
     name = ch.login_name(target)
     said: List[str] = []
-    widens = False
 
+    # ── What was asked: each part's shape, and who may ──
     # The job.
     job_set = "job" in body
     job_key = None
+    job_label = None
     if job_set and body.get("job") is not None:
-        job = cj.find(ch.b, body.get("job"))
+        job = cj.find(ch.b, body.get("job")) if isinstance(body.get("job"), str) else None
         if not job:
             raise HTTPException(400, "That isn't one of this church's jobs.")
         if job["role"] == "admin" and trole != "admin":
             raise HTTPException(403 if ed == "holder" else 400, ADMIN_JOB)
-        job_key = job["key"]
-        if job_key != (seat.get("lane") or None):
-            said.append(f"job: {job['label']}")
-            widens = True
-    elif job_set and seat.get("lane"):
-        said.append("no job")
+        job_key, job_label = job["key"], job["label"]
 
     # The areas.
     areas_set = "areas" in body
@@ -467,24 +524,20 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         if trole in church_areas.KEEPS_ALL:
             raise HTTPException(400, KEEPS_ALL_WHY)
         raw = body.get("areas")
+        if raw is None and ed == "holder":
+            raise HTTPException(403, BACK_TO_GUESS)
         if isinstance(raw, list) and church_areas.FINANCE_ONLY in raw:
             raise HTTPException(403 if ed == "holder" else 400, GIVING_LOCKED)
         areas = church_areas.clean_login_areas(raw)
-        had = [a for a in church_areas.AREA_ORDER if a in (seat.get("areas") or [])]
-        new = areas or []
-        plus, minus = [a for a in new if a not in had], [a for a in had if a not in new]
-        if plus:
-            said.append("added " + _join([_label(a) for a in plus]))
-            widens = True
-        if minus:
-            said.append("took off " + _join([_label(a) for a in minus]))
-        if areas is None and isinstance(seat.get("areas"), list):
-            said.append("areas back to Chief's guess")
 
     # The duties, and the grant among them.
-    duties = body.get("duties") if isinstance(body.get("duties"), dict) else {}
-    add = [str(k) for k in (duties.get("add") or [])]
-    remove = [str(k) for k in (duties.get("remove") or [])]
+    duties = body.get("duties")
+    if duties is None:
+        duties = {}
+    if not isinstance(duties, dict):
+        raise HTTPException(400, "Send the duties to give and to take away as two lists.")
+    add = _str_list(duties.get("add"), "the duties to give")
+    remove = _str_list(duties.get("remove"), "the duties to take away")
     known = set(cd.CATALOG) | {cj.GRANT}
     if any(k not in known for k in add + remove) or set(add) & set(remove):
         raise HTTPException(400, "One of those isn't a duty here.")
@@ -498,39 +551,99 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         why = cd._check(ch.b, business, to, key)
         if why:
             raise HTTPException(400, why)
-        gave = target in to
-        said.append(("gave" if gave else "took away") + f" “{cd.CATALOG[key]['label']}”")
-        widens = widens or gave
+    grant_changes = False
     if grant is not None:
         if ed not in ("owner", "admin"):
             raise HTTPException(403, GRANT_LOCKED)
         if trole != "manager":
             raise HTTPException(400, "Give that to a Manager login. An Admin sets up jobs and sheets already, and "
                                      "a Member or Viewer login doesn't.")
-        widens = widens or grant
+        holders = cj.grant_holders(ch.b)
+        if holders is None:              # unread before anything is written, never after
+            raise HTTPException(503, "Who sets up jobs couldn't be read just now. Nothing changed. Try again.")
+        grant_changes = (target in holders) != grant
 
+    # ── What the login has now, and what this would leave it with ──
+    stored_areas = seat.get("areas")
+    picked_now = ([a for a in church_areas.AREA_ORDER if a in stored_areas] or None) if isinstance(
+        stored_areas, list) else None
+    lane_now = seat.get("lane") or None
+    now = _areas(business, ch, target)
+    shown_now, guess = now["shown"], now["guess"]
+    picked_then = areas if areas_set else picked_now
+    lane_then = lane_now
+    if job_set or areas_set:
+        lane_then = church_areas.lane_after(
+            trole, lane_now, stored_areas, areas=areas if areas_set else church_areas.KEEP,
+            job=job_key if job_set else church_areas.KEEP, own=church_areas.own_job(ch.b, lane_now))
+    shown_then = None if trole in church_areas.KEEPS_ALL else _shown(picked_then, guess)
+    moved_then = dict(ch.moved)
+    for key, to in plan:
+        moved_then[key] = list(to)
+    held_now = _held(ch, target, trole, lane_now, picked_now, shown_now, ch.moved)
+    held_then = _held(ch, target, trole, lane_then, picked_then, shown_then, moved_then)
+    # "The whole church" for a login an area can be picked for never opens Giving.
+    every_area = set(church_areas.AREA_ORDER) - {church_areas.FINANCE_ONLY}
+    areas_now = every_area if shown_now is None else set(shown_now)
+    areas_then = every_area if shown_then is None else set(shown_then)
+    more_areas = [a for a in church_areas.AREA_ORDER if a in areas_then - areas_now]
+    more_duties = [k for k in cd.CATALOG if k in held_then - held_now]
+    less_areas = [a for a in church_areas.AREA_ORDER if a in areas_now - areas_then]
+    less_duties = [k for k in cd.CATALOG if k in held_now - held_then]
+
+    # A holder's ceiling, on the result: nothing this leaves the login with
+    # may be something only the owner or an Admin gives.
+    if ed == "holder":
+        for k in more_areas + more_duties:
+            if k in lk["locked_why"] and (k in lk["locked_areas"] or k in lk["locked_duties"]):
+                raise HTTPException(403, lk["locked_why"][k])
+        if shown_then is None and shown_now is not None:
+            raise HTTPException(403, BACK_TO_GUESS)
+
+    widens = bool(more_areas or more_duties or (grant is True and grant_changes))
     if widens and widening is not None:
         widening()
 
-    # Everything checked: write each part through its own write.
+    # ── The words for the record, from what really changes ──
+    if lane_then != lane_now:
+        label = job_label or (cj.label_of(ch.b, lane_then) if lane_then else None)
+        said.append(f"job: {label}" if label else "no job")
+    if more_areas:
+        said.append("added " + _join([_label(a) for a in more_areas]))
+    if less_areas:
+        said.append("took off " + _join([_label(a) for a in less_areas]))
+    if areas_set and areas is None and isinstance(stored_areas, list):
+        said.append("areas back to Chief's guess")
+
+    def _duty_words(keys: List[str]) -> str:
+        labels = [f"“{cd.CATALOG[k]['label']}”" for k in keys]
+        return _join(labels[:4]) + (f" and {len(labels) - 4} more" if len(labels) > 4 else "")
+    if more_duties:
+        said.append("gave " + _duty_words(more_duties))
+    if less_duties:
+        said.append("took away " + _duty_words(less_duties))
+
+    # ── Everything checked: write each part through its own write ──
     if job_set or areas_set:
         church_areas.set_login(ch.b, target, trole,
                                areas=areas if areas_set else church_areas.KEEP,
                                job=job_key if job_set else church_areas.KEEP)
     for key, to in plan:
         cd.move(business, key, to, viewer)
-    if grant is not None and cj.set_grant(business, target, grant, viewer):
+    if grant is not None and grant_changes and cj.set_grant(business, target, grant, viewer):
         said.append(("gave" if grant else "took away") + f" “{cj.GRANT_LABEL}”")
     try:
         import chief_areas
         chief_areas.forget(ch.b)
+        cd._forget(ch.b)
     except Exception:  # noqa: BLE001 — Chief reads the new sheet within the minute either way
         pass
     summary = f"changed {name}'s sheet: " + "; ".join(said) if said else ""
     if said:
         cj.changed(business, "sheet", viewer, ed or "", ch.login_name(viewer), summary, subject=target,
                    detail={"job": body.get("job") if job_set else None, "areas": areas if areas_set else None,
-                           "duties": {"add": add, "remove": remove}, "grant": grant})
+                           "duties": {"add": add, "remove": remove}, "grant": grant,
+                           "more": {"areas": more_areas, "duties": more_duties}})
     # A holder's change is sent to the owner (cj.changed); the app says so.
     return {"widens": widens, "summary": summary, "changed": bool(said),
             "owner_told": bool(said) and ed == "holder"}
@@ -542,7 +655,12 @@ def jobs_view(business: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     """The jobs and what this login may do with them: {jobs, can_manage,
     can_make_admin_job}."""
     ch = co.Church(business)
-    ed = cj.editor(ch.b, user_id, ch.role(user_id))
+    role = ch.role(user_id)
+    if role not in ("owner", "admin", "manager"):
+        # The route's own gate said a Manager and up; this is that again, on
+        # this church's own rows, the way standing() checks a sheet's reader.
+        raise HTTPException(403, "The church's jobs are read by its office seats: a Manager and up.")
+    ed = cj.editor(ch.b, user_id, role)
     # The duty list a job's form ticks from, so whoever sets up jobs needs no
     # other page's read for it (the duties page is not theirs to open).
     duties = [{"key": d["key"], "label": d["label"], "area": d["area"], "money": bool(d["money"]),
@@ -586,9 +704,21 @@ def remove_job(business: Dict[str, Any], ed: str, by: str, by_name: str, key: st
 
 # ─── Routes ───────────────────────────────────────────────────────────
 
+def _church_access(min_role: str):
+    """business_access, after the business id is known to be a UUID: that
+    dependency puts the id into a PostgREST path as it came, where a value
+    ending in an encoded # would drop the filters after it."""
+    inner = business_access(min_role)
+
+    async def dep(business_id: str, session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+        _uuid(business_id, "church")
+        return await inner(business_id, session)
+    return dep
+
+
 @router.get("/sheet")
 def get_sheet(business_id: str, user_id: str, session: UserSession = Depends(sb_clients.authed_request),
-              biz: Dict[str, Any] = Depends(business_access("viewer"))):
+              biz: Dict[str, Any] = Depends(_church_access("viewer"))):
     """One person's sheet. The owner or an Admin reads anyone's; whoever sets
     up jobs and sheets, a Manager login's or below; anyone, their own."""
     church_areas._gate(session.user)
@@ -600,9 +730,10 @@ def get_sheet(business_id: str, user_id: str, session: UserSession = Depends(sb_
 
 @router.put("/sheet")
 def put_sheet(body: Dict[str, Any], request: Request, session: UserSession = Depends(sb_clients.authed_request)):
-    """Change a person's sheet, then answer with it as it is now. Giving
-    someone more (an area, a duty, a job) asks for the password again, as an
-    invite does; taking something away never does."""
+    """Change a person's sheet, then answer with it as it is now. A change
+    that leaves someone with more (an area they're shown, a duty they hold)
+    asks for the password again, as an invite does, whoever is acting; one
+    that leaves them with less never does."""
     user = session.user
     church_areas._gate(user)
     body = body or {}
@@ -619,7 +750,7 @@ def put_sheet(body: Dict[str, Any], request: Request, session: UserSession = Dep
 
 @router.get("/sheet/jobs")
 def list_jobs(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
-              biz: Dict[str, Any] = Depends(business_access("manager"))):
+              biz: Dict[str, Any] = Depends(_church_access("manager"))):
     """The starting jobs and the church's own, and whether this login may
     set them up. A Manager seat and up."""
     church_areas._gate(session.user)

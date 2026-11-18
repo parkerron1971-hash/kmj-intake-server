@@ -7,6 +7,8 @@ status: in review
 prs: ["kmj-intake-server (this change, branch church-person-sheet)", "solutionist-studio (the app's half, branch church-person-sheet)"]
 migrations: ["supabase/APPLY-2026-11-17-church-jobs.sql (NOT APPLIED: church_jobs, church_sheet_changes; the code works before it)"]
 left_undone:
+  - "The older Logins & areas route (PUT /church/areas/login) and the Duties tab move a login's areas and duties for the owner and Admins with no password asked, as they did before this change. Only the sheet asks. The areas route is the owner's and Admins'; the Duties tab is theirs and whoever is over the lanes, so a holder gets nothing from either by holding the grant."
+  - "business_access puts the business id into a PostgREST path as it came. The sheet's two reads check it is a UUID first; every other route that depends on business_access does not."
   - "Steps two to five of the artifact: the rulebook (every page, server door and Chief action names its tick), the levels See / Work / Lead and the guarded ticks, giving as its own tick without an Admin login, the standard start, Chief everywhere."
   - "The sheet does not change a login's level (Viewer, Member, Manager, Admin): that is still the invite's. A job that is a different level from the login is only a label."
   - "A duty a login does by its job alone can't be taken off on the sheet when nobody else does it: the Duties tab names who does it instead."
@@ -34,12 +36,28 @@ to. It also says what this editor may not toggle (`locked_areas`,
 `locked_duties`, `locked_why`) and, for a holder, the limits in sentences.
 
 `PUT /church/sheet` checks everything first, then writes each part through its
-own write. Giving someone more asks for the password again, as an invite does;
-taking something away never does.
+own write. A change that leaves someone with more asks for the password again,
+as an invite does; one that leaves them with less never does. "More" is judged
+by the result: the areas the login is shown and the duties it holds are worked
+out before and after the planned write, so taking an area off (which can spell
+a different lane), clearing a job, or sending a login back to Chief's guess
+asks too when it gives. A holder's ceiling is held on the result as well, and a
+holder never sends a login back to Chief's guess.
+
+`POST /auth/step-up` (ledger_unlock) now lets the owner, an active Admin, or an
+active Manager holding the grant re-prove their own password for `access`;
+`danger` stays the owner's. Before this only the owner could, so an Admin could
+never confirm an invite and a holder could never give anything.
+
+A login taken off the team loses the grant (hand_back_login), and a login that
+has just joined holds none left from before. `church_jobs` is exported with the
+church and not restored on import, as its job descriptions are;
+`church_sheet_changes` is not exported, as the duties' and descriptions' logs
+aren't.
 
 `church_jobs` holds the jobs a church makes beside the five starting ones.
 `POST /church/jobs`, `PUT /church/jobs/{key}` and `DELETE /church/jobs/{key}`
 are for the owner, an Admin or a holder; an Admin job is the owner's.
 
-Tests: `__tests__/test_church_sheet.py` (79). The related files around what was
+Tests: `__tests__/test_church_sheet.py` (125). The related files around what was
 touched were run by name, never the whole suite.

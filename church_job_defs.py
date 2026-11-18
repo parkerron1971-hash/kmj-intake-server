@@ -211,6 +211,28 @@ def set_grant(business: Dict[str, Any], target: str, give: bool, by: str) -> boo
     return True
 
 
+def drop_grant(business_id: Any, user_id: Any) -> Optional[bool]:
+    """Take the grant away from a login that is leaving the team or has just
+    joined it again (business_users_router: revoke, accept), so it never
+    comes back with the same person. True when a row went, None when they
+    held none, False when it couldn't be read or saved. Logged by the
+    duties' own write with no one named as the changer."""
+    have = grant_holders(business_id)
+    if have is None:
+        return False
+    if str(user_id) not in have:
+        return None
+    try:
+        saved = sb_clients.sb_post_as_service("/rpc/church_duty_set", {
+            "p_business_id": str(business_id), "p_duty": GRANT, "p_user_ids": sorted(have - {str(user_id)}),
+            "p_by": None, "p_undoes": None})
+    except Exception:  # noqa: BLE001
+        return False
+    if isinstance(saved, list):
+        saved = saved[0] if saved else None
+    return bool(isinstance(saved, dict) and saved.get("id"))
+
+
 # ─── The record, and telling the owner ────────────────────────────────
 
 def record(business_id: Any, kind: str, by: Any, summary: str, *, subject: Any = None, job_key: Any = None,
@@ -327,13 +349,15 @@ def clean(body: Dict[str, Any], by_role: str) -> Dict[str, Any]:
         raise
     except Exception:  # noqa: BLE001 — the pay check is the descriptions'; unread, the job still saves
         pass
-    role = body.get("role") or "manager"
-    if role not in ROLES:
+    role = body.get("role")
+    role = "manager" if role in (None, "") else role
+    if not isinstance(role, str) or role not in ROLES:
         raise HTTPException(400, "A job's login is a Viewer, a Member, a Manager or an Admin.")
     if role == "admin" and by_role != "owner":
         raise HTTPException(403, OWNER_ONLY_ADMIN)
     areas = body.get("areas")
-    if areas is not None and (not isinstance(areas, list) or any(a not in church_areas.AREAS for a in areas)):
+    if areas is not None and (not isinstance(areas, list)
+                              or any(not isinstance(a, str) or a not in church_areas.AREAS for a in areas)):
         raise HTTPException(400, "Pick the job's areas from the church's eight.")
     areas = [a for a in church_areas.AREA_ORDER if a in (areas or [])]
     if role == "admin":
@@ -342,7 +366,8 @@ def clean(body: Dict[str, Any], by_role: str) -> Dict[str, Any]:
         raise HTTPException(400, "Giving & money opens only for an Admin login, so it can't be part of this job. "
                                  "Only the owner makes an Admin job.")
     duties = body.get("duties")
-    if duties is not None and (not isinstance(duties, list) or any(d not in cd.CATALOG for d in duties)):
+    if duties is not None and (not isinstance(duties, list)
+                               or any(not isinstance(d, str) or d not in cd.CATALOG for d in duties)):
         raise HTTPException(400, "One of those isn't a duty here. Pick the job's duties from the church's list.")
     duties = [k for k in cd.CATALOG if k in (duties or [])]
     if role != "admin" and any(cd.CATALOG[k]["money"] for k in duties):
