@@ -56,6 +56,16 @@ tables are there, and otherwise this page is exactly step 1's):
                           protected. A count, never a name: who is away is
                           under Who else is away for those who may see it
 
+PAIRS (S2-4): two people who can't be away together. The one asking is told,
+before sending and on their card, only that "this overlaps with someone you
+can't be away with at the same time": never who, never which days are the
+other's, and their card says it from the ask's own flag, so it never changes
+as the other's asks do. No nearest open days are offered for a pair alone.
+Whoever it went up to reads, in "Why it came to you", who it overlaps with
+only when they are the one who may give the exception (the owner's person,
+or that of whoever oversees the office, on an ask that went up to them);
+anyone else who has the card reads the same words without a name.
+
 A reason, and the note that came with an answer, appear only where
 church_schedule.shape() gave them. "Who else is away" is built from name,
 days and who covers alone (view's `away`), so nothing else can be printed
@@ -108,6 +118,11 @@ DONE_ALONE = {"dt_asked": "Asked. It’s waiting for a yes.",
 DONE_UP = {"dt_asked_up": "Asked. It went to {up}, who can make an exception.",
            "dt_yes_x": "You said yes, as an exception. It’s on the calendar now."}
 NOT_SENT = "Not sent yet. A day you picked is full or protected. Have a look under Ask for time off."
+NOT_SENT_PAIR = ("Not sent yet. These days overlap with someone you can’t be away with at the same time. Have a look "
+                 "under Ask for time off.")
+# A pair, said three ways (S2-4). Never which days are the other's.
+PAIR_YOU = "This overlaps with someone you can’t be away with at the same time."
+PAIR_THEY = "It overlaps with someone they can’t be away with at the same time."
 WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")
 WHY_MAX = 3                 # how many full or protected days a card spells out; the rest are counted
 # {n}: the days "can't make it" reaches (the church's notice days, two at least).
@@ -136,6 +151,10 @@ ERRORS = {
              "didn’t go through, and it has gone on to the one who can make an exception.",
     "dt_yours": "Those days have changed since this was asked: one of them is full now, or is a protected day. Your "
                 "yes didn’t go through yet. It’s marked below. Say yes again to make an exception.",
+    "dt_up_now": "Those days have changed since this was asked, and they need an exception now. Your yes didn’t go "
+                 "through, and it has gone on to the one who can make an exception.",
+    "dt_yours_now": "Those days have changed since this was asked, and they need an exception now. Your yes didn’t go "
+                    "through yet. It’s marked below. Say yes again to make an exception.",
 }
 
 DATES_CSS = """
@@ -325,7 +344,15 @@ def _limits(ch, cid: str, mine: List[Dict[str, Any]], waiting: List[Dict[str, An
     what its days run into as things stand now (church_schedule_limits.
     flags_of: counts and day names, never who). One picture for them all;
     an ask it can't hold gets None, and the card says only that it went up.
-    Nothing more is read when no ask is flagged."""
+    Nothing more is read when no ask is flagged.
+
+    A pair (S2-4). On their own card it is said from the ask's flag, never
+    looked at again (nothing about the other's time away reaches them as it
+    changes), and their pairs are never read here. On a card waiting for
+    this person's yes it is looked at as things stand (the asker's pairs,
+    read once for all such cards), and it names the other only on a card
+    this person may answer, which makes them the owner's person or that of
+    whoever oversees the office, on an ask that went up to them."""
     import church_schedule as cs
     import church_schedule_limits as csl
     up = cs.goes_up(ch, cid)["name"] if asks else ""
@@ -336,11 +363,26 @@ def _limits(ch, cid: str, mine: List[Dict[str, Any]], waiting: List[Dict[str, An
         return up
     lo = min(lo for lo, _hi in spans)
     hi = min(max(hi for _lo, hi in spans), lo + timedelta(days=csl.PICTURE_DAYS))
-    pic = csl.picture(ch, lo, hi, now=now)
+    theirs = {id(a) for a in mine}
+    pic = csl.picture(ch, lo, hi, now=now, who={a["contact_id"] for a in flagged if id(a) not in theirs})
     for a in flagged:
         first, last = cs._day(a["starts_on"]), cs._day(a["ends_on"])
-        a["why"] = (csl.flags_of(pic, a["contact_id"], first, last, (a.get("department") or {}).get("id"))["why"]
-                    if first and last and lo <= first and last <= hi else None)
+        if not (first and last and lo <= first and last <= hi):
+            a["why"] = None
+            continue
+        own = id(a) in theirs
+        why = csl.flags_of(pic, a["contact_id"], first, last, (a.get("department") or {}).get("id"),
+                           before=a.get("created_at"), pairs=not own)["why"]
+        if own and "pair" in (a.get("flags") or []):
+            why.append({"flag": "pair"})                # as it was when they asked: never looked at again
+        elif not own and a.get("can_answer"):
+            for w in why:
+                if w["flag"] == "pair":                 # the one who may give the exception reads who
+                    hits = pic.pair_hits(a["contact_id"], first, last, a.get("created_at"))
+                    names = ch.names(sorted(hits))
+                    w["with"] = sorted((names.get(c, "") for c in hits if names.get(c) not in (None, "", "Someone")),
+                                       key=str.casefold)
+        a["why"] = why
     return up
 
 
@@ -389,9 +431,18 @@ def _serving_line(a: Dict[str, Any], theirs: bool) -> str:
             f'that place opens again for their team.</p>')
 
 
-def _why_said(w: Dict[str, Any], today: date) -> str:
+def _why_said(w: Dict[str, Any], today: date, theirs: bool = False) -> str:
     """One full or protected day, in plain words. A count and the day:
-    never who is away."""
+    never who is away. A pair: to the one asking (`theirs`) and to whoever
+    else has the card, that it overlaps with someone they can't be away
+    with; by name only where _limits put one (`with`)."""
+    if w.get("flag") == "pair":
+        who = [n for n in (w.get("with") or []) if n]
+        if who:
+            names = who[0] if len(who) == 1 else f"{', '.join(who[:-1])} and {who[-1]}"
+            return (f"It overlaps with time away for {names}, "
+                    f"{'someone' if len(who) == 1 else 'people'} they can’t be away with at the same time.")
+        return PAIR_YOU if theirs else PAIR_THEY
     day = _day(w.get("day"), today)
     if w.get("flag") == "protected_day":
         return f"{day} is a protected day{' (' + w['name'] + ')' if w.get('name') else ''}."
@@ -402,13 +453,16 @@ def _why_said(w: Dict[str, Any], today: date) -> str:
             f"away at once.")
 
 
-def _why_lines(why: List[Dict[str, Any]], today: date) -> List[str]:
-    """The first few, soonest first, then how many more."""
+def _why_lines(why: List[Dict[str, Any]], today: date, theirs: bool = False) -> List[str]:
+    """The first few days, soonest first, then how many more; then a pair,
+    once (it has no day)."""
+    pair = [w for w in why if w.get("flag") == "pair"]
+    why = [w for w in why if w.get("flag") != "pair"]
     said = [_why_said(w, today) for w in why[:WHY_MAX]]
     more = len({w.get("day") for w in why[WHY_MAX:]} - {w.get("day") for w in why[:WHY_MAX]})
     if len(why) > WHY_MAX:
         said.append(f"And {more} more day{'s' if more != 1 else ''} like these." if more else "And more on those days.")
-    return said
+    return said + ([_why_said(pair[0], today, theirs)] if pair else [])
 
 
 def _open_said(open_: Dict[str, Any], today: date) -> str:
@@ -423,7 +477,7 @@ def _look_block(draft: Dict[str, Any], today: date) -> str:
     """Before sending: the days they picked are full or protected. Nothing
     has been sent. What is in the way, the nearest open days, and where it
     goes if they ask anyway."""
-    lines = "".join(f"<p>{_e(x)}</p>" for x in _why_lines(draft.get("why") or [], today))
+    lines = "".join(f"<p>{_e(x)}</p>" for x in _why_lines(draft.get("why") or [], today, theirs=True))
     near = _open_said(draft.get("open") or {}, today)
     up = draft.get("up") or ""
     still = (f"You can still ask for these days. It goes to {up}, who can make an exception." if up
@@ -447,7 +501,7 @@ def _up_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
     if theirs:
         who = f"{to} can make an exception" if to else "It’s with the one who can make an exception"
         if why:
-            body = "".join(f"<p>{_e(x)}</p>" for x in _why_lines(why, today)) + f"<p>{_e(who)}.</p>"
+            body = "".join(f"<p>{_e(x)}</p>" for x in _why_lines(why, today, theirs=True)) + f"<p>{_e(who)}.</p>"
         elif why is None:
             body = f"<p>{_e(who)}.</p>"
         else:
@@ -459,6 +513,9 @@ def _up_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
                 + "<p>Your yes makes an exception.</p>")
     elif why is None:
         body = "<p>It needs an exception. Your yes makes one.</p>"
+    elif "pair" in (a.get("flags") or []):
+        body = ("<p>Something was in the way of these days when it was asked. Nothing is now, so your yes is a "
+                "plain yes.</p>")
     else:
         body = ("<p>These days were full or protected when it was asked. There’s room now, so your yes is a plain "
                 "yes.</p>")
@@ -740,7 +797,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], v: O
     form may be below what waits for their yes."""
     import member_portal_lead as mpl
     from member_portal import _shell
-    flash = f'<p class="mp-err mp-flash" role="alert">{_e(NOT_SENT)}</p>' if draft else _flash(request, v, err)
+    days_in_the_way = any(w.get("flag") != "pair" for w in (draft or {}).get("why") or [])
+    flash = (f'<p class="mp-err mp-flash" role="alert">{_e(NOT_SENT if days_in_the_way else NOT_SENT_PAIR)}</p>'
+             if draft else _flash(request, v, err))
     return _shell(biz, site, "Dates",
                   f'<style>{mpl.LEAD_CSS}{mpl.TASK_CSS}{DATES_CSS}</style><div class="ld-wide">'
                   f'{flash}{_head(me)}{seg}{body(v, draft)}</div>', tab="lead", who=me, wide=True)
@@ -836,6 +895,8 @@ def _code(e: HTTPException) -> str:
     if status == 409:
         if said.startswith(cs.FULL_NOW):                    # a yes that didn't land: the days ran into something new
             return "dt_yours" if said == cs.YOURS_NOW else "dt_up"
+        if said.startswith(cs.NEEDS_NOW):                   # the same, a pair alone (never said to be one)
+            return "dt_yours_now" if said == cs.YOURS_NEEDS else "dt_up_now"
         return {cs.WAITING: "dt_waiting", cs.ALREADY: "dt_already", cs.NO_YES: "dt_no_yes",
                 cs.NOT_OPEN: "dt_closed"}.get(said, "dt_changed")
     return "error"

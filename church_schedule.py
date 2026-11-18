@@ -125,11 +125,17 @@ the service days and the protected days, and its own "are its tables there"):
   never looked at ... "can't make it" and the owner's own time away: never
                       flagged, never blocked. Their away dates still count
                       for the next person who asks
+  a pair (S2-4) ..... two people who can't be away together: an ask whose
+                      days overlap the other's away date, or an ask of
+                      theirs still waiting that was made first, is flagged
+                      `pair` and goes up the same way. A pair is private:
+                      shape() shows the flag only to those who read the
+                      reason, and nothing here ever names the other
 
 With step 2's tables absent (step2() says no) none of that runs and nothing
 of step 2 is read: everything above is exactly step 1.
 
-Not here yet (its own PR): things that repeat, pairs, the volunteers' rules.
+Not here yet (its own PR): things that repeat, the volunteers' rules.
 """
 from __future__ import annotations
 
@@ -182,9 +188,10 @@ FIELDS = ("id,business_id,contact_id,made_by,grp,department_id,kind,starts_on,en
           "cover_name,to_user_id,to_contact_id,state,flags,decided_by_user_id,decided_by_contact_id,decided_at,"
           "decided_note,withdrawn_at,created_at")
 FACT_FIELDS = "id,contact_id,starts_on,ends_on,ask_id,kind,created_at"
-# The flags that send an ask up for an exception (step 2). `pair` comes with
-# its own PR; an ask that carries it is answered by the same people.
+# The flags that send an ask up for an exception (step 2: the limit and the
+# protected days in S2-3, pairs in S2-4), all answered by the same people.
 UP_FLAGS = ("over_limit", "protected_day", "pair")
+DAY_FLAGS = ("over_limit", "protected_day")         # the ones a day is behind: full, or protected
 NOT_CHURCH = "The leaders schedule is for churches"
 UNREAD = "The leaders schedule couldn't be read just now. Try again."
 UNSAVED = "That didn't save. Try again."
@@ -209,6 +216,12 @@ FULL_NOW = ("Those days have changed since this was asked: one of them is full n
             "Your yes didn't go through.")
 WENT_UP = FULL_NOW + " It has gone to {name}, who can make an exception."
 YOURS_NOW = FULL_NOW + " It's marked now. Say yes again to make an exception."
+# The same, when what is new is a pair alone (S2-4): no day is full or
+# protected, and a pair is never said to someone who may not read it, so the
+# words say only that it needs an exception now.
+NEEDS_NOW = "Those days have changed since this was asked, and they need an exception now. Your yes didn't go through."
+WENT_UP_NEEDS = NEEDS_NOW + " It has gone to {name}, who can make an exception."
+YOURS_NEEDS = NEEDS_NOW + " It's marked now. Say yes again to make an exception."
 # A yes to an ask that went up, on a server that can't tell just now whether
 # the limit's tables are there: nothing is saved, and they try again.
 CANT_EXCEPT = ("That one needs an exception, and the schedule couldn't be read just now to make one. Nothing was "
@@ -1095,8 +1108,9 @@ def shape(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any], names: Dict[st
     """One ask as `me` may see it. THE ONE PLACE A REASON LEAVES THE SERVER:
     `reason` is None unless sees_reason, and `reason_hidden` then says one
     was given. The note that came with the answer is kept to the same
-    people (it can say why). Never fails on a read once `names` and _prime
-    are done: it answers writes that already saved."""
+    people (it can say why), and so is the `pair` flag (S2-4). Never fails
+    on a read once `names` and _prime are done: it answers writes that
+    already saved."""
     people, logins = names.get("people") or {}, names.get("logins") or {}
     sees = sees_reason(ch, me, row)
     reason = str(row.get("reason") or "").strip() or None
@@ -1120,16 +1134,21 @@ def shape(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any], names: Dict[st
               or people.get(str(row.get("decided_by_contact_id") or "")) or None)
         decided = {"by": by, "at": row.get("decided_at"), "note": (row.get("decided_note") or None) if sees else None}
     did = str(row.get("department_id") or "")
+    # A pair is private (S2-4): that this person is in one, and that the
+    # other had time away on these days, is for those who read the reason
+    # alone. Everyone else (the calendar's readers) sees the ask without it.
+    flags = [f for f in (row.get("flags") or []) if sees or f != "pair"]
     # The flags a yes was given over (step 2): only where the row carries the
     # column, so on a database with step 1 alone the shape is step 1's.
-    more = {"excepted": list(row.get("excepted") or [])} if "excepted" in row else {}
+    more = ({"excepted": [f for f in (row.get("excepted") or []) if sees or f != "pair"]} if "excepted" in row
+            else {})
     return {
         **more,
         "id": str(row["id"]) if row.get("id") else None, "contact_id": str(row.get("contact_id")),
         "name": people.get(str(row.get("contact_id")), "Someone"), "group": row.get("grp"),
         "department": {"id": did, "name": (names.get("depts") or {}).get(did, "A department")} if did else None,
         "kind": row.get("kind"), "starts_on": str(row.get("starts_on") or "")[:10],
-        "ends_on": str(row.get("ends_on") or "")[:10], "state": state, "flags": list(row.get("flags") or []),
+        "ends_on": str(row.get("ends_on") or "")[:10], "state": state, "flags": flags,
         "to": to, "cover": cover, "decided": decided,
         "reason": reason if sees else None, "reason_hidden": bool(reason) and not sees,
         "mine": _is_asker(ch, me, row),
@@ -1441,13 +1460,19 @@ def _recheck(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any]) -> Tuple[Li
     not: an Admin's ask sits with the owner from the start, and stays his
     when the day fills. It is marked where it is, nobody is told (the one
     who holds it is the one who just pressed yes, or will find it marked),
-    and their next yes is the exception."""
+    and their next yes is the exception.
+
+    A pair (S2-4) is looked at again too: the other's away dates, whenever
+    they were made, and their asks still waiting that were made before this
+    one (first asked, first answered: a later ask of theirs is the one that
+    goes up, never this one)."""
     import church_schedule_limits
     cid = str(row.get("contact_id") or "")
     a, b = _day(row.get("starts_on")), _day(row.get("ends_on"))
     if not a or not b:
         return [], None
-    now = church_schedule_limits.flags_for(ch, cid, a, b, department_id=row.get("department_id"))["flags"]
+    now = church_schedule_limits.flags_for(ch, cid, a, b, department_id=row.get("department_id"),
+                                           before=row.get("created_at"))["flags"]
     have = list(row.get("flags") or [])
     new = [f for f in now if f not in have]
     if not new:
@@ -1458,7 +1483,19 @@ def _recheck(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any]) -> Tuple[Li
     after = dict(row, flags=have + new)
     if up:
         after.update(to_user_id=up["id"], to_contact_id=None)
-    return [], {"flags": have + new, "to": up, "name": (up or {}).get("name") or "", "yours": may_decide(ch, me, after)}
+    return [], {"flags": have + new, "new": new, "to": up, "name": (up or {}).get("name") or "",
+                "yours": may_decide(ch, me, after)}
+
+
+def _now_words(flags: Iterable[str]) -> Tuple[str, str, str]:
+    """The words of a yes that didn't land, by what is in the way that it
+    wasn't shown: (the change, went up, yours now). A day behind it (full,
+    protected): the words that say so, as always. A pair alone: words that
+    say only that it needs an exception now, never that there is a pair
+    (whoever pressed yes may not be someone who reads pairs)."""
+    if set(flags) & set(DAY_FLAGS) or "pair" not in set(flags):
+        return FULL_NOW, WENT_UP, YOURS_NOW
+    return NEEDS_NOW, WENT_UP_NEEDS, YOURS_NEEDS
 
 
 def _send_up(ch: co.Church, row: Dict[str, Any], moved: Dict[str, Any]) -> None:
@@ -1482,8 +1519,9 @@ def _send_up(ch: co.Church, row: Dict[str, Any], moved: Dict[str, Any]) -> None:
         raise HTTPException(409, MOVED)             # answered, taken back or sent on in the same moment
     if up:
         _after("tell_new", ch, {**row, **new})      # whoever it went up to hears, once the write is back
-    raise HTTPException(409, YOURS_NOW if moved.get("yours") else (
-        WENT_UP.format(name=moved["name"]) if moved.get("name") else FULL_NOW))
+    changed, went, yours = _now_words(moved.get("new") or moved["flags"])
+    raise HTTPException(409, yours if moved.get("yours") else (
+        went.format(name=moved["name"]) if moved.get("name") else changed))
 
 
 def _shown(v: Any) -> Set[str]:
@@ -1513,7 +1551,7 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
     one saying yes was shown as being in the way (the Dates page posts them
     with its Yes; the office route takes them in the body; nothing said is
     none shown). A yes lands as an exception only when every flag it would
-    be given over is among them. Otherwise it is the same 409, with nothing
+    be given over is among them, `pair` too (S2-4). Otherwise it is the same 409, with nothing
     written: so a second press of Yes that was already on its way when the
     first one marked the ask does not land an exception nobody saw. A yes
     with nothing to except, "not this one" and a take-back never ask.
@@ -1539,8 +1577,9 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
         moved: Optional[Dict[str, Any]] = None
         if yes and step2():
             excepted, moved = _recheck(ch, me, row)
-            if not moved and set(excepted) - _shown(shown):
-                raise HTTPException(409, YOURS_NOW)     # an exception they were not shown: nothing is written
+            unseen = set(excepted) - _shown(shown)
+            if not moved and unseen:
+                raise HTTPException(409, _now_words(unseen)[2])     # an exception they were not shown: nothing written
         elif yes and flagged(row):
             raise HTTPException(503, CANT_EXCEPT)       # can't tell just now: never a plain yes over a flag
         by = {"by_user": str(me["id"])} if me["kind"] == co.LOGIN else {"by_contact": str(me["id"])}
