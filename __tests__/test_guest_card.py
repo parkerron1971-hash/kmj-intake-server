@@ -234,16 +234,32 @@ def test_a_chosen_card_switched_off_later_is_gone_and_the_bulletin_falls_back(ch
 def test_saving_new_here_keeps_the_guest_card(church, monkeypatch):
     import new_here
     import sb_clients
-    church.t["businesses"][0]["settings"]["new_here"]["guest_form"] = VISIT
-    written = []
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body, **k: written.append(body) or [body])
     monkeypatch.setattr(new_here, "own_number", lambda biz: "+12315550199")
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: pytest.fail("a whole-object write"))
+    body = new_here.NewHereIn(on=True, word="HOWDY", welcome="", thanks=new_here.StepIn(), monday=new_here.StepIn(),
+                              invite=new_here.StepIn())
+    # The room read New here before Tiara picked the guest card; the save lands after.
+    church.t["businesses"][0]["settings"]["new_here"]["guest_form"] = VISIT
+    out = new_here.put_new_here(CHURCH, body, user=_who(TIARA_ID))
+    (call,) = church.merges
+    assert call["under"] == ["new_here"] and call["drop"] == [] and "guest_form" not in call["set"]
+    assert set(call["set"]) == {"on", "word", "welcome", "thanks", "monday", "invite"}
+    nh = church.t["businesses"][0]["settings"]["new_here"]
+    assert nh["guest_form"] == VISIT and nh["word"] == "HOWDY"
+    assert church.t["businesses"][0]["settings"]["brand_kit"] == {"colors": {"primary": "#3b1f5c"}}
+    assert out["settings"]["word"] == "HOWDY"
+
+
+def test_a_new_here_save_that_fails_is_a_503(church, monkeypatch):
+    import business_settings
+    import new_here
+    from fastapi import HTTPException
+    monkeypatch.setattr(business_settings, "merge", lambda *a, **k: None)
     body = new_here.NewHereIn(on=True, word="HELLO", welcome="", thanks=new_here.StepIn(), monday=new_here.StepIn(),
                               invite=new_here.StepIn())
-    new_here.put_new_here(CHURCH, body, user=_who(TIARA_ID))
-    (row,) = written
-    assert row["settings"]["new_here"]["guest_form"] == VISIT and row["settings"]["new_here"]["word"] == "HELLO"
-    assert new_here.KEPT == ("guest_form",)
+    with pytest.raises(HTTPException) as no:
+        new_here.put_new_here(CHURCH, body, user=_who(TIARA_ID))
+    assert no.value.status_code == 503
 
 
 def test_the_choice_lives_inside_a_server_key():

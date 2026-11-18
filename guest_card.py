@@ -30,7 +30,7 @@ Where it is kept: settings.new_here.guest_form, inside New here's own key (a
 server key with its own checked endpoints, business_settings.SERVER_KEYS),
 written with business_settings.merge under ["new_here"], so the app's own
 logins can never write it and nothing else in New here is touched. New
-here's PUT keeps it (new_here.KEPT).
+here's own PUT merges its keys under ["new_here"] too, so it never drops it.
 
 A private card (a prayer or help card: settings.private_care, or "prayer"
 in its name) is never a guest card: it goes only to Prayer & care and never

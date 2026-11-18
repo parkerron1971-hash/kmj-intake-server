@@ -209,8 +209,8 @@ tent, seat cards, a half-sheet connect card), with no server write. `guest_card.
   member. A failed duty read is a 503. A switched-off card, a private one (a prayer or help card:
   it never gives a guest a person and a call date) or another church's is refused.
 - Kept in `settings.new_here.guest_form`, written with `business_settings.merge(under=["new_here"])`
-  (New here's key is a server key, so the app's own logins never write it); New here's own PUT keeps
-  it (`new_here.KEPT`). Media & Communications still makes the bulletin and the connect card: their
+  (New here's key is a server key, so the app's own logins never write it); New here's own PUT merges
+  its keys under `new_here` the same way, so it never drops the choice. Media & Communications still makes the bulletin and the connect card: their
   "New here?" code opens the guest card when there is one, else the links page as before.
 
 ## Moving a duty

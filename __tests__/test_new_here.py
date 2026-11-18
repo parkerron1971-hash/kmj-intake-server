@@ -399,7 +399,9 @@ def room(db, monkeypatch):
     return TestClient(app), who
 
 
-def test_the_room_reads_and_saves(room, db):
+def test_the_room_reads_and_saves(room, db, monkeypatch):
+    from settings_merge_fake import install
+    merges = install(monkeypatch, lambda bid: db["biz"])
     c, who = room
     db["contacts"].append({"id": GUEST, "name": "Dana Reyes", "phone": PHONE, "metadata": {"new_here": {
         "texted_at": nh._iso(nh._now()), "card_at": nh._iso(nh._now()), "card": {"first_time": True}}}})
@@ -413,8 +415,13 @@ def test_the_room_reads_and_saves(room, db):
     assert g["name"] == "Dana Reyes" and g["phone_last4"] == "0142" and g["follow_up"]["reached"] is True
     r = c.put(f"/new-here/{BIZ}", json=_body().model_dump())
     assert r.status_code == 200 and r.json()["settings"]["invite"]["on"] is False
-    (path, row), = [(p, r) for p, r in db["patches"] if p.startswith("/businesses")]
-    assert row["settings"]["new_here"]["word"] == "NEW" and row["settings"]["new_here"]["on"] is True
+    # Only New here's own keys, merged inside settings.new_here (business_settings.merge):
+    # never the whole settings object from the room's read.
+    assert not [p for p, r in db["patches"] if p.startswith("/businesses")]
+    (call,) = merges
+    assert call["under"] == ["new_here"] and call["drop"] == []
+    assert call["set"]["word"] == "NEW" and call["set"]["on"] is True
+    assert db["biz"]["settings"]["new_here"]["invite"]["on"] is False
     who["edit"] = False
     assert c.put(f"/new-here/{BIZ}", json=_body().model_dump()).status_code == 403
     who["read"] = False

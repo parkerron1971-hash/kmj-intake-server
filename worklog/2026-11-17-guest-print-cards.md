@@ -12,7 +12,7 @@ left_undone:
   - "Love City has New here off (settings.new_here.on unset), so its print sheet offers its cards (Plan your visit, Baptism, Serve with us) and not the text"
 decisions:
   - "The choice lives in settings.new_here.guest_form, inside New here's own server key (business_settings.SERVER_KEYS), written with business_settings.merge(under=['new_here']): no new server key, so no change to the unapplied settings-server-keys SQL list, and the app's logins can never write it once that migration is applied"
-  - "new_here.put_new_here keeps settings.new_here.guest_form (new_here.KEPT): its PUT builds the key from clean(body) and would otherwise drop the choice"
+  - "new_here.put_new_here now writes with business_settings.merge(set=clean(body), under=['new_here']) instead of the whole settings object from its read (review): only New here's own keys, so the guest card chosen a moment before is never put back or dropped"
   - "Who chooses: church_duties.holds(biz, user, 'first_guests') (the owner and admins always; Tiara by default; whoever it is moved to). A failed duty read is a 503 on the PUT and can_choose false on the GET. Every login of the church reads it (viewer)"
   - "A private card (settings.private_care, or 'prayer' in its name) is never offered or accepted: it goes only to Prayer & care and never starts a follow-up, which is the first-time guests' job. A switched-off card is refused (400), another church's is a 404"
   - "Card addresses: the church's own address (custom domain, else its subdomain), else the API host (chief_form_actions.public_form_url's rule)"
@@ -26,7 +26,7 @@ why the choice sits inside new_here rather than a key of its own) and the
 church bulletin (Media's Bulletins & print).
 
 `guest_card.py` (`GET`/`PUT /church/guest-card/{business_id}`), mounted
-after New here in `kmj_intake_automation.py`. `new_here.py`: `KEPT`.
+after New here in `kmj_intake_automation.py`. `new_here.py`: its PUT merges under new_here.
 `church_duties.py`: first_guests `opens`. `docs/CHURCH_DUTIES.md`: "The guest
 card". Tests: `__tests__/test_guest_card.py` (19: the cards a guest can be
 sent to and their addresses, the text only when New here is on with a number,
