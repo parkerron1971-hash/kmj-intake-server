@@ -812,29 +812,36 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
                moves={key: to for key, to in plan})
     # One of the church's own jobs brings only the duties given on the sheet
     # (church_duties.own_job_seat): none from its areas, none from a starting
-    # job its areas happen to spell. So a save that leaves a Manager on one
-    # must not quietly take away what their sheet showed ticked: each duty
-    # they did and weren't asked to drop is given to them by name, with
-    # everyone who does it now, in the same save. One that can't be (the duty
-    # already names the most logins it takes) is left to the record below,
-    # which says it was taken away.
-    if e["role_then"] == "manager" and cd.own_job_seat({"lane": e["lane_then"]}):
+    # job its areas happen to spell. So that a save onto one doesn't quietly
+    # take away what a Manager's sheet showed ticked, a duty they did is
+    # given to them by name, with everyone who does it now. NARROWLY (the
+    # review of 2026-11-18: kept wide, an Admin moved down to one area left
+    # with 44 duties): only for a login that was ALREADY a Manager before
+    # this save; never a money duty or the lanes' oversight; only a duty in
+    # an area they are shown AFTER this save, and never when the save leaves
+    # them seeing the whole church. Everything else they did comes off, and
+    # the record says so. A duty that can't be named for them (it already
+    # names the most logins it takes) comes off too.
+    kept_plan: List[Tuple[str, List[str]]] = []
+    if (e["role_now"] == "manager" and e["role_then"] == "manager" and cd.own_job_seat({"lane": e["lane_then"]})
+            and e["shown_then"] is not None):
         planned = {key for key, _to in plan}
-        keeping = [k for k in e["less_duties"] if k not in remove and k not in planned and not cd.CATALOG[k]["money"]]
+        keeping = [k for k in e["less_duties"]
+                   if k not in remove and k not in planned and not cd.CATALOG[k]["money"]
+                   and k not in cd.OVERSIGHT and cd.CATALOG[k]["area"] in e["shown_then"]]
         if keeping:
             page = {d["key"]: d for d in cd.build(business)["duties"]}
-            kept_by_name: List[Tuple[str, List[str]]] = []
             for k in keeping:
                 doing = [h["user_id"] for h in page[k]["holders"] if h.get("active")]
                 to = sorted(set(doing) | {target})
                 if len(to) > cd.MAX_HOLDERS or cd._check(ch.b, business, [u for u in to if u != target], k):
                     continue
-                kept_by_name.append((k, to))
-            if kept_by_name:
-                plan = plan + kept_by_name
+                kept_plan.append((k, to))
+            if kept_plan:
                 e = effect(business, ch, target, level=level if level_changes else keep,
                            areas=areas if areas_set else keep, job=job_arg,
-                           moves={key: to for key, to in plan})
+                           moves={key: to for key, to in plan + kept_plan})
+    kept_duties = [k for k, _to in kept_plan]
     stored_areas = e["stored_areas"]
     more_areas, more_duties = e["more_areas"], e["more_duties"]
     less_areas, less_duties = e["less_areas"], e["less_duties"]
@@ -876,8 +883,21 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         said.append("gave " + _duty_words(more_duties))
     if less_duties:
         said.append("took away " + _duty_words(less_duties))
+    if kept_duties:
+        said.append("kept " + _duty_words(kept_duties) + " by name")
 
     # ── Everything checked: the writes, in the order that fails safe ──
+    # 0. The duties kept by name, FIRST. Each names the same people who do
+    #    it now (this login among them, by their areas or their old job), so
+    #    until the job below is written nothing about who does what has
+    #    changed: a move that fails here stops the save with the level, the
+    #    areas and the job untouched. (The duties module writes one duty a
+    #    call; there is no all-at-once write to ask for.)
+    for key, to in kept_plan:
+        try:
+            cd.move(business, key, to, viewer)
+        except HTTPException:
+            raise HTTPException(503, "That didn't save. Their level, job and areas are as they were. Try again.")
     # 1. The grant taken away, BEFORE the level. Written after it, a save
     #    that failed here left the login moved down with the row still
     #    there, and the next move back to Manager made them a holder again.
@@ -915,7 +935,9 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
                    detail={"level": level if level_changes else None,
                            "job": body.get("job") if job_set else None, "areas": areas if areas_set else None,
                            "duties": {"add": add, "remove": remove}, "grant": grant,
-                           "more": {"areas": more_areas, "duties": more_duties}})
+                           "more": {"areas": more_areas, "duties": more_duties},
+                           "less": {"areas": less_areas, "duties": less_duties},
+                           "kept_by_name": kept_duties})
     # A holder's change is sent to the owner (cj.changed); the app says so.
     return {"widens": widens, "summary": summary, "changed": bool(said),
             "owner_told": bool(said) and ed == "holder"}

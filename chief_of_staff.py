@@ -15914,15 +15914,15 @@ async def chief_chat(
             _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
             if _office_shown:
                 chief_truth.record('context:office_roster', _office_shown, kind='context')
-            # The planning coach at a church, for the owner or an Admin (the course is theirs): who already
-            # does what in the office (church_structure), so the pastor isn't asked twice. '' when there is
-            # nothing to say and when it can't be read.
+            # The planning coach at a church: who already does what in the office (church_structure), so
+            # the pastor isn't asked twice. For the owner or an Admin only, and the block itself reads
+            # this signed-in person's role on this church and answers '' when it is anyone else's turn or
+            # the role can't be read. (chief_areas.WHO is None for the owner AND when its read failed, so
+            # it is not asked here: a gate on it failed open.)
             if req.mode == "strategy_coach" and _cfu.is_church(biz):
-                _coach_who = chief_areas.WHO.get()
-                if _coach_who is None or str(_coach_who.get("role") or "") == "admin":
-                    import church_structure as _structure_engine
-                    ctx["church_structure_block"] = await asyncio.to_thread(
-                        _structure_engine.coach_block, ctx.get("business") or biz)
+                import church_structure as _structure_engine
+                ctx["church_structure_block"] = await asyncio.to_thread(
+                    _structure_engine.coach_block, ctx.get("business") or biz, str(user_session.user.id))
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,

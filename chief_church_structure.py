@@ -50,6 +50,8 @@ STATE_WORDS = {
     "invited": "invited, waiting for them to accept",
     "login": "already a login, set up differently today",
     "done": "already set up this way",
+    "needs_job": "needs a job with areas before they can be invited",
+    "no_login": "needs no login today",
 }
 NOT_YOURS = ("The church's structure is drafted and read by the owner, an Admin, or whoever sets up jobs and "
              "people's sheets.")

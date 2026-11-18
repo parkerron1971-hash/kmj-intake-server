@@ -748,6 +748,7 @@ async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
 _DELETE_SELECT = {
     "marketing_desks": "business_id",       # keyed by the business
     "church_move_items": "business_id",     # keyed by (business_id, item)
+    "church_structure_drafts": "business_id",   # keyed by the business: one draft a church
     "marketing_link_clicks": "post_id",     # keyed by (post_id, day)
     "marketing_link_hits": "link_id",       # keyed by (link_id, day)
 }

@@ -51,7 +51,11 @@ answer 503 "Team setup is being switched on. Try again shortly." What is
 kept is cleaned again every time it is read.
 
 `state` and the gaps are worked out on every read from the church as it is
-now, so a draft keeps up as people are invited and sheets are saved. An
+now, so a draft keeps up as people are invited and sheets are saved. Two
+states are ones nobody is invited from, whatever the app does: `needs_job`
+(no job, or nothing switched on: a Viewer, since an invitation would make a
+login that opens the whole church) and `no_login` (they only count or
+deposit). An
 email typed or corrected on review is put on that one drafted person
 (POST /church/structure/person) so the invitation that follows is theirs.
 None of these doors asks for the password: a draft grants nothing. The
@@ -428,11 +432,19 @@ def pick_shape(a: Dict[str, Any], hint: str = "") -> Dict[str, str]:
 
 # ─── The jobs a draft uses ────────────────────────────────────────────
 
+def _description(v: Any) -> Optional[str]:
+    """A job's description as church_job_defs keeps one: words only, its own
+    line breaks, 8,000 letters at most; None for anything else."""
+    if not isinstance(v, str):
+        return None
+    return v.replace("\r\n", "\n").strip()[:cj.DESCRIPTION_MAX] or None
+
+
 def _job_row(job: Dict[str, Any], *, custom: bool, exists: bool, called: Optional[str] = None) -> Dict[str, Any]:
     role = job.get("role") if job.get("role") in LEVELS else "manager"
     areas = None if role == "admin" else [a for a in church_areas.AREA_ORDER if a in (job.get("areas") or [])]
     return {"key": job.get("key") if exists else None, "label": _text(job.get("label"), TITLE_MAX),
-            "does": _text(job.get("does"), DOES_MAX), "description": job.get("description") or None,
+            "does": _text(job.get("does"), DOES_MAX), "description": _description(job.get("description")),
             "role": role, "areas": areas, "duties": [k for k in cd.CATALOG if k in (job.get("duties") or [])],
             "custom": bool(custom), "exists": bool(exists), "also_called": called}
 
@@ -458,6 +470,15 @@ class _Jobs:
         self._seen.add(fold)
         self.rows.append(row)
         return row
+
+    def forget(self, row: Dict[str, Any], since: int) -> None:
+        """Take back a job this draft proposed a moment ago for one person
+        (the rows since `since`), when it turns out nothing is on it and they
+        need no login at all. A job the church has, or one another person
+        already holds here, stays."""
+        if not row.get("exists") and len(self.rows) == since + 1 and self.rows[-1] is row:
+            self.rows.pop()
+            self._seen.discard(row["label"].casefold())
 
     def existing(self, job: Dict[str, Any]) -> Dict[str, Any]:
         key = job["key"]
@@ -529,8 +550,9 @@ def _valid_list(v: Any, known, what: str, name: str, notes: List[str]) -> List[s
 
 
 def _person(raw: Dict[str, Any], jobs: _Jobs, money: Dict[str, Any], by_kind: str, owner_name: str,
-            source: str) -> Optional[Dict[str, Any]]:
-    """One person as the draft keeps them, before anyone is looked up."""
+            by: str) -> Optional[Dict[str, Any]]:
+    """One person as the draft keeps them, before anyone is looked up.
+    `by` is who is drafting: an email they passed is theirs (email_by)."""
     name = _text(raw.get("name"), NAME_MAX)
     if not name:
         return None
@@ -560,8 +582,8 @@ def _person(raw: Dict[str, Any], jobs: _Jobs, money: Dict[str, Any], by_kind: st
     admin_notes = [ADMIN_SEES, OWNER_MAKES_ADMIN if by_kind == "owner" else
                    f"Only the owner can make someone an Admin, so this one waits for {owner_name or 'the owner'}."]
 
-    out = {"name": name, "email": email, "does": does, "title": title or None, "user_id": None, "contact_id": None,
-           "no_login": False}
+    out = {"name": name, "email": email, "email_by": (raw.get("_email_by") or by) if email else None, "does": does,
+           "title": title or None, "user_id": None, "contact_id": None, "no_login": False}
 
     if treasurer:
         job = jobs.preset("treasurer")
@@ -577,6 +599,7 @@ def _person(raw: Dict[str, Any], jobs: _Jobs, money: Dict[str, Any], by_kind: st
         return {**out, "job_label": job["label"], "job_key": job["key"], "role": "admin", "areas": None,
                 "duties": list(cd.STARTER.get("treasurer") or []), "why": why, "notes": notes}
 
+    proposed_before = len(jobs.rows)
     job, why = _job_for(title, does, areas_in, duties_in, role_in, jobs, name, notes)
     role = role_in or (job["role"] if job else "manager")
     if job and job["role"] == "admin":
@@ -611,17 +634,28 @@ def _person(raw: Dict[str, Any], jobs: _Jobs, money: Dict[str, Any], by_kind: st
         _note(notes, DEPOSITOR_NOTE.format(name=name))
     no_login = False
     if not areas and not duties:
-        # Nothing to switch on (a job with no areas is nothing on too). With no level asked for, a
-        # Viewer: the least a login can be.
-        role = role_in or "viewer"
+        # Nothing to switch on (a job with no areas is nothing on too): a Viewer, the least a login can
+        # be, WHATEVER level was asked for. A Manager with no job and no areas would open the whole
+        # church, and the server does not leave that to the app (the review of 2026-11-18).
+        if role != "viewer" and role_in:
+            _note(notes, f"You asked for {LEVEL_LABEL[role_in]}, but nothing is switched on for {name} yet, and "
+                         f"a {LEVEL_LABEL[role_in]} login with no job and no areas opens the whole church. Drafted "
+                         "as a Viewer until a job is picked.")
+        role = "viewer"
         guess = church_areas.guess_area(said)
-        if (counts or deposits) and not job:
+        if counts or deposits:
+            # Whoever only counts or deposits needs no login, whatever the church calls them.
             no_login = True
+            if job:
+                jobs.forget(job, proposed_before)
+                job = None
             why = (("Counting the offering" if counts else "Taking the deposit")
                    + " needs no login today, so nothing is switched on.")
         elif (guess and guess[0] == church_areas.FINANCE_ONLY) or _MONEY.search(said):
             _note(notes, MONEY_WORDS_NOTE.format(name=name))
-        _note(notes, EMPTY_JOB_NOTE.format(job=job["label"], name=name) if job else NO_JOB_NOTE.format(name=name))
+        if not no_login:
+            _note(notes, EMPTY_JOB_NOTE.format(job=job["label"], name=name) if job
+                  else NO_JOB_NOTE.format(name=name))
         if not why:
             why = ("Chief couldn't tell what they do from what was said." if said
                    else "Nothing was said about what they do.")
@@ -741,6 +775,15 @@ def _seat_names(ch: co.Church) -> Dict[str, Set[str]]:
     return out
 
 
+def _need_quiet(path: str) -> List[Dict[str, Any]]:
+    """church_over._need for a read whose path holds a typed name or email:
+    a failure's log line leaves the filter values out."""
+    rows = sb_clients.sb_get_as_service(path, redact=True)
+    if not isinstance(rows, list):
+        raise HTTPException(503, co.UNREAD)
+    return rows
+
+
 def _match(ch: co.Church, p: Dict[str, Any], seat_names: Dict[str, Set[str]]) -> None:
     """Tie a drafted person to the login or the member they already are:
     by email, then by name, and only when exactly one fits."""
@@ -778,8 +821,8 @@ def _match(ch: co.Church, p: Dict[str, Any], seat_names: Dict[str, Set[str]]) ->
         return
     rows: List[Dict[str, Any]] = []
     if email:
-        rows = co._need(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(co._escape_ilike(email))}"
-                        "&select=id,name,email&limit=10")
+        rows = _need_quiet(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(co._escape_ilike(email))}"
+                           "&select=id,name,email&limit=10")
         # PostgREST reads * as a wildcard in ilike: only a row whose email IS this one counts.
         rows = [c for c in rows if _plain(c.get("email")).lower() == email]
         if len(rows) > 1:
@@ -788,12 +831,12 @@ def _match(ch: co.Church, p: Dict[str, Any], seat_names: Dict[str, Set[str]]) ->
                 _note(notes, "More than one person here uses that email, so Chief didn't pick one.")
             rows = same if len(same) == 1 else []
     if not rows and " " in fold:
-        rows = co._need(f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(co._escape_ilike(_plain(p['name'])))}"
-                        "&select=id,name,email&limit=10")
+        rows = _need_quiet(f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(co._escape_ilike(_plain(p['name'])))}"
+                           "&select=id,name,email&limit=10")
         bare = _HONORIFIC.sub("", _plain(p["name"])).strip()
         if not rows and bare and bare != _plain(p["name"]):
-            rows = co._need(f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(co._escape_ilike(bare))}"
-                            "&select=id,name,email&limit=10")
+            rows = _need_quiet(f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(co._escape_ilike(bare))}"
+                               "&select=id,name,email&limit=10")
         rows = [c for c in rows if _fold(c.get("name")) == fold]        # the same guard, for a name
         if len(rows) > 1:
             _note(notes, f"More than one person here is named {p['name']}, so Chief didn't pick one. Pick the "
@@ -810,9 +853,12 @@ def _match(ch: co.Church, p: Dict[str, Any], seat_names: Dict[str, Set[str]]) ->
 # ─── Making a draft ───────────────────────────────────────────────────
 
 def make(business: Dict[str, Any], ch: co.Church, by: str, by_kind: str, answers: Any, source: str,
-         more_notes: Optional[List[str]] = None, hint: str = "") -> Dict[str, Any]:
+         more_notes: Optional[List[str]] = None, hint: str = "",
+         typed: Optional[Dict[str, Tuple[str, str]]] = None) -> Dict[str, Any]:
     """A draft as it is kept, from the answers. Reads the church; writes
-    nothing."""
+    nothing. `typed` is the emails people typed on the draft this one
+    replaces (name -> (email, who typed it)): a person named exactly the
+    same, with no email said this time, keeps theirs."""
     biz = str(business["id"])
     a, notes = clean_answers(answers)
     notes = list(more_notes or []) + notes
@@ -868,7 +914,10 @@ def make(business: Dict[str, Any], ch: co.Church, by: str, by_kind: str, answers
             _note(first["notes"], f"{name} was named more than once. Chief kept one sheet for them: check that it "
                                   "covers everything they do.")
             continue
-        p = _person(raw, jobs, money, by_kind, owner_name, source)
+        before = (typed or {}).get(_plain(name).casefold())
+        if before and not _plain(raw.get("email")):
+            raw = {**raw, "email": before[0], "_email_by": before[1]}
+        p = _person(raw, jobs, money, by_kind, owner_name, by)
         if not p:
             continue
         people.append(p)
@@ -903,7 +952,10 @@ def make(business: Dict[str, Any], ch: co.Church, by: str, by_kind: str, answers
     seat_names = _seat_names(ch)
     for n, p in enumerate(people, 1):
         p["ref"] = f"p{n}"
+        said = p.get("email")
         _match(ch, p, seat_names)
+        if p.get("email") != said:
+            p["email_by"] = None        # taken from a login or a member's record: nobody typed it
         if p.get("user_id") and p["user_id"] == by:
             _note(p["notes"], "This is you. Nobody changes their own sheet: the owner or an Admin saves yours.")
 
@@ -1029,6 +1081,7 @@ def _kept(raw: Any) -> Optional[Dict[str, Any]]:
             row = _job_row(j, custom=bool(j.get("custom")), exists=bool(j.get("exists")),
                            called=_text(j.get("also_called"), TITLE_MAX) or None)
             row["key"] = _text(j.get("key"), 60) or None
+            row["description"] = _description(j.get("description"))
             if row["role"] != "admin":
                 row["areas"] = [a for a in row["areas"] or [] if a != church_areas.FINANCE_ONLY]
                 row["duties"] = [k for k in row["duties"] if not cd.CATALOG[k]["money"]]
@@ -1047,15 +1100,19 @@ def _kept(raw: Any) -> Optional[Dict[str, Any]]:
             duties = [k for k in duties if not cd.CATALOG[k]["money"]]
         if role not in ("admin", "manager"):
             duties = []
+        if role != "admin" and not areas and not duties:
+            role = "viewer"             # nothing switched on is never more than a Viewer
         email = _plain(p.get("email")).lower()
+        email = email if _EMAIL.match(email or "") else None
         people.append({
             "ref": _text(p.get("ref"), 12) or f"p{n}", "name": _text(p.get("name"), NAME_MAX),
-            "email": email if _EMAIL.match(email or "") else None,
+            "email": email, "email_by": _uuid_or_none(p.get("email_by")) if email else None,
             "user_id": _uuid_or_none(p.get("user_id")), "contact_id": _uuid_or_none(p.get("contact_id")),
             "job_label": _text(p.get("job_label"), TITLE_MAX), "job_key": _text(p.get("job_key"), 60) or None,
             "role": role, "areas": None if role == "admin" else areas, "duties": duties,
             "why": _text(p.get("why"), 500), "does": _text(p.get("does"), DOES_MAX),
-            "title": _text(p.get("title"), TITLE_MAX) or None, "no_login": p.get("no_login") is True,
+            "title": _text(p.get("title"), TITLE_MAX) or None,
+            "no_login": p.get("no_login") is True and role != "admin" and not areas and not duties,
             "notes": [_text(x, NOTE_MAX) for x in (p.get("notes") or []) if _plain(x)][:MAX_NOTES]
             if isinstance(p.get("notes"), list) else [],
         })
@@ -1104,15 +1161,41 @@ class Live:
         self.by_email = {(s.get("invited_email") or "").strip().lower(): u for u, s in ch.seats.items()
                          if "@" in (s.get("invited_email") or "")}
         self._placed: Optional[Dict[str, str]] = None
+        self._shown: Dict[str, Optional[List[str]]] = {}
+        self._held: Dict[str, Any] = {}
 
     @property
     def placed(self) -> Dict[str, str]:
         """login -> how it is placed today ('all', 'picked', 'guess', or
-        'none': nothing places it, so it opens the whole church)."""
+        'none': nothing places it, so it opens the whole church). One read
+        of the church's areas for every login, which also says what each is
+        shown."""
         if self._placed is None:
             rows = church_areas.build(self.business).get("logins") or []
             self._placed = {str(r.get("user_id")): str(r.get("by") or "none") for r in rows}
+            self._shown = {str(r.get("user_id")): r.get("areas") for r in rows}
         return self._placed
+
+    def held(self, uid: str) -> Any:
+        """The duties a login holds today, worked out once a login from what
+        this read already has (its seat, the moves, the areas it is shown):
+        church_sheet._held's rule, without a read a login. Thirty Managers
+        with no ready-made job cost 119 reads a GET before (the review of
+        2026-11-18)."""
+        if uid not in self._held:
+            ch, seat = self.ch, self.ch.seats.get(uid) or {}
+            role = ch.role(uid)
+            if role in church_areas.KEEPS_ALL:
+                got = cd.ALL
+            elif role != "manager":
+                got = frozenset()
+            else:
+                self.placed             # noqa: B018 — fills _shown
+                picked = seat.get("areas") if isinstance(seat.get("areas"), list) else None
+                got = cs._held(ch, uid, role, seat.get("lane"), picked, self._shown.get(uid), ch.moved,
+                               uid in ch.exec_users)
+            self._held[uid] = got
+        return self._held[uid]
 
     def login_of(self, p: Dict[str, Any]) -> Optional[str]:
         uid = p.get("user_id")
@@ -1122,10 +1205,26 @@ class Live:
 
     def guest_hearers(self) -> List[str]:
         """Manager logins that hold the first-guests duty today."""
-        return [u for u in self.ch.seats if self.ch.role(u) == "manager" and "first_guests" in self.ch.held(u)]
+        return [u for u in self.ch.seats if self.ch.role(u) == "manager" and "first_guests" in self.held(u)]
+
+
+STATES = ("new", "needs_email", "invited", "login", "done", "needs_job", "no_login")
+
+
+def _nothing_on(p: Dict[str, Any]) -> bool:
+    return p["role"] != "admin" and not p["areas"] and not p["duties"]
 
 
 def _state(live: Live, p: Dict[str, Any], job_key: Optional[str]) -> str:
+    """Where one drafted person stands. Two of the states are ones nobody is
+    invited from: `no_login` (they only count or deposit: there is nothing to
+    invite them to) and `needs_job` (no job, or nothing switched on: an
+    invitation would make a login that opens the whole church). Neither is
+    ever `new` or `needs_email`, whatever the app does with the rest."""
+    if p.get("no_login"):
+        return "no_login"
+    if p["role"] != "admin" and (not p.get("job_label") or _nothing_on(p)):
+        return "needs_job"
     uid = live.login_of(p)
     if uid:
         seat = live.ch.seats.get(uid) or {}
@@ -1136,7 +1235,7 @@ def _state(live: Live, p: Dict[str, Any], job_key: Optional[str]) -> str:
             picked = seat.get("areas") if isinstance(seat.get("areas"), list) else []
             same = set(picked) == set(p["areas"] or [])
         if same and p["duties"] and p["role"] != "admin":
-            held = live.ch.held(uid)
+            held = live.held(uid)
             same = all(k in held for k in p["duties"])
         return "done" if same else "login"
     if p.get("email") and p["email"] in live.invited:
@@ -1205,9 +1304,15 @@ def status(business: Dict[str, Any], ch: co.Church, live: Optional[Live] = None,
             "gaps": gaps}
 
 
-def view(business: Dict[str, Any], ch: co.Church, kept: Dict[str, Any], live: Optional[Live] = None) -> Dict[str, Any]:
+def view(business: Dict[str, Any], ch: co.Church, kept: Dict[str, Any], live: Optional[Live] = None,
+         ed: str = "owner", reader: str = "") -> Dict[str, Any]:
     """A kept draft as the app and Chief read it: each person's state and
-    the gaps, worked out from the church as it is now."""
+    the gaps, worked out from the church as it is now. `ed` and `reader` are
+    who is reading: the owner and an Admin read every email; whoever only
+    sets up jobs and sheets reads an email only when they typed it
+    themselves (one taken from a member's record, a login's, or typed by
+    someone else is kept for the owner and left out for them, and the
+    person reads as needing an email)."""
     live = live or Live(business, ch)
     owner_names = _owner_names(business)
     jobs = []
@@ -1219,8 +1324,13 @@ def view(business: Dict[str, Any], ch: co.Church, kept: Dict[str, Any], live: Op
     for p in kept["people"]:
         now = live.job_by_label.get((p.get("job_label") or "").casefold())
         job_key = now["key"] if now else None
-        uid = live.login_of(p)
-        people.append({**p, "user_id": uid, "job_key": job_key, "state": _state(live, p, job_key)})
+        login = live.login_of(p)
+        state = _state(live, p, job_key)
+        shown = {k: v for k, v in p.items() if k != "email_by"}
+        if ed not in ("owner", "admin") and p.get("email") and p.get("email_by") != reader:
+            shown["email"] = None
+            state = "needs_email" if state == "new" else state
+        people.append({**shown, "user_id": login, "job_key": job_key, "state": state})
 
     gaps: List[Dict[str, str]] = []
     seats = ch.seats
@@ -1298,7 +1408,8 @@ def load(business_id: Any) -> Tuple[bool, Optional[Dict[str, Any]]]:
     None). Unread is before its file is applied, or a read that failed:
     either way there is no draft to show and nothing may be written."""
     try:
-        rows = sb_clients.sb_get_as_service(f"/{TABLE}?business_id=eq.{_q(business_id)}&select=draft&limit=1")
+        rows = sb_clients.sb_get_as_service(f"/{TABLE}?business_id=eq.{_q(business_id)}&select=draft&limit=1",
+                                            redact=True)
     except Exception:  # noqa: BLE001 — a draft's read never fails a page
         rows = None
     if not isinstance(rows, list):
@@ -1319,8 +1430,9 @@ def _keep(business_id: str, kept: Dict[str, Any]) -> Dict[str, Any]:
     upsert on the church's row), and answer with it as it was kept."""
     row = {"business_id": business_id, "draft": kept, "made_by": kept.get("made_by"),
            "made_at": kept.get("made_at") or _now(), "updated_at": _now()}
+    # redact: a failure's log line must not carry the names and emails in the draft.
     out = sb_clients.sb_post_as_service(f"/{TABLE}?on_conflict=business_id", row,
-                                        prefer="resolution=merge-duplicates,return=representation")
+                                        prefer="resolution=merge-duplicates,return=representation", redact=True)
     if not isinstance(out, list) or not out:
         raise HTTPException(503, UNSAVED)
     again = _kept(out[0].get("draft"))
@@ -1333,9 +1445,13 @@ def draft(business: Dict[str, Any], ch: co.Church, uid: str, ed: str, answers: A
           from_plan: bool = False) -> Dict[str, Any]:
     """Make the church's draft and keep it in place of the one before: the
     route's and Chief's one path. `ed` is who is asking (owner, admin or
-    holder; the caller checked). Returns the draft as read."""
+    holder; the caller checked). An email someone typed on the draft being
+    replaced stays with the person of exactly that name. Returns the draft
+    as read."""
     biz = str(business["id"])
-    _ready(biz)                          # before any work: nothing is drafted that can't be kept
+    prior = _ready(biz)                  # before any work: nothing is drafted that can't be kept
+    typed = {_plain(p["name"]).casefold(): (p["email"], p["email_by"]) for p in (prior or {}).get("people", [])
+             if p.get("email") and p.get("email_by")}
     notes: List[str] = []
     hint = ""
     source = "questions"
@@ -1352,13 +1468,13 @@ def draft(business: Dict[str, Any], ch: co.Church, uid: str, ed: str, answers: A
         source = "plan"
     elif not isinstance(answers, dict) or not answers:
         raise HTTPException(400, NOTHING_SAID)
-    kept = make(business, ch, uid, ed, answers, source, notes, hint)
+    kept = make(business, ch, uid, ed, answers, source, notes, hint, typed)
     # Everything the read-back needs is read BEFORE the draft is kept, so a church that can't be read is a
     # 503 with nothing kept, never "it failed" beside a draft that was saved.
     live = Live(business, ch)
     if ch.seats:
         live.placed                      # noqa: B018 — read now, used by view()
-    return view(business, ch, _keep(biz, kept), live)
+    return view(business, ch, _keep(biz, kept), live, ed, uid)
 
 
 def read(business: Dict[str, Any], ch: co.Church, uid: str, ed: Optional[str]) -> Dict[str, Any]:
@@ -1372,16 +1488,18 @@ def read(business: Dict[str, Any], ch: co.Church, uid: str, ed: Optional[str]) -
     live = Live(business, ch)
     can_use = ed in ("owner", "admin")
     track = plan_track(str(business["id"])) if can_use else None
-    return {"ok": True, "draft": view(business, ch, kept, live) if kept else None,
+    return {"ok": True, "draft": view(business, ch, kept, live, ed, uid) if kept else None,
             "status": status(business, ch, live, kept), "can_draft": True, "ready": ready,
             "plan": {"leaders_written": leaders_written(track), "can_use": can_use}}
 
 
-def set_email(business: Dict[str, Any], ch: co.Church, ref: Any, email: Any) -> Dict[str, Any]:
+def set_email(business: Dict[str, Any], ch: co.Church, ref: Any, email: Any, ed: str = "owner",
+              by: str = "") -> Dict[str, Any]:
     """Put an email on ONE person in the draft (typed or corrected on review,
     right before they are invited), so the waiting invitation and the login
     that follows are tied to them. Nothing else in the draft changes, and
-    nothing outside it: no invitation is sent here. Returns the draft as read."""
+    nothing outside it: no invitation is sent here. `by` typed it. Returns
+    the draft as read."""
     biz = str(business["id"])
     kept = _ready(biz)
     if kept is None:
@@ -1392,7 +1510,8 @@ def set_email(business: Dict[str, Any], ch: co.Church, ref: Any, email: Any) -> 
     email = _plain(email).lower()
     if not email or len(email) > 200 or not _EMAIL.match(email):
         raise HTTPException(400, "That isn't an email address.")
-    if email == _owner_email(ch):
+    # ch.owner_email, not the soft read: when the owner's email can't be read this is a 503, never "not theirs".
+    if email == ch.owner_email:
         raise HTTPException(400, "That is the owner's own email. The owner already opens everything.")
     other = next((x for x in kept["people"] if x is not p and x.get("email") == email), None)
     if other:
@@ -1401,22 +1520,23 @@ def set_email(business: Dict[str, Any], ch: co.Church, ref: Any, email: Any) -> 
     if ch.seats:
         live.placed                      # noqa: B018 — read before anything is kept, as draft() does
     p["email"] = email
+    p["email_by"] = _uuid_or_none(by)
     p["notes"] = [n for n in p["notes"] if "isn't an email address" not in n
                   and not n.startswith("Their email comes from their record")]
     # Who that email already is: a login by its sign-in email (stronger than a name), else the one member it names.
-    uid = live.by_email.get(email)
-    if uid:
-        p["user_id"] = uid
-        cid = ch.login_person.get(uid)
+    login = live.by_email.get(email)
+    if login:
+        p["user_id"] = login
+        cid = ch.login_person.get(login)
         if cid:
             p["contact_id"] = str(cid)
     elif not p.get("user_id") and not p.get("contact_id"):
-        rows = co._need(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(co._escape_ilike(email))}"
-                        "&select=id,name,email&limit=10")
+        rows = _need_quiet(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(co._escape_ilike(email))}"
+                           "&select=id,name,email&limit=10")
         rows = [c for c in rows if _plain(c.get("email")).lower() == email]
         if len(rows) == 1 and rows[0].get("id"):
             p["contact_id"] = str(rows[0]["id"])
-    return view(business, ch, _keep(biz, kept), live)
+    return view(business, ch, _keep(biz, kept), live, ed, by)
 
 
 def discard(business: Dict[str, Any]) -> None:
@@ -1428,16 +1548,25 @@ def discard(business: Dict[str, Any]) -> None:
         raise HTTPException(503, "The draft couldn't be cleared just now. Try again.")
 
 
+def _once():
+    """The request's one read of the church's leaders map (church_map.once),
+    as Chief's verbs have it: every login's standing asks the map."""
+    import church_map
+    return church_map.once()
+
+
 @router.post("/structure/draft")
 def post_draft(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """Draft the church's structure from Chief's five questions, or from the
     planning course (from_plan), in place of the draft before. A proposal:
     no login, invitation, job or sheet is made or changed."""
     body = body or {}
-    business, ch, ed, uid = _who(body.get("business_id"), session.user)
-    if not ed:
-        raise HTTPException(403, NOT_YOURS)
-    return {"ok": True, "draft": draft(business, ch, uid, ed, body.get("answers"), body.get("from_plan") is True)}
+    with _once():
+        business, ch, ed, uid = _who(body.get("business_id"), session.user)
+        if not ed:
+            raise HTTPException(403, NOT_YOURS)
+        return {"ok": True,
+                "draft": draft(business, ch, uid, ed, body.get("answers"), body.get("from_plan") is True)}
 
 
 @router.post("/structure/person")
@@ -1446,18 +1575,20 @@ def post_person(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
     same people who may draft. It changes the draft and nothing else, so
     like the draft itself it asks for no password."""
     body = body or {}
-    business, ch, ed, uid = _who(body.get("business_id"), session.user)
-    if not ed:
-        raise HTTPException(403, NOT_YOURS)
-    return {"ok": True, "draft": set_email(business, ch, body.get("ref"), body.get("email"))}
+    with _once():
+        business, ch, ed, uid = _who(body.get("business_id"), session.user)
+        if not ed:
+            raise HTTPException(403, NOT_YOURS)
+        return {"ok": True, "draft": set_email(business, ch, body.get("ref"), body.get("email"), ed, uid)}
 
 
 @router.get("/structure")
 def get_structure(business_id: str, session: UserSession = Depends(sb_clients.authed_request)):
     """The church's draft (or none), the standing check, whether this login
     may draft or use the plan, and whether drafts are switched on (`ready`)."""
-    business, ch, ed, uid = _who(business_id, session.user, "viewer")
-    return read(business, ch, uid, ed)
+    with _once():
+        business, ch, ed, uid = _who(business_id, session.user, "viewer")
+        return read(business, ch, uid, ed)
 
 
 @router.delete("/structure")
@@ -1473,17 +1604,23 @@ def delete_structure(business_id: str, session: UserSession = Depends(sb_clients
 
 # ─── For the planning coach ───────────────────────────────────────────
 
-def coach_block(business: Optional[Dict[str, Any]]) -> str:
+def coach_block(business: Optional[Dict[str, Any]], user_id: Any = None) -> str:
     """Who does what at this church already, short, for the planning coach,
     so the pastor isn't asked twice: the office logins and their jobs, and
-    the people in a draft waiting for review. '' when there is neither, for
-    any other business, and when it can't be read. Never raises."""
+    the people in a draft waiting for review. ONLY for a turn whose signed-in
+    person is the church's owner or an Admin, read here from the church's own
+    rows (church_over.Church.role), never from what the caller worked out:
+    anyone else, nobody signed in, and a role that can't be read all get ''.
+    '' too when there is nothing to say and for any other business. Never
+    raises."""
     try:
         import church_follow_up as cfu
         import untrusted_text
         if not isinstance(business, dict) or not business.get("id") or not cfu.is_church(business):
             return ""
         ch = co.Church(business)
+        if not user_id or ch.role(str(user_id)) not in ("owner", "admin"):
+            return ""
         lines: List[str] = []
         jobs = {j["key"]: j["label"] for j in cj.jobs(ch.b)}
         logins = []

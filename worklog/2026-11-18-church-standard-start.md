@@ -7,13 +7,14 @@ status: in progress
 prs: []
 migrations: [supabase/APPLY-2026-11-18-church-structure-drafts.sql]
 left_undone:
-  - "Not pushed: two local commits on the branch church-standard-start, for the parent session to open as a PR beside the app's half."
+  - "Not pushed: three local commits on the branch church-standard-start, for the parent session to open as a PR beside the app's half."
   - "The app's half (the review on Logins & areas, the setup flag, applying a draft through the job, invite and sheet writes) is built by a sibling session against the same contract."
   - "The migration is NOT applied. Until it is, no draft can be made (ready false, a write is a 503); the standing check works."
   - "No database test for the new table (the PGlite checks need a side-install here): a Python test pins the file's shape instead."
   - "No model was run: Chief's five questions, the read-back and the coach's one offer are instructions that no eval has exercised."
-  - "EXISTING LOGINS, at deploy: a login already on one of a church's own jobs stops holding the duties its areas gave it (and a starting job's duties its areas happened to spell) until those duties are given on its sheet. No production read was made, so how many there are is not known. To list them before deploying: select business_id, user_id, lane, areas from business_users where status = 'active' and role = 'manager' and lane is not null and lane not in ('office_leadership','people_care','sunday_serving','media_comms','treasurer');"
-  - "A person with nothing to switch on (no job, or a job with no areas) is drafted as a Viewer, but the team invite cannot carry areas without a job that has them: invited as they are, they would open the whole church (read-only) until their sheet is saved. The note on the person says so and the gap flags it. The app should not offer Invite for them."
+  - "EXISTING LOGINS, at deploy: a login already on one of a church's own jobs stops holding the duties its areas gave it (and a starting job's duties its areas happened to spell) until those duties are given on its sheet. CHECKED: the coordinating session ran the query below against production on 2026-11-18 and found 0 church-made jobs and 0 logins on one, so nothing is taken from anyone at deploy and there is nothing to backfill. Run it again if the deploy is later than a church making its first job: select business_id, user_id, lane, areas from business_users where status = 'active' and role = 'manager' and lane is not null and lane not in ('office_leadership','people_care','sunday_serving','media_comms','treasurer');"
+  - "The duties module writes one duty a call, so the duties a save keeps by name are not one transaction. They are written FIRST, each naming the people who already do it, so a failure there stops the save with the level, job and areas untouched and nobody doing anything different; what was already named stays named."
+  - "A person with nothing to switch on is state needs_job and whoever only counts or deposits is state no_login: neither can be invited from. The app must not offer Invite for either (it never gets new or needs_email for them)."
   - "A title that reads as the office's (Secretary, Clerk, Administrator) still gets the ready-made Office & Leadership job: that is the title, not a guess from the work."
   - "Step three (Giving as its own switch) replaces the money notes here: a treasurer will no longer need an Admin login, and a counter can be given the count sheet."
 decisions:
@@ -28,7 +29,11 @@ decisions:
   - "Matching is by email, then full name, then a first name only among logins, and only when exactly one fits; two is a note, never a pick. A member's email is taken from their record, and said."
   - "State and the gaps are worked out on every read from the church as it is. Every gap carries a tone: warn for nobody on giving and for one person counting and depositing, note for the rest."
   - "A CHURCH JOB BRINGS ONLY THE DUTIES GIVEN ON THE SHEET (Kevin's decision the same day, on what this work found): church_duties._seat_lane no longer gives a login on a church job the starting job its areas happen to spell, and such a login holds no duty by its areas either: only the duties named for it (church_duties.own_job_seat; standing, the duties page, holds(), church_over.held and the sheet's own reckoning all ask it). A login with NO job whose picked areas spell a starting job keeps that job's duties, and one whose areas spell none keeps its areas' duties, as before."
-  - "So that the sheet never quietly takes duties away: a save that leaves a Manager on a church job gives them, by name, every duty they did and weren't asked to drop (church_sheet.change), with everyone who does it now. A job alone is still a label: nothing is given, nothing is taken, no password."
+  - "So that the sheet doesn't quietly take a Manager's duties away when they are put on a church job, a save keeps for them, by name, the duties they did (church_sheet.change), NARROWLY (the independent review of 2026-11-18 proved the first, wide version left an Admin moved down to one area with 44 duties, the lanes' oversight among them): only a login that was already a Manager before the save; never a money duty or the monthly report or Over the lanes; only a duty in an area they are shown after the save; nothing when the save leaves them seeing the whole church. Everything else they did comes off, and the summary and the record's detail say what was kept (kept_by_name) and what came off (less)."
+  - "REVIEW, the server does not rely on the app: nothing switched on is a Viewer whatever level was asked (with a note), whoever only counts or deposits is no_login whatever their title (and no empty job is proposed for them), and both read as states nobody is invited from: needs_job and no_login."
+  - "REVIEW: whoever only sets up jobs and sheets reads an email in a draft only when they typed it themselves (people[].email_by, kept and never returned). One taken from a member's record or a login, or typed by the owner, is left out for them and the person reads as needing an email. A new draft keeps the emails typed on the one before, for a person of exactly the same name."
+  - "REVIEW: the planning coach's who-does-what block asks the church itself for the signed-in person's role (owner or Admin) and answers nothing when it can't be read; the gate on chief_areas.WHO failed open (WHO is None for the owner and when its read fails)."
+  - "REVIEW: a GET works every login's duties out from the one read of the church's areas (Live.held), not a read a login (30 Managers cost 119 reads); the routes run inside church_map.once(). Reads and writes that carry a typed name or email are redacted in the failure log. Setting an email fails closed when the owner's own email can't be read."
   - "Chief's draft verb is a READ in the registry (it reads the proposal back mid-turn) that also keeps the draft, said in its description; its handler holds it on a turn that read someone else's words. Both verbs are placed for every login and kept by the handler to the owner, an Admin and whoever sets up jobs and sheets (not chief_areas.OWNERS)."
   - "The planning coach may offer once, only after the Leaders part is written, and is told not to when a draft is already waiting. It is handed who already does what (the logins and the draft) for the owner or an Admin only. Writing or finishing the plan still changes nothing by itself."
   - "A board the church named by its own bodies is those bodies: no generic Board member beside Deacons. A Presbyterian board is its Session, so it is the elders' job."
@@ -80,6 +85,12 @@ Every gap carries `tone`: `warn` for `no_giving` and `counts_and_deposits`,
 `counts_and_deposits`, `sees_everything`, `nothing_on`, `no_guests`,
 `job_unheld` (`church_structure.GAP_KEYS`).
 
+`people[].state` is one of `new`, `needs_email`, `invited`, `login`, `done`,
+`needs_job`, `no_login` (`church_structure.STATES`). Nobody is invited from
+the last two: `needs_job` is no job, or nothing switched on (an invitation
+would make a login that opens the whole church); `no_login` is someone who
+only counts or deposits.
+
 Optional fields beyond the first contract, all additive: `draft.notes`,
 `draft.answers`, `jobs[].also_called`, `people[].does`, `.title`,
 `.no_login`; with `from_plan: true`, `answers` may be sent too and is laid
@@ -116,4 +127,4 @@ not wait for it.
 
 ## Tests
 
-`__tests__/test_church_structure.py` (58). Changed: `test_tool_loop.py`.
+`__tests__/test_church_structure.py` (70). Changed: `test_tool_loop.py`, `test_church_sheet.py`.

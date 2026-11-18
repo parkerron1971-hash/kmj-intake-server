@@ -940,7 +940,7 @@ def test_before_the_table_is_there_nothing_is_drafted_and_the_standing_check_sti
     status = chief(db, OWNER, "church_structure_status")
     assert not status.get("failed") and "4 logins besides the owner; 3 placed" in status["result"]
     assert "isn't switched on here yet" in status["result"] and "draft_church_structure" not in status["result"]
-    assert st.coach_block(business).count("A draft of the office team") == 0
+    assert st.coach_block(business, OWNER).count("A draft of the office team") == 0
 
 
 def test_the_migration_is_one_server_only_table_and_the_export_knows_it():
@@ -987,7 +987,8 @@ def test_what_is_kept_is_cleaned_again_on_every_read_so_a_forged_draft_opens_not
         "id": "x", "made_at": "2026-11-18T10:00:00+00:00", "made_by_name": "Someone", "source": "elsewhere",
         "shape": {"key": "theocracy", "why": "w" * 5000},
         "jobs": [{"label": "Money Friend", "role": "manager", "areas": ["giving_money", "office"],
-                  "duties": ["deposit", "calendar"], "custom": True, "exists": True, "key": "treasurer"}, "junk"],
+                  "duties": ["deposit", "calendar"], "custom": True, "exists": True, "key": "treasurer",
+                  "description": {"not": "words"}}, "junk"],
         "people": [{"name": "Zed Novak", "role": "manager", "areas": ["giving_money", "office"],
                     "duties": ["books", "calendar"], "user_id": "not-a-uuid", "email": "nope", "state": "done",
                     "job_label": "Money Friend", "notes": ["n" * 900]},
@@ -1002,7 +1003,9 @@ def test_what_is_kept_is_cleaned_again_on_every_read_so_a_forged_draft_opens_not
     zed, ivy = d["people"]
     assert zed["areas"] == ["office"] and zed["duties"] == ["calendar"] and zed["user_id"] is None
     assert zed["email"] is None and zed["state"] == "needs_email" and len(zed["notes"][0]) <= st.NOTE_MAX
-    assert ivy["role"] == "manager" and ivy["areas"] == [] and ivy["duties"] == []
+    # Nothing switched on is never more than a Viewer, and never someone to invite.
+    assert ivy["role"] == "viewer" and ivy["areas"] == [] and ivy["duties"] == [] and ivy["state"] == "needs_job"
+    assert job["description"] is None                       # a description that isn't words is no description
     for junk in (None, "draft", {"people": "many"}, {"people": [], "jobs": None}):
         _row(db)["draft"] = junk
         got = _read(db)
@@ -1073,7 +1076,10 @@ def test_putting_someone_on_a_church_job_keeps_the_duties_their_sheet_showed_by_
     assert before == {"kids", "youth", "background_checks"}
     asked = []
     got = cs.change(_biz(db), OWNER, KAY, {"job": job["key"]}, widening=lambda: asked.append(1))
-    assert asked == [] and not got["widens"] and got["summary"] == "changed Kay Odum's sheet: job: Kids Director"
+    assert asked == [] and not got["widens"]
+    assert got["summary"] == ("changed Kay Odum's sheet: job: Kids Director; kept “Kids”, “Youth and Teen Bible "
+                              "Study” and “Background checks” by name")
+    assert db.t["church_sheet_changes"][-1]["detail"]["kept_by_name"] == ["kids", "youth", "background_checks"]
     assert _held(db, KAY)[0] == before
     named = {r["duty"] for r in db.t["church_duty_holders"] if r["user_id"] == KAY}
     assert named == before                                   # by name now, not by her areas
@@ -1399,15 +1405,317 @@ def test_the_coach_may_offer_once_only_at_a_church_and_only_after_leaders_is_wri
 
 
 def test_the_coach_is_handed_who_does_what_from_the_logins_and_the_draft(db, monkeypatch):
-    assert st.coach_block(_biz(db)) == ""                   # nobody yet, and no draft
+    assert st.coach_block(_biz(db), OWNER) == ""            # nobody yet, and no draft
     _draft(db, SMALL)
-    alone = st.coach_block(_biz(db))
+    alone = st.coach_block(_biz(db), OWNER)
     assert alone.startswith("WHO DOES WHAT IN THE OFFICE ALREADY")
     assert "A draft of the office team is waiting" in alone and "Alma Price: Treasurer" in alone
     assert "Office logins today" not in alone
     _office(db)
-    both = st.coach_block(_biz(db))
+    both = st.coach_block(_biz(db), OWNER)
     assert "Office logins today: Alma Price: Treasurer; Nora Whitfield: Office & Leadership" in both
-    assert st.coach_block(_biz(db, SHOP)) == "" and st.coach_block(None) == "" and st.coach_block({}) == ""
+    assert st.coach_block(_biz(db, SHOP), OWNER) == "" and st.coach_block(None, OWNER) == ""
+    assert st.coach_block({}, OWNER) == ""
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: None)
-    assert st.coach_block(_biz(db)) == ""                   # unread is nothing said, never a failed turn
+    assert st.coach_block(_biz(db), OWNER) == ""            # unread is nothing said, never a failed turn
+
+
+def test_the_coachs_block_is_the_owners_and_an_admins_by_their_real_role_and_fails_closed(db, monkeypatch):
+    """The review of 2026-11-18: the gate was chief_areas.WHO, which is None
+    for the owner AND when its read fails, so a Manager's coach turn could be
+    handed the logins and the drafted names. The block asks the church itself
+    who this is."""
+    _office(db)
+    _draft(db, SMALL)
+    for uid in (OWNER, ADMIN):
+        assert "Office logins today" in st.coach_block(_biz(db), uid)
+    for uid in (HOLDER, MANAGER, LOOSE, STRANGER, "", None, "not-a-login"):
+        assert st.coach_block(_biz(db), uid) == "", uid
+    assert st.coach_block(_biz(db)) == ""                   # nobody named: nothing
+    # A role that can't be read is nobody's, never the owner's.
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/business_users") else real(path, **kw))
+    assert st.coach_block(_biz(db), ADMIN) == ""
+    src = (pathlib.Path(ROOT) / "chief_of_staff.py").read_text(encoding="utf-8")
+    call = src[src.index("_structure_engine.coach_block"):][:200]
+    assert "str(user_session.user.id)" in call
+    before = src[:src.index("_structure_engine.coach_block")][-900:]
+    assert "chief_areas.WHO.get()" not in before.split("if req.mode == \"strategy_coach\" and _cfu.is_church(biz):")[-1]
+
+
+# ─── The review of 2026-11-18 ─────────────────────────────────────────
+
+def _greeter(db):
+    return cj.create(_biz(db), {"label": "Greeter lead", "role": "manager", "areas": ["people_care"],
+                                "duties": ["first_guests"]}, OWNER, "owner")["job"]
+
+
+CARE = {"first_guests", "care_visits", "prayer", "help_requests", "shepherding", "member_records", "devotionals"}
+
+
+def test_an_admin_moved_down_onto_a_church_job_keeps_nothing(db):
+    """Proven in review: this save left the login with 44 duties, the monthly
+    report and Over the lanes among them, 37 outside its one area, with a
+    record that named only the four money duties."""
+    job = _greeter(db)
+    db.t["business_users"].append(_seat(KAY, "admin", "kay@hopechapel.example", "Kay Odum"))
+    asked = []
+    got = cs.change(_biz(db), OWNER, KAY, {"level": "manager", "job": job["key"], "areas": ["people_care"]},
+                    widening=lambda: asked.append(1))
+    assert _held(db, KAY) == (set(), set(), [])             # nothing: she wasn't a Manager before this save
+    assert asked == [] and not got["widens"]
+    assert [r for r in db.t["church_duty_holders"] if r["user_id"] == KAY] == []
+    detail = db.t["church_sheet_changes"][-1]["detail"]
+    assert detail["kept_by_name"] == [] and len(detail["less"]["duties"]) == len(cd.CATALOG)
+    assert set(cd.OVERSIGHT) <= set(detail["less"]["duties"])
+    assert "took away" in got["summary"] and f"and {len(cd.CATALOG) - 4} more" in got["summary"]
+    assert "kept" not in got["summary"]
+
+
+def test_a_manager_who_saw_everything_keeps_only_the_duties_in_the_areas_they_are_left_with(db):
+    """Proven in review: a holder put a Manager nothing placed (42 duties) on
+    a church job with one area, and she had 42 before and after."""
+    _office(db)
+    job = _greeter(db)
+    before = _held(db, LOOSE)[0]
+    assert len(before) == 42 and not before & set(cd.OVERSIGHT)
+    asked = []
+    got = cs.change(_biz(db), HOLDER, LOOSE, {"job": job["key"], "areas": ["people_care"]},
+                    widening=lambda: asked.append(1))
+    after = _held(db, LOOSE)[0]
+    assert after == CARE and all(cd.CATALOG[k]["area"] == "people_care" for k in after)
+    assert asked == [] and not got["widens"]
+    detail = db.t["church_sheet_changes"][-1]["detail"]
+    assert set(detail["kept_by_name"]) == CARE and len(detail["less"]["duties"]) == 42 - len(CARE)
+    assert "kept “First-time guests and welcome calls”" in got["summary"] and "by name" in got["summary"]
+    assert "took away" in got["summary"] and "took off" in got["summary"]
+    # Left seeing the whole church (a job, and no areas picked): nothing is kept at all.
+    seat = next(x for x in db.t["business_users"] if x["user_id"] == LOOSE)
+    seat.update(lane=None, areas=None)
+    db.t["church_duty_holders"] = [r for r in db.t["church_duty_holders"] if r["user_id"] != LOOSE]
+    assert len(_held(db, LOOSE)[0]) >= 35
+    cs.change(_biz(db), OWNER, LOOSE, {"job": job["key"]})
+    assert _held(db, LOOSE)[0] == set()
+    assert db.t["church_sheet_changes"][-1]["detail"]["kept_by_name"] == []
+
+
+def test_the_lanes_oversight_and_money_are_never_kept_by_name(db):
+    job = _greeter(db)
+    db.t["business_users"].append(_seat(KAY, "manager", "kay@hopechapel.example", "Kay Odum",
+                                        lane="people_care", areas=["people_care", "kids_youth", "groups_classes"]))
+    cs.change(_biz(db), OWNER, KAY, {"duties": {"add": ["monthly_report", "oversee_lanes"]}})
+    assert set(cd.OVERSIGHT) <= _held(db, KAY)[0]
+    cs.change(_biz(db), OWNER, KAY, {"job": job["key"], "areas": ["people_care"]})
+    held = _held(db, KAY)[0]
+    # The two she was given by name stay hers (a named duty is not the job's to take); none is kept anew,
+    # and nothing outside People & care is.
+    kept = db.t["church_sheet_changes"][-1]["detail"]["kept_by_name"]
+    assert not set(kept) & set(cd.OVERSIGHT) and all(cd.CATALOG[k]["area"] == "people_care" for k in kept)
+    assert not [k for k in kept if cd.CATALOG[k]["money"]]
+    assert held - set(cd.OVERSIGHT) == CARE
+
+
+def test_a_kept_duty_that_doesnt_save_stops_the_save_with_the_level_job_and_areas_untouched(db, monkeypatch):
+    job = _greeter(db)
+    db.t["business_users"].append(_seat(KAY, "manager", "kay@hopechapel.example", "Kay Odum",
+                                        areas=["people_care", "kids_youth"]))
+    real, calls = cd.move, []
+
+    def flaky(business, duty, to, by, **kw):
+        calls.append(duty)
+        if len(calls) == 3:
+            raise HTTPException(503, "That didn't save. Try again.")
+        return real(business, duty, to, by, **kw)
+    monkeypatch.setattr(cd, "move", flaky)
+    before = _held(db, KAY)[0]
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, KAY, {"job": job["key"], "areas": ["people_care"]})
+    assert e.value.status_code == 503 and "are as they were" in e.value.detail
+    seat = next(x for x in db.t["business_users"] if x["user_id"] == KAY)
+    assert seat.get("lane") is None and seat["areas"] == ["people_care", "kids_youth"] and seat["role"] == "manager"
+    assert db.t["church_sheet_changes"] == []                # no record of a save that didn't happen
+    assert _held(db, KAY)[0] == before                       # and she does exactly what she did
+
+
+def test_whoever_only_counts_or_deposits_needs_no_login_whatever_they_are_called(db):
+    d = _draft(db, {"leads": "pastor", "money": {"counts": ["Dana Reed"], "deposits": None, "books": None}, "people": [
+        {"name": "Dana Reed", "title": "Offering counter", "does": "counts the offering",
+         "email": "dana@hopechapel.example"},
+        {"name": "Bo Lin", "does": "counts the offering", "role": "manager"},
+        {"name": "Ray Cho", "title": "Bank runner", "does": "takes the deposit to the bank on Monday"},
+        {"name": "Sam Ortiz", "title": "Usher", "does": "seats people, and takes the deposit to the bank"},
+    ]})
+    for name in ("Dana Reed", "Bo Lin", "Ray Cho"):
+        p = _p(d, name)
+        assert p["no_login"] and p["state"] == "no_login" and p["role"] == "viewer", name
+        assert p["job_label"] == "" and p["job_key"] is None and p["areas"] == [] and p["duties"] == []
+    assert "Offering counter" not in _labels(d) and "Bank runner" not in _labels(d)   # no empty job is proposed
+    assert _p(d, "Dana Reed")["title"] == "Offering counter" and _p(d, "Dana Reed")["email"] == "dana@hopechapel.example"
+    sam = _p(d, "Sam Ortiz")                                # he does more than take the deposit
+    assert not sam["no_login"] and sam["job_label"] == "Usher" and sam["areas"] and sam["state"] == "needs_email"
+    assert st.DEPOSITOR_NOTE.format(name="Sam Ortiz") in sam["notes"]
+    assert "nothing_on" not in _keys(d["gaps"])
+
+
+def test_nothing_switched_on_is_a_viewer_nobody_can_be_invited_from_whatever_level_was_asked(db):
+    d = _draft(db, {"leads": "pastor", "people": [
+        {"name": "Vera Hale", "does": "helps out", "role": "manager", "email": "vera@hopechapel.example"},
+        {"name": "Ned Poole", "title": "Helper", "does": "helps out", "role": "manager",
+         "email": "ned@hopechapel.example"},
+        {"name": "Ola Dean", "does": "helps out", "role": "member"},
+        {"name": "Tom Reyes", "title": "Minister of Music", "does": "leads the choir", "email": "tom@hopechapel.example"},
+    ]})
+    for name, level in (("Vera Hale", "Manager"), ("Ned Poole", "Manager"), ("Ola Dean", "Member")):
+        p = _p(d, name)
+        assert p["role"] == "viewer" and p["areas"] == [] and p["duties"] == [] and not p["no_login"], name
+        assert p["state"] == "needs_job", name              # an email or not: never new, never needs_email
+        assert any(n.startswith(f"You asked for {level}, but nothing is switched on for {name} yet")
+                   for n in p["notes"]), name
+    assert st.EMPTY_JOB_NOTE.format(job="Helper", name="Ned Poole") in _p(d, "Ned Poole")["notes"]
+    assert _p(d, "Tom Reyes")["state"] == "new" and _p(d, "Tom Reyes")["role"] == "manager"
+    assert [g["line"] for g in d["gaps"] if g["key"] == "nothing_on"] == [
+        "Nothing is switched on for Vera Hale yet.", "Nothing is switched on for Ned Poole yet.",
+        "Nothing is switched on for Ola Dean yet."]
+    # Already a login, and nothing drafted for them: still nothing to apply, never "login".
+    db.t["business_users"].append(_seat(KAY, "manager", "vera@hopechapel.example", "Vera Hale"))
+    assert _p(_read(db)["draft"], "Vera Hale")["state"] == "needs_job"
+    assert st.STATES == ("new", "needs_email", "invited", "login", "done", "needs_job", "no_login")
+    assert {p["state"] for p in _read(db)["draft"]["people"]} <= set(st.STATES)
+    # Chief says both in plain words.
+    text = chief(db, OWNER, "church_structure_status")["result"]
+    assert "needs a job with areas before they can be invited: 3" in text
+
+
+def test_a_get_reads_the_church_once_however_many_logins_it_has(db, monkeypatch):
+    """The review of 2026-11-18: 30 Managers with no ready-made job cost 119
+    reads a GET, one login at a time."""
+    import church_map
+
+    def reads(n):
+        db.t["business_users"] = [_seat(f"c8{i:02d}0000-0000-4000-8000-0000000000{i:02d}", "manager",
+                                        f"m{i}@hopechapel.example", f"Manager {i}", areas=["kids_youth"])
+                                  for i in range(n)]
+        for c in (cd._CACHE, cd._FAILED, ca._MY_CACHE):
+            c.clear()
+        calls = []
+        real = db.get
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: calls.append(path) or real(path, **kw))
+        with church_map.once():
+            got = _read(db)
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+        assert got["status"]["logins"] == n and "no_guests" in _keys(got["status"]["gaps"])
+        return len(calls)
+    _draft(db, SMALL)
+    reads(1)                                                # the first read of a church fills its role library
+    few, many = reads(3), reads(30)
+    assert many <= few + 2 and many <= 40, (few, many)      # flat: not one read more a login
+    # And what it works out for each login is what the church's own reckoning says.
+    _office(db)
+    job = _greeter(db)
+    db.t["business_users"].append(_seat(KAY, "manager", "kay@hopechapel.example", "Kay Odum", lane=job["key"],
+                                        areas=["people_care"]))
+    cs.change(_biz(db), OWNER, KAY, {"duties": {"add": ["prayer"]}})
+    for c in (cd._CACHE, cd._FAILED, ca._MY_CACHE):
+        c.clear()
+    business = _biz(db)
+    ch = co.Church(business)
+    live = st.Live(business, ch)
+    for uid in ch.seats:
+        assert set(live.held(uid)) == set(ch.held(uid)), uid
+    assert set(live.held(KAY)) == {"prayer"}
+    import inspect
+    for fn in (st.post_draft, st.post_person, st.get_structure):
+        assert "_once()" in inspect.getsource(fn)
+
+
+def test_whoever_only_sets_up_jobs_reads_an_email_only_when_they_typed_it(office, db):
+    office.who["id"] = HOLDER
+    d = office.post("/church/structure/draft", json={"business_id": BIZ, "answers": {"leads": "pastor", "people": [
+        {"name": "Maria Lopez", "title": "Greeter", "does": "greets guests"},
+        {"name": "Zed Novak", "title": "Greeter", "does": "greets guests", "email": "zed@hopechapel.example"},
+        {"name": "Caleb Stone", "title": "Greeter", "does": "greets guests"}]}}).json()["draft"]
+    maria = _p(d, "Maria Lopez")                            # a member: her record's email is not handed over
+    assert maria["contact_id"] == C_MARIA and maria["email"] is None and maria["state"] == "needs_email"
+    assert _p(d, "Zed Novak")["email"] == "zed@hopechapel.example" and _p(d, "Zed Novak")["state"] == "new"
+    assert _p(d, "Caleb Stone")["email"] is None and _p(d, "Caleb Stone")["user_id"] == MANAGER   # a login's neither
+    assert "email_by" not in maria and "maria@hopechapel.example" not in str(d)
+    got = office.get(f"/church/structure?business_id={BIZ}").json()["draft"]
+    assert _p(got, "Maria Lopez")["email"] is None
+    # The owner and an Admin read it, and for them she can be invited.
+    for uid in (OWNER, ADMIN):
+        office.who["id"] = uid
+        got = office.get(f"/church/structure?business_id={BIZ}").json()["draft"]
+        assert _p(got, "Maria Lopez")["email"] == "maria@hopechapel.example" and _p(got, "Maria Lopez")["state"] == "new"
+    # An email the owner typed is the owner's: not hers to read either. One she types herself is.
+    office.who["id"] = OWNER
+    office.post("/church/structure/person", json={"business_id": BIZ, "ref": maria["ref"],
+                                                  "email": "maria.new@hopechapel.example"})
+    office.who["id"] = HOLDER
+    assert _p(office.get(f"/church/structure?business_id={BIZ}").json()["draft"], "Maria Lopez")["email"] is None
+    r = office.post("/church/structure/person", json={"business_id": BIZ, "ref": maria["ref"],
+                                                      "email": "m.lopez@hopechapel.example"})
+    assert _p(r.json()["draft"], "Maria Lopez")["email"] == "m.lopez@hopechapel.example"
+    assert _p(r.json()["draft"], "Maria Lopez")["state"] == "new"
+
+
+def test_a_new_draft_keeps_the_emails_typed_on_the_one_before(db):
+    people = [{"name": "Zed Novak", "title": "Greeter", "does": "greets guests"},
+              {"name": "Tom Reyes", "title": "Minister of Music", "does": "leads the choir"}]
+    d = _draft(db, {"leads": "pastor", "people": people})
+    business = _biz(db)
+    st.set_email(business, co.Church(business), _p(d, "Zed Novak")["ref"], "zed@hopechapel.example", "owner", OWNER)
+    # Chief drafts again from the same conversation, with no emails in it.
+    again = chief(db, OWNER, "draft_church_structure", answers={"leads": "pastor_board", "people": people + [
+        {"name": "Zed N.", "title": "Greeter", "does": "greets guests"}]})
+    assert not again.get("failed")
+    kept = {p["name"]: p for p in _row(db)["draft"]["people"]}
+    assert kept["Zed Novak"]["email"] == "zed@hopechapel.example" and kept["Zed Novak"]["email_by"] == OWNER
+    assert kept["Tom Reyes"]["email"] is None and kept["Zed N."]["email"] is None      # the exact name, or nothing
+    assert _p(_read(db)["draft"], "Zed Novak")["state"] == "new"
+    # An email said this time wins over the one typed before.
+    d = _draft(db, {"leads": "pastor", "people": [{**people[0], "email": "zed.novak@hopechapel.example"}]})
+    assert _p(d, "Zed Novak")["email"] == "zed.novak@hopechapel.example"
+
+
+def test_typed_names_and_emails_stay_out_of_the_failure_log_and_the_owners_email_fails_closed(db, monkeypatch):
+    seen = []
+    get, post = db.get, db.post
+
+    def g(path, **kw):
+        seen.append(("GET", path, kw))
+        return get(path, **kw)
+
+    def p(path, body, prefer=None, **kw):
+        seen.append(("POST", path, kw))
+        return post(path, body, prefer, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", g)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", p)
+    d = _draft(db, {"leads": "pastor", "people": [
+        {"name": "Sister Maria Lopez", "title": "Greeter", "does": "greets", "email": "someone@hopechapel.example"}]})
+    business = _biz(db)
+    st.set_email(business, co.Church(business), _p(d, "Sister Maria Lopez")["ref"], "typed@hopechapel.example",
+                 "owner", OWNER)
+    mine = [(m, path, kw) for m, path, kw in seen
+            if path.startswith(f"/{st.TABLE}") or ("/contacts?" in path and "select=id,name,email&limit=10" in path)]
+    assert len([x for x in mine if "/contacts?" in x[1]]) >= 3 and len([x for x in mine if x[0] == "POST"]) == 2
+    assert all(kw.get("redact") is True for _m, _path, kw in mine), [x for x in mine if not x[2].get("redact")]
+    # The owner's own email, when it can't be read, is a 503: never "that isn't the owner's".
+    import messaging_router
+    monkeypatch.setattr(co, "_OWNER_EMAIL", {})
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda uid: None)
+    with pytest.raises(HTTPException) as e:
+        st.set_email(business, co.Church(business), "p1", "pastor@hopechapel.example", "owner", OWNER)
+    assert e.value.status_code == 503
+
+
+def test_a_jobs_description_is_cleaned_like_every_other_string_and_the_delete_knows_the_table():
+    import account_lifecycle
+    assert st._description("  Owns check-in.\r\nAnswers to the pastor.  ") == "Owns check-in.\nAnswers to the pastor."
+    assert st._description("x" * 9000) == "x" * cj.DESCRIPTION_MAX
+    for junk in (None, "", "   ", 7, ["a"], {"a": 1}):
+        assert st._description(junk) is None
+    row = st._job_row({"label": "Kids Director", "description": ["not", "words"]}, custom=True, exists=False)
+    assert row["description"] is None
+    # No `id` column: the account delete asks for the column the table has.
+    assert account_lifecycle._DELETE_SELECT[st.TABLE] == "business_id"

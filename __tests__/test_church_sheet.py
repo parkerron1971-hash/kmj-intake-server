@@ -886,7 +886,11 @@ def test_a_job_alone_is_a_label_and_asks_for_no_password(db):
     cj.create(_biz(db), {**JOB, "areas": ["kids_youth"], "duties": []}, OWNER, "owner")
     asked = []
     got = cs.change(_biz(db), OWNER, SARAH, {"job": "kids_director"}, widening=lambda: asked.append(1))
-    assert asked == [] and not got["widens"] and got["summary"].endswith("job: Kids Director")
+    assert asked == [] and not got["widens"]
+    # A church job brings only the duties given on the sheet (2026-11-18), so the three she did by her
+    # area are kept for her by name, and the record says so.
+    assert got["summary"] == ("changed Sarah Okafor's sheet: job: Kids Director; kept “Kids”, “Youth and Teen "
+                              "Bible Study” and “Background checks” by name")
 
 
 def test_changing_only_the_areas_keeps_a_churchs_own_job_on_the_login(db):
