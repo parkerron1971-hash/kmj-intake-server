@@ -275,6 +275,23 @@ def test_a_known_address_costs_no_read(reads):
     assert len(reads) == before and ms.numbers()["ready"]["conversation"]["n"] == 1
 
 
+@pytest.mark.parametrize("cookie", ["made-up", "eyJiaXoiOiAiMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIn0.forged", ""])
+def test_a_made_up_cookie_costs_no_read(reads, cookie):
+    c = _client()
+    c.cookies.update({mp.SESSION_COOKIE: cookie})
+    assert _beacon(c, cookies=False).status_code == 204
+    assert reads == [] and ms.numbers() == {}
+
+
+def test_a_session_from_before_sign_everyone_out_doesnt_count(reads, monkeypatch):
+    signed_out_at = int(time.time()) + 60
+    biz = {**BUSINESS, "settings": {"member_portal": {"enabled": True, "epoch": signed_out_at}}}
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: [
+        {"slug": "first-light", "business_id": BIZ, "site_config": {}, "business": dict(biz)}])
+    assert _beacon(_client()).status_code == 204
+    assert ms.numbers() == {}
+
+
 def test_an_unknown_address_is_looked_up_once(reads):
     c = _client()
     assert _beacon(c).status_code == 204
@@ -346,15 +363,25 @@ def test_a_reading_takes_each_sample_once():
     got = ms.for_reading("sunday", now)
     assert got["server"]["home"]["n"] == 3 and got["server"]["home"]["p50"] == 500
     assert got["ready"]["home"]["n"] == 1 and sum(got["server"]["home"]["h"]) == 3
+    ms.saved(got, "sunday")
     assert ms.for_reading("sunday", now + 1) is None           # nothing new since
     ms.record("server", "home", 400, at=now + 5)
     assert ms.for_reading("sunday", now + 10)["server"]["home"]["n"] == 1
 
 
+def test_a_reading_that_wasnt_saved_leaves_its_numbers_for_the_next():
+    now = time.time()
+    ms.record("server", "home", 300, at=now - 60)
+    lost = ms.for_reading("sunday", now)                      # its save failed: saved() never ran
+    assert lost["server"]["home"]["n"] == 1
+    ms.record("server", "home", 500, at=now + 5)
+    assert ms.for_reading("sunday", now + 10)["server"]["home"]["n"] == 2
+
+
 def test_check_now_never_steals_sundays_numbers():
     now = time.time()
     ms.record("server", "home", 300, at=now - 60)
-    assert ms.for_reading("manual", now)["server"]["home"]["n"] == 1
+    ms.saved(ms.for_reading("manual", now), "manual")
     assert ms.for_reading("manual", now)["server"]["home"]["n"] == 1
     assert ms.for_reading("sunday", now)["server"]["home"]["n"] == 1
 

@@ -777,7 +777,12 @@ async def take_reading(slot: datetime, kind: str, *, top: bool) -> Dict[str, Any
     if why:
         print(f"[db_health] metrics unread at {_z(slot)}: {why}", flush=True)
     row = {"taken_at": _z(taken_at), "metrics": metrics, "pg": pg, "problem": problem}
-    await asyncio.to_thread(sb_clients.sb_patch_as_service, f"{SAMPLES}?slot=eq.{_z(slot)}", row)
+    kept = await asyncio.to_thread(sb_clients.sb_patch_as_service, f"{SAMPLES}?slot=eq.{_z(slot)}", row)
+    if kept:
+        # Only now does the next reading start after these member numbers.
+        member_stopwatch.saved(member, kind)
+    else:
+        print(f"[db_health] reading at {_z(slot)} wasn't saved", flush=True)
     return {"slot": _z(slot), "taken": True, "kind": kind, "taken_at": _z(taken_at), "metrics": metrics,
             "pg": pg, "problem": problem}
 

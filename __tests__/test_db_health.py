@@ -794,6 +794,19 @@ def test_a_reading_keeps_the_member_apps_numbers(db, feed, stopwatch):
     assert "member_app" not in db.samples[1]["metrics"]
 
 
+def test_a_reading_that_wasnt_saved_hands_its_member_numbers_on(db, feed, stopwatch, monkeypatch):
+    """A Supabase blip on the save must not lose that quarter hour."""
+    import time as _time
+    stopwatch.record("server", "home", 300, at=_time.time() - 60)
+    real_patch = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    run(dh.tick(et(SUNDAY, 9, 0).astimezone(timezone.utc)))
+    assert db.samples[0]["taken_at"] is None                            # the save failed
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real_patch)
+    run(dh.tick(et(SUNDAY, 9, 15).astimezone(timezone.utc)))
+    assert db.samples[1]["metrics"]["member_app"]["server"]["home"]["n"] == 1
+
+
 def test_an_unread_feed_still_keeps_the_member_apps_numbers(db, stopwatch, monkeypatch):
     async def down(client):
         return None, "Supabase's metrics answered 503."
