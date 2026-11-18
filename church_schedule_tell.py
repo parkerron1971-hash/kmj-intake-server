@@ -26,10 +26,12 @@ _bare() drops both from every row at the door, and the sweep never asks the
 database for either, so nothing below this line can say them.
 
 An ask that went up for an exception (step 2: past the number who can be away
-at once, or on a protected day) is told to whoever it went up to, and nobody
-else: the one over the asker can't answer it and isn't told of it. Its notice
-adds only that it is past the number or on a protected day (up_words): never
-how many are away, never who, never which day.
+at once, on a protected day, or overlapping someone they can't be away with)
+is told to whoever it went up to, and nobody else: the one over the asker
+can't answer it and isn't told of it. Its notice adds only that it is past
+the number, on a protected day, or that it overlaps with someone they can't
+be away with (up_words): never how many are away, never who, never which day,
+and never who the other of a pair is.
 
 HOW SOMEONE IS TOLD. One of the church's people: a push to their phone and a
 line in their conversation with the church (member_push.send does both, kind
@@ -180,10 +182,21 @@ def new_words(church: str, to_name: str, asker: str, ask: Dict[str, Any]) -> Dic
 
 def up_words(ask: Dict[str, Any]) -> str:
     """Why a flagged ask came up, as much as a lock screen may say: that it
-    is past the number, or on a protected day. Never how many, never which
-    day, never who else is away. '' for an ask that isn't flagged."""
+    is past the number, on a protected day, or overlaps with someone they
+    can't be away with (a pair, S2-4). Never how many, never which day,
+    never who else is away, never who the other of a pair is. '' for an ask
+    that isn't flagged."""
     flags = ask.get("flags") or []
     over, kept = "over_limit" in flags, "protected_day" in flags
+    if "pair" in flags:
+        pair = "overlaps with someone they can’t be away with"
+        if over and kept:
+            return f"It’s past the number who can be away at once, on a protected day, and {pair}"
+        if over:
+            return f"It’s past the number who can be away at once, and {pair}"
+        if kept:
+            return f"It’s on a protected day, and {pair}"
+        return f"It {pair}"
     if over and kept:
         return "It’s past the number who can be away at once, and on a protected day"
     if over:

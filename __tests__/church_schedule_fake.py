@@ -39,7 +39,9 @@ with both files: the two numbers and the usual service days on
 church_schedule_settings (their checks), church_schedule_department_limits
 (one number a department, the department and whoever set it the church's
 own), church_protected_days (one row a date a church, merged), church_away_pairs
-(ordered, one row a pair, both people the church's own), `excepted` and
+(its before trigger, then ordered and the note's length, then one row a pair:
+on an insert, and on an update the trigger only when it names a person or
+the church, as the SQL's column list says), `excepted` and
 `team_group_id` on an ask (their defaults, church_away_asks_excepted on every
 write, the team the church's own), and church_away_settle_excepted exactly as
 the function is written: church_away_settle's decision, then the exception
@@ -234,24 +236,37 @@ def _protected(d, b, prefer):
                    {"id": None, "created_by": None, "created_at": NOW.isoformat()})
 
 
+def _pair_wrong(d, row, old=None):
+    """church_away_pairs' guards on a row as it would stand, in Postgres's
+    order: the before trigger church_schedule_limits_same_business first
+    (on an insert, or an update that names either person or the church:
+    both people this church's, which someone paired with themself is not),
+    then the checks (church_away_pairs_ordered: the smaller id first, as
+    their lower-case text orders, which is how Postgres orders uuids; the
+    note 140 at most), then church_away_pairs_one. Why, or None."""
+    a, z = str(row.get("a_contact_id") or ""), str(row.get("b_contact_id") or "")
+    named = old is None or any(row.get(k) != old.get(k) for k in ("a_contact_id", "b_contact_id", "business_id"))
+    if named and (a == z or not (_mine(d, "contacts", row.get("business_id"), a)
+                                 and _mine(d, "contacts", row.get("business_id"), z))):
+        return "trigger: A pair is two people in this church"
+    if not a.lower() < z.lower():
+        return "check: church_away_pairs_ordered"
+    if row.get("note") is not None and len(row["note"]) > 140:
+        return "check: note"
+    if any(r is not old and r["business_id"] == row.get("business_id") and r["a_contact_id"] == a
+           and r["b_contact_id"] == z for r in d.t["church_away_pairs"]):
+        return "unique: church_away_pairs_one"
+    return None
+
+
 def _pair(d, b):
     """church_away_pairs: the smaller id first, two of the church's own
     people, one row a pair, a note of 140 at most."""
-    a, z = str(b.get("a_contact_id") or ""), str(b.get("b_contact_id") or "")
-    if not (_mine(d, "contacts", b.get("business_id"), a) and _mine(d, "contacts", b.get("business_id"), z)) or a == z:
-        d.refused.append("trigger: A pair is two people in this church")
-        return None
-    if not a.lower() < z.lower():
-        d.refused.append("check: church_away_pairs_ordered")
-        return None
-    if b.get("note") is not None and len(b["note"]) > 140:
-        d.refused.append("check: note")
-        return None
-    if any(r["business_id"] == b["business_id"] and r["a_contact_id"] == a and r["b_contact_id"] == z
-           for r in d.t["church_away_pairs"]):
-        d.refused.append("unique: church_away_pairs_one")
-        return None
     row = {"id": str(uuid.uuid4()), "note": None, "created_by": None, "created_at": NOW.isoformat(), **b}
+    why = _pair_wrong(d, row)
+    if why:
+        d.refused.append(why)
+        return None
     d.t["church_away_pairs"].append(row)
     return [dict(row)]
 
@@ -387,6 +402,14 @@ def build(monkeypatch, *, mode: str = "on", limits: bool = False, **kw):
         nothing and answers None."""
         if failing("patch", path) or absent(path, body):
             return None
+        if path.startswith("/church_away_pairs"):
+            table, filters, _limit = d._parse(path)
+            for r in d.t[table]:
+                if d._match(r, filters):
+                    why = _pair_wrong(d, {**r, **body}, old=r)
+                    if why:
+                        d.refused.append(why)
+                        return None
         if path.startswith("/church_away_asks"):
             table, filters, _limit = d._parse(path)
             for r in d.t[table]:

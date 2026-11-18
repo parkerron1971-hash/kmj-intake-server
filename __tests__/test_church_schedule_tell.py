@@ -1066,6 +1066,42 @@ def test_a_yes_that_no_longer_lands_tells_the_new_person_once_and_never_the_reas
     assert len(db.rang) == 1
 
 
+@LIMITS
+def test_a_pair_asks_notice_says_it_overlaps_with_someone_and_never_who_or_which_days(app, db):
+    """Yusuf's ask waits on Amara (his own days, his own reason). Kara's
+    overlaps it, so hers goes up: whoever it went up to hears that it
+    overlaps with someone she can't be away with, and nothing of his."""
+    fake.seat(db, HOPE, "kara")
+    w = db.who[HOPE]
+    x, y = sorted((w["yusuf"], w["kara"]))
+    db.t["church_away_pairs"].append({"id": str(uuid.uuid4()), "business_id": HOPE, "a_contact_id": x,
+                                      "b_contact_id": y, "note": "Both carry the trip", "created_by": owner(db),
+                                      "created_at": NOW.isoformat()})
+    phone(db, "amara")
+    phone(db, "yusuf")
+    desk(db, w["owen@"])
+    his = ask(app, "yusuf", starts_on=day(33), ends_on=day(35), kind="commitment", reason=SECRET)
+    fake.later(db)
+    assert [p["to"] for p in db.rang] == [w["amara"]], "his went to the one over him, as any ask does"
+    for kept in (db.rang, db.mail, notes(db), db.t["member_push_sends"], db.t["member_push_held"]):
+        kept.clear()
+    hers = ask(app, "kara", reason="A family matter out of town")
+    assert hers["flags"] == ["pair"] and hers["to"]["id"] == w["owen@"]
+    assert quiet(db) and fake.later(db) == 1
+    assert [(p["to"], p["title"], p["body"]) for p in db.rang] == [
+        (w["owen@"], "Kara asked for Dec 18 to 25",
+         "It overlaps with someone they can’t be away with, so it came to you. Say yes or not this one when you can.")]
+    [mail] = db.mail
+    assert ("Kara Bell asked to be away Friday, December 18 to Friday, December 25. It overlaps with someone they "
+            "can’t be away with, so it came to you.") in mail["html"]
+    everything = said(db)
+    for word in ("Yusuf", "Grant", "Dec 21", "Dec 23", "December 21", "commitment", SECRET, "Both carry the trip",
+                 his["id"], w["yusuf"]):
+        assert word not in everything, word
+    assert notes(db) == [], "the one over her, and the other of the pair, hear nothing"
+    assert tell.sweep_tick(NOW + HOUR)["told"] == 0, "once"
+
+
 def test_the_words_for_a_flagged_ask_say_only_that_it_is_past_the_number_or_on_a_protected_day():
     import re
 
@@ -1079,9 +1115,20 @@ def test_the_words_for_a_flagged_ask_say_only_that_it_is_past_the_number_or_on_a
     assert words("short_notice", "over_limit", "protected_day")["body"] == (
         "Short notice. It’s past the number who can be away at once, and on a protected day, so it came to you. Say "
         "yes or not this one when you can.")
-    assert words("pair")["body"].startswith("It needs an exception, so it came to you.")
+    # A pair (S2-4): that it overlaps with someone they can't be away with, never who.
+    assert words("pair")["body"] == ("It overlaps with someone they can’t be away with, so it came to you. Say yes or "
+                                     "not this one when you can.")
+    assert tell.up_words({"flags": ["over_limit", "pair"]}) == (
+        "It’s past the number who can be away at once, and overlaps with someone they can’t be away with")
+    assert tell.up_words({"flags": ["protected_day", "pair"]}) == (
+        "It’s on a protected day, and overlaps with someone they can’t be away with")
+    assert tell.up_words({"flags": ["short_notice", "over_limit", "protected_day", "pair", "serving"]}) == (
+        "It’s past the number who can be away at once, on a protected day, and overlaps with someone they can’t be "
+        "away with")
+    assert "It overlaps with someone they can’t be away with, so it came to you." in words("pair")["text"]
     assert words()["body"] == "Say yes or not this one when you can." and words("serving") == words()
-    for flags in (("over_limit",), ("protected_day",), ("over_limit", "protected_day"), ("pair",)):
+    for flags in (("over_limit",), ("protected_day",), ("over_limit", "protected_day"), ("pair",),
+                  ("over_limit", "pair"), ("protected_day", "pair")):
         got = json.dumps(words(*flags), ensure_ascii=False)
         assert SECRET not in got and "Dec 20" not in got and not re.search(r"\d+ (are|is) ", got), got
     assert tell.up_words({"flags": ["short_notice", "serving"]}) == ""

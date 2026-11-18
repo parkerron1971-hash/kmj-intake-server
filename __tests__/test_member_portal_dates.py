@@ -1157,6 +1157,124 @@ def test_a_flagged_card_whose_days_have_cleared_says_there_is_room_now(app, db, 
     assert went(post(app, f"/my/lead/dates/{asks(db)[0]['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes"
 
 
+# ─── Pairs (S2-4): two people who can't be away together ──────────────
+
+def pair_up(db, a, b):
+    """A pair as it sits in the table (the smaller id first)."""
+    x, y = sorted((db.who[HOPE][a], db.who[HOPE][b]))
+    db.t["church_away_pairs"].append({"id": db.nid("church_away_pairs"), "business_id": HOPE, "a_contact_id": x,
+                                      "b_contact_id": y, "note": "Both carry the youth trip", "created_by": None,
+                                      "created_at": fake.NOW.isoformat()})
+
+
+def look_block(html):
+    return html.split('<div class="dt-it dt-full" role="alert">')[1].split("</div>")[0]
+
+
+@LIMITS
+def test_before_sending_a_pair_is_said_without_a_name_or_the_others_days(app, db, shell):
+    pair_up(db, "yusuf", "esther")
+    away(db, "esther", day(34))                         # Tuesday, Dec 22: no service, and one of the same days
+    as_(app, "yusuf")
+    before = wrote(db)
+    r = post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET)
+    assert r.status_code == 200 and wrote(db) == before and db.later == [], "nothing sent"
+    words = text(r.text)
+    assert words.strip().startswith(mpd.NOT_SENT_PAIR)
+    assert ("Not sent yet This overlaps with someone you can’t be away with at the same time. You can still ask for "
+            "these days. It goes to Owen Diaz, who can make an exception.") in words
+    block = text(look_block(r.text))
+    for x in ("Esther", "Moss", "Dec 22", "Tue", "nearest", "youth trip"):
+        assert x not in block, x
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET,
+                     sure="yes")) == "/my/lead/dates?done=dt_asked_up"
+    [row] = asks(db)
+    assert (row["flags"], row["to_user_id"]) == (["pair"], db.who[HOPE]["owen@"])
+    card = text(page(db, "yusuf")[0]).split("My dates")[1].split("Who else is away")[0]
+    assert ("Waiting for Owen Diaz’s yes. Needs an exception This overlaps with someone you can’t be away with at the "
+            "same time. Owen Diaz can make an exception.") in card
+    assert "Esther" not in card and "Dec 22" not in card
+    # Said from the ask's own flag: it never changes as the other's time away does.
+    db.t["serve_away"] = [f for f in db.t["serve_away"] if f["contact_id"] != db.who[HOPE]["esther"]]
+    assert text(page(db, "yusuf")[0]).split("My dates")[1].split("Who else is away")[0] == card
+
+
+@LIMITS
+def test_whoever_may_give_the_exception_reads_who_it_overlaps_with_and_their_yes_carries_it(app, db, shell):
+    pair_up(db, "yusuf", "esther")
+    away(db, "esther", day(34))
+    as_(app, "yusuf")
+    post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET, sure="yes")
+    [row] = asks(db)
+    words = text(page(db, "owen")[0])
+    assert ("Yusuf Grant Time off Fri, Dec 18 to Fri, Dec 25 Why it came to you It overlaps with time away for "
+            "Esther Moss, someone they can’t be away with at the same time. Your yes makes an exception.") in words
+    assert "youth trip" not in words, "the pair's note is for the office, not a card"
+    assert shown_on(db, "owen", row["id"]) == "pair"
+    # The one over him: not his to answer, and nothing of it is on her page.
+    amara = text(page(db, "amara")[0])
+    assert "Yusuf Grant Time off" not in amara and "away with" not in amara and SECRET not in amara
+    as_(app, "owen")
+    assert went(post(app, f"/my/lead/dates/{row['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_yours_now", \
+        "a Yes that carried nothing lands nothing"
+    assert row["state"] == "asked"
+    assert went(post(app, f"/my/lead/dates/{row['id']}/answer", ans="yes", shown="pair")) == \
+        "/my/lead/dates?done=dt_yes_x"
+    assert (row["state"], row["excepted"]) == ("yes", ["pair"])
+
+
+@LIMITS
+def test_anyone_else_with_a_pairs_card_reads_it_without_a_name(app, db, shell):
+    """A guarded leader's ask that sits with whoever oversees the office (as
+    it would until the sweep sends it on): he has the card and may not give
+    the exception, so he reads that it overlaps with someone, and not who."""
+    pair_up(db, "elena", "esther")
+    away(db, "esther", day(34))
+    db.t["church_away_asks"].append({
+        "id": db.nid("church_away_asks"), "business_id": HOPE, "contact_id": db.who[HOPE]["elena"], "made_by": None,
+        "grp": "leaders", "department_id": None, "kind": "time_off", "starts_on": day(30), "ends_on": day(37),
+        "reason": None, "cover_contact_id": None, "cover_name": None, "to_user_id": db.who[HOPE]["owen@"],
+        "to_contact_id": None, "state": "asked", "flags": ["pair"], "decided_by_user_id": None,
+        "decided_by_contact_id": None, "decided_at": None, "decided_note": None, "withdrawn_at": None,
+        "told_at": None, "answer_told_at": None, "nudged_at": None, "excepted": [], "team_group_id": None,
+        "created_at": fake.NOW.isoformat()})
+    words = text(page(db, "owen")[0])
+    card = words.split("Waiting for your yes")[1].split("Ask for time off")[0]
+    assert ("Why it came to you It overlaps with someone they can’t be away with at the same time. Your yes makes an "
+            "exception.") in card
+    assert "Esther" not in card and "Dec 22" not in card
+
+
+@LIMITS
+def test_a_yes_from_the_page_that_no_longer_lands_for_a_pair_alone_never_says_pair(app, db, shell):
+    got = ask(app, "yusuf", reason=SECRET)              # nothing in the way when he asked: it went to Amara
+    pair_up(db, "yusuf", "esther")
+    away(db, "esther", day(34))
+    as_(app, "amara")
+    assert went(post(app, f"/my/lead/dates/{got['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_up_now"
+    assert (got["state"], got["flags"], got["to_user_id"]) == ("asked", ["pair"], db.who[HOPE]["owen@"])
+    words = text(page(db, "amara", err="dt_up_now")[0])
+    assert mpd.ERRORS["dt_up_now"] in words
+    assert "can’t be away with" not in words and "Esther" not in words.split("Ask for time off")[0], \
+        "never said to her (Esther is only in who can cover, and under Who else is away)"
+
+
+def test_the_words_for_a_pair_have_no_ids_office_words_or_title_words():
+    today = fake.TODAY
+    said = [mpd.PAIR_YOU, mpd.PAIR_THEY, mpd.NOT_SENT_PAIR, mpd.ERRORS["dt_up_now"], mpd.ERRORS["dt_yours_now"],
+            mpd._why_said({"flag": "pair", "with": ["Esther Moss"]}, today),
+            mpd._why_said({"flag": "pair", "with": ["Esther Moss", "Abel Ford", "Kara Bell"]}, today),
+            *mpd._why_lines([{"flag": "pair"}, {"flag": "protected_day", "day": day(36), "name": ""}], today, True)]
+    assert said[5] == "It overlaps with time away for Esther Moss, someone they can’t be away with at the same time."
+    assert said[6] == ("It overlaps with time away for Esther Moss, Abel Ford and Kara Bell, people they can’t be away "
+                       "with at the same time.")
+    assert said[7:] == ["Thu, Dec 24 is a protected day.", mpd.PAIR_YOU], "the days first, then the pair, once"
+    for words in said:
+        for rule in (UUID, OFFICE_WORDS, TITLE_WORDS, KEYS):
+            assert not rule.search(words), (words, rule.search(words))
+        assert "pair" not in words.lower(), "a pair is never called one on a screen"
+
+
 def test_with_step_one_alone_the_page_never_looks_and_reads_nothing_of_step_two(app, db, shell, monkeypatch):
     """The default fixture is a database with step 1's file alone."""
     import church_schedule_limits as csl

@@ -349,16 +349,28 @@ def boards_of(biz_id: str, person_id: str) -> Set[str]:
         "&archived=eq.false&select=id&limit=50")}
 
 
-async def on_board(biz: Dict[str, Any], person: Optional[Dict[str, Any]]) -> bool:
+async def on_board(biz: Dict[str, Any], person: Optional[Dict[str, Any]], *, kept: bool = False) -> bool:
     """Whether this member gets the Board tab. A read that fails gives no
     tab, the way a page stands without its door."""
     if not tab_on() or not person:
         return False
+    # kept=True (every page's tab bar): kept a minute per member
+    # (member_cache.TAB_SECONDS). It only draws the tab; the Board's pages
+    # read membership on their own. A failed read isn't kept.
+    import member_cache
+    key = (str(biz["id"]), str(person.get("id") or ""), "board")
+    if kept:
+        hit, got = member_cache.tabs.get(key)
+        if hit:
+            return got
     try:
-        return bool(await asyncio.to_thread(boards_of, str(biz["id"]), str(person.get("id") or "")))
+        got = bool(await asyncio.to_thread(boards_of, str(biz["id"]), str(person.get("id") or "")))
     except Exception:  # noqa: BLE001
         logger.warning("board tab: membership read failed (business %s)", str(biz.get("id"))[:8])
         return False
+    if kept:
+        member_cache.tabs.put(key, got, tag=str(biz["id"]))
+    return got
 
 
 def serve_door() -> str:

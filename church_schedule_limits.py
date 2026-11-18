@@ -22,6 +22,10 @@ same time on our services. allowing only so many people off at the same time."
                                                      people is away (read only;
                                                      the volunteers' own rules
                                                      come with their own PR)
+    GET    /church/schedule/pairs?business_id=       two people who can't be
+    POST   /church/schedule/pairs                    away together (S2-4): the
+    DELETE /church/schedule/pairs/{id}?business_id=  owner and whoever oversees
+                                                     the office only, reads too
 
 WHICH DAYS COUNT (a "service day"), on the church's own clock:
 
@@ -49,6 +53,17 @@ the people it counts), or that touches a protected day, is flagged
 (`over_limit`, `protected_day`) and goes up (church_schedule.goes_up). "Can't
 make it" and the owner's own time away are never looked at here.
 
+PAIRS (S2-4): two people who can't be away together, set by the owner or
+whoever oversees the office, and private: read by those two alone, never
+named to the one asking, to anyone else who decides, or on the calendar. An
+ask whose days overlap, on any day, an away date of the other of a pair (the
+facts, whatever made them: "can't make it" and the owner's own count) or an
+ask of theirs still waiting that was made before it, is flagged `pair` and
+goes up like the rest. A pair is in force only while both of them are on the
+leaders schedule; while either is off it, it is kept and does nothing.
+Reading an asker's pairs is one read an ask; their other's waiting asks are
+read only when there is a pair.
+
 WHO SETS WHAT (decision 7): the leaders number, the office number, the usual
 service days and the protected days are the owner's and whoever oversees the
 office's. Not an Admin's. A department's number: its leader, its overseer,
@@ -66,6 +81,7 @@ is paged, or bounded by a list of ids a hundred at a time.
 """
 from __future__ import annotations
 
+import re
 import time as clock
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -80,9 +96,10 @@ from auth_supabase import UserSession
 
 router = APIRouter(prefix="/church", tags=["church"])
 
-FLAGS = ("over_limit", "protected_day")     # what this module flags (a pair comes with its own PR)
+FLAGS = ("over_limit", "protected_day", "pair")     # what this module flags, in church_schedule.UP_FLAGS's order
 LIMIT_MAX = 99
 NAME_MAX = 80
+PAIR_NOTE_MAX = 140         # church_away_pairs.note
 NEAR_DAYS = 56              # eight weeks: how far the usual weekdays are worked out, and an open day looked for
 PICTURE_DAYS = cs.MAX_DAYS + 2 * NEAR_DAYS + 2      # the widest window anything here reads
 SERVE_DUTY = "serve_schedule"
@@ -107,6 +124,12 @@ PAST_DAY = "Pick today or a day still to come."
 BAD_NAME = f"Give the day a name, {NAME_MAX} letters at most."
 ONE_THING = "Say one thing to set: a group's number, a department's number, or the usual service days."
 NO_DAY = "That isn't one of this church's protected days."
+NOT_PAIRS = "Only the owner, or whoever oversees the office, sees or changes who can't be away together."
+PAIR_SELF = "Pick two different people."
+PAIR_OFF = "Both of them need to be on the leaders schedule first."
+PAIR_TWICE = "Those two are already a pair."
+PAIR_NOTE = f"Keep the note to {PAIR_NOTE_MAX} letters."
+NO_PAIR = "That isn't one of this church's pairs."
 
 
 # ─── Are step 2's tables there ────────────────────────────────────────
@@ -322,9 +345,15 @@ class Picture:
                     departments that have a number
       away ........ {person: [(first day, last day)]}: THE FACTS (serve_away)
                     and nothing else. An ask still waiting is not in here
+      pairs ....... {person: {the other of each pair in force}}: only for the
+                    people the picture was asked to read pairs for (`who`),
+                    else empty. PRIVATE: never handed to a page whole
+      held ........ {the other of a pair: [(first, last, created_at)]}: their
+                    asks still waiting in the window, and nobody else's. Read
+                    only when there is a pair, and never counted as away
     """
     __slots__ = ("lo", "hi", "today", "roster", "people", "limits", "weekdays", "worked_out", "days", "departments",
-                 "away")
+                 "away", "pairs", "held")
 
     def group_of(self, cid: Any) -> Optional[str]:
         return self.roster.group_of(cid)
@@ -335,14 +364,31 @@ class Picture:
         but = str(but or "")
         return {c for c in people if c != but and any(a <= day <= z for a, z in self.away.get(c, ()))}
 
+    def pair_hits(self, cid: Any, first: date, last: date, before: Any = None) -> Set[str]:
+        """The other of each of this person's pairs whose time away overlaps
+        `first` to `last` on any day: an away date (the facts, whatever made
+        them), or an ask still waiting that was made before `before` (the
+        recheck at a yes: an ask is never sent up by one made after it; with
+        no `before`, every one waiting). PRIVATE: who it is goes only to
+        whoever may give the exception (member_portal_dates._limits)."""
+        out: Set[str] = set()
+        for o in self.pairs.get(str(cid or ""), ()):
+            if any(a <= last and first <= z for a, z in self.away.get(o, ())):
+                out.add(o)
+            elif any(a <= last and first <= z and _made_before(at, before) for a, z, at in self.held.get(o, ())):
+                out.add(o)
+        return out
+
     def counted(self, lo: Optional[date] = None, hi: Optional[date] = None) -> List[Dict[str, Any]]:
         lo, hi = lo or self.lo, hi or self.hi
         return [self.days[d] for d in sorted(self.days) if lo <= d <= hi]
 
 
-def picture(ch: co.Church, lo: date, hi: date, *, now: Optional[datetime] = None) -> Picture:
+def picture(ch: co.Church, lo: date, hi: date, *, now: Optional[datetime] = None,
+            who: Optional[Iterable[Any]] = None) -> Picture:
     """The window `lo` to `hi` (PICTURE_DAYS at most). Every read here is
-    paged or bounded; a read that fails is a 503."""
+    paged or bounded; a read that fails is a 503. `who`: the people whose
+    pairs it reads too (an ask's asker); none named, no pair is read."""
     if hi < lo or (hi - lo).days > PICTURE_DAYS:
         raise HTTPException(400, cs.BAD_DAYS)
     import church_map
@@ -392,7 +438,77 @@ def picture(ch: co.Church, lo: date, hi: date, *, now: Optional[datetime] = None
         for d in p.departments.values():
             everyone |= d["people"]
         p.away = _facts(ch, everyone, lo, hi)
+        # Pairs (S2-4): one read for the people asked about, who must be on
+        # the schedule; their other's waiting asks only when there is a pair.
+        # The other's away dates are already in p.away (they are on it too).
+        p.pairs, p.held = {}, {}
+        asked = {str(c) for c in (who or ()) if c} & p.roster.people()
+        if asked:
+            p.pairs = _partners(ch, asked, p.roster.people())
+            others: Set[str] = set().union(*p.pairs.values()) if p.pairs else set()
+            if others:
+                p.held = _waiting(ch, others, lo, hi)
         return p
+
+
+def _made_before(at: Any, before: Any) -> bool:
+    """Whether a waiting ask made at `at` was made before `before` (or at
+    the same moment: both count). With no `before`, every one does; a moment
+    that can't be read counts too: a pair is never missed for a clock."""
+    if before in (None, ""):
+        return True
+
+    def moment(v: Any) -> Optional[datetime]:
+        s = str(v or "").replace("Z", "+00:00")
+        m = re.match(r"^(.*?T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$", s)
+        if m:                                   # any number of digits after the second (Postgres trims them)
+            s = m.group(1) + (f".{(m.group(2) + '000000')[:6]}" if m.group(2) else "") + m.group(3)
+        try:
+            d = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    a, b = moment(at), moment(before)
+    return a is None or b is None or a <= b
+
+
+def _partners(ch: co.Church, who: Set[str], on: Set[str]) -> Dict[str, Set[str]]:
+    """{person in `who`: the other of each of their pairs in force}. In
+    force: both are on the leaders schedule today (`on`); a pair with
+    someone since taken off it is kept and does nothing. A hundred people a
+    read, each read a page at a time, both columns at once (the table keeps
+    each pair once, the smaller id first)."""
+    out: Dict[str, Set[str]] = {}
+    for part in co._chunks(who, co.IDS_PER_READ):
+        ids = cs._in(part)
+        for r in cs._every(f"/church_away_pairs?business_id=eq.{cs._q(ch.b)}"
+                           f"&or=(a_contact_id.in.({ids}),b_contact_id.in.({ids}))"
+                           f"&select=id,business_id,a_contact_id,b_contact_id"):
+            a, b = str(r.get("a_contact_id") or ""), str(r.get("b_contact_id") or "")
+            if str(r.get("business_id")) != ch.b or not a or not b or a == b or a not in on or b not in on:
+                continue
+            for x, y in ((a, b), (b, a)):
+                if x in who:
+                    out.setdefault(x, set()).add(y)
+    return out
+
+
+def _waiting(ch: co.Church, people: Set[str], lo: date, hi: date) -> Dict[str, List[Tuple[date, date, str]]]:
+    """These people's asks still waiting that touch `lo` to `hi`: {person:
+    [(first, last, created_at)]}. Who, which days and when it was made:
+    never a reason, a kind, or who it went to. A hundred people a read,
+    each read a page at a time."""
+    out: Dict[str, List[Tuple[date, date, str]]] = {}
+    window = f"&ends_on=gte.{lo.isoformat()}&starts_on=lte.{hi.isoformat()}"
+    for part in co._chunks(people, co.IDS_PER_READ):
+        for r in cs._every(f"/church_away_asks?business_id=eq.{cs._q(ch.b)}&state=eq.asked"
+                           f"&contact_id=in.({cs._in(part)}){window}"
+                           f"&select=id,business_id,contact_id,state,starts_on,ends_on,created_at"):
+            cid = str(r.get("contact_id") or "")
+            first, last = cs._day(r.get("starts_on")), cs._day(r.get("ends_on"))
+            if str(r.get("business_id")) == ch.b and r.get("state") == "asked" and cid in people and first and last:
+                out.setdefault(cid, []).append((first, last, str(r.get("created_at") or "")))
+    return out
 
 
 def _facts(ch: co.Church, people: Iterable[str], lo: date, hi: date) -> Dict[str, List[Tuple[date, date]]]:
@@ -443,7 +559,8 @@ def away_on(ch: co.Church, day: date, grp: str, department_id: Any = None) -> Se
 
 # ─── What an ask would do ─────────────────────────────────────────────
 
-def flags_of(p: Picture, cid: Any, first: date, last: date, department_id: Any = None) -> Dict[str, Any]:
+def flags_of(p: Picture, cid: Any, first: date, last: date, department_id: Any = None, *, before: Any = None,
+             pairs: bool = True) -> Dict[str, Any]:
     """What asking for `first` to `last` would run into, for one person, from
     a picture already read: {"flags": [...], "why": [...]}.
 
@@ -454,7 +571,14 @@ def flags_of(p: Picture, cid: Any, first: date, last: date, department_id: Any =
     already away as may be. Counts only: who is away is on the calendar for
     those who may see it. The asker's own away dates never count against
     them, and they are held to a department's number only when they are one
-    of the people it counts."""
+    of the people it counts.
+
+    Then, last, at most one {"flag": "pair"} (S2-4) when the other of one of
+    their pairs has time away on any of the same days (Picture.pair_hits,
+    with `before`). It carries no day and no name: which days are the
+    other's, and who they are, never leave here in `why`. Only a picture
+    asked to read this person's pairs (`who`) can find one; `pairs=False`
+    never looks."""
     cid = str(cid or "")
     grp = p.group_of(cid)
     dept = p.departments.get(str(department_id or ""))
@@ -475,22 +599,29 @@ def flags_of(p: Picture, cid: Any, first: date, last: date, department_id: Any =
             if n >= dept["at_most"]:
                 why.append({"flag": "over_limit", "day": day.isoformat(), "of": "department", "name": dept["name"],
                             "away": n, "at_most": dept["at_most"]})
+    if pairs and p.pairs.get(cid) and p.pair_hits(cid, first, last, before):
+        why.append({"flag": "pair"})
     return {"flags": [f for f in FLAGS if any(w["flag"] == f for w in why)], "why": why}
 
 
 def flags_for(ch: co.Church, asker_cid: Any, starts_on: date, ends_on: date, *, department_id: Any = None,
-              now: Optional[datetime] = None) -> Dict[str, Any]:
+              now: Optional[datetime] = None, before: Any = None) -> Dict[str, Any]:
     """flags_of, read fresh for exactly these days: what church_schedule.ask
-    asks before it writes, and church_schedule.answer again at a yes."""
-    return flags_of(picture(ch, starts_on, ends_on, now=now), asker_cid, starts_on, ends_on, department_id)
+    asks before it writes, and church_schedule.answer again at a yes (with
+    `before`, the ask's own created_at: the other of a pair's waiting asks
+    made after it never send it up)."""
+    return flags_of(picture(ch, starts_on, ends_on, now=now, who=[asker_cid]), asker_cid, starts_on, ends_on,
+                    department_id, before=before)
 
 
 def nearest_open(p: Picture, cid: Any, first: date, last: date, department_id: Any = None) -> Dict[str, Optional[str]]:
     """The nearest service day before `first` (today or later) and after
     `last` that this person could ask for without a flag: {"before",
-    "after"}, each a day or None when the picture holds none."""
+    "after"}, each a day or None when the picture holds none. A pair is
+    never looked at here: skipping the days the other of a pair is away
+    would say which days those are."""
     def is_open(d: Dict[str, Any]) -> bool:
-        return d["kind"] == "service" and not flags_of(p, cid, d["day"], d["day"], department_id)["flags"]
+        return d["kind"] == "service" and not flags_of(p, cid, d["day"], d["day"], department_id, pairs=False)["flags"]
     before = [d["day"] for d in p.counted() if p.today <= d["day"] < first and is_open(d)]
     after = [d["day"] for d in p.counted() if d["day"] > last and is_open(d)]
     return {"before": max(before).isoformat() if before else None, "after": min(after).isoformat() if after else None}
@@ -501,16 +632,19 @@ def look(ch: co.Church, cid: Any, first: date, last: date, *, department_id: Any
     """Before an ask is sent (the Dates page): what these days would run
     into, the nearest open service days either side, and who it would go up
     to. {"flags", "why", "open": {"before", "after"}, "up": {kind, id,
-    name}}. Reads; never writes."""
+    name}}. Reads; never writes. A pair is in `why` as {"flag": "pair"}
+    alone (flags_of), and with nothing else in the way no open days are
+    offered: they would be guesses about someone else's time away."""
     today = cs._today(ch, now)
     try:
         lo = min(first, max(today, first - timedelta(days=NEAR_DAYS)))
         hi = last + timedelta(days=NEAR_DAYS)
     except OverflowError:
         raise HTTPException(400, cs.BAD_DAYS)
-    p = picture(ch, lo, hi, now=now)
+    p = picture(ch, lo, hi, now=now, who=[cid])
     got = flags_of(p, cid, first, last, department_id)
-    return {**got, "open": nearest_open(p, cid, first, last, department_id) if got["flags"]
+    days_in_the_way = [f for f in got["flags"] if f != "pair"]
+    return {**got, "open": nearest_open(p, cid, first, last, department_id) if days_in_the_way
             else {"before": None, "after": None}, "up": cs.goes_up(ch, cid)}
 
 
@@ -847,6 +981,108 @@ def volunteers(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[st
         return {"from": lo.isoformat(), "to": hi.isoformat(), "departments": out}
 
 
+# ─── Pairs: two people who can't be away together (S2-4) ──────────────
+
+PAIR_FIELDS = "id,business_id,a_contact_id,b_contact_id,note,created_at"
+
+
+def pairs(ch: co.Church) -> List[Dict[str, Any]]:
+    """Every pair at this church, as saved (the smaller id first), a page at
+    a time. PRIVATE: this is for the owner and whoever oversees the office
+    alone (view_pairs, add_pair, drop_pair ask who first). An ask reads only
+    its asker's (picture's `who`)."""
+    return [r for r in cs._every(f"/church_away_pairs?business_id=eq.{cs._q(ch.b)}&select={PAIR_FIELDS}")
+            if str(r.get("business_id")) == ch.b and r.get("a_contact_id") and r.get("b_contact_id")]
+
+
+def _pair_view(r: Dict[str, Any], on: Set[str], names: Dict[str, str]) -> Dict[str, Any]:
+    """One pair as the owner and whoever oversees the office see it. `in_force`
+    is false while either of them is off the leaders schedule: kept, and it
+    does nothing."""
+    def one(c: str) -> Dict[str, Any]:
+        return {"contact_id": c, "name": names.get(c, "Someone"), "on_schedule": c in on}
+    a, b = str(r["a_contact_id"]), str(r["b_contact_id"])
+    return {"id": str(r.get("id")), "a": one(a), "b": one(b), "note": cs._plain(r.get("note")) or None,
+            "in_force": a in on and b in on, "created_at": r.get("created_at")}
+
+
+def view_pairs(ch: co.Church, me: Dict[str, Any]) -> Dict[str, Any]:
+    """GET pairs: {pairs: [{id, a: {contact_id, name, on_schedule}, b: {…},
+    note, in_force, created_at}], can_change}, by name. The owner and
+    whoever oversees the office ONLY (403 for anyone else: an Admin, a
+    Manager who doesn't oversee the office, a department's leader, a
+    member-app session, whoever it is)."""
+    import church_map
+    with church_map.once():
+        if not cs.over_all(ch, me):
+            raise HTTPException(403, NOT_PAIRS)
+        rows = pairs(ch)
+        on = cs.roster(ch).people()
+        names = ch.names([r[k] for r in rows for k in ("a_contact_id", "b_contact_id")])
+        out = [_pair_view(r, on, names) for r in rows]
+    return {"pairs": sorted(out, key=lambda x: (x["a"]["name"].casefold(), x["b"]["name"].casefold(), x["id"])),
+            "can_change": True}
+
+
+def add_pair(ch: co.Church, me: Dict[str, Any], a: Any, b: Any, note: Any = None) -> Dict[str, Any]:
+    """Two people who can't be away together: the owner, or whoever oversees
+    the office (403 for anyone else). Two different people (400), both this
+    church's own (400 for anyone else's) and both on the leaders schedule
+    (400), with a private note of 140 letters at most. Saved once, the
+    smaller id first (Postgres orders two uuids as their lower-case text
+    does, and _uuid writes them lower-case); the same two again are a 409.
+    Everything the answer says is read before the write."""
+    import church_map
+    with church_map.once():
+        if not cs.over_all(ch, me):
+            raise HTTPException(403, NOT_PAIRS)
+        x, y = cs._uuid(a, "person"), cs._uuid(b, "person")
+        if x == y:
+            raise HTTPException(400, PAIR_SELF)
+        said = cs._plain(note) or None
+        if said and len(said) > PAIR_NOTE_MAX:
+            raise HTTPException(400, PAIR_NOTE)
+        names = {x: cs._person(ch, x), y: cs._person(ch, y)}       # 400 for anyone not this church's own
+        on = cs.roster(ch).people()
+        if x not in on or y not in on:
+            raise HTTPException(400, PAIR_OFF)
+        first, second = sorted((x, y))
+        if cs._need(f"/church_away_pairs?business_id=eq.{cs._q(ch.b)}&a_contact_id=eq.{cs._q(first)}"
+                    f"&b_contact_id=eq.{cs._q(second)}&select=id&limit=1"):
+            raise HTTPException(409, PAIR_TWICE)
+    # redact: a refusal's body would echo the row, and the note is private.
+    saved = sb_clients.sb_post_as_service("/church_away_pairs", {
+        "business_id": ch.b, "a_contact_id": first, "b_contact_id": second, "note": said,
+        "created_by": str(me["id"])}, redact=True)
+    if not isinstance(saved, list) or not saved or not saved[0].get("id"):
+        if str((sb_clients.last_error() or {}).get("code") or "") == "23505":
+            raise HTTPException(409, PAIR_TWICE)        # the same two, saved in the same moment
+        raise HTTPException(503, cs.UNSAVED)
+    return _pair_view({**saved[0], "a_contact_id": first, "b_contact_id": second, "note": said}, on, names)
+
+
+def drop_pair(ch: co.Church, me: Dict[str, Any], pair_id: Any) -> Dict[str, Any]:
+    """Take a pair off: the owner, or whoever oversees the office (403 for
+    anyone else). Read first, so one that isn't this church's is a 404 and
+    the answer says what was removed. An ask already flagged by it keeps
+    its flag; at the yes it is looked at again, and with the pair gone it
+    is a plain yes (unless something else is in the way)."""
+    import church_map
+    with church_map.once():
+        if not cs.over_all(ch, me):
+            raise HTTPException(403, NOT_PAIRS)
+        pid = cs._uuid(pair_id, "pair")
+        rows = cs._need(f"/church_away_pairs?id=eq.{cs._q(pid)}&business_id=eq.{cs._q(ch.b)}"
+                        f"&select={PAIR_FIELDS}&limit=1")
+        if not rows or str(rows[0].get("business_id")) != ch.b or not rows[0].get("a_contact_id"):
+            raise HTTPException(404, NO_PAIR)
+        on = cs.roster(ch).people()
+        view = _pair_view(rows[0], on, ch.names([rows[0]["a_contact_id"], rows[0]["b_contact_id"]]))
+    if not sb_clients.sb_delete_as_service(f"/church_away_pairs?id=eq.{cs._q(pid)}&business_id=eq.{cs._q(ch.b)}"):
+        raise HTTPException(503, cs.UNSAVED)
+    return view
+
+
 # ─── The routes ───────────────────────────────────────────────────────
 
 def _church(session: UserSession, biz: Dict[str, Any]) -> co.Church:
@@ -941,3 +1177,29 @@ def schedule_volunteers(business_id: str, start: Optional[str] = Query(None, ali
     ch = _church(session, biz)
     lo, hi = _window(ch, start, end, cs.WINDOW_DEFAULT)
     return volunteers(ch, cs._me(session), lo, hi)
+
+
+@router.get("/schedule/pairs")
+def schedule_pairs(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                   biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+    """Who can't be away together: the owner and whoever oversees the office
+    only."""
+    ch = _church(session, biz)
+    return view_pairs(ch, cs._me(session))
+
+
+@router.post("/schedule/pairs")
+def schedule_pairs_add(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
+    """Two people who can't be away together."""
+    ch = _church_from_body(session, body or {})
+    body = body or {}
+    return {"saved": add_pair(ch, cs._me(session), body.get("a_contact_id"), body.get("b_contact_id"),
+                              body.get("note"))}
+
+
+@router.delete("/schedule/pairs/{pair_id}")
+def schedule_pairs_drop(pair_id: str, business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                        biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+    """Take a pair off."""
+    ch = _church(session, biz)
+    return {"removed": drop_pair(ch, cs._me(session), pair_id)}
