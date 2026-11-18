@@ -462,6 +462,11 @@ app.include_router(church_job_descriptions_router)
 # must match before this one's /church/jobs/{key}.
 from church_sheet import router as church_sheet_router
 app.include_router(church_sheet_router)
+# The standard start (church_structure.py): a church's structure draft, from
+# Chief's five questions or the planning course. A proposal to review; it
+# grants nothing.
+from church_structure import router as church_structure_router
+app.include_router(church_structure_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)

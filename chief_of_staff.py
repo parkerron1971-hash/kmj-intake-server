@@ -263,6 +263,7 @@ from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
+import chief_church_structure as _church_structure  # the standard start: a church's office team, drafted for review
 import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
 import chief_office as _church_office  # the office team's week and the monthly report, read for the office
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
@@ -423,6 +424,7 @@ _ACTION_PHRASES = {
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
+    **_church_structure.PROGRESS,
     **_church_roles.PROGRESS,
     **_church_office.PROGRESS,
     "move_duty": "moving the duty",
@@ -6704,6 +6706,10 @@ async def handle_navigate(client, biz, action) -> Dict:
             nav["sheet"] = str(_uuid_mod.UUID(sheet))
         except (ValueError, TypeError):
             pass
+    # The review of a church's structure draft (church_structure), on the same
+    # page and no other: a flag, never free text.
+    if action.get("setup") in (1, True, "1", "true") and tab == "operate" and (page or sub) == "areas":
+        nav["setup"] = 1
 
     # Build a human label
     label_parts = [tab.upper()]
@@ -12446,6 +12452,7 @@ ACTION_HANDLERS = {
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
+    **_church_structure.HANDLERS,
     **_church_roles.HANDLERS,
     **_church_office.HANDLERS,
     "move_duty":             handle_move_duty,
@@ -15907,6 +15914,15 @@ async def chief_chat(
             _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
             if _office_shown:
                 chief_truth.record('context:office_roster', _office_shown, kind='context')
+            # The planning coach at a church, for the owner or an Admin (the course is theirs): who already
+            # does what in the office (church_structure), so the pastor isn't asked twice. '' when there is
+            # nothing to say and when it can't be read.
+            if req.mode == "strategy_coach" and _cfu.is_church(biz):
+                _coach_who = chief_areas.WHO.get()
+                if _coach_who is None or str(_coach_who.get("role") or "") == "admin":
+                    import church_structure as _structure_engine
+                    ctx["church_structure_block"] = await asyncio.to_thread(
+                        _structure_engine.coach_block, ctx.get("business") or biz)
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,

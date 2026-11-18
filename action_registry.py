@@ -602,6 +602,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "draft_church_job": {**_r("reads the building blocks for a new church job (the areas, the duties with their "
                               "keys, the login levels, the jobs there are); saves nothing", sensitive=True),
                          "chief_only": True},
+    # The standard start (chief_church_structure): a church's office team drafted for review, and the standing
+    # check. The draft is a read to Chief (it reads the proposal back in the same turn) that also KEEPS the
+    # proposal at settings.church_structure in place of the one before; nothing else is written, and no login,
+    # invitation, job or sheet changes. Its handler holds it on a turn that read someone else's words.
+    "draft_church_structure": {**_r("drafts a church's office team from the pastor's answers or the planning "
+                                    "course (shape, jobs, each person's proposed login, the gaps) and keeps it as "
+                                    "the church's one draft for review; grants nothing; staff by name",
+                                    sensitive=True), "chief_only": True},
+    "church_structure_status": {**_r("reads how a church's office is set up (logins, how many are placed, what "
+                                     "is missing) and the draft waiting for review; staff by name",
+                                     sensitive=True), "chief_only": True},
     "save_church_job": {**_w("A", "makes or changes one of a church's own jobs through church_sheet.save_job "
                                   "(the owner, an Admin, or whoever sets up jobs and people's sheets; an Admin "
                                   "job only the owner's); recorded, and never changes a login that holds it"),

@@ -278,8 +278,41 @@ def _digest(track: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines) or "  (nothing written yet)"
 
 
+def office_team_block(track: Optional[Dict[str, Any]], structure: str = "") -> str:
+    """The coach's part in the standard start (church_structure): once the
+    Leaders part is written it may offer, ONCE, to draft the office team
+    from what the pastor just said. The draft is a proposal the pastor
+    reviews on Logins & areas; writing or finishing the plan still changes
+    nothing by itself. `structure` is who already does what in the office
+    (church_structure.coach_block), so the coach doesn't ask twice. '' until
+    Leaders is written and there is nothing to hand it."""
+    out = (structure.rstrip() + "\n\n") if structure and structure.strip() else ""
+    if not page(track, "leaders"):
+        return out
+    waiting = "A draft of the office team is waiting" in structure
+    return out + (
+        "THE OFFICE TEAM (the Leaders part is written, so this is open to you)\n"
+        + ("- A draft of the office team is already waiting for their review, so do NOT offer to make one. If "
+           "they ask, say it is on Logins & areas and offer to open it.\n" if waiting else
+           "- ONCE in this course, at a natural pause after the Leaders part is saved, you may offer: \"Want me to "
+           "set up your office team from what you just told me? You'd review each person before anything "
+           "changes.\" If RECENT SESSIONS shows you already offered, or they said no, do not offer again.\n")
+        + "- On a yes, emit silently, with the people THEY named in this conversation and what each does, in "
+        "their words (a title only if they said one; never a name they did not say; leave money out unless "
+        "they told you who counts, who deposits and who keeps the books):\n"
+        '  [ACTION:{"type":"draft_church_structure","answers":{"leads":"pastor|pastor_board|elders|staff",'
+        '"people":[{"name":"...","title":"...","does":"..."}],"guests":"..."}}]\n'
+        "  It makes a DRAFT and nothing else: no login, no invitation, no job and no sheet. Then say in one "
+        "sentence that the draft is waiting on Logins & areas, that each person is reviewed there before "
+        "anything changes, and offer to open it:\n"
+        '  [ACTION:{"type":"navigate","tab":"operate","sub":"areas","setup":1}]\n'
+        "- Never say anyone was invited or given access. Then come back to the plan.\n"
+        "- A step in the next 90 days about setting up the office team may point at operate/areas.\n\n")
+
+
 def coach_prompt(ctx: Dict[str, Any], is_greeting: bool, resume_note: Any = None,
-                 shared_core: str = "", knowledge_block: str = "", learning: str = "") -> str:
+                 shared_core: str = "", knowledge_block: str = "", learning: str = "",
+                 structure: str = "") -> str:
     """The planning coach's whole prompt, for a church in a course session."""
     biz = ctx.get("business") or {}
     church = biz.get("name") or "the church"
@@ -375,7 +408,7 @@ WHERE THINGS STAND
 RECENT SESSIONS
 {history}
 
-ACTIONS (all emitted silently, inside your reply)
+{office_team_block(track, structure)}ACTIONS (all emitted silently, inside your reply)
 {saves}
   [ACTION:{{"type":"save_launch_plan","weeks":[{{"week":1,"theme":"...","actions":[{{"description":"...","system_link":"operate/follow-up"}},{{"description":"..."}}]}}]}}]
   [ACTION:{{"type":"advance_phase","to":"{'|'.join(ids()[1:])}"}}]

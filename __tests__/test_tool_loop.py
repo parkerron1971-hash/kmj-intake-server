@@ -75,6 +75,8 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          "whose_job", "job_of", "draft_job_description",
                                          # One sheet per person (chief_church_sheet): the same.
                                          "sheet_of", "list_church_jobs", "draft_church_job",
+                                         # The standard start (chief_church_structure): the same.
+                                         "draft_church_structure", "church_structure_status",
                                          # The office team's week and the monthly report (chief_office): the same.
                                          "team_week", "monthly_report_draft"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
