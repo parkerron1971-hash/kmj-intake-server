@@ -123,6 +123,25 @@ def holder(business_id: Any, user_id: Any) -> Optional[Dict[str, Any]]:
     return mh.money_holder(business_id, user_id)
 
 
+_READY = {"yes": False, "until": 0.0}
+
+
+def tables_ready() -> bool:
+    """Whether the two tables answer (APPLY-2026-11-18-church-money-holders
+    .sql is applied). Yes is kept for good; no is asked again in five
+    minutes. Until they are there, switching this on changes nothing: the
+    hooks below do nothing, exactly as with the switch off."""
+    import time
+    if _READY["yes"]:
+        return True
+    if time.monotonic() < _READY["until"]:
+        return False
+    ok = mh._rows(f"/{mh.HOLDERS}?select=business_id&limit=1") is not None
+    _READY["yes"] = ok
+    _READY["until"] = 0.0 if ok else time.monotonic() + 300
+    return ok
+
+
 # ─── Small things ─────────────────────────────────────────────────────
 
 def _q(v: Any) -> str:
@@ -200,7 +219,7 @@ def block(business: Dict[str, Any], ch: Any, st: Dict[str, Any], target: str) ->
     elif ed in ("admin", "holder") and trole != "admin":
         can, why = "ask", OWNER_ONLY_GRANTS
     if trole == "admin":
-        bank = bool(held and held["bank"])
+        bank = bool(held and held["bank"])       # the only thing an Admin's row holds
         return {"level": "lead", "who_gave": True, "bank": bank, "pending": pending, "can": can,
                 "why": ADMIN_HAS_IT, "words": words({"level": "lead", "who_gave": True, "bank": bank}),
                 "levels": []}
@@ -241,23 +260,36 @@ def plan(business: Dict[str, Any], ch: Any, st: Dict[str, Any], viewer: str, tar
     for k in ("who_gave", "bank"):
         if k in raw and not isinstance(raw.get(k), bool):
             raise HTTPException(400, "Send who gave and the bank as yes or no.")
-    level = raw.get("level")
-    if level is not None and level not in LEVELS:
+    if "level" in raw and raw.get("level") is not None and raw.get("level") not in LEVELS:
         raise HTTPException(400, NOT_A_MONEY_LEVEL)
+    now = mh.money_holder(biz, target)
+    now_t = {"level": now["level"], "who_gave": now["who_gave"], "bank": now["bank"]} if now else None
+    # A login moved down from Admin in this same save keeps nothing from its
+    # Admin row (role_lowered clears it before the level is written): what is
+    # asked here is judged against "no tick", and so asks for the password.
+    if st["target_role"] == "admin" and level_after != "admin":
+        now_t = None
+    # A key that isn't sent is UNCHANGED; an explicit false is off, and an
+    # explicit null level takes giving away.
+    was = now_t or {"level": None, "who_gave": False, "bank": False}
+    level = raw.get("level") if "level" in raw else was["level"]
+    who = raw.get("who_gave") if "who_gave" in raw else was["who_gave"]
+    bank = raw.get("bank") if "bank" in raw else was["bank"]
     if level_after == "admin":
         if ed != "owner":
             raise HTTPException(403, ADMIN_HAS_IT)
-        wants: Optional[Dict[str, Any]] = {"level": "lead", "who_gave": True, "bank": raw.get("bank") is True}
-        if not wants["bank"]:
-            wants = None                    # nothing an Admin doesn't have already: no row is kept
+        # ONLY what is ticked is stored: the bank. Never an implied Lead or
+        # who gave (an Admin has those by standing; a stored one would stay
+        # with the person if they were later moved down).
+        wants: Optional[Dict[str, Any]] = {"level": "see", "who_gave": False, "bank": True} if bank else None
     elif level is None:
+        if "level" not in raw:
+            raise HTTPException(400, NOT_A_MONEY_LEVEL)   # ticks with no level, on someone who has none
         wants = None
     else:
         if level_after == "viewer" and level != "see":
             raise HTTPException(400, VIEWER_SEES)
-        wants = {"level": level, "who_gave": raw.get("who_gave") is True, "bank": raw.get("bank") is True}
-    now = mh.money_holder(biz, target)
-    now_t = {"level": now["level"], "who_gave": now["who_gave"], "bank": now["bank"]} if now else None
+        wants = {"level": level, "who_gave": who is True, "bank": bank is True}
     if (wants or None) == (now_t or None):
         return None
     w, n = wants or {}, now_t or {}
@@ -296,14 +328,7 @@ def apply(p: Dict[str, Any], business: Dict[str, Any], viewer: str, viewer_name:
         if not out or out.get("ok") is not True:
             raise HTTPException(503, MONEY_503)
     elif p["kind"] == "lower":
-        path = f"/{mh.HOLDERS}?business_id=eq.{_q(biz)}&user_id=eq.{_q(target)}"
-        if wants is None:
-            ok = sb_clients.sb_delete_as_service(path)
-        else:
-            ok = isinstance(sb_clients.sb_patch_as_service(
-                path, {"level": wants["level"], "who_gave": wants["who_gave"], "bank": wants["bank"]},
-                redact=True), list)
-        if not ok:
+        if not _lower(biz, target, wants):
             raise HTTPException(503, MONEY_503)
     else:
         out = _rpc("church_money_ask", {
@@ -326,31 +351,89 @@ def apply(p: Dict[str, Any], business: Dict[str, Any], viewer: str, viewer_name:
     _forget(biz, target)
 
 
+def _lower(biz: str, target: str, wants: Optional[Dict[str, Any]]) -> bool:
+    """Lower a tick, and ONLY lower it, whatever else is being written at
+    the same moment: the level moves only from a higher one, and who gave
+    and the bank are only ever switched off here. So two lowerings racing
+    end at the lower of the two, never back at the older, higher tick."""
+    path = f"/{mh.HOLDERS}?business_id=eq.{_q(biz)}&user_id=eq.{_q(target)}"
+    if wants is None:
+        return bool(sb_clients.sb_delete_as_service(path))
+    ok = True
+    higher = [k for k in LEVELS if _RANK[k] > _RANK[wants["level"]]]
+    if higher:
+        ok = isinstance(sb_clients.sb_patch_as_service(
+            f"{path}&level=in.({','.join(higher)})", {"level": wants["level"]}, redact=True), list) and ok
+    off = {k: False for k in ("who_gave", "bank") if not wants[k]}
+    if off:
+        ok = isinstance(sb_clients.sb_patch_as_service(path, off, redact=True), list) and ok
+    return ok
+
+
 # ─── A login that leaves, or is lowered ───────────────────────────────
 
-def seat_gone(business_id: Any, user_id: Any) -> bool:
-    """A login taken off the team keeps no tick and no ask about it. True
-    when both were cleared (or the switch is off: nothing to clear)."""
-    if mode() == "off" or not mh._id(business_id) or not mh._id(user_id):
+def _hooks_on(business_id: Any, user_id: Any) -> bool:
+    """The hooks act only when there is something they could act on: the
+    switch not off AND the tables there. Before the migration, "on" is "off"."""
+    return bool(mode() != "off" and mh._id(business_id) and mh._id(user_id) and tables_ready())
+
+
+def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
+    """A login taken off the team keeps no tick, and no ask about it or by
+    it. `seat_id`: the seat row that was revoked. Only the tick tied to THAT
+    row goes (revoking a person's old, already-revoked row must not touch
+    the tick on their live seat), and asks are withdrawn only when the
+    person has no active seat left. True when that was done, or there was
+    nothing to do."""
+    if not _hooks_on(business_id, user_id):
         return True
     b, u = _q(str(business_id).lower()), _q(str(user_id).lower())
-    gone = sb_clients.sb_delete_as_service(f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}")
-    asks = sb_clients.sb_patch_as_service(
-        f"/{mh.ASKS}?business_id=eq.{b}&user_id=eq.{u}&status=eq.asked",
-        {"status": "withdrawn", "answered_at": _iso(_now())}, redact=True)
-    return bool(gone) and isinstance(asks, list)
+    seat = mh._id(seat_id)
+    gone = sb_clients.sb_delete_as_service(
+        f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}" + (f"&seat_id=eq.{_q(seat)}" if seat else ""))
+    live = mh._rows(f"/business_users?business_id=eq.{b}&user_id=eq.{u}&status=eq.active&select=id&limit=1")
+    if live is None:
+        return False
+    if live:
+        return bool(gone)                    # still on the team by another seat: their asks stand
+    stamp = {"status": "withdrawn", "answered_at": _iso(_now())}
+    about = sb_clients.sb_patch_as_service(
+        f"/{mh.ASKS}?business_id=eq.{b}&user_id=eq.{u}&status=eq.asked", stamp, redact=True)
+    by = sb_clients.sb_patch_as_service(
+        f"/{mh.ASKS}?business_id=eq.{b}&asked_by=eq.{u}&status=eq.asked", stamp, redact=True)
+    return bool(gone) and isinstance(about, list) and isinstance(by, list)
 
 
 def seat_lowered_to_viewer(business_id: Any, user_id: Any) -> bool:
     """Before a login becomes a Viewer its tick is lowered to See, so moving
     it back up later never brings Work back without the owner. True when
-    that is so (or the switch is off)."""
-    if mode() == "off" or not mh._id(business_id) or not mh._id(user_id):
+    that is so (or there is nothing to lower)."""
+    if not _hooks_on(business_id, user_id):
         return True
     got = sb_clients.sb_patch_as_service(
         f"/{mh.HOLDERS}?business_id=eq.{_q(str(business_id).lower())}&user_id=eq.{_q(str(user_id).lower())}"
         "&level=in.(work,lead)", {"level": "see"}, redact=True)
     return isinstance(got, list)
+
+
+def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
+    """BEFORE a login's level is lowered: it must never be left holding more
+    than the owner gave it at the level it will have.
+      Admin → anything lower   its row (the bank, ticked for an Admin) is
+                               CLEARED: the owner gives what a Manager or
+                               Member should hold, on purpose, with the
+                               password
+      anything → Viewer        the tick is lowered to See
+    True when that is so; False stops the save."""
+    if old == new or not _hooks_on(business_id, user_id):
+        return True
+    ok = True
+    if old == "admin" and new != "admin":
+        ok = bool(sb_clients.sb_delete_as_service(
+            f"/{mh.HOLDERS}?business_id=eq.{_q(str(business_id).lower())}&user_id=eq.{_q(str(user_id).lower())}"))
+    if new == "viewer":
+        ok = seat_lowered_to_viewer(business_id, user_id) and ok
+    return ok
 
 
 # ─── Who holds the bank, for the doors outside the gate's table ───────
@@ -472,8 +555,36 @@ def answer_ask(ask_id: str, body: Dict[str, Any], request: Request,
                    detail={"money": {"kind": "answer", "yes": yes, "wants": wants, "ask": ask["id"]}})
     except Exception:  # noqa: BLE001 — the answer is saved; the record is the lesser thing
         logger.warning("money ask: the answer wasn't recorded (business %s)", biz[:8])
+    _tell_asker(business, ask, yes)
     _forget(biz, target)
     return {"ok": True, "status": out.get("status"), "user_id": target}
+
+
+def _tell_asker(business: Dict[str, Any], ask: Dict[str, Any], yes: bool) -> None:
+    """A phone alert to whoever asked, off the request. One that fails stops
+    nothing: the sheet shows the answer either way."""
+    asker = mh._id(ask.get("asked_by"))
+    if not asker:
+        return
+    biz = str(business["id"])
+
+    def run() -> None:
+        try:
+            import church_over as co
+            import push_notifications
+            name = co.Church(business).login_name(str(ask.get("user_id") or ""))
+            push_notifications.send_to_user(
+                asker, title=(f"The owner said yes: giving for {name}" if yes
+                              else f"The owner said no: giving for {name}")[:150],
+                body=("It is open now, exactly as you asked." if yes else "Nothing was opened."),
+                nav="operate:areas", tag=f"money-ask-answer-{ask.get('id')}", business_id=biz)
+        except Exception:  # noqa: BLE001
+            logger.warning("money ask: the asker couldn't be told (business %s)", biz[:8])
+    try:
+        import threading
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/money-asks/{ask_id}/withdraw")
@@ -502,7 +613,7 @@ def sweep(now: Optional[_dt.datetime] = None) -> Dict[str, int]:
     """Mark the asks that ran out, and remind each owner once, 48 hours in.
     Each reminder is claimed by its row first, so two replicas send one."""
     out = {"expired": 0, "reminded": 0}
-    if mode() == "off":
+    if mode() == "off" or not tables_ready():
         return out
     now = now or _now()
     stale = sb_clients.sb_patch_as_service(
@@ -515,11 +626,9 @@ def sweep(now: Optional[_dt.datetime] = None) -> Dict[str, int]:
         biz, aid = mh._id((a or {}).get("business_id")), mh._id((a or {}).get("id"))
         if not biz or not aid or not open_for(biz) or _sample(biz):
             continue
-        claimed = sb_clients.sb_patch_as_service(
-            f"/{mh.ASKS}?id=eq.{_q(aid)}&status=eq.asked&reminded_at=is.null", {"reminded_at": _iso(now)},
-            redact=True)
-        if not isinstance(claimed, list) or not claimed:
-            continue
+        # Sent, THEN marked (the job runs on the scheduler's leader alone):
+        # a reminder that couldn't be sent stays unmarked and is tried again
+        # the next hour.
         try:
             import church_job_defs as cj
             import church_over as co
@@ -534,9 +643,14 @@ def sweep(now: Optional[_dt.datetime] = None) -> Dict[str, int]:
                           f"{ch.login_name(str(a.get('asked_by') or ''))} asked to give {name} giving access "
                           f"({words(wants)}). Nothing is open. Say yes or no on Logins & areas before the request "
                           "runs out.", tag=f"money-ask-remind-{aid}")
-            out["reminded"] += 1
         except Exception:  # noqa: BLE001 — one church's reminder never stops the rest
             logger.warning("money ask: a reminder couldn't be sent (business %s)", biz[:8])
+            continue
+        marked = sb_clients.sb_patch_as_service(
+            f"/{mh.ASKS}?id=eq.{_q(aid)}&status=eq.asked&reminded_at=is.null", {"reminded_at": _iso(now)},
+            redact=True)
+        if isinstance(marked, list) and marked:
+            out["reminded"] += 1
     return out
 
 

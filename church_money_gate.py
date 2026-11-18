@@ -373,7 +373,14 @@ class _Facts:
         t = self._tick
         if not t:
             return False
-        work, who, bank = t.get("can_work") is True, t.get("who_gave") is True, t.get("bank") is True
+        # An Admin seat works giving and sees who gave by its own standing;
+        # the one thing its row adds is the bank and payouts. So for an
+        # Admin only `bank` is read from the row, and the row never stores
+        # more than that (church_money_ticks.plan).
+        admin = t.get("seat_role") == ADMIN
+        work = t.get("can_work") is True or admin
+        who = t.get("who_gave") is True or admin
+        bank = t.get("bank") is True
         return {TICK: True, TICK_WORK: work, TICK_LEAD: work and t.get("level") == "lead", TICK_WHO: who,
                 TICK_WHO_WORK: who and work, TICK_BANK: bank, TICK_BANK_WORK: bank and work,
                 TICK_BANK_WHO: bank and who}.get(standing, False)
@@ -413,6 +420,48 @@ def tick_admits(business_id: Any, user: Any, need: str, door: str) -> bool:
     if not _ticks_on(business_id):
         return False
     return _Facts(business_id, user, None, False, None).ticked(standing)
+
+
+GIVERS_403 = ("Who gave is kept for the owner, an admin, the accountant, or a login the owner ticked "
+              "“who gave” for.")
+SEES_ONLY_403 = "This login sees Giving & money but doesn't change it."
+
+
+def sees_givers(business_id: Any, user: Any, business: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a door that this person has ALREADY passed may put a name
+    beside a gift, or show any one person's giving.
+
+    With the giving tick switched off for the business: yes, always (each
+    door and the Giving keeper decide, exactly as before; nothing is read).
+    Switched on: in a church or nonprofit, the giving rule ("giving" at
+    "see": the owner, an Admin, the accountant, or the "who gave" tick); in
+    any other business, yes. A read that fails is a no."""
+    if not _ticks_on(business_id):
+        return True
+    try:
+        by, _rule_, _f, _out = _decide(business_id, user, "see", "books", _UNREAD, None, business)
+        if by == NOT_ASKED:
+            return True
+        return _decide(business_id, user, "see", "giving", _UNREAD, None, business)[0] is not None
+    except HTTPException:
+        return False
+
+
+def require_church_wall(business_id: Any, user: Any, need: str = "see", part: str = "books",
+                        business: Optional[Dict[str, Any]] = None) -> Pass:
+    """The church wall in front of a door that has its OWN seat ladder (the
+    ledger, the reports, payroll, contractors, the periods, the bank's
+    reads). At "see" it is require_money exactly. At "work" (the door is
+    about to change something) a login that got through the wall only by
+    its giving tick must hold Work there: the door's ladder would let a
+    Manager seat write, and a tick that only Sees must not ride on it. The
+    owner, an Admin and the accountant pass as they always did."""
+    p = require_money(business_id, user, "see", part, business=business)
+    if need == "work" and p.by in TICKS:
+        want = TICK_BANK_WORK if part == "bank" else TICK_WORK
+        if not _Facts(business_id, user, None, False, None).ticked(want):
+            raise HTTPException(403, SEES_ONLY_403)
+    return p
 
 
 def _rule(need: str, part: str) -> Rule:

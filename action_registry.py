@@ -597,6 +597,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # who sets jobs up, is church_sheet's and church_job_defs'), so Chief's alone.
     "sheet_of": {**_r("reads one church login's sheet: its level, job, areas, duties, what is guarded and "
                       "whether it is open to them; staff by name", sensitive=True), "chief_only": True},
+    "list_money_asks": {**_r("reads the requests for giving access waiting for a church's owner (who asked, "
+                             "for whom, for what); it answers none of them", sensitive=True), "chief_only": True},
     "list_church_jobs": {**_r("reads a church's jobs (the five starting ones and its own): each one's login "
                               "level, areas and duties", sensitive=True), "chief_only": True},
     "draft_church_job": {**_r("reads the building blocks for a new church job (the areas, the duties with their "

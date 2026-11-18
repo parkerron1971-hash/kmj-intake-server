@@ -222,7 +222,9 @@ def _fresh():
     for c in caches:
         c.clear()
     chief_areas.forget()
+    cmt._READY.update(yes=False, until=0.0)
     yield
+    cmt._READY.update(yes=False, until=0.0)
     for c in caches:
         c.clear()
     chief_areas.forget()
@@ -517,9 +519,12 @@ def test_nobody_touches_their_own_and_a_viewer_only_sees(db):
 def test_an_admin_has_giving_already_and_only_the_owner_adds_the_bank(db):
     sheet = cs.compose(_biz(db), OWNER, ADMIN)["money"]
     assert (sheet["level"], sheet["who_gave"], sheet["bank"], sheet["can"]) == ("lead", True, False, "grant")
-    out, pw = _change(db, OWNER, ADMIN, {"money": {"level": "see", "bank": True}})
-    assert pw and _held(db, ADMIN) == {**_held(db, ADMIN), "level": "lead", "who_gave": True, "bank": True}
-    assert gate.tick_admits(BIZ, _u(ADMIN), "work", "payouts")
+    out, pw = _change(db, OWNER, ADMIN, {"money": {"level": "lead", "who_gave": True, "bank": True}})
+    # ONLY what was ticked is stored: the bank. Never an implied Lead or who gave.
+    assert pw and _held(db, ADMIN) == {**_held(db, ADMIN), "level": "see", "who_gave": False, "bank": True}
+    assert all(gate.tick_admits(BIZ, _u(ADMIN), need, door) for (door, need) in gate.TICK_DOORS)   # by its Admin seat
+    sheet = cs.compose(_biz(db), OWNER, ADMIN)["money"]
+    assert (sheet["level"], sheet["who_gave"], sheet["bank"]) == ("lead", True, True)
     out, pw = _change(db, OWNER, ADMIN, {"money": {"level": "lead", "bank": False}})
     assert not pw and _held(db, ADMIN) is None                    # nothing an Admin doesn't have: no row kept
     own = cs.compose(_biz(db), OWNER, OWNER)["money"]
@@ -641,6 +646,8 @@ def test_a_login_taken_off_the_team_keeps_no_tick_and_no_request(db):
     import business_users_router
     _give(db, MANAGER, "work", who=True)
     aid = _ask(db, ADMIN, MEMBER, "see", False)
+    for uid in (MANAGER, MEMBER):
+        db._active(BIZ, uid)["status"] = "revoked"
     assert business_users_router.hand_back_login(BIZ, MANAGER)["failed"] == 0
     assert _held(db, MANAGER) is None
     business_users_router.hand_back_login(BIZ, MEMBER)
@@ -675,16 +682,21 @@ def test_chief_reads_money_for_a_login_that_sees_and_changes_none(db):
     chief_areas.forget()
     scope = chief_areas.scope_for(BIZ, MANAGER, OWNER)
     assert scope["money"] == {"level": "see", "can_work": False, "who_gave": False, "bank": False}
-    assert "giving_money" not in scope["areas"]                   # without who gave, Chief's context stays trimmed
-    assert chief_areas.refusal("bills", {}, scope) is None
-    assert "doesn't change it" in chief_areas.refusal("add_bill", {}, scope)
+    assert "giving_money" not in scope["areas"]                   # Chief's own context stays trimmed of money
+    assert chief_areas.refusal("giving_counts", {}, scope) is None                # its handler asks the gate
     assert "doesn't change it" in chief_areas.refusal("record_service_gifts", {}, scope)
-    _give(db, MANAGER, "work", who=True)
+    money = {v for v, n in chief_areas.VERBS.items() if n == chief_areas.MONEY}
+    assert chief_areas.TICK_VERBS <= money and chief_areas.MONEY_READS - {"show_view"} <= money
+    _give(db, MANAGER, "lead", who=True, bank=True)
     chief_areas.forget()
     scope = chief_areas.scope_for(BIZ, MANAGER, OWNER)
-    assert "giving_money" in scope["areas"] and chief_areas.refusal("add_bill", {}, scope) is None
-    money = {v for v, n in chief_areas.VERBS.items() if n == chief_areas.MONEY}
-    assert chief_areas.MONEY_READS - {"show_view"} <= money
+    assert "giving_money" not in scope["areas"] and chief_areas.refusal("record_service_gifts", {}, scope) is None
+    # A Chief verb is never wider than its door: everything outside the short list stays the owner's and
+    # the Admins', whatever the tick (approving a proposal is the owner's alone over HTTP; bills read the bank).
+    for verb in sorted(money - chief_areas.TICK_VERBS):
+        assert "owner's or an admin's" in chief_areas.refusal(verb, {}, scope), verb
+    for verb in ("approve_bookkeeping_proposal", "review_books", "bills", "add_bill", "send_report", "show_revenue"):
+        assert verb in money - chief_areas.TICK_VERBS
     counts = pathlib.Path(ROOT, "chief_giving_counts.py").read_text(encoding="utf-8")
     assert counts.count('_chief({"id": biz_id}, atype, "work")') == 2 and "gs._gate(str(biz[\"id\"]), user, need)" in counts
     for verb in ("grant_money", "ask_money", "answer_money_ask"):
@@ -764,3 +776,293 @@ def test_it_is_registered_switched_and_asks_the_money_gate_only():
     for route in ("list_asks", "answer_ask", "withdraw_ask", "read_alerts"):
         body = src[src.index(f"def {route}("):]
         assert "sb_clients.authed_request" in body[:400], route
+
+
+# ─── After the independent review of 2026-11-18 ───────────────────────
+# Each of these was a reproduction in the reviewer's probes.
+
+def test_who_gave_is_not_shown_to_a_login_that_only_sees(db, monkeypatch):
+    import reports_router as rr
+    givers = {"by_customer": [{"customer": "Jane Giver", "amount": 500.0}], "total": 500.0}
+    _give(db, MEMBER, "see")
+    assert rr._owner_or_reader(BIZ, _u(MEMBER))["id"] == BIZ      # the books open
+    hidden = rr._givers_hidden(BIZ, _u(MEMBER), givers)
+    assert hidden["by_customer"] == [] and hidden["givers_locked"] and hidden["total"] == 500.0   # totals kept
+    for wall in (rr._giving_wall, rr._names_wall):
+        with pytest.raises(HTTPException) as e:
+            wall(BIZ, _u(MEMBER))
+        assert e.value.status_code == 403 and e.value.detail == gate.GIVERS_403
+    _give(db, MEMBER, "see", who=True)
+    assert rr._givers_hidden(BIZ, _u(MEMBER), givers)["by_customer"] and rr._giving_wall(BIZ, _u(MEMBER)) is None
+    for uid in (OWNER, ADMIN):
+        assert rr._givers_hidden(BIZ, _u(uid), givers)["by_customer"] and gate.sees_givers(BIZ, _u(uid))
+    assert gate.sees_givers(SHOP, _u(STRANGER))                   # a shop is not asked
+    monkeypatch.setenv("CHURCH_MONEY_TICKS", "off")
+    db.reads.clear()
+    assert gate.sees_givers(BIZ, _u(MANAGER)) and db.reads == []  # off: as before, nothing read
+    src = pathlib.Path(ROOT, "reports_router.py").read_text(encoding="utf-8")
+    for route in ("general-ledger", "journal", "audit-trail-report"):
+        body = src[src.index(f'@router.get("/{route}")'):]
+        assert "_names_wall(biz, user)" in body[:body.index("\n@router.", 10)], route
+    export = src[src.index('@router.get("/export")'):]
+    export = export[:export.index("\n@router.", 10)]
+    assert 'if report in ("general_ledger", "audit_trail"):\n        _names_wall(biz, user)' in export
+    assert "_givers_hidden(biz, user, data)" in export and "_bank_wall(biz, user, biz_row)" in export
+    for route in ("statement-customers", "customer-statement", "donors", "givers", "giver-history"):
+        body = src[src.index(f'@router.get("/{route}")'):]
+        assert "_giving_wall(biz, user)" in body[:body.index("\n@router.", 10)], route
+
+
+def test_the_bank_tick_alone_does_not_open_gifts_matched_to_deposits(db, monkeypatch):
+    import giving_deposits as gd
+    monkeypatch.setattr(gd, "switched_on", lambda biz: True)
+    _give(db, MANAGER, "see", bank=True)
+    with pytest.raises(HTTPException) as e:
+        gd._gate(BIZ, _u(MANAGER), write=False)
+    assert e.value.status_code == 403 and e.value.detail == gate.GIVERS_403
+    _give(db, MANAGER, "see", who=True, bank=True)
+    assert gd._gate(BIZ, _u(MANAGER), write=False)["id"] == BIZ
+    assert _status(gd._gate, BIZ, _u(MANAGER), write=True) == 403           # See doesn't match or unmatch
+
+
+def test_the_banks_report_takes_the_bank_tick(db):
+    import reports_router as rr
+    _give(db, MANAGER, "see", who=True)
+    row = rr._owner_or_reader(BIZ, _u(MANAGER))
+    assert _status(rr._bank_wall, BIZ, _u(MANAGER), row) == 403
+    _give(db, MANAGER, "see", bank=True)
+    assert rr._bank_wall(BIZ, _u(MANAGER), row) is None
+    src = pathlib.Path(ROOT, "reports_router.py").read_text(encoding="utf-8")
+    body = src[src.index('@router.get("/bank-reconciliation")'):]
+    assert "_bank_wall(biz, user, biz_row)" in body[:body.index("\n@router.", 10)]
+
+
+def test_a_login_that_only_sees_changes_no_money(db):
+    import church_help
+    import giving_records
+    _give(db, MEMBER, "see")
+    ca._MY_CACHE.clear()
+    view = church_help.view_of(BIZ, MEMBER, "member")
+    me = {"biz": _biz(db), "role": "member", "uid": MEMBER, "view": view}
+    assert view == "money" and church_help.pays(me) is False     # reads the amounts, pays nothing
+    _give(db, MEMBER, "work")
+    assert church_help.pays({**me, "money_work": gate.may_money(BIZ, _u(MEMBER), "work", "help")}) is True
+    me.pop("money_work", None)
+    assert church_help.pays(me) is True
+    # The doors with a seat ladder behind the church wall: a Manager seat would write, a See tick must not.
+    _give(db, MANAGER, "see")
+    row = _biz(db)
+    giving_records.require_ministry_finance(BIZ, _u(MANAGER), row)                # reading: yes
+    with pytest.raises(HTTPException) as e:
+        giving_records.require_ministry_finance(BIZ, _u(MANAGER), row, need="work")
+    assert e.value.status_code == 403 and e.value.detail == gate.SEES_ONLY_403
+    for mod in ("gl_router", "payroll_router", "contractors_router", "accounting_periods_router"):
+        import importlib
+        r = importlib.import_module(mod)
+        assert r._access(BIZ, _u(MANAGER), "viewer")["id"] == BIZ, mod
+        assert _status(r._access, BIZ, _u(MANAGER), "manager") == 403, mod
+    _give(db, MANAGER, "work")
+    for mod in ("gl_router", "payroll_router", "contractors_router", "accounting_periods_router"):
+        assert importlib.import_module(mod)._access(BIZ, _u(MANAGER), "manager")["id"] == BIZ, mod
+    giving_records.require_ministry_finance(BIZ, _u(MANAGER), row, need="work")
+    for uid in (OWNER, ADMIN):                                   # as ever
+        giving_records.require_ministry_finance(BIZ, _u(uid), row, need="work")
+    # The bank's wall holds a tick to the bank's own Work.
+    _give(db, MANAGER, "work", bank=False)
+    assert _status(giving_records.require_ministry_finance, BIZ, _u(MANAGER), row, part="bank", need="work") == 403
+
+
+def test_no_money_door_that_changes_something_asks_only_to_see():
+    """The scan: every door with a seat ladder behind the church wall asks
+    it at "work" when it is about to change something, and the two doors the
+    review named ask "work" themselves."""
+    for mod in ("gl_router", "payroll_router", "contractors_router", "accounting_periods_router"):
+        src = pathlib.Path(ROOT, f"{mod}.py").read_text(encoding="utf-8")
+        body = src[src.index("def _access("):]
+        body = body[:body.index("\ndef ", 10)]
+        assert 'require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")' in body, mod
+        assert "require_ministry_finance(biz, user, row)\n" not in src, mod
+    reports = pathlib.Path(ROOT, "reports_router.py").read_text(encoding="utf-8")
+    put = reports[reports.index('@router.put("/budgets")'):]
+    assert 'require_ministry_finance(biz, user, row, need="work")' in put[:put.index("\n@router.", 10)]
+    # Every other non-GET route in reports_router is the owner's alone or sends as the owner.
+    import re
+    for m in re.finditer(r'@router\.(post|put|delete|patch)\("([^"]+)"\)', reports):
+        body = reports[m.start():reports.index("\n@router.", m.start() + 10)]
+        assert "_owner(" in body or 'need="work"' in body or "_owner_or_accountant(" in body \
+            or "require_role(" in body, m.group(2)
+    help_src = pathlib.Path(ROOT, "church_help.py").read_text(encoding="utf-8")
+    pays = help_src[help_src.index("def pays("):]
+    assert '"work", "help"' in pays[:pays.index("\ndef ", 10)]
+    gate_src = pathlib.Path(ROOT, "church_money_gate.py").read_text(encoding="utf-8")
+    assert "if need == \"work\" and p.by in TICKS:" in gate_src
+
+
+def test_an_admin_moved_down_keeps_nothing_from_her_admin_row(db):
+    _change(db, OWNER, ADMIN, {"money": {"bank": True}})
+    assert _held(db, ADMIN)["bank"] is True
+    out, pw = _change(db, OWNER, ADMIN, {"level": "manager", "areas": ["office"]})
+    assert not pw and _held(db, ADMIN) is None                   # cleared before the level was written
+    assert not any(_may(ADMIN, need, part) for (part, need) in gate.RULES_ON)
+    assert not any(gate.tick_admits(BIZ, _u(ADMIN), need, door) for (door, need) in gate.TICK_DOORS)
+    # A Member who Sees, made an Admin with the bank, then moved down again: nothing rides along.
+    _give(db, MEMBER, "see")
+    _change(db, OWNER, MEMBER, {"level": "admin", "money": {"bank": True}})
+    assert (_held(db, MEMBER)["level"], _held(db, MEMBER)["who_gave"], _held(db, MEMBER)["bank"]) == ("see", False, True)
+    _change(db, OWNER, MEMBER, {"level": "member", "areas": ["office"]})
+    assert _held(db, MEMBER) is None and not _may(MEMBER, "see", "books")
+    # Moved down and given giving in the SAME save: judged against nothing, so it takes the password.
+    _change(db, OWNER, MANAGER, {"level": "admin", "money": {"bank": True}})
+    out, pw = _change(db, OWNER, MANAGER, {"level": "manager", "areas": ["office"],
+                                           "money": {"level": "see", "who_gave": False, "bank": True}})
+    assert pw and (_held(db, MANAGER)["level"], _held(db, MANAGER)["bank"]) == ("see", True)
+
+
+def test_a_cap_that_cannot_be_saved_stops_the_level(db, monkeypatch):
+    _change(db, OWNER, ADMIN, {"money": {"bank": True}})
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path: False)
+    assert _status(cs.change, _biz(db), OWNER, ADMIN, {"level": "manager", "areas": ["office"]}) == 503
+    assert db._active(BIZ, ADMIN)["role"] == "admin" and _held(db, ADMIN)["bank"] is True
+
+
+def test_switched_on_before_the_tables_exist_is_exactly_off(db, monkeypatch):
+    import business_users_router
+    real = db.get
+
+    def missing(path, **kw):
+        if path.startswith(f"/{mh.HOLDERS}") or path.startswith(f"/{mh.ASKS}"):
+            return None
+        return real(path, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", missing)
+    writes = []
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path: writes.append(path) or False)
+    assert not cmt.tables_ready()
+    _change(db, OWNER, MANAGER, {"level": "viewer"})              # no 503: nothing to lower
+    assert db._active(BIZ, MANAGER)["role"] == "viewer"
+    assert business_users_router.hand_back_login(BIZ, MEMBER)["failed"] == 0
+    assert cmt.sweep() == {"expired": 0, "reminded": 0}
+    assert not [w for w in writes if mh.HOLDERS in w or mh.ASKS in w]
+    for mode in ("on", "owner"):
+        monkeypatch.setenv("CHURCH_MONEY_TICKS", mode)
+        assert not any(_may(HOLDER, need, part) for (part, need) in gate.RULES)   # a Manager, as with it off
+        assert all(_may(OWNER, k[1], k[0]) == (k[0] != "help") for k in gate.RULES)
+
+
+def test_two_lowerings_racing_end_at_the_lower(db):
+    _give(db, MANAGER, "lead", who=True, bank=True)
+    ch = co.Church(_biz(db))
+    plan = cmt.plan(_biz(db), ch, cs.standing(ch, ADMIN, MANAGER), ADMIN, MANAGER,
+                    {"money": {"level": "work", "who_gave": True, "bank": True}}, "manager")
+    assert plan["kind"] == "lower"
+    _change(db, OWNER, MANAGER, {"money": {"level": "see", "who_gave": False, "bank": False}})    # the owner, meanwhile
+    cmt.apply(plan, _biz(db), ADMIN, "Alma Price", MANAGER)
+    held = _held(db, MANAGER)
+    assert (held["level"], held["who_gave"], held["bank"]) == ("see", False, False)             # never back up
+    src = pathlib.Path(ROOT, "church_money_ticks.py").read_text(encoding="utf-8")
+    lower = src[src.index("def _lower("):src.index("# ─── A login that leaves")]
+    body = lower.split('"""')[2]
+    assert "{k: False for k in" in body and "level=in.(" in body and ": True" not in body   # only ever down
+
+
+def test_revoking_an_old_row_leaves_the_live_seats_tick(db):
+    import business_users_router
+    old = {**_seat(MANAGER, "manager", "Caleb Stone", status="revoked"), "id": str(uuid.uuid4())}
+    db.t["business_users"].append(old)
+    _give(db, MANAGER, "work", who=True)
+    aid = _ask(db, MANAGER, MEMBER, "see", False) if False else None
+    assert business_users_router.hand_back_login(BIZ, MANAGER, seat_id=old["id"])["failed"] == 0
+    assert _held(db, MANAGER)["level"] == "work" and _may(MANAGER, "work", "books")
+    live = db._active(BIZ, MANAGER)
+    live["status"] = "revoked"
+    business_users_router.hand_back_login(BIZ, MANAGER, seat_id=live["id"])
+    assert _held(db, MANAGER) is None and aid is None
+    src = pathlib.Path(ROOT, "business_users_router.py").read_text(encoding="utf-8")
+    assert "hand_back_login(biz, target[0].get(\"user_id\"), seat_id=member_id)" in src
+
+
+def test_a_request_does_not_outlive_whoever_sent_it(db):
+    import business_users_router
+    aid = _ask(db, HOLDER, MEMBER, "see", False)
+    seat = db._active(BIZ, HOLDER)
+    seat["status"] = "revoked"
+    business_users_router.hand_back_login(BIZ, HOLDER, seat_id=seat["id"])
+    assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "withdrawn"
+
+
+def test_a_key_that_is_not_sent_is_unchanged(db):
+    _give(db, MANAGER, "see", who=True, bank=True)
+    out, pw = _change(db, OWNER, MANAGER, {"money": {"level": "work"}})
+    held = _held(db, MANAGER)
+    assert pw and (held["level"], held["who_gave"], held["bank"]) == ("work", True, True)
+    out, pw = _change(db, OWNER, MANAGER, {"money": {"bank": False}})
+    held = _held(db, MANAGER)
+    assert not pw and (held["level"], held["who_gave"], held["bank"]) == ("work", True, False)
+    assert _status(cs.change, _biz(db), OWNER, MEMBER, {"money": {"who_gave": True}}) == 400    # no level, none held
+
+
+def test_a_refund_is_checked_keyed_and_never_zero(monkeypatch):
+    import asyncio
+    import stripe_payments_router as pay
+    monkeypatch.setattr(pay, "_require_owner", lambda business_id, user: {"id": BIZ, "owner_id": OWNER})
+    for amount in (0, -500):
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(pay.refund_charge("ch_1", pay.RefundBody(business_id=BIZ, amount_cents=amount), None,
+                                          _u(OWNER)))
+        assert e.value.status_code == 400 and "above zero" in e.value.detail
+    src = pathlib.Path(ROOT, "stripe_payments_router.py").read_text(encoding="utf-8")
+    refund = src[src.index("async def refund_charge("):]
+    assert refund.index("amount_cents <= 0") < refund.index("require_unlock(") < refund.index("create_refund(")
+    assert "idempotency_key=key" in refund and "REFUND MADE BUT NOT RECORDED" in refund
+    assert '"recorded": recorded' in refund and "tell_owner(" in refund
+    helper = pathlib.Path(ROOT, "stripe_checkout_helpers.py").read_text(encoding="utf-8")
+    assert '"Idempotency-Key": idempotency_key' in helper
+
+
+def test_the_owner_reads_the_requests_through_chief_and_chief_answers_none(db):
+    import chief_areas
+    import chief_church_sheet as ccs
+    assert "list_money_asks" in ccs.HANDLERS and "list_money_asks" in chief_areas.VERBS
+    assert ccs._money_asks(_biz(db), OWNER, {})["label"] == "No requests waiting"
+    _ask(db, ADMIN, MANAGER)
+    got = ccs._money_asks(_biz(db), OWNER, {})
+    assert "1 request for giving access is waiting" in got["result"] and "Work, with who gave" in got["result"]
+    assert "You never answer one." in got["result"]
+    assert "1 request" in ccs._money_asks(_biz(db), ADMIN, {})["result"]          # her own
+    assert ccs._money_asks(_biz(db), HOLDER, {})["label"] == "No requests waiting"
+    assert _status(ccs._money_asks, _biz(db), STRANGER, {}) == 403
+    for name in ("action_registry.py", "chief_prompt.py", "chief_tool_loop.py"):
+        assert "list_money_asks" in pathlib.Path(ROOT, name).read_text(encoding="utf-8"), name
+
+
+def test_whoever_asked_hears_the_answer(db, monkeypatch):
+    import threading
+    import push_notifications
+    sent = []
+    monkeypatch.setattr(push_notifications, "send_to_user", lambda uid, **kw: sent.append((uid, kw["title"])))
+
+    class Now:
+        def __init__(self, target, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+    monkeypatch.setattr(threading, "Thread", Now)
+    _unlock(monkeypatch)
+    cmt.answer_ask(_ask(db, HOLDER, MEMBER, "see", False), {"yes": False}, None, session=_session(OWNER))
+    cmt.answer_ask(_ask(db, ADMIN, MANAGER), {"yes": True}, None, session=_session(OWNER))
+    assert [u for u, _ in sent] == [HOLDER, ADMIN]
+    assert "said no" in sent[0][1] and "said yes" in sent[1][1]
+
+
+def test_a_reminder_that_could_not_be_sent_is_tried_again(db, monkeypatch):
+    aid = _ask(db, ADMIN, MEMBER, "see", False)
+    row = next(a for a in db.t[mh.ASKS] if a["id"] == aid)
+    row["asked_at"] = _z(NOW - dt.timedelta(hours=50))
+
+    def boom(*a, **k):
+        raise RuntimeError("push is down")
+    monkeypatch.setattr(cj, "tell_owner", boom)
+    assert cmt.sweep()["reminded"] == 0 and row["reminded_at"] is None
+    monkeypatch.setattr(cj, "tell_owner", lambda *a, **k: None)
+    assert cmt.sweep()["reminded"] == 1 and row["reminded_at"]
+

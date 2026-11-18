@@ -434,7 +434,8 @@ def _shrink(result: Any) -> str:
                                                            'move_in_status', 'church_email', 'whose_job', 'job_of',
                                                            'draft_job_description', 'team_week',
                                                            'monthly_report_draft', 'sheet_of',
-                                                           'list_church_jobs', 'draft_church_job',
+                                                           'list_church_jobs', 'list_money_asks',
+                                                           'draft_church_job',
                                                            'draft_church_structure', 'church_structure_status'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
@@ -495,6 +496,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "one_on_one", "whose_job", "job_of",
                                               "draft_job_description", "team_week",
                                               "monthly_report_draft", "sheet_of", "list_church_jobs",
+                                              "list_money_asks",
                                               "draft_church_job", "draft_church_structure",
                                               "church_structure_status")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "

@@ -70,6 +70,12 @@ TOOLS = [
                      "and people's sheets, a Manager login's or below; anyone, their own."),
      "input_schema": {"type": "object", "properties": {"who": {"type": "string", "description": "A name, or me"}},
                       "required": ["who"]}},
+    {"name": "list_money_asks",
+     "description": ("The requests for giving access waiting for the church's owner: who asked, for whom, and for "
+                     "what (See, Work or Lead, who gave, the bank and payouts). The owner reads all of them; "
+                     "anyone else, the ones they sent. Read only: you never give giving access, ask for it or "
+                     "answer a request. The owner answers on Logins & areas, with the password."),
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "list_church_jobs",
      "description": ("A church's jobs: the five starting ones and the ones the church made, each with its login "
                      "level, what it does, its areas and its duties. A job is a starting point for a person's "
@@ -296,6 +302,36 @@ def _sheet(business: Dict[str, Any], uid: str, action: Dict[str, Any]) -> Dict[s
             "nav": {**NAV, "sheet": target}}
 
 
+def _money_asks(business: Dict[str, Any], uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    """The requests for giving access waiting at this church, as words.
+    Reading only: nothing here gives, asks or answers."""
+    import church_money_ticks as cmt
+    if not cmt.open_for(business.get("id")):
+        return {"result": "Giving as its own switch on a person's sheet isn't on for this church yet. Giving opens "
+                          "for the owner and Admin logins.", "label": "Not switched on"}
+    ch = co.Church(business)
+    if not ch.role(uid):
+        raise HTTPException(403, "That is read by the church's own logins.")
+    asks = cmt.open_asks(business, uid)
+    if asks is None:
+        raise HTTPException(503, "The requests couldn't be read just now.")
+    owner = str(business.get("owner_id") or "") == uid
+    if not asks:
+        return {"result": ("No request for giving access is waiting." if owner
+                           else "You have no request for giving access waiting for the owner."),
+                "label": "No requests waiting"}
+    lines = [f"{len(asks)} request{'' if len(asks) == 1 else 's'} for giving access "
+             f"{'is' if len(asks) == 1 else 'are'} waiting for the owner:"]
+    for a in asks:
+        lines.append(f"- {a['name']}: {a['wants_words']}, asked by {a['asked_by_name'] or 'someone in the office'} "
+                     f"on {str(a.get('asked_at') or '')[:10]}; it runs out {str(a.get('expires_at') or '')[:10]}.")
+    lines.append("Nothing is open until the owner says yes. The owner answers on Logins & areas, with the "
+                 "password. You never answer one." if owner else
+                 "Nothing is open until the owner says yes. You can take a request back on the person's sheet.")
+    return {"result": "\n".join(lines), "label": f"{len(asks)} waiting",
+            "nav": {"tab": "operate", "sub": "areas"}}
+
+
 def _jobs(business: Dict[str, Any], uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
     ch = co.Church(business)
     if ch.role(uid) not in ("owner", "admin", "manager"):
@@ -400,17 +436,20 @@ def _handler(atype: str, body):
 
 handle_sheet_of = _handler("sheet_of", _sheet)
 handle_list_church_jobs = _handler("list_church_jobs", _jobs)
+handle_list_money_asks = _handler("list_money_asks", _money_asks)
 handle_draft_church_job = _handler("draft_church_job", _blocks)
 handle_save_church_job = _handler("save_church_job", _save)
 handle_remove_church_job = _handler("remove_church_job", _remove)
 
 HANDLERS = {
     "sheet_of": handle_sheet_of, "list_church_jobs": handle_list_church_jobs,
+    "list_money_asks": handle_list_money_asks,
     "draft_church_job": handle_draft_church_job, "save_church_job": handle_save_church_job,
     "remove_church_job": handle_remove_church_job,
 }
 PROGRESS = {
     "sheet_of": "reading their sheet", "list_church_jobs": "looking at the church's jobs",
+    "list_money_asks": "looking at the requests for giving access",
     "draft_church_job": "getting the pieces of a job", "save_church_job": "saving the job",
     "remove_church_job": "removing the job",
 }

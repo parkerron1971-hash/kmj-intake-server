@@ -139,9 +139,14 @@ def _gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     if not switched_on(business_id):
         raise HTTPException(404, "Not Found")
     import plaid_router
-    if write:
-        return plaid_router._require_money_writer(business_id, user)
-    return plaid_router._require_reader(business_id, user)
+    row = plaid_router._require_money_writer(business_id, user) if write \
+        else plaid_router._require_reader(business_id, user)
+    # Matching Sunday's gifts to the deposit shows each gift and its giver:
+    # with giving as its own tick, the bank tick alone doesn't open it.
+    import church_money_gate
+    if not church_money_gate.sees_givers(business_id, user):
+        raise HTTPException(403, church_money_gate.GIVERS_403)
+    return row
 
 
 def _q(v: Any) -> str:

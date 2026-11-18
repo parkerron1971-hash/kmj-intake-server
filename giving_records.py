@@ -47,9 +47,12 @@ def require_finance(business_id, user, need="see"):
     import church_money_gate
     return church_money_gate.require_money(business_id, user, need, "giving").role or "accountant"
 
-def require_ministry_finance(business_id, user, business=None, part="books"):
+def require_ministry_finance(business_id, user, business=None, part="books", need="see"):
     """Reading the books or the bank of a church or nonprofit takes the
     giving rule; any other business isn't asked here (church_money_gate,
-    "books" / "bank" at "see")."""
+    "books" / "bank" at "see"). `need="work"` from a door that is about to
+    CHANGE something behind its own seat ladder: a login let through only
+    by a giving tick must then hold Work (church_money_gate
+    .require_church_wall); everyone else is answered as at "see"."""
     import church_money_gate
-    church_money_gate.require_money(business_id, user, "see", part, business=business)
+    church_money_gate.require_church_wall(business_id, user, need, part, business=business)

@@ -351,7 +351,20 @@ def pays(me: Dict[str, Any]) -> bool:
     money, not People & care), at member level or above. It pays what the care
     side sent it, and nothing else. The owner and admins act on the care side,
     where they may record any help."""
-    return me["view"] == "money" and me["role"] in WRITERS
+    if not (me["view"] == "money" and me["role"] in WRITERS):
+        return False
+    # Paying writes an expense: the money gate at "work" (the same people as
+    # "see" until giving is its own tick; then a login that only Sees doesn't pay).
+    if "money_work" not in me:
+        import church_money_gate
+        from types import SimpleNamespace
+        try:
+            me["money_work"] = church_money_gate.may_money(
+                me["biz"]["id"], SimpleNamespace(id=me["uid"]), "work", "help", role=me["role"],
+                areas=[church_money_gate.MONEY_AREA_KEY])
+        except HTTPException:
+            me["money_work"] = False
+    return bool(me["money_work"])
 
 
 # ─── The fund ─────────────────────────────────────────────────────────

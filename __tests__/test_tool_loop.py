@@ -74,7 +74,7 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          # Church job descriptions (chief_church_jobs): the same.
                                          "whose_job", "job_of", "draft_job_description",
                                          # One sheet per person (chief_church_sheet): the same.
-                                         "sheet_of", "list_church_jobs", "draft_church_job",
+                                         "sheet_of", "list_church_jobs", "list_money_asks", "draft_church_job",
                                          # The standard start (chief_church_structure): the same.
                                          "draft_church_structure", "church_structure_status",
                                          # The office team's week and the monthly report (chief_office): the same.

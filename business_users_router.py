@@ -584,10 +584,10 @@ def revoke(member_id: str, biz: str,
         {"status": "revoked", "revoked_at": _now_iso()})
     if not isinstance(saved, list):  # None = the write failed
         raise HTTPException(503, "That didn't save. Try again.")
-    return {"ok": True, **hand_back_login(biz, target[0].get("user_id"))}
+    return {"ok": True, **hand_back_login(biz, target[0].get("user_id"), seat_id=member_id)}
 
 
-def hand_back_login(biz: str, user_id: Any) -> Dict[str, int]:
+def hand_back_login(biz: str, user_id: Any, seat_id: Any = None) -> Dict[str, int]:
     """A login taken off the team leaves nothing with it (Kevin, 2026-11-11:
     "if a person is removed automatically the emails etc is as well with no
     problems"). Its access ends with the revoke, since every gate reads the
@@ -626,7 +626,7 @@ def hand_back_login(biz: str, user_id: Any) -> Dict[str, int]:
     # given to, so this is the tidy half: nothing is left to come back.
     try:
         import church_money_ticks
-        if not church_money_ticks.seat_gone(biz, user_id):
+        if not church_money_ticks.seat_gone(biz, user_id, seat_id):
             out["failed"] += 1
             logger.warning("revoke: a removed login's giving tick is still stored on %s", str(biz)[:8])
     except Exception:  # noqa: BLE001 — as above

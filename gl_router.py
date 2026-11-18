@@ -37,7 +37,9 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
         raise HTTPException(404, "business not found")
     row = rows[0]
     from giving_records import require_ministry_finance
-    require_ministry_finance(biz, user, row)
+    # A door asked for more than reading (min_role above "viewer") is about
+    # to change something: a login let in only by a giving tick must hold Work.
+    require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")
     if str(row.get("owner_id")) == str(user.id):
         return row
     if min_role == "viewer":

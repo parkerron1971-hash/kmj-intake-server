@@ -934,6 +934,12 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
             raise HTTPException(503, "That didn't save. Nothing changed. Try again.")
     # 2. The level, the areas and the job, in one row write: never a new
     #    level with the old areas.
+    if level_changes and not cmt.role_lowered(ch.b, target, trole, level):
+        # A login moved down keeps no more giving than the owner gave it at
+        # the level it will have (an Admin's row is cleared, a Viewer's is
+        # lowered to See), BEFORE the level is written. If that can't be
+        # saved, the level isn't either.
+        raise HTTPException(503, "That didn't save. Their level, job and areas are as they were. Try again.")
     if level_changes or areas_set or job_arg is not keep:
         church_areas.set_login(ch.b, target, level, areas=areas if areas_set else keep, job=job_arg,
                                level=level if level_changes else keep)

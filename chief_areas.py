@@ -109,7 +109,7 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # isn't ready-made. Who may read whose sheet and who sets jobs up (the owner, an Admin, or whoever the
         # owner gave "Sets up jobs and people's sheets") is the handlers', through church_sheet's and
         # church_job_defs' own checks: never an area's, and never the owner's alone, so they aren't in OWNERS.
-        "sheet_of", "list_church_jobs", "draft_church_job", "save_church_job", "remove_church_job",
+        "sheet_of", "list_money_asks", "list_church_jobs", "draft_church_job", "save_church_job", "remove_church_job",
         # The standard start (chief_church_structure): the office team drafted for review, and the standing
         # check. The same people as the jobs, by the handlers' own check (church_job_defs.editor): never an
         # area's, and never the owner's alone, so they aren't in OWNERS either.
@@ -230,6 +230,16 @@ MONEY_READS = frozenset({
     "giving_counts", "expense_categories", "fund_status", "find_fund_payments", "bank_history", "list_expenses",
     "check_balance", "unbilled_time", "list_products", "list_offerings", "offering_readiness", "check_inventory",
     "show_view"})
+# THE ONLY money verbs a giving tick's Chief runs: the ones whose handlers
+# ask the money gate themselves, at the right part and the right need (the
+# counts and the statements: chief_giving_counts, chief_giving_actions).
+# Every other money verb stays the owner's and the Admins', as before the
+# tick: several of them have an HTTP door that is the owner's alone
+# (approving a bookkeeping proposal), read the bank, or name givers, and a
+# Chief verb is never wider than its door. A verb is added here only with a
+# handler that asks church_money_gate.
+TICK_VERBS = frozenset({"giving_counts", "record_service_gifts", "undo_service_gifts", "giving_statement",
+                        "giving_statements_run"})
 
 # Events and timeline entries that are money.
 MONEY_EVENT = re.compile(r"^(giv|gift|donat|pledge|invoice|payment|paid|pay_|payout|refund|charge|order|product_sold|"
@@ -297,10 +307,11 @@ def _read_scope(business_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     except Exception:  # noqa: BLE001 — couldn't tell: no tick
         tick = None
     if tick:
+        # The areas are NOT widened: Chief's own context stays trimmed of
+        # money for this login (kept a minute a replica, like every scope:
+        # a tick given or taken reaches Chief within the minute).
         scope["money"] = {"level": tick["level"], "can_work": tick["can_work"], "who_gave": tick["who_gave"],
                           "bank": tick["bank"]}
-        if tick["who_gave"] and MONEY[0] not in scope["areas"]:
-            scope["areas"] = [a for a in church_areas.AREA_ORDER if a in areas or a == MONEY[0]]
     return scope
 
 
@@ -363,10 +374,14 @@ def refusal(verb: str, action: Optional[Dict[str, Any]], scope: Optional[Dict[st
     needs = areas_of(verb, action)
     tick = scope.get("money")
     if needs == MONEY and tick:
+        if verb not in TICK_VERBS:
+            return ("That part of Giving & money is the owner's or an admin's to ask Chief for. For this login "
+                    "Chief reads the giving counts and statements, and records Sunday's gifts when its giving "
+                    "is Work. The rest is on its own pages.")
         if verb not in MONEY_READS and not tick.get("can_work"):
             return ("This login sees Giving & money but doesn't change it. The owner, an admin or whoever works "
                     "giving does that.")
-        return None                      # its own gate decides the rest: who gave, the bank
+        return None                      # its own gate decides the rest: who gave
     if needs and (ALL in needs or has(scope, *needs)):
         if verb == "schedule_action":
             inner = (action or {}).get("action")
