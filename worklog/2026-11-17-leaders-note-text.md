@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17, on two ideas for Naiya (Office & Leadership): "Send the Monday leaders note as a short text to the leaders" and "check how many people have signed up for texts each week": "I approve your ideas. make this happen please."'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (Text it too on the leaders note, My week's fact line)]
+prs: [kmj-intake-server#1911, solutionist-studio#1619]
 migrations: []
 left_undone:
   - "A text that couldn't go (who said yes unreadable, every send failed) can't be sent again that week: the note goes once a week, email and text together. The sent page says why"
