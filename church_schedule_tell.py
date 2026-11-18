@@ -25,6 +25,12 @@ NOTICE: not in a push, an email, the church's conversation or a log line.
 _bare() drops both from every row at the door, and the sweep never asks the
 database for either, so nothing below this line can say them.
 
+An ask that went up for an exception (step 2: past the number who can be away
+at once, or on a protected day) is told to whoever it went up to, and nobody
+else: the one over the asker can't answer it and isn't told of it. Its notice
+adds only that it is past the number or on a protected day (up_words): never
+how many are away, never who, never which day.
+
 HOW SOMEONE IS TOLD. One of the church's people: a push to their phone and a
 line in their conversation with the church (member_push.send does both, kind
 `serving`), and an email only when no phone was reached and they have one. An
@@ -48,7 +54,10 @@ open for, and never a sample church. For each:
   * a waiting ask whose `to` is no longer anyone at the nearest step over
     the asker (or is a login that has left the office, or is empty) is sent
     to whoever church_schedule.goes_to gives now, and its told_at cleared so
-    they hear. Never one that needs no yes
+    they hear. Never one that needs no yes. A FLAGGED ask (step 2: past the
+    number, or on a protected day) went up for an exception and is never
+    sent back down: it moves only when it no longer sits with someone who
+    may give one, and then to whoever church_schedule.goes_up gives
   * untold asks older than two minutes, and untold "can't make it"s
   * untold answers from the last week
   * the one nudge
@@ -147,12 +156,38 @@ def new_words(church: str, to_name: str, asker: str, ask: Dict[str, Any]) -> Dic
                                      "plan around it."])}
     short = "short_notice" in (ask.get("flags") or [])
     title = f"{first} asked for {when}"
+    up = up_words(ask)
+    if up:
+        # It went up for an exception (step 2). Who asked, which days, and
+        # that it is past the number or on a protected day: nothing else.
+        return {"title": title,
+                "body": ("Short notice. " if short else "") + f"{up}, so it came to you. Say yes or not this one "
+                        "when you can.",
+                "subject": f"{church}: {title}",
+                "text": "\n\n".join([_hi(to_name), f"{asker} asked to be away {long}." + (" It’s short notice." if short
+                                     else "") + f" {up}, so it came to you. It’s waiting for your yes, or not this "
+                                     "one.", "You can answer in the church’s app."])}
     return {"title": title,
             "body": ("Short notice. " if short else "") + "Say yes or not this one when you can.",
             "subject": f"{church}: {title}",
             "text": "\n\n".join([_hi(to_name), f"{asker} asked to be away {long}." + (" It’s short notice." if short
                                  else "") + " It’s waiting for your yes, or not this one.",
                                  "You can answer in the church’s app."])}
+
+
+def up_words(ask: Dict[str, Any]) -> str:
+    """Why a flagged ask came up, as much as a lock screen may say: that it
+    is past the number, or on a protected day. Never how many, never which
+    day, never who else is away. '' for an ask that isn't flagged."""
+    flags = ask.get("flags") or []
+    over, kept = "over_limit" in flags, "protected_day" in flags
+    if over and kept:
+        return "It’s past the number who can be away at once, and on a protected day"
+    if over:
+        return "It’s past the number who can be away at once"
+    if kept:
+        return "It’s on a protected day"
+    return "It needs an exception" if cs.flagged(ask) else ""
 
 
 def answer_words(church: str, asker: str, by: str, ask: Dict[str, Any]) -> Dict[str, str]:
@@ -607,6 +642,15 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
         waiting = [a for a in waiting if (cs._day(a.get("ends_on")) or today) >= today]
         for a in waiting:
             cid = str(a.get("contact_id") or "")
+            if cs.flagged(a):
+                # It went up for an exception (step 2): it stays with whoever
+                # may give one, and is NEVER sent back down to the nearest
+                # step. Only when it no longer sits with such a person (they
+                # left the office, or no longer oversee it) is it sent on,
+                # to whoever church_schedule.goes_up gives now.
+                if not cs.held_right(ch, a) and _move(ch, a, cs.goes_up(ch, cid), now):
+                    stats["moved"] += 1
+                continue
             if cid not in near:
                 near[cid] = cs.nearest(ch, cid)
             if near[cid] and _stale(ch, a, near[cid]) and _move(ch, a, near[cid][0], now):

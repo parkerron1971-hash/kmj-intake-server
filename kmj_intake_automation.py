@@ -459,6 +459,11 @@ app.include_router(church_handovers_router)
 # 404 until supabase/APPLY-2026-11-19-church-schedule.sql is applied).
 from church_schedule import router as church_schedule_router
 app.include_router(church_schedule_router)
+# Step 2, the limit on how many can be away at once (/church/schedule/limits,
+# days, protected-days, volunteers; church_schedule_limits.py). The same
+# switch; 404 until supabase/APPLY-2026-11-20-church-schedule-limits.sql too.
+from church_schedule_limits import router as church_schedule_limits_router
+app.include_router(church_schedule_limits_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what

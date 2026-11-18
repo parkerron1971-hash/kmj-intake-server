@@ -71,8 +71,10 @@ ROUTES = ("/my/lead/dates/ask", "/my/lead/dates/cant", "/my/lead/dates/{id}/answ
 
 
 @pytest.fixture
-def db(monkeypatch):
-    d = fake.build(monkeypatch)
+def db(monkeypatch, request):
+    """A database with step 1's file alone; `db` asked for with True
+    (indirect) has step 2's file too."""
+    d = fake.build(monkeypatch, limits=bool(getattr(request, "param", False)))
     import rate_limit
     monkeypatch.setattr(rate_limit, "allow_strict", lambda *a, **kw: True)
     return d
@@ -886,3 +888,287 @@ def test_a_persons_notice_points_at_this_page():
     src = open(os.path.join(ROOT, "kmj_intake_automation.py"), encoding="utf-8").read()
     assert src.index("member_portal_dates_router") < src.index("app.include_router(public_site_router)"), \
         "before the public site's catch-all"
+
+
+# ─── Step 2: the limit, on the page ───────────────────────────────────
+#
+# These run on a database with step 2's file applied (the `db` fixture with
+# limits=True); every test above runs on step 1's alone, and passes unchanged.
+
+LIMITS = pytest.mark.parametrize("db", [True], indirect=True)
+SUNDAY = day(32)                         # Sunday 20 December 2026: inside day(30)..day(37)
+
+
+def away(db, handle, on=SUNDAY):
+    """An away date that was agreed: a fact in serve_away."""
+    db.t["serve_away"].append({"id": db.nid("serve_away"), "business_id": HOPE, "contact_id": db.who[HOPE][handle],
+                               "starts_on": on, "ends_on": on, "note": "", "ask_id": None, "kind": None,
+                               "created_at": fake.NOW.isoformat()})
+
+
+def full(db, on=SUNDAY):
+    """The leaders number at two, and two leaders away that Sunday."""
+    db.t["church_schedule_settings"].append({"business_id": HOPE, "notice_days": 14, "leaders_limit": 2,
+                                             "office_limit": None, "service_weekdays": None})
+    away(db, "wren", on)
+    away(db, "kara", on)
+
+
+@LIMITS
+def test_before_sending_a_leader_sees_the_day_is_full_and_nothing_is_sent(app, db, shell):
+    full(db)
+    as_(app, "yusuf")
+    before = wrote(db)
+    r = post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="commitment", reason=SECRET,
+             cover=db.who[HOPE]["esther"], cover_name="")
+    assert r.status_code == 200, "the page itself, not a redirect: nothing was sent"
+    assert wrote(db) == before and asks(db) == [] and db.later == [], "not one write, nobody told"
+    assert r.headers["cache-control"].startswith("no-store"), "what they typed is never kept by a browser"
+    words = text(r.text)
+    assert ("Not sent yet Sun, Dec 20 is full: two of the leaders are already away, and that’s as many as can be away "
+            "at once. The nearest open days are Sun, Dec 13 and Sun, Dec 27. You can still ask for these days. It "
+            "goes to Owen Diaz, who can make an exception.") in words
+    assert "Ask anyway" in words and "I changed the days. Ask for those" in words
+    # What they typed is still in the form: the days, the kind, their own reason, who covers.
+    assert f'name="start" value="{day(30)}"' in r.text and f'name="end" value="{day(37)}"' in r.text
+    assert 'value="commitment" checked' in r.text and 'value="time_off" checked' not in r.text
+    assert f'maxlength="500">{SECRET}</textarea>' in r.text
+    assert f'<option value="{db.who[HOPE]["esther"]}" selected>' in r.text
+    assert '<button class="ld-btn" type="submit" name="sure" value="yes">Ask anyway</button>' in r.text
+    block = words.split("Not sent yet")[1].split("What kind")[0]
+    assert "Wren" not in block and "Kara" not in block, "a count, never who"
+    seen = words.replace(SECRET, "")
+    assert not UUID.search(seen) and not OFFICE_WORDS.search(seen) and not KEYS.search(seen)
+    assert not TITLE_WORDS.search(seen.replace(OWNER_CALLED, "")), TITLE_WORDS.search(seen.replace(OWNER_CALLED, ""))
+    assert "Asked." not in words, "nothing happened"
+    assert words.strip().startswith(mpd.NOT_SENT), "the top of the page says so: the form may be far down"
+
+
+@LIMITS
+def test_ask_anyway_sends_it_to_the_one_who_can_make_an_exception_and_the_card_says_so(app, db, shell):
+    full(db)
+    as_(app, "yusuf")
+    r = post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET, sure="yes")
+    assert went(r) == "/my/lead/dates?done=dt_asked_up"
+    [row] = asks(db)
+    assert (row["state"], row["flags"], row["to_user_id"], row["to_contact_id"]) == (
+        "asked", ["over_limit"], db.who[HOPE]["owen@"], None)
+    words = text(page(db, "yusuf", done="dt_asked_up")[0])
+    assert "Asked. It went to Owen Diaz, who can make an exception." in words
+    assert ("Fri, Dec 18 to Fri, Dec 25 Waiting Time off Waiting for Owen Diaz’s yes. Needs an exception Sun, Dec 20 "
+            "is full: two of the leaders are already away, and that’s as many as can be away at once. Owen Diaz can "
+            "make an exception.") in words
+    assert "Your reason · private " + SECRET in words
+    seen = words.replace(SECRET, "")
+    assert not UUID.search(seen) and not OFFICE_WORDS.search(seen) and not KEYS.search(seen)
+    assert not TITLE_WORDS.search(seen.replace(OWNER_CALLED, ""))
+    # The one over him is not asked, and reads nothing of it.
+    amara = text(page(db, "amara")[0])
+    assert "Waiting for your yes" not in amara and SECRET not in amara and "Yusuf Grant Time off" not in amara
+
+
+@LIMITS
+def test_whoever_it_went_up_to_sees_why_it_came_to_them_and_their_yes_is_an_exception(app, db, shell):
+    full(db)
+    as_(app, "yusuf")
+    post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET, sure="yes")
+    [row] = asks(db)
+    html, status = page(db, "owen")
+    words = text(html)
+    assert status == 200 and "Waiting for your yes 1 waiting" in words
+    assert ("Yusuf Grant Time off Fri, Dec 18 to Fri, Dec 25 Why it came to you Sun, Dec 20 is full: two of the "
+            "leaders are already away, and that’s as many as can be away at once. Your yes makes an exception. "
+            "Their reason · private " + SECRET) in words
+    card = words.split("Waiting for your yes")[1].split("Ask for time off")[0]
+    assert "Wren" not in card and "Kara" not in card, "why it came says how many, never who"
+    assert "Kara Bell Sun, Dec 20" in words.split("Who else is away")[1], "who is away is on the calendar he may see"
+    seen = words.replace(SECRET, "")
+    assert not UUID.search(seen) and not OFFICE_WORDS.search(seen) and not KEYS.search(seen)
+    assert not TITLE_WORDS.search(seen.replace(OWNER_CALLED, ""))
+    as_(app, "owen")
+    assert went(post(app, f"/my/lead/dates/{row['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes_x"
+    assert (row["state"], row["excepted"], row["decided_by_contact_id"]) == ("yes", ["over_limit"],
+                                                                             db.who[HOPE]["owen"])
+    assert "You said yes, as an exception. It’s on the calendar now." in text(page(db, "owen", done="dt_yes_x")[0])
+    mine = text(page(db, "yusuf")[0])
+    assert "Owen Diaz said yes on Wed, Nov 18, as an exception. It’s on the calendar." in mine
+    assert "Needs an exception" not in mine, "answered: the card is its answer"
+
+
+@LIMITS
+def test_a_protected_day_is_named_before_sending_and_a_guarded_leaders_goes_to_the_owner(app, db, shell):
+    db.t["church_protected_days"].append({"id": db.nid("church_protected_days"), "business_id": HOPE, "day": day(36),
+                                          "name": "Christmas Eve", "created_by": None,
+                                          "created_at": fake.NOW.isoformat()})
+    as_(app, "elena")
+    r = post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")
+    assert r.status_code == 200 and asks(db) == []
+    words = text(r.text)
+    assert ("Not sent yet Thu, Dec 24 is a protected day (Christmas Eve). The nearest open days are Sun, Dec 13 and "
+            "Sun, Dec 27. You can still ask for these days. It goes to Pastor Nathan, who can make an exception.") in words
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", sure="yes")).endswith(
+        "done=dt_asked_up")
+    [row] = asks(db)
+    assert (row["flags"], row["to_user_id"]) == (["protected_day"], c3.NH_OWNER)
+    assert "Thu, Dec 24 is a protected day (Christmas Eve). Pastor Nathan can make an exception." in text(
+        page(db, "elena")[0])
+    nathan = text(page(db, "nathan")[0])
+    assert "Why it came to you Thu, Dec 24 is a protected day (Christmas Eve). Your yes makes an exception." in nathan
+    assert "Waiting for your yes" not in text(page(db, "owen")[0]), "whoever oversees the office is not asked"
+
+
+@LIMITS
+def test_days_with_room_go_straight_through_and_changed_days_are_looked_at_again(app, db, shell):
+    full(db)
+    as_(app, "yusuf")
+    assert post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off").status_code == 200
+    assert asks(db) == []
+    # The other button: the days changed to ones with room. Sent at once, to the one over him.
+    assert went(post(app, "/my/lead/dates/ask", start=day(40), end=day(44), kind="time_off")) == \
+        "/my/lead/dates?done=dt_asked"
+    [row] = asks(db)
+    assert (row["flags"], row["to_contact_id"]) == ([], db.who[HOPE]["amara"])
+    words = text(page(db, "yusuf")[0])
+    assert "Needs an exception" not in words and "Not sent yet" not in words
+    # Sure of days that turn out to have room: a plain ask, no exception asked for.
+    db.t["church_away_asks"].clear()
+    db.t["serve_away"].clear()
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", sure="yes")).endswith(
+        "done=dt_asked")
+    assert asks(db)[0]["flags"] == []
+
+
+@LIMITS
+def test_the_look_before_sending_writes_nothing_in_the_preview_and_refuses_what_the_ask_refuses(app, db, shell):
+    full(db)
+    before = wrote(db)
+    as_(app, "yusuf")
+    app.state.update(unavailable="preview")
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")) == \
+        "/my/lead/dates?err=preview"
+    app.state.update(unavailable=False)
+    assert went(post(app, "/my/lead/dates/ask", start=day(37), end=day(30), kind="time_off")).endswith("err=dt_days")
+    as_(app, "hugo")                                    # not on the leaders schedule
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")).endswith("err=dt_not_on")
+    as_(app, "nathan")                                  # the one person the church's owner is: never looked at
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")).endswith("done=dt_set")
+    assert len(asks(db)) == 1 and asks(db)[0]["flags"] == [] and len(wrote(db)[0]) == len(before[0]) + 2
+    as_(app, "yusuf")
+    db.fail = {"get": "/church_protected_days"}         # the look can't be read: nothing is sent, try again
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")).endswith("err=error")
+    assert len(asks(db)) == 1
+
+
+@LIMITS
+def test_cant_make_it_is_never_looked_at_on_a_full_day(app, db, shell):
+    full(db, on=day(4))
+    as_(app, "yusuf")
+    assert went(post(app, "/my/lead/dates/cant", start=day(4))) == "/my/lead/dates?done=dt_cant"
+    [row] = asks(db)
+    assert (row["state"], row["flags"]) == ("yes", ["short_notice"])
+    assert "Needs an exception" not in text(page(db, "yusuf")[0])
+
+
+@LIMITS
+def test_a_yes_from_the_page_that_no_longer_lands_says_so_in_plain_words(app, db, shell):
+    db.t["church_schedule_settings"].append({"business_id": HOPE, "notice_days": 14, "leaders_limit": 2,
+                                             "office_limit": None, "service_weekdays": None})
+    got = ask(app, "yusuf", reason=SECRET)              # room when he asked: it went to Amara
+    away(db, "wren")
+    away(db, "kara")                                    # and then the Sunday filled
+    as_(app, "amara")
+    assert went(post(app, f"/my/lead/dates/{got['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_up"
+    assert (got["state"], got["flags"], got["to_user_id"]) == ("asked", ["over_limit"], db.who[HOPE]["owen@"])
+    words = text(page(db, "amara", err="dt_up")[0])
+    assert ("Those days have changed since this was asked: one of them is full now, or is a protected day. Your yes "
+            "didn’t go through, and it has gone on to the one who can make an exception.") in words
+    assert "Waiting for your yes" not in words and SECRET not in words, "it has left her"
+    # The owner's own person, on one that went to him and has filled since: marked, and a second yes is the exception.
+    db.t["church_away_asks"].clear()
+    db.t["serve_away"].clear()
+    mine = ask(app, "amara", start=day(30), end=day(37))
+    assert mine["flags"] == [] and mine["to_user_id"] == c3.NH_OWNER
+    away(db, "wren")
+    away(db, "kara")
+    as_(app, "nathan")
+    assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_yours"
+    words = text(page(db, "nathan", err="dt_yours")[0])
+    assert "It’s marked below. Say yes again to make an exception." in words and "Why it came to you" in words
+    assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes_x"
+    assert mine["excepted"] == ["over_limit"]
+
+
+@LIMITS
+def test_on_the_page_nobody_gets_the_owners_or_the_office_overseers_view_of_a_flagged_ask(app, db, shell):
+    """A member-app session is a person: an exception only on an ask that
+    went up to that very person."""
+    full(db)
+    as_(app, "yusuf")
+    post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=SECRET, sure="yes")
+    as_(app, "elena")
+    post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", reason=OTHER, sure="yes")
+    his, hers = asks(db)
+    assert (his["to_user_id"], hers["to_user_id"]) == (db.who[HOPE]["owen@"], c3.NH_OWNER)
+    nathan, owen = text(page(db, "nathan")[0]), text(page(db, "owen")[0])
+    assert OTHER in nathan and SECRET not in nathan and "Yusuf Grant Time off" not in nathan
+    assert SECRET in owen and OTHER not in owen and "Elena Ruiz Time off" not in owen
+    for who, ask_id in (("nathan", his["id"]), ("owen", hers["id"]), ("amara", his["id"]), ("amara", hers["id"])):
+        as_(app, who)
+        assert went(post(app, f"/my/lead/dates/{ask_id}/answer", ans="yes")).endswith("err=dt_not_yours"), who
+    assert (his["state"], hers["state"]) == ("asked", "asked") and db.rpcs == []
+
+
+@LIMITS
+def test_a_flagged_card_whose_days_have_cleared_says_there_is_room_now(app, db, shell):
+    full(db)
+    as_(app, "yusuf")
+    post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off", sure="yes")
+    db.t["serve_away"].clear()
+    assert ("Needs an exception These days were full or protected when you asked, so it went up. There’s room now. "
+            "Owen Diaz can make an exception.") in text(page(db, "yusuf")[0])
+    assert ("Why it came to you These days were full or protected when it was asked. There’s room now, so your yes "
+            "is a plain yes.") in text(page(db, "owen")[0])
+    as_(app, "owen")
+    assert went(post(app, f"/my/lead/dates/{asks(db)[0]['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes"
+
+
+def test_with_step_one_alone_the_page_never_looks_and_reads_nothing_of_step_two(app, db, shell, monkeypatch):
+    """The default fixture is a database with step 1's file alone."""
+    import church_schedule_limits as csl
+
+    def never(*a, **k):
+        raise AssertionError("the limit was asked about on a database without it")
+    monkeypatch.setattr(mpd, "_look", never)
+    monkeypatch.setattr(mpd, "_limits", never)
+    for name in ("picture", "look", "flags_for"):
+        monkeypatch.setattr(csl, name, never)
+    for h in ("wren", "kara", "celia", "esther"):
+        db.t["serve_away"].append({"id": db.nid("serve_away"), "business_id": HOPE, "contact_id": db.who[HOPE][h],
+                                   "starts_on": SUNDAY, "ends_on": SUNDAY, "note": "", "ask_id": None, "kind": None})
+    as_(app, "yusuf")
+    assert went(post(app, "/my/lead/dates/ask", start=day(30), end=day(37), kind="time_off")).endswith("done=dt_asked")
+    assert asks(db)[0]["flags"] == [] and asks(db)[0]["to_contact_id"] == db.who[HOPE]["amara"]
+    words = text(page(db, "yusuf", done="dt_asked")[0])
+    assert "Asked. It’s waiting for Amara Stone’s yes." in words and "exception" not in words
+    assert not [p for p in db.reads if fake.STEP2_NEW.search(p)] and "absent: step 2" not in db.refused
+
+
+def test_the_words_for_a_full_or_protected_day_have_no_ids_office_words_or_title_words():
+    today = fake.TODAY
+    said = [mpd._why_said({"flag": "over_limit", "day": SUNDAY, "of": of, "name": name, "away": n, "at_most": n}, today)
+            for of, name, n in (("leaders", "", 1), ("leaders", "", 3), ("office", "", 2), ("department", "Worship", 14))]
+    assert said == [
+        "Sun, Dec 20 is full: one of the leaders is already away, and that’s as many as can be away at once.",
+        "Sun, Dec 20 is full: three of the leaders are already away, and that’s as many as can be away at once.",
+        "Sun, Dec 20 is full: two from the office are already away, and that’s as many as can be away at once.",
+        "Sun, Dec 20 is full: 14 from Worship are already away, and that’s as many as can be away at once."]
+    said += [mpd._why_said({"flag": "protected_day", "day": day(36), "name": ""}, today),
+             mpd._open_said({"before": day(25), "after": None}, today), mpd._open_said({}, today),
+             *mpd._why_lines([{"flag": "protected_day", "day": day(n), "name": ""} for n in range(30, 36)], today),
+             *mpd.DONE_UP.values(), *mpd.DONE_ALONE.values(), mpd.ERRORS["dt_up"], mpd.ERRORS["dt_yours"],
+             mpd.NOT_SENT]
+    assert "Thu, Dec 24 is a protected day." in said and "The nearest open day is Sun, Dec 13." in said and "" in said
+    assert "And 3 more days like these." in said
+    for words in said:
+        for rule in (UUID, OFFICE_WORDS, TITLE_WORDS, KEYS):
+            assert not rule.search(words.replace("{up}", "Owen Diaz")), (words, rule.search(words))
