@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17, on resending a leaders-note text that failed: "build that"'
 status: in review
-prs: [kmj-intake-server (this PR), "solutionist-studio (the frontend PR)"]
+prs: [kmj-intake-server#1914, solutionist-studio#1623]
 migrations: []
 left_undone:
   - "A Text them again that breaks partway (an exception mid-send, not a failed text) is kept as unsure: who got it can't be told, so it never goes again that week. Same for the note's own send"
