@@ -165,6 +165,9 @@ TICKS = {
     "devotional_daily_texts": "devotional_daily:sweep_tick",
     "devotional_daily_morning": "devotional_daily:morning_tick",
     "sample_church_cleanup": "sample_church:cleanup_tick",
+    # Not business-scoped: the platform's own database readings and weekly
+    # verdict; its church count already leaves samples out (is_sample).
+    "db_health": "db_health:tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {
