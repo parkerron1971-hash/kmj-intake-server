@@ -741,13 +741,19 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
 
 
 def _flash(request: Request) -> str:
+    return flash_html(done=request.query_params.get("done") or "", err=request.query_params.get("err") or "")
+
+
+def flash_html(done: str = "", err: str = "") -> str:
+    """The notice a page shows after ?done= or ?err= (member_instant_send
+    hands the same markup to a page that sent without reloading)."""
     from member_portal import _e
-    done = DONE.get(request.query_params.get("done") or "")
-    err = ERRORS.get(request.query_params.get("err") or "")
-    if err:
-        return f'<p class="mp-err mp-flash" role="alert">{_e(err)}</p>'
-    if done:
-        return f'<p class="mp-ok mp-flash" role="status">{_e(done)}</p>'
+    done_words = DONE.get(done or "")
+    err_words = ERRORS.get(err or "")
+    if err_words:
+        return f'<p class="mp-err mp-flash" role="alert">{_e(err_words)}</p>'
+    if done_words:
+        return f'<p class="mp-ok mp-flash" role="status">{_e(done_words)}</p>'
     return ""
 
 

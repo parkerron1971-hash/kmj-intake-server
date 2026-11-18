@@ -1354,6 +1354,94 @@ CHAT_CSS = """
 """
 
 
+RX_NAMES = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen", "", "Amen"))
+
+
+def _chat_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]], mode: str,
+               by_id: Dict[str, Dict[str, Any]], rx: Dict[str, Dict[str, Any]], tid: str, here: str, leader: bool,
+               photos: Dict[str, Any], polls: Dict[str, Any], now: datetime, tz=None) -> str:
+    """One message in a group's chat: the page draws every message with
+    it, and member_instant_send draws a message just sent with it (sent_item),
+    so the two never differ."""
+    import chat_photos
+    import chat_polls
+    from member_portal import _e
+    sid = str(m.get("sender_contact_id") or "")
+    mine = sid == me_id
+    person = folks.get(sid) or {}
+    name = display_name(person, mode) if person else "Someone"
+    face = "" if mine else _face(person, "gs-av m", mode)
+    who = "" if mine else f'<span class="gc-who">{_e(name)}</span>'
+    quote = ""
+    if m.get("reply_to"):
+        q = by_id.get(str(m["reply_to"]))
+        if q and q.get("status") == "delivered":
+            qn = display_name(folks.get(str(q.get("sender_contact_id") or "")) or {}, mode) or "Someone"
+            quote = f'<span class="gc-q"><b>{_e(qn)}</b><span>{_e(str(q.get("body") or "")[:120])}</span></span>'
+    held = ('<span class="gc-held">Held for review. Only you can see it.</span>' if m.get("status") == "held" else "")
+    r = rx.get(str(m["id"])) or {}
+    chips, acts = [], []
+    if m.get("status") == "delivered":
+        for kind, icon, label in RX_NAMES:
+            n = int(r.get(kind) or 0)
+            on = kind in (r.get("mine") or set())
+
+            def toggle(cls: str, inner: str, said: str) -> str:
+                return (f'<form method="post" action="/my/messages/{_e(tid)}/react"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                        f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="{_e(here)}">'
+                        f'<button class="{cls}{" on" if on else ""}" type="submit" aria-pressed="{"true" if on else "false"}" '
+                        f'aria-label="{said}">{inner}</button></form>')
+            # Under the message: the reactions it has, with counts.
+            if n or on:
+                chips.append(toggle("gc-chip", (_ic(icon, 14) if icon else f"<span>{label}</span>") + f"<span>{n}</span>",
+                                    f"{label}, {n}"))
+            # In the picker: all three.
+            acts.append(toggle("gc-pk", _ic(icon, 18) if icon else f"<span>{label}</span>", label))
+        acts.append(f'<a class="gc-act" href="{_e(here)}?reply={_e(m["id"])}#gc-compose">Reply</a>')
+        if not mine:
+            acts.append(f'<form method="post" action="/my/messages/report"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                        f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act" type="submit">Report</button></form>')
+        if leader and not mine:
+            acts.append(f'<form method="post" action="/my/messages/{_e(tid)}/hide"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                        f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act warn" type="submit">Take down</button></form>')
+    chips_html = f'<div class="gc-rx">{"".join(chips)}</div>' if chips else ""
+    body = _e(m.get("body") or "")
+    # Tap a message for Love / Praying / Amen, Reply, Report (and a
+    # leader's Take down): the chat stays calm, like the canvas.
+    bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
+              if acts else f'<p class="gc-b">{body}</p>')
+    pic = photos.get(str(m["id"]))
+    if pic:
+        # A photo: tap it for the same picker, with Open for the full size.
+        cap = body if pic["captioned"] else ""
+        alt = ("Your photo" if mine else f"Photo from {name}") + (": " + str(m.get("body") or "") if cap else "")
+        shown = (f'<span class="gc-ph{" cap" if cap else ""}">{chat_photos.img(tid, str(m["id"]), pic, alt, _e)}</span>'
+                 + (f'<span class="gc-b">{cap}</span>' if cap else ""))
+        opener = f'<a class="gc-act" href="{_e(chat_photos.src(tid, str(m["id"])))}" target="_blank" rel="noopener">Open</a>'
+        bubble = (f'<details class="gc-d"><summary class="gc-phs">{shown}</summary><div class="gc-acts">{opener}{"".join(acts)}</div></details>'
+                  if acts else f'<div class="gc-phs">{shown}</div>')
+    poll = polls.get(str(m["id"]))
+    if poll:
+        # A poll: its question opens the same picker, its choices vote.
+        q = (f'<details class="gc-d"><summary class="gc-pq">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
+             if acts else f'<p class="gc-pq">{body}</p>')
+        bubble = chat_polls.card(poll, question_html=q, tid=tid, mid=str(m["id"]), here=here, esc=_e, now=now,
+                                 tz=tz, can_vote=m.get("status") == "delivered")
+    rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
+    return (f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
+            f'{bubble}{rang}{held}{chips_html}</div></li>')
+
+
+def sent_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]], mode: str,
+              quoted: Optional[Dict[str, Any]], tid: str, here: str) -> str:
+    """A message the member just sent, as the chat page draws it (no
+    reactions yet, no photo or poll: instant send carries words only).
+    `quoted` is the delivered message it replies to, when there is one."""
+    by_id = {str(quoted["id"]): quoted} if quoted else {}
+    return _chat_item(m, me_id=me_id, folks=folks, mode=mode, by_id=by_id, rx={}, tid=tid, here=here,
+                      leader=False, photos={}, polls={}, now=datetime.now(timezone.utc))
+
+
 def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dict[str, Any], cv: Dict[str, Any],
                leader: bool, *, here: str = ""):
     """(html, script) for the Chat tab (and the leaders' room, `here`)."""
@@ -1403,7 +1491,6 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     by_id = {str(m["id"]): m for m in msgs}
     reply_id = str(request.query_params.get("reply") or "")
     replying = by_id.get(reply_id) if UUID.match(reply_id) and by_id.get(reply_id, {}).get("status") == "delivered" else None
-    rx_names = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen", "", "Amen"))
     import chat_photos
     import chat_polls
     polls = cv.get("polls") or {}
@@ -1414,70 +1501,8 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     items = []
     stamps = []
     for m in msgs:
-        sid = str(m.get("sender_contact_id") or "")
-        mine = sid == me_id
-        person = folks.get(sid) or {}
-        name = display_name(person, mode) if person else "Someone"
-        face = "" if mine else _face(person, "gs-av m", mode)
-        who = "" if mine else f'<span class="gc-who">{_e(name)}</span>'
-        quote = ""
-        if m.get("reply_to"):
-            q = by_id.get(str(m["reply_to"]))
-            if q and q.get("status") == "delivered":
-                qn = display_name(folks.get(str(q.get("sender_contact_id") or "")) or {}, mode) or "Someone"
-                quote = f'<span class="gc-q"><b>{_e(qn)}</b><span>{_e(str(q.get("body") or "")[:120])}</span></span>'
-        held = ('<span class="gc-held">Held for review. Only you can see it.</span>' if m.get("status") == "held" else "")
-        r = rx.get(str(m["id"])) or {}
-        chips, acts = [], []
-        if m.get("status") == "delivered":
-            for kind, icon, label in rx_names:
-                n = int(r.get(kind) or 0)
-                on = kind in (r.get("mine") or set())
-
-                def toggle(cls: str, inner: str, said: str) -> str:
-                    return (f'<form method="post" action="/my/messages/{_e(tid)}/react"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
-                            f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="{_e(here)}">'
-                            f'<button class="{cls}{" on" if on else ""}" type="submit" aria-pressed="{"true" if on else "false"}" '
-                            f'aria-label="{said}">{inner}</button></form>')
-                # Under the message: the reactions it has, with counts.
-                if n or on:
-                    chips.append(toggle("gc-chip", (_ic(icon, 14) if icon else f"<span>{label}</span>") + f"<span>{n}</span>",
-                                        f"{label}, {n}"))
-                # In the picker: all three.
-                acts.append(toggle("gc-pk", _ic(icon, 18) if icon else f"<span>{label}</span>", label))
-            acts.append(f'<a class="gc-act" href="{_e(here)}?reply={_e(m["id"])}#gc-compose">Reply</a>')
-            if not mine:
-                acts.append(f'<form method="post" action="/my/messages/report"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
-                            f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act" type="submit">Report</button></form>')
-            if leader and not mine:
-                acts.append(f'<form method="post" action="/my/messages/{_e(tid)}/hide"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
-                            f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act warn" type="submit">Take down</button></form>')
-        chips_html = f'<div class="gc-rx">{"".join(chips)}</div>' if chips else ""
-        body = _e(m.get("body") or "")
-        # Tap a message for Love / Praying / Amen, Reply, Report (and a
-        # leader's Take down): the chat stays calm, like the canvas.
-        bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
-                  if acts else f'<p class="gc-b">{body}</p>')
-        pic = photos.get(str(m["id"]))
-        if pic:
-            # A photo: tap it for the same picker, with Open for the full size.
-            cap = body if pic["captioned"] else ""
-            alt = ("Your photo" if mine else f"Photo from {name}") + (": " + str(m.get("body") or "") if cap else "")
-            shown = (f'<span class="gc-ph{" cap" if cap else ""}">{chat_photos.img(tid, str(m["id"]), pic, alt, _e)}</span>'
-                     + (f'<span class="gc-b">{cap}</span>' if cap else ""))
-            opener = f'<a class="gc-act" href="{_e(chat_photos.src(tid, str(m["id"])))}" target="_blank" rel="noopener">Open</a>'
-            bubble = (f'<details class="gc-d"><summary class="gc-phs">{shown}</summary><div class="gc-acts">{opener}{"".join(acts)}</div></details>'
-                      if acts else f'<div class="gc-phs">{shown}</div>')
-        poll = polls.get(str(m["id"]))
-        if poll:
-            # A poll: its question opens the same picker, its choices vote.
-            q = (f'<details class="gc-d"><summary class="gc-pq">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
-                 if acts else f'<p class="gc-pq">{body}</p>')
-            bubble = chat_polls.card(poll, question_html=q, tid=tid, mid=str(m["id"]), here=here, esc=_e, now=now,
-                                     tz=cv.get("tz"), can_vote=m.get("status") == "delivered")
-        rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
-        items.append(f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
-                     f'{bubble}{rang}{held}{chips_html}</div></li>')
+        items.append(_chat_item(m, me_id=me_id, folks=folks, mode=mode, by_id=by_id, rx=rx, tid=tid, here=here,
+                                leader=leader, photos=photos, polls=polls, now=now, tz=cv.get("tz")))
         stamps.append(str(m.get("created_at") or ""))
     # The group's notes (a leader's Board post, a prayer-wall request) at
     # their time among the messages, each a small card with its button.
@@ -1532,7 +1557,7 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                   "not_enabled": "Ask the church office to turn on messaging for you."}.get(acc.get("why"), "You can’t post here right now.")
         compose = f'<p class="gs-note">{_e(reason)}</p>'
     # New messages show up for everyone, readers of a leaders-only chat too.
-    script = _chat_script(tid, len(msgs), len(gnotes))
+    script = chat_script(tid, msgs, len(gnotes), compose_open=can_write and 'id="gc-compose"' in compose)
     # How you hear about it (group_chat_notify), when the church sends notes about messages.
     import group_chat_notify as gcn
     hear = gcn.control(tid, cv["notify"], here, _ic, _e) if cv.get("notify") else ""
@@ -1552,6 +1577,40 @@ def _alert_toggle(cv: Dict[str, Any]) -> str:
     return (f'<label class="gc-ah"><input type="checkbox" name="after_hours" value="1">{_ic("bell", 15)}'
             f'<span><b>After-hours alert</b> Rings through quiet hours for people who allow it, like a late prayer call. '
             f'One a night.</span></label>')
+
+
+def chat_script(tid: str, msgs: List[Dict[str, Any]], notes: int = 0, *, compose_open: bool = True) -> str:
+    """The chat's scripts: instant send (member_instant_send) and a poll
+    that knows about it, or, with MEMBER_INSTANT_SEND=off, the post that
+    reloads (_chat_script)."""
+    import member_instant_send as mis
+    last = str(msgs[-1]["id"]) if msgs else ""
+    instant = mis.script("gc-compose", "gc-list", "gc-say", "gc-err", "gc", seen=last) if compose_open else ""
+    if not mis.on():
+        return _chat_script(tid, len(msgs), notes)
+    return _instant_chat_script(tid, len(msgs), notes, last) + instant
+
+
+def _instant_chat_script(tid: str, count: int, notes: int, last: str) -> str:
+    """_chat_script's poll, beside instant send: reload when something new
+    arrives (a different count or newest message, or a new note), never
+    while they're typing or choosing or a message of theirs is on its way.
+    Their own sent message (mb:sent) is on the page already; when someone
+    else wrote in between (fresh false) the next poll reloads."""
+    import json
+    return f"""<script>(function(){{var f=document.getElementById('gc-compose'),n={json.dumps(count)},k={json.dumps(notes)},last={json.dumps(last)};
+var l=document.getElementById('gc-list');if(l&&!location.hash){{if(getComputedStyle(l).overflowY==='auto'){{l.scrollTop=l.scrollHeight;}}else{{window.scrollTo(0,document.documentElement.scrollHeight);}}}}
+document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
+document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
+function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'&&document.activeElement.value)return;
+if(f&&f.hasAttribute('data-sending'))return;
+if(document.getElementById('gc-pollform')||document.getElementById('gc-photoform'))return;
+if(document.querySelector('details.gc-d[open]'))return;
+fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
+.then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&(d.count!==n||(typeof d.notes==='number'&&d.notes!==k)||(typeof d.last==='string'&&d.last!==last)))location.replace(location.pathname);}}).catch(function(){{}});}}
+setInterval(poll,6000);
+if(f)f.addEventListener('mb:sent',function(e){{var x=e.detail||{{}};if(typeof x.count==='number'&&x.fresh){{n=x.count;last=x.id;}}else{{n=-1;}}}});
+}})();</script>"""
 
 
 def _chat_script(tid: str, count: int, notes: int = 0) -> str:

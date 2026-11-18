@@ -57,7 +57,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 import church_threads as ct
 import sb_clients
@@ -637,6 +637,21 @@ t.addEventListener('input',fit);fit();
 var f=document.getElementById('ct-compose');if(f){f.addEventListener('submit',function(){var s=f.querySelector('button');if(s)s.disabled=true;});}
 })();</script>"""
 
+# With instant send on (member_instant_send) the box is its script's: this
+# only scrolls to the newest and grows the box as they write.
+SCROLL_ONLY_JS = """<script>(function(){var b=document.getElementById('ct-chat');if(b){window.scrollTo(0,document.documentElement.scrollHeight);}
+var t=document.getElementById('ct-say');if(!t)return;function fit(){t.style.height='auto';t.style.height=Math.min(t.scrollHeight,160)+'px';}
+t.addEventListener('input',fit);fit();
+})();</script>"""
+
+
+def church_script() -> str:
+    """The church conversation's scripts: instant send while it's on, else
+    the plain post that reloads (MEMBER_INSTANT_SEND=off)."""
+    import member_instant_send as mis
+    instant = mis.script("ct-compose", "ct-chat", "ct-say", "ct-err", "ct")
+    return SCROLL_ONLY_JS + instant if instant else SCROLL_JS
+
 
 def render_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                   rows: List[Dict[str, Any]], zone) -> str:
@@ -653,7 +668,7 @@ def render_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any
     body = (f'<style>{THREAD_CSS}</style><div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(name)}</h1></div>'
             f'{_flash(request)}<ul class="mb-chat ct-chat" id="ct-chat" aria-label="Messages">{chat}</ul>{compose}</div>')
     return _shell(biz, site, name, body, tab="messages", who=me, bar=False, back=("/my/messages", "Messages"),
-                  script=SCROLL_JS)
+                  script=church_script())
 
 
 def render_group(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any], rows: List[Dict[str, Any]],
@@ -752,7 +767,7 @@ def recent_mine(business_id: str, contact_id: str) -> Optional[List[Dict[str, An
     since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     rows = sb_clients.sb_get_as_service(
         f"/{ct.NOTES}?business_id=eq.{ct._q(business_id)}&contact_id=eq.{ct._q(contact_id)}&direction=eq.member"
-        f"&created_at=gte.{ct._q(since)}&select=id,created_at&order=created_at.desc&limit={ct.DAY_MAX + 1}")
+        f"&created_at=gte.{ct._q(since)}&select=id,created_at,body,held&order=created_at.desc&limit={ct.DAY_MAX + 1}")
     return rows if isinstance(rows, list) else None
 
 
@@ -763,9 +778,12 @@ def too_soon(rows: List[Dict[str, Any]], now: Optional[datetime] = None) -> bool
     return d is not None and ((now or datetime.now(timezone.utc)) - d).total_seconds() < ct.GAP_SECONDS
 
 
-async def send_message(biz: Dict[str, Any], me: Dict[str, Any], text: str) -> Tuple[bool, str]:
+async def send_message(biz: Dict[str, Any], me: Dict[str, Any], text: str, *,
+                       saved: Optional[Dict[str, Any]] = None, retry: bool = False) -> Tuple[bool, str]:
     """The member's message to the church office. (ok, code): the code is
-    the page's flash."""
+    the page's flash. `saved` gets the saved row ("row"). `retry` (the app
+    lost the answer to this very message) answers with the same words saved
+    in the last few minutes instead of saving them twice."""
     import msg_screen
     import sample_church
     if sample_church.skip(biz):                     # a sample church records and sends nothing
@@ -778,6 +796,11 @@ async def send_message(biz: Dict[str, Any], me: Dict[str, Any], text: str) -> Tu
     mine = await asyncio.to_thread(recent_mine, biz_id, me_id)
     if mine is None:
         return False, "error"
+    if retry:
+        import member_instant_send as mis
+        hit = mis.same_recent(mine, text)
+        if hit is not None:
+            return await _already_sent(biz_id, hit, text, saved)
     if len(mine) >= ct.DAY_MAX:
         return False, "ct_day"
     if too_soon(mine):
@@ -794,6 +817,8 @@ async def send_message(biz: Dict[str, Any], me: Dict[str, Any], text: str) -> Tu
         "author_name": first or None, "held": held}, redact=True)
     if not isinstance(row, list) or not row:
         return False, "error"
+    if saved is not None:
+        saved["row"] = row[0]
     if held:
         ct.tell_reviewers(biz_id, str(row[0].get("id") or ""))
         return True, "held"
@@ -803,6 +828,51 @@ async def send_message(biz: Dict[str, Any], me: Dict[str, Any], text: str) -> Tu
         await asyncio.to_thread(mpm.care_alert, biz_id, me)
         return True, "care"
     return True, "ct_sent"
+
+
+async def _already_sent(biz_id: str, row: Dict[str, Any], text: str, saved: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+    """A retry whose message was saved the first time: nothing is saved or
+    told again. A row keeps "held" but not a crisis verdict, so the words
+    are checked again to show the crisis resources the first answer would
+    have shown (the crisis floor when the check can't run)."""
+    import msg_screen
+    if saved is not None:
+        saved["row"] = row
+    if row.get("held"):
+        return True, "held"
+    try:
+        verdict = await msg_screen.screen(biz_id, text)
+    except msg_screen.ScreenUnavailable:
+        verdict = msg_screen.floor(text) or "ok"
+    return True, "care" if verdict == "self_harm" else "ct_sent"
+
+
+# A refused send's HTTP status, for the app's JSON answer.
+REFUSED_STATUS = {"ct_day": 429, "ct_gap": 429, "slow": 429, "screen_off": 503, "error": 503, "preview": 403,
+                  "signed_out": 401, "gone_chat": 404}
+
+
+def sent_json(biz: Dict[str, Any], row: Dict[str, Any], code: str) -> Dict[str, Any]:
+    """The app's answer to a saved message: the bubble as this page draws it,
+    the day it falls on (and its divider), and the page's own held or crisis
+    notice. A failure here never makes a saved message look unsent."""
+    import member_instant_send as mis
+    out: Dict[str, Any] = {"ok": True, "code": code, "id": str(row.get("id") or "")}
+    if code == "care":
+        out["care"] = True
+    note = mis.notice(code)
+    if note:
+        out["notice"] = note
+    try:
+        zone = _zone(biz)
+        out["html"] = _bubble(row, zone)
+        d = _at(row.get("created_at"), zone)
+        if d is not None:
+            out["day"] = day_label(d)
+            out["day_html"] = f'<li class="mb-msg ct-day" role="separator">{_e(out["day"])}</li>'
+    except Exception:
+        logger.exception("church conversation: the sent bubble didn't draw")
+    return out
 
 
 def _go(target: str, **q: str) -> RedirectResponse:
@@ -815,17 +885,34 @@ def _go(target: str, **q: str) -> RedirectResponse:
 
 @router.post("/my/inbox/church/send", include_in_schema=False)
 async def send_route(request: Request):
+    """The plain form gets a 303 back to the conversation, as always; the
+    app's instant send (Accept: application/json) gets JSON, through the
+    same checks in the same order."""
+    import member_instant_send as mis
     import member_portal_church as mpc
+    app = mis.wants_json(request)
+
+    def no(code: str, target: str = CHURCH_PAGE):
+        if app:
+            return mis.refused(code, REFUSED_STATUS.get(code, 400), ERRORS)
+        return _go(target, err=code) if target == CHURCH_PAGE else _go(target)
+
     church, me, unavailable = await mpc._signed_in(request)
     form = await request.form()
     if unavailable:
-        return _go(CHURCH_PAGE, err="preview" if unavailable == "preview" else "error")
+        return no("preview" if unavailable == "preview" else "error")
     if not me:
-        return _go("/my")
+        return no("signed_out", "/my")
     biz = church["business"]
     if not await asyncio.to_thread(entry_open, biz):
-        return _go("/my")
+        return no("gone_chat", "/my")
     if not mpc._allowed(church, me):
-        return _go(CHURCH_PAGE, err="slow")
-    ok, code = await send_message(biz, me, ct.words(form.get("body")))
-    return _go(CHURCH_PAGE, **({"done": code} if ok else {"err": code}))
+        return no("slow")
+    saved: Dict[str, Any] = {}
+    ok, code = await send_message(biz, me, ct.words(form.get("body")), saved=saved,
+                                  retry=app and mis.is_retry(form))
+    if not app:
+        return _go(CHURCH_PAGE, **({"done": code} if ok else {"err": code}))
+    if not ok:
+        return no(code)
+    return JSONResponse(await asyncio.to_thread(sent_json, biz, saved.get("row") or {}, code))

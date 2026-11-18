@@ -41,6 +41,7 @@ see unread counts when they open the app.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -53,6 +54,7 @@ import member_messaging_rules as rules
 import sb_clients
 
 router = APIRouter(tags=["member-portal"])
+logger = logging.getLogger("member_portal_messaging")
 
 UUID = re.compile(r"^[0-9a-fA-F-]{36}$")
 BODY_MAX = 2000
@@ -388,16 +390,18 @@ def reactions_for(business_id: str, message_ids: Iterable[str], me_id: str) -> O
 
 
 def group_chat_settings(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
-    """{'chat_on', 'chat_writers', 'chat_extras'} for a group (an older row
-    reads as on, everyone writes, polls on)."""
+    """{'chat_on', 'chat_writers', 'chat_extras', 'name_display'} for a group
+    (an older row reads as on, everyone writes, polls on, full names)."""
     rows = sb_clients.sb_get_as_service(
-        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&select=chat_on,chat_writers,chat_extras&limit=1")
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
+        f"&select=chat_on,chat_writers,chat_extras,name_display&limit=1")
     if not isinstance(rows, list):
         return None
     g = rows[0] if rows else {}
     return {"chat_on": g.get("chat_on") is not False,
             "chat_writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all",
-            "chat_extras": g.get("chat_extras") is not False}
+            "chat_extras": g.get("chat_extras") is not False,
+            "name_display": g.get("name_display") or "full"}
 
 
 def staff_looks(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
@@ -638,7 +642,7 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
         if t["kind"] == "direct" and acc.get("other"):
             actions += (f'<div class="mb-chat-tools"><form method="post" action="/my/messages/{_e(t["id"])}/block">'
                         f'<button class="mp-link" type="submit">Block {_e(first_and_initial(acc["other"]["name"]))}</button></form></div>')
-    script = _poll_script(t["id"], len(msgs)) if not parent else ""
+    script = chat_script(t["id"], msgs) if not parent else ""
     # A chat fills the screen and its box sits at the foot, so the tab
     # bar steps aside (bar=False); Back returns to Messages.
     return _shell(biz, site, title, f"""<div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(title)}</h1></div>
@@ -660,6 +664,34 @@ fetch(f.getAttribute('action'),{{method:'POST',credentials:'same-origin',headers
 .then(function(r){{return r.json().then(function(d){{return {{ok:r.ok,d:d}};}});}}).then(function(x){{b.disabled=false;
 if(x.ok){{i.value='';if(x.d.care){{location.href=location.pathname+'?done=care';return;}}location.reload();}}else{{err.textContent=x.d.error||'That didn\\'t send. Please try again.';err.hidden=false;}}}})
 .catch(function(){{b.disabled=false;err.textContent='That didn\\'t send. Please try again.';err.hidden=false;}});}});}}
+}})();</script>"""
+
+
+def chat_script(tid: str, msgs: List[Dict[str, Any]]) -> str:
+    """A private chat's scripts: instant send (member_instant_send) and a
+    poll that knows about it, or, with MEMBER_INSTANT_SEND=off, the post
+    that reloads."""
+    import member_instant_send as mis
+    last = str(msgs[-1]["id"]) if msgs else ""
+    instant = mis.script("mb-compose", "mb-chat", "mb-say", "mb-chat-err", "mb", seen=last)
+    if not instant:
+        return _poll_script(tid, len(msgs))
+    return _instant_poll_script(tid, len(msgs), last) + instant
+
+
+def _instant_poll_script(tid: str, count: int, last: str) -> str:
+    """Reload when something new arrives: a different count, or a different
+    newest message (a long chat's count stops at PAGE). Never while they're
+    typing or a message of theirs is on its way; their own sent message
+    (mb:sent) is already on the page, so it isn't "new". When someone else
+    wrote in between (fresh false), the next poll reloads."""
+    return f"""<script>(function(){{var box=document.getElementById('mb-chat'),f=document.getElementById('mb-compose'),
+n={json.dumps(count)},last={json.dumps(last)};if(box){{box.scrollTop=box.scrollHeight;window.scrollTo(0,document.documentElement.scrollHeight);}}
+function poll(){{var a=document.activeElement;if(a&&a.id==='mb-say'&&a.value)return;if(f&&f.hasAttribute('data-sending'))return;
+fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
+.then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&(d.count!==n||(typeof d.last==='string'&&d.last!==last)))location.reload();}}).catch(function(){{}});}}
+setInterval(poll,{POLL_MS});
+if(f)f.addEventListener('mb:sent',function(e){{var x=e.detail||{{}};if(typeof x.count==='number'&&x.fresh){{n=x.count;last=x.id;}}else{{n=-1;}}}});
 }})();</script>"""
 
 
@@ -972,9 +1004,10 @@ def _family_page(request, biz, site, me, teen_id: str):
 
 
 def _feed(business_id: str, me_id: str, tid: str, biz: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The chat's poll: how many messages this person can see, and in a
-    group's chat how many of the group's notes sit in it (church threads,
-    member_portal_threads.chat_notes), so a new note shows up too."""
+    """The chat's poll: how many messages this person can see and the
+    newest one's id, and in a group's chat how many of the group's notes sit
+    in it (church threads, member_portal_threads.chat_notes), so a new note
+    shows up too."""
     if not UUID.match(tid):
         return {"error": "gone"}
     t = thread(business_id, tid)
@@ -984,7 +1017,9 @@ def _feed(business_id: str, me_id: str, tid: str, biz: Optional[Dict[str, Any]] 
     if not acc or not acc["role"]:
         return {"error": "gone"}
     msgs = messages(business_id, tid, me_id, parent=acc["role"] == "parent")
-    out: Dict[str, Any] = {"count": len(msgs or [])}
+    # "last": the newest message this person can see, so a long chat (whose
+    # count stops at PAGE) still shows a new one (member_instant_send).
+    out: Dict[str, Any] = {"count": len(msgs or []), "last": str(msgs[-1]["id"]) if msgs else None}
     if biz and t.get("kind") == "group" and acc["role"] == "member" and t.get("group_id"):
         import member_portal_threads as mpt
         out["notes"] = len(mpt.chat_notes(biz, me_id, str(t["group_id"]), msgs or []))
@@ -1094,6 +1129,7 @@ async def send(tid: str, request: Request):
     if photo is not None and (acc.get("teen_in_chat") or rules.is_teen(me)):
         # Not in a chat with a teen in it (Kevin's call; off until he says).
         return _answer(request, False, "photo_teen", back, 403)
+    gs: Optional[Dict[str, Any]] = None
     if t["kind"] == "group":
         # The office's switches for this group (2026-10-20).
         gs = await asyncio.to_thread(group_chat_settings, biz["id"], str(t["group_id"]))
@@ -1110,6 +1146,7 @@ async def send(tid: str, request: Request):
             if not any(str(g["group_id"]) == str(t["group_id"]) and g.get("role") == "leader" for g in mine):
                 return _answer(request, False, "leaders_write", back, 403)
     reply_to = str(form.get("reply_to") or "")
+    quoted: Optional[Dict[str, Any]] = None
     if reply_to:
         if not UUID.match(reply_to):
             reply_to = ""
@@ -1117,10 +1154,28 @@ async def send(tid: str, request: Request):
             hit = await asyncio.to_thread(
                 sb_clients.sb_get_as_service,
                 f"/msg_messages?id=eq.{_q(reply_to)}&thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}"
-                f"&status=eq.delivered&select=id&limit=1")
+                f"&status=eq.delivered&select=id,body,sender_contact_id,status&limit=1")
             if not isinstance(hit, list):
                 return _answer(request, False, "error", back, 503)
             reply_to = reply_to if hit else ""
+            quoted = hit[0] if hit else None
+    import member_instant_send as mis
+    app = _wants_json(request)
+    seen = str(form.get("seen") or "")
+    if app and mis.is_retry(form) and photo is None and choices is None:
+        # The app lost the answer to this very message: when it was saved,
+        # answer with it instead of saving it twice.
+        again = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/msg_messages?thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}&sender_contact_id=eq.{_q(me['id'])}"
+            f"&status=in.(delivered,held)&created_at=gte.{quote(mis.since(), safe='')}"
+            f"&select=id,sender_contact_id,body,status,flag,reply_to,after_hours,created_at&order=created_at.desc&limit=5")
+        if not isinstance(again, list):
+            return _answer(request, False, "error", back, 503)
+        was = mis.same_recent(again, text)
+        if was is not None:
+            code = "held" if was.get("status") == "held" else "care" if was.get("flag") == "self_harm" else "sent"
+            return JSONResponse(await asyncio.to_thread(sent_json, biz, me, t, acc, was, code, back, seen, quoted, gs))
     # An after-hours alert means something only in quiet hours, and each
     # person sends one a night.
     import member_push
@@ -1194,8 +1249,49 @@ async def send(tid: str, request: Request):
                                 {"state": "active"})
     if verdict == "self_harm":
         await asyncio.to_thread(care_alert, biz["id"], me)
-        return _answer(request, True, "care", back, care=True)
-    return _answer(request, True, "held" if verdict == "harm" else "sent", back)
+    code = "care" if verdict == "self_harm" else "held" if verdict == "harm" else "sent"
+    if app:
+        return JSONResponse(await asyncio.to_thread(sent_json, biz, me, t, acc, row[0], code, back, seen, quoted, gs))
+    return _answer(request, True, code, back, **({"care": True} if code == "care" else {}))
+
+
+def sent_json(biz: Dict[str, Any], me: Dict[str, Any], t: Dict[str, Any], acc: Dict[str, Any], row: Dict[str, Any],
+              code: str, back: str, seen: str, quoted: Optional[Dict[str, Any]],
+              gs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The app's answer to a saved message (member_instant_send): its bubble
+    drawn by the page's own renderer (a group's chat, or a private chat),
+    the page's held or crisis notice, and for the poll how many messages the
+    chat shows now and whether the one before it is the newest the page had
+    (`seen`), i.e. nobody else wrote in between. A failure here never makes
+    a saved message look unsent."""
+    import member_instant_send as mis
+    out: Dict[str, Any] = {"ok": True, "code": code, "id": str(row.get("id") or "")}
+    if code == "care":
+        out["care"] = True
+    note = mis.notice(code)
+    if note:
+        out["notice"] = note
+    me_id = str(me["id"])
+    try:
+        if _GROUP_BACK.match(back or ""):
+            import member_portal_groups as mpg
+            mode = ((gs or {}).get("name_display") if t.get("kind") == "group" else None) or "full"
+            out["html"] = mpg.sent_item(row, me_id=me_id, folks=acc.get("people") or {}, mode=mode, quoted=quoted,
+                                        tid=str(t["id"]), here=back)
+        else:
+            out["html"] = _bubble(row, me_id, {}, reportable=False)
+    except Exception:
+        logger.exception("chat: the sent bubble didn't draw")
+    try:
+        msgs = messages(biz["id"], str(t["id"]), me_id)
+    except Exception:
+        msgs = None
+    if msgs is not None:
+        ids = [str(m["id"]) for m in msgs]
+        out["count"] = len(ids)
+        i = ids.index(out["id"]) if out["id"] in ids else -1
+        out["fresh"] = i >= 0 and (ids[i - 1] if i > 0 else "") == (seen or "")
+    return out
 
 
 async def _set_state(request: Request, tid: str, state: str):

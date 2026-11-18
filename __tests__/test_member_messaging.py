@@ -237,7 +237,8 @@ def test_needs_a_birthdate_and_the_switch_and_the_guidelines(env):
 def test_adults_who_share_a_group_chat_and_the_other_sees_it_unread(env):
     loc = _start(env, ANA, BEN)
     tid = _tid(loc)
-    assert _send(env, ANA, tid, "See you Tuesday!").json() == {"ok": True}
+    sent = _send(env, ANA, tid, "See you Tuesday!").json()
+    assert sent["ok"] is True and sent["code"] == "sent" and "care" not in sent     # member_instant_send's answer
     inbox = _member(env, BEN).get("/my/messages").text
     assert "See you Tuesday!" in inbox and 'aria-label="1 unread"' in inbox
     assert "See you Tuesday!" in _member(env, BEN).get(f"/my/messages/{tid}").text
@@ -303,7 +304,7 @@ def test_crisis_words_deliver_show_988_and_tell_the_pastor_privately(env):
     tid = _tid(_start(env, ANA, BEN))
     env.verdict = "self_harm"
     r = _send(env, ANA, tid, "I want to disappear")
-    assert r.json() == {"ok": True, "care": True}
+    assert r.json()["ok"] is True and r.json()["care"] is True and r.json()["code"] == "care"
     assert env.t["msg_messages"][0]["status"] == "delivered"
     care = env.t["ministry_care_requests"][0]
     assert care["contact_id"] == ANA and care["submission"]["confidential"] == "yes"
