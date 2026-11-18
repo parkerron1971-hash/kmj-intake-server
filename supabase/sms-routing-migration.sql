@@ -1,3 +1,8 @@
+-- DO NOT RE-RUN THIS FILE (2026-11-18). Its three `*_all` policies are allow-all
+-- (USING true): they let the public anon key read and change every business's
+-- rows, and supabase/APPLY-2026-11-18-close-allow-all-policies.sql drops them.
+-- Running this again recreates them. See docs/RLS_MODEL.md, Rule 3.
+--
 -- sms-routing-migration.sql
 -- SMS routing layer (2026-07-04, Kevin's architecture brief):
 -- ONE Twilio number for the whole platform; Chief routes every inbound

@@ -20,7 +20,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from availability_engine import DEFAULT_BOOKED_MIN, compute_slots
 from chief_host import _sb
-from chief_availability import _busy_get, _pages, _settings, Unavailable
+from chief_availability import _busy_get, _owner_tz_get, _pages, _settings, Unavailable
 
 logger = logging.getLogger(__name__)
 VERB = "rehearse_booking_plan"
@@ -199,8 +199,8 @@ def rehearse(plan: BookingPlan, *, business_id: str, availability: dict,
     }
 
 
-async def _rows(client, path: str) -> list[dict]:
-    rows = await _sb(client, "GET", path)
+async def _rows(client, path: str, read=None) -> list[dict]:
+    rows = await (read or _sb)(client, "GET", path)
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         raise RehearsalUnavailable("Required business data could not be read; availability is unknown.")
     return rows
@@ -223,7 +223,9 @@ async def _handle_rehearse_booking_plan(client, biz, action) -> dict:
         practitioner_tz = None
         if isinstance(availability, dict) and not availability.get("timezone") and business.get("owner_id"):
             owner = str(UUID(str(business["owner_id"])))
-            profiles = await _rows(client, f"/practitioner_profiles?owner_id=eq.{owner}&select=timezone&limit=1")
+            # The owner's own row, read as the server (chief_availability._owner_tz_get).
+            profiles = await _rows(client, f"/practitioner_profiles?owner_id=eq.{owner}&select=timezone&limit=1",
+                                   read=_owner_tz_get)
             practitioner_tz = profiles[0].get("timezone") if profiles else None
         ids = ",".join(sorted({str(a.offering_id) for a in plan.appointments}))
         offerings = await _rows(client, f"/offerings?business_id=eq.{business_id}&id=in.({ids})&is_active=eq.true&select=id,business_id,is_active,duration_min&limit=8")

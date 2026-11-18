@@ -1,3 +1,8 @@
+-- DO NOT RE-RUN THIS FILE (2026-11-18). Its `specs_all` policy is allow-all
+-- (USING true): it let the public anon key read and change every business's
+-- rows, and supabase/APPLY-2026-11-18-close-allow-all-policies.sql drops it.
+-- Running this again recreates it. See docs/RLS_MODEL.md, Rule 3.
+--
 -- ═══════════════════════════════════════════════════════════════════════
 -- Phase A Light (spike) — module_specs
 -- ═══════════════════════════════════════════════════════════════════════

@@ -279,6 +279,22 @@ async def _busy_get(client, method, path, body=None):
     return await sb_clients.sb_as_service(client, 'GET', path)
 
 
+async def _owner_tz_get(client, method, path, body=None):
+    # practitioner_profiles is keyed by the OWNER, and its one policy is the
+    # owner's own row (owner_id = auth.uid()). An office login's Chief got the
+    # owner's timezone only through an allow-all policy that
+    # APPLY-2026-11-18-close-allow-all-policies.sql drops, and without it a
+    # church whose hours carry no timezone would read "unavailable" for
+    # everyone but the pastor. The caller is here only after the fresh
+    # business/owner check, the owner id comes from that business row, and
+    # nothing but the timezone is read.
+    if (method != 'GET' or body is not None
+            or not path.startswith('/practitioner_profiles?owner_id=eq.')
+            or not path.endswith('&select=timezone&limit=1')):
+        raise ValueError('Invalid server-owned profile read')
+    return await sb_clients.sb_as_service(client, 'GET', path)
+
+
 async def load_offerings(client, business_id):
     """Reusable read-only preparation: complete active catalog, bounded to 100 rows."""
     bid = str(UUID(str(business_id)))
@@ -491,7 +507,8 @@ async def _check_request(client, req, biz, *, now=None, prepared=None):
         profile_tz = None
         if isinstance(raw, dict) and not raw.get('timezone') and biz.get('owner_id'):
             owner = str(UUID(str(biz['owner_id'])))
-            profiles = await _rows(client, f'/practitioner_profiles?owner_id=eq.{owner}&select=timezone&limit=1')
+            profiles = await _rows(client, f'/practitioner_profiles?owner_id=eq.{owner}&select=timezone&limit=1',
+                                   read=_owner_tz_get)
             profile_tz = profiles[0].get('timezone') if len(profiles) == 1 else None
         av, tz = _settings(raw, profile_tz)
         day = resolve_day(check.day, now, tz)

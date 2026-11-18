@@ -1393,6 +1393,12 @@ def _check_rate(slug: str, limit: Optional[int] = None) -> bool:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _sb(client: httpx.AsyncClient, path: str):
+    """A GET with the public anon key. It reads only what a signed-out
+    visitor may read through PostgREST themselves. `products` is NOT one of
+    those: its allow-all policy is dropped by
+    APPLY-2026-11-18-close-allow-all-policies.sql, so a site's products are
+    read with `_sb_service`, filtered to the business the public slug
+    resolved to and to what the owner switched on for the website."""
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
         "apikey": _supabase_anon(),
@@ -1679,7 +1685,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
 
         # Pass 3: Smart Sites flag-gate. ANY failure falls through to legacy.
         if _use_smart_sites(site) and biz_id:
-            products_for_smart = await _sb(client,
+            products_for_smart = await _sb_service(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
             smart_html = await _try_render_smart_site(
@@ -1702,7 +1708,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
         biz_settings: Dict[str, Any] = {}
         if biz_id:
             prod_rows, biz_rows = await asyncio.gather(
-                _sb(client,
+                _sb_service(client,
                     f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                     f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
                 _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
@@ -4524,7 +4530,7 @@ async def booking_slots(slug: str, days: int = 14):
         # BUILD -> Products & Services automatically makes it bookable.
         product_services = []
         try:
-            product_services = await _sb(
+            product_services = await _sb_service(
                 client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active"
                 f"&type=eq.service&display_on_website=eq.true"
@@ -5842,7 +5848,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     biz_settings: Dict[str, Any] = {}
     if biz_id:
         prod_rows, biz_rows = await asyncio.gather(
-            _sb(client,
+            _sb_service(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
             _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
@@ -7167,7 +7173,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
 
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
-            products = await _sb(client,
+            products = await _sb_service(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
             smart_html = await _try_render_smart_site(
@@ -7330,7 +7336,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
                 headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _use_smart_sites(site) and biz_id:
-            products = await _sb(client,
+            products = await _sb_service(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
             smart_html = await _try_render_smart_site(
