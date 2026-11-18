@@ -431,8 +431,10 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
 <template id="lv-here-tpl">{you_are_here}</template>
 <div class="lv-toast" id="lv-toast" role="status" aria-live="polite"{'' if flash else ' hidden'}>{flash}</div>"""
     first = (str(me.get("name") or "").split() or [""])[0][:40]
+    import member_instant_send as mis
     cfg = {"v": int(cur.get("chat_version") or 0), "hearts": int(cur.get("hearts") or 0), "started": started,
-           "church": church, "first": first, "poll": POLL_MS}
+           "church": church, "first": first, "poll": POLL_MS,
+           "instant": mis.on(), "author": lr.author_for(me.get("name")), "offline": mis.OFFLINE}
     script = "<script>" + ROOM_JS.replace("__CFG__", json.dumps(cfg).replace("</", "<\\/")) + "</script>"
     return _shell(biz, site, "Live", body, tab="live", who=me, script=script, back=("/my/sermons", "Watch"), wide=True)
 
@@ -680,6 +682,11 @@ function row(m){var li=d.createElement('li'),av=d.createElement('span'),p=d.crea
     b.textContent=m.mine?'You':m.author;p.appendChild(b);}
   p.appendChild(d.createTextNode(' '+m.body));li.appendChild(av);li.appendChild(p);return li;}
 function near(){return list.scrollHeight-list.scrollTop-list.clientHeight<90;}
+// Instant send: my message shows at once, faded, until the room has it.
+function norm(t){return String(t||'').replace(/\s+/g,' ').replace(/^ | $/g,'');}
+function adopt(m){if(!m.mine)return false;var ps=list.querySelectorAll('li.is-pending');
+  for(var i=0;i<ps.length;i++){if(ps[i].getAttribute('data-t')===norm(m.body)){settle(ps[i],m.id);return true;}}return false;}
+function settle(li,id){li.classList.remove('is-pending');li.style.opacity='';li.removeAttribute('data-t');if(id)li.setAttribute('data-id',id);}
 function down(){list.scrollTop=list.scrollHeight;if(newer)newer.hidden=true;}
 function draw(ms){
   var have=[].map.call(list.querySelectorAll('li[data-id]'),function(li){return li.getAttribute('data-id');}),
@@ -688,7 +695,7 @@ function draw(ms){
   if(k>0){have.slice(0,k).forEach(function(id){var o=list.querySelector('li[data-id="'+id+'"]');if(o)o.remove();});have=have.slice(k);}
   var gone=have.some(function(id){return ids.indexOf(id)<0;});
   if(gone){list.textContent='';have=[];}
-  ms.forEach(function(m){if(have.indexOf(m.id)<0){list.appendChild(row(m));added++;}});
+  ms.forEach(function(m){if(have.indexOf(m.id)<0){if(!adopt(m))list.appendChild(row(m));added++;}});
   var empty=list.querySelector('.lv-empty');
   if(ms.length&&empty)empty.remove();
   if(!ms.length&&!empty){var e=d.createElement('li');e.className='lv-empty';e.textContent='No messages yet. Say hello.';list.appendChild(e);}
@@ -724,14 +731,33 @@ function poll(){if(d.hidden)return;ticks++;
 function oops(m){if(!err)return;var s=near();err.textContent=m||'That didn’t send. Please try again.';err.hidden=false;
   if(s)down();clearTimeout(oops.t);oops.t=setTimeout(function(){err.hidden=true;},6000);}
 function post(t,done){if(err)err.hidden=true;if(send)send.disabled=true;
+  if(C.instant)return instantly(t,done);
   fetch('/my/live/chat',{method:'POST',credentials:'same-origin',headers:JSONH,body:'body='+encodeURIComponent(t)})
   .then(function(r){return r.json().then(function(x){return {ok:r.ok,x:x};});})
   .then(function(o){if(send)send.disabled=false;if(o.ok){if(done)done();down();poll();}else oops(o.x&&o.x.error);})
   .catch(function(){if(send)send.disabled=false;oops();});}
+// member_instant_send: the message is in the chat before the answer; the
+// box clears at once. Not sent: it comes out, the words go back in the box,
+// and the room says why. A lost answer makes the same words a retry
+// (retry=1), which the server answers with the message it already has.
+var again=null,sentAt=0;
+function instantly(t,done){var li=row({id:'',author:C.author||'You',body:t,mine:true,host:false});
+  li.removeAttribute('data-id');li.classList.add('is-pending');li.style.opacity='.6';li.setAttribute('data-t',norm(t));
+  var e=list.querySelector('.lv-empty');if(e)e.remove();
+  list.appendChild(li);down();if(done)done();sentAt=Date.now();
+  var retry=again!==null&&again===t;again=null;
+  fetch('/my/live/chat',{method:'POST',credentials:'same-origin',headers:JSONH,body:'body='+encodeURIComponent(t)+(retry?'&retry=1':'')})
+  .then(function(r){return r.json().then(function(x){return {x:x};},function(){return {x:null};});},function(){return {x:null};})
+  .then(function(o){if(send)send.disabled=false;
+    if(o.x&&o.x.ok){var have=o.x.id&&list.querySelector('li[data-id="'+o.x.id+'"]');
+      if(have&&have!==li){if(li.parentNode)li.remove();}else settle(li,o.x.id);poll();return;}
+    if(li.parentNode)li.remove();
+    if(say&&!say.value.trim()){say.value=t;say.dispatchEvent(new Event('input'));if(!o.x)again=t;}
+    oops((o.x&&o.x.error)||(o.x?null:C.offline));});}
 if(f&&say&&send){
   var mode=function(){var has=!!say.value.trim();f.classList.toggle('has-text',has);send.setAttribute('aria-label',has?'Send':'Send a heart');};
   say.addEventListener('input',mode);
-  send.addEventListener('click',function(e){if(!say.value.trim()){e.preventDefault();heart();}});
+  send.addEventListener('click',function(e){if(!say.value.trim()){e.preventDefault();if(Date.now()-sentAt>700)heart();}});
   f.addEventListener('submit',function(e){e.preventDefault();var t=say.value.trim();if(t)post(t,function(){say.value='';mode();});});}
 var quick=d.getElementById('lv-quick');
 if(quick){var g=quick.querySelector('[data-greet]'),hr=new Date().getHours();
@@ -839,11 +865,11 @@ def _wants_json(request: Request) -> bool:
     return "application/json" in (request.headers.get("accept") or "")
 
 
-def _answer(request: Request, ok: bool, code: str, status: int = 400):
+def _answer(request: Request, ok: bool, code: str, status: int = 400, **extra):
     import member_portal_church as mpc
     if _wants_json(request):
         if ok:
-            return JSONResponse({"ok": True})
+            return JSONResponse({"ok": True, **extra})
         return JSONResponse({"ok": False, "error": mpc.ERRORS.get(code, "That didn't send. Please try again.")},
                             status_code=status)
     return mpc._back("/my/live", **({"done": code} if ok else {"err": code}))
@@ -880,6 +906,19 @@ async def live_chat_post(request: Request):
         return _answer(request, False, "error", 503)
     if paused:
         return _answer(request, False, "muted", 403)
+    import member_instant_send as mis
+    if _wants_json(request) and mis.is_retry(form):
+        # The live room lost the answer to this very message: when it was
+        # saved, answer with it instead of saving it twice.
+        mine = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/live_chat?session_id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(me['id'])}"
+            f"&created_at=gte.{_q(mis.since())}&select=id,body,created_at&order=created_at.desc&limit=5")
+        if not isinstance(mine, list):
+            return _answer(request, False, "error", 503)
+        was = mis.same_recent(mine, text)
+        if was is not None:
+            return _answer(request, True, "chat", id=str(was["id"]))
     if not rate_limit.allow_strict("live_chat", f"{biz_id}|{me['id']}"):
         return _answer(request, False, "slow_chat", 429)
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/live_chat", {
@@ -887,7 +926,7 @@ async def live_chat_post(request: Request):
         "author": lr.author_for(me.get("name")), "host": False, "body": text})
     if not isinstance(rows, list) or not rows:
         return _answer(request, False, "error", 503)
-    return _answer(request, True, "chat")
+    return _answer(request, True, "chat", id=str(rows[0].get("id") or ""))
 
 
 def mark_here(business_id: str, cur: Dict[str, Any], me: Dict[str, Any]) -> bool:

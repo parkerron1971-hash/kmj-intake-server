@@ -72,6 +72,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from member_stopwatch import timed as _timed
 
 logger = logging.getLogger("member_portal")
 
@@ -443,6 +444,7 @@ def gifts_for(business_id: str, contact_id: str, year: int) -> List[Dict[str, An
 # ─── Host → church ───────────────────────────────────────────────────
 
 
+@_timed("church")      # member_stopwatch: the Server-Timing header's "church"
 def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
     """The church whose address this request arrived on, or None (the API
     host, an unknown host, a site taken offline)."""
@@ -516,6 +518,7 @@ def _epoch(biz: Dict[str, Any]) -> int:
         return 0
 
 
+@_timed("session")     # member_stopwatch: the Server-Timing header's "session"
 def _session_for(request: Request, church: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The signed-in member, re-checked against today's records.
     {"unavailable": True} when the records could not be read — the page
@@ -720,8 +723,15 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
+{_phone_timing() if signed_in else ''}
 </body>
 </html>"""
+
+
+def _phone_timing() -> str:
+    """The phone's timing of this page (member_stopwatch.PHONE_JS)."""
+    import member_stopwatch
+    return member_stopwatch.phone_js()
 
 
 GIVE_CSS = """

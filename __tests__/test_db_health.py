@@ -767,6 +767,71 @@ def test_check_now_reads_once_a_minute_and_never_counts_toward_the_week(db, feed
     assert again.status_code == 429 and feed["n"] == 1
 
 
+# ─── The member app's numbers (member_stopwatch.py) ──────────────────────
+
+@pytest.fixture
+def stopwatch(monkeypatch):
+    import member_stopwatch as ms
+    monkeypatch.delenv("MEMBER_STOPWATCH", raising=False)
+    ms.forget()
+    yield ms
+    ms.forget()
+
+
+def test_a_reading_keeps_the_member_apps_numbers(db, feed, stopwatch):
+    """In the reading's own metrics jsonb: no table, no migration."""
+    import time as _time
+    for ms_ in (300, 420, 900):
+        stopwatch.record("server", "home", ms_, at=_time.time() - 60)
+    stopwatch.record("ready", "connect", 1200, at=_time.time() - 60)
+    run(dh.tick(et(SUNDAY, 9, 0).astimezone(timezone.utc)))
+    row = db.samples[0]
+    assert row["metrics"]["mem_total"] == 2.05e9                        # the feed's numbers stay
+    member = row["metrics"]["member_app"]
+    assert member["server"]["home"]["n"] == 3 and member["server"]["home"]["p50"] == 420
+    assert member["ready"]["connect"]["n"] == 1
+    run(dh.tick(et(SUNDAY, 9, 15).astimezone(timezone.utc)))           # nothing new since
+    assert "member_app" not in db.samples[1]["metrics"]
+
+
+def test_a_reading_that_wasnt_saved_hands_its_member_numbers_on(db, feed, stopwatch, monkeypatch):
+    """A Supabase blip on the save must not lose that quarter hour."""
+    import time as _time
+    stopwatch.record("server", "home", 300, at=_time.time() - 60)
+    real_patch = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    run(dh.tick(et(SUNDAY, 9, 0).astimezone(timezone.utc)))
+    assert db.samples[0]["taken_at"] is None                            # the save failed
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real_patch)
+    run(dh.tick(et(SUNDAY, 9, 15).astimezone(timezone.utc)))
+    assert db.samples[1]["metrics"]["member_app"]["server"]["home"]["n"] == 1
+
+
+def test_an_unread_feed_still_keeps_the_member_apps_numbers(db, stopwatch, monkeypatch):
+    async def down(client):
+        return None, "Supabase's metrics answered 503."
+    monkeypatch.setattr(dh, "read_metrics", down)
+    stopwatch.record("server", "home", 300)
+    run(dh.tick(et(SUNDAY, 9, 0).astimezone(timezone.utc)))
+    assert db.samples[0]["metrics"] == {"member_app": db.samples[0]["metrics"]["member_app"]}
+    assert db.samples[0]["problem"].startswith("Supabase's metrics answered 503")
+
+
+def test_the_card_says_how_fast_tabs_opened_last_sunday(db, stopwatch, monkeypatch):
+    now = et(date(2026, 11, 23), 10, 0).astimezone(timezone.utc)
+    monkeypatch.setattr(dh, "_now", lambda: now)
+    db.samples = series(SUNDAY, dtime(9, 0), [(0.3, 5, 100), (0.32, 5, 100)])
+    for r in db.samples:
+        r["metrics"]["member_app"] = {"v": 1, "ready": {"home": {"n": 10, "h": stopwatch.hist([860] * 8 + [1700] * 2)}},
+                                      "server": {"home": {"n": 10, "h": stopwatch.hist([320] * 10)}}}
+    body = _client().get("/platform/db-health/summary").json()
+    member = body["member_app"]
+    assert member["headline"] == "Tabs open in 0.9 s typical, 1.7 s for the slowest 1 in 10 (last Sunday)."
+    assert member["sunday"]["readings"] == 3 and member["sunday"]["ready"]["n"] == 30
+    assert member["sunday"]["pages"][0]["label"] == "Home"
+    assert body["verdict"]["headline"].startswith("Fine")              # the verdict never reads them
+
+
 def test_count_churches_counts_only_churches(db):
     assert dh.count_churches() == 2
     path = next(p for k, p, _ in db.calls if k == "get_all")
