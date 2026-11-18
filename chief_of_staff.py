@@ -4095,6 +4095,12 @@ def _memory_prompt_line(memory):
             f"{_neutralize_untrusted(memory.get('content') or '')}")
 
 
+# An events room's line in CUSTOM MODULES (archetype=event_roster): its
+# volunteer roles live in each entry's data, not in its fields.
+ROSTER_ROLES_NOTE = ('; each entry also holds its volunteer roles (needed vs filled) and named volunteers: set them '
+                     'with "roles" and "volunteers" on create_module_entry/update_module_entry, never in notes')
+
+
 def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
     """The whole snapshot as one block: the cached part, then the live part."""
     parts = _format_context_parts(ctx)
@@ -4172,6 +4178,11 @@ def _format_context_parts(ctx: Dict[str, Any]):
             ) if _fields else ""
         except Exception:
             fields_part = ""
+        # An event's volunteer roles aren't a schema field (they ride in the
+        # entry's data, chief_roster): said here, or Chief reads the fields
+        # and puts the roles in the notes (2026-11-18).
+        if m.get('archetype') == 'event_roster':
+            fields_part += ROSTER_ROLES_NOTE
         module_lines.append(
             f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}{slug_part}]{fields_part}")
 
@@ -15843,10 +15854,14 @@ async def chief_chat(
             # FINDING THE WAY (church_findway): when a church's message reads
             # like "where is" or "how do I", the Help Center's own answers
             # that match it, cut to what the login's areas show. It comes and
-            # goes with the message, so it rides the per-message tail.
+            # goes with the message, so it rides the per-message tail. A lane's
+            # duties add the pages they open (Rooms & spaces for the events duty).
             try:
                 import church_findway as _findway
-                _way_block = _findway.turn_block(biz, req.message or "", chief_areas.TURN.get())
+                _way_scope = chief_areas.TURN.get()
+                _way_duties = (await asyncio.to_thread(_findway.duties_of, biz, str(user_session.user.id))
+                               if _way_scope is not None and _findway.asks(req.message or "") else None)
+                _way_block = _findway.turn_block(biz, req.message or "", _way_scope, _way_duties)
                 if _way_block:
                     chief_truth.record('context:help_center', _way_block, kind='context')
                     growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _way_block).strip() + "\n"

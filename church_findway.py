@@ -52,7 +52,8 @@ _FILE = Path(__file__).with_name("church_findway.json")
 # Pages the map has a card for that today's menu does not list: the
 # marketing desk is open for every business, and it took their place
 # (Posts opens Marketing; Video studio and Video Clips are tabs of Create).
-NOT_ON_THE_MENU = {"grow:content", "grow:video-studio", "grow:video-clips"}
+TAKEN_BY = {"grow:content": "grow:marketing", "grow:video-studio": "grow:create", "grow:video-clips": "grow:create"}
+NOT_ON_THE_MENU = set(TAKEN_BY)
 
 # An area's short name, for the tag after a page.
 AREA_TAG = {
@@ -94,6 +95,15 @@ def _pages() -> List[Dict[str, Any]]:
     return out
 
 
+def page(tab: Optional[str], sub: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A page on the menu by its key ("operate:spaces") or its tab and sub,
+    in the menu's words (its `where`). A page the marketing desk replaced is
+    the page it sits in now (TAKEN_BY). None when the map hasn't it."""
+    key = str(tab or "") if sub is None else f"{tab}:{sub}"
+    key = TAKEN_BY.get(key, key)
+    return next((p for p in _pages() if p.get("key") == key), None)
+
+
 def _is_church(biz: Optional[Dict[str, Any]]) -> bool:
     try:
         import church_follow_up
@@ -104,10 +114,12 @@ def _is_church(biz: Optional[Dict[str, Any]]) -> bool:
 
 # ─── Who sees a page ──────────────────────────────────────────────────
 
-def shown_to(page: Dict[str, Any], scope: Optional[Dict[str, Any]]) -> bool:
+def shown_to(page: Dict[str, Any], scope: Optional[Dict[str, Any]], duties: Any = None) -> bool:
     """Whether a login kept to its areas (chief_areas.scope_for) has the
     page. No scope is the whole church: the owner, an admin. Money pages
-    are never a lane's (the menu's own rule, churchStructure MONEY)."""
+    are never a lane's (the menu's own rule, churchStructure MONEY). A
+    page a duty opens (its `duties`: churchStructure DUTY_OF, ASKED_BY) is
+    on the menu of whoever does that duty, whatever their areas."""
     if scope is None:
         return True
     sees = page.get("sees")
@@ -115,8 +127,18 @@ def shown_to(page: Dict[str, Any], scope: Optional[Dict[str, Any]]) -> bool:
         return True
     if sees == "money" or not isinstance(sees, list):
         return False
+    if duties and any(d in duties for d in page.get("duties") or []):
+        return True
     mine = scope.get("areas") or []
     return any(a in mine for a in sees)
+
+
+def _duty_labels(keys: List[str]) -> List[str]:
+    try:
+        import church_duties
+        return [church_duties.CATALOG[k]["label"] for k in keys if k in church_duties.CATALOG]
+    except Exception:  # noqa: BLE001 — no labels means the tag says areas only
+        return []
 
 
 def _tag(page: Dict[str, Any]) -> str:
@@ -125,9 +147,11 @@ def _tag(page: Dict[str, Any]) -> str:
         return ""
     if sees == "money":
         return " [money]"
-    if not sees:
-        return " [owner]"
-    return " [" + ", ".join(AREA_TAG.get(a, a) for a in sees) + "]"
+    tag = ", ".join(AREA_TAG.get(a, a) for a in sees) if sees else "owner"
+    duties = _duty_labels(page.get("duties") or [])
+    if duties:
+        tag += "; +" + " / ".join(duties)
+    return f" [{tag}]"
 
 
 def _path(page: Dict[str, Any]) -> str:
@@ -196,9 +220,13 @@ def _menu_text() -> str:
         "text you write TO the person who was sent one (a reminder, a thank-you), call it a bill, never an invoice: "
         "that is the word on what they received. A tag says who "
         "has the page: [money] is the owner, admins and the treasurer only; [owner] the owner and admins; any other "
-        "tag names the areas whose logins have it; no tag is every login. For a login kept to a lane, never point "
-        "to a page its areas do not have: say who handles it. The Help Center (operate/help-center) has the "
-        "written answers; when a HELP CENTER ANSWERS block is in this turn, use it. When you open a page, the action "
+        "tag names the areas whose logins have it; no tag is every login; a +Duty after them (\"+Rooms\") is a duty in "
+        "THE OFFICE whose holder has the page too, whatever their areas. For a login kept to a lane, never point "
+        "to a page its areas or its duties do not give it: say who handles it. The places on this menu, the ones THE "
+        "OFFICE gives beside each duty and those in a HELP CENTER ANSWERS block are confirmed: give them as written, "
+        "door first, and never say you have no confirmed path or won't guess the way. The steps inside a page are the Help Center's "
+        "(operate/help-center has every written answer): when a HELP CENTER ANSWERS block is in this turn, give its "
+        "steps; without one, give the place and the button THE OFFICE names, and offer to open it. When you open a page, the action "
         "comes back saying where it is (\"Opened Office › Money out › Check requests\"): say the place in those "
         "words, door first, and never as Operate, Grow or Build.\n"
     )
@@ -250,14 +278,15 @@ def _fit(asked: List[str], phrase: List[str]) -> float:
     return exact * (0.7 + 0.3 * (len(asked) / max(len(asked), len(phrase))))
 
 
-def match_answers(message: str, scope: Optional[Dict[str, Any]] = None, limit: int = 2) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+def match_answers(message: str, scope: Optional[Dict[str, Any]] = None, limit: int = 2,
+                  duties: Any = None) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
     """(answer, page) for the answers a message asks for, best first, cut
-    to the pages the login's areas show."""
+    to the pages the login's areas and duties show."""
     asked = key_words(message)
     if not asked or len((message or "").strip()) < 2:
         return []
     pool: List[Tuple[Dict[str, Any], Dict[str, Any]]] = [
-        (a, p) for p in _pages() if shown_to(p, scope) for a in p.get("answers") or []]
+        (a, p) for p in _pages() if shown_to(p, scope, duties) for a in p.get("answers") or []]
     scored: List[Tuple[float, int, Tuple[Dict[str, Any], Dict[str, Any]]]] = []
     last = len(asked) - 1
     for i, (a, p) in enumerate(pool):
@@ -292,13 +321,14 @@ def _plain(text: str) -> str:
     return " " + " ".join(re.findall(r"[a-z0-9]+", (text or "").lower().replace("’", "").replace("'", ""))) + " "
 
 
-def match_pages(message: str, scope: Optional[Dict[str, Any]] = None, limit: int = 3) -> List[Dict[str, Any]]:
+def match_pages(message: str, scope: Optional[Dict[str, Any]] = None, limit: int = 3,
+                duties: Any = None) -> List[Dict[str, Any]]:
     """The pages a message names: by the menu's name for them, or a word
     of two letters or more people type for them said whole."""
     text = _plain(message)
     out: List[Tuple[int, int, Dict[str, Any]]] = []
     for i, p in enumerate(_pages()):
-        if not shown_to(p, scope):
+        if not shown_to(p, scope, duties):
             continue
         name = _plain(p.get("name") or "")
         s = 2 if len(name) > 2 and name in text else 0
@@ -317,6 +347,8 @@ def match_pages(message: str, scope: Optional[Dict[str, Any]] = None, limit: int
 
 # ─── This turn ────────────────────────────────────────────────────────
 
+PAGE_ANSWERS = 2             # a named page's own answers a turn is given
+
 # A message that asks where something is or how to do it. A question about
 # the church's own numbers ("what did we take in last Sunday") is not one,
 # and neither is an order ("text the deacons"): the menu block covers
@@ -327,16 +359,50 @@ _ASKS = re.compile(
     r"what does .{0,40} do\b|walk me through|show me how|how does)", re.I)
 
 
-def turn_block(biz: Optional[Dict[str, Any]], message: str, scope: Optional[Dict[str, Any]] = None) -> str:
+def page_answers(message: str, page: Dict[str, Any], limit: int = PAGE_ANSWERS) -> List[Dict[str, Any]]:
+    """A named page's own answers, the ones sharing most of the message's
+    words first (the app's search lists a page's answers under it): a long
+    question that names its page ("add it to Services & Events with
+    volunteer spots") holds too many words for any one answer to match."""
+    asked = set(key_words(message))
+    rows = [(len(asked & set(key_words(" ".join([a.get("q") or "", *(a.get("words") or [])])))), i, a)
+            for i, a in enumerate(page.get("answers") or [])]
+    rows.sort(key=lambda x: (-x[0], x[1]))
+    return [a for hits, _, a in rows[:limit] if hits]
+
+
+def asks(message: str) -> bool:
+    """Whether a message reads like a "where" or a "how" (turn_block's gate)."""
+    return bool(message) and bool(_ASKS.search(message))
+
+
+def duties_of(biz: Optional[Dict[str, Any]], user_id: Any) -> Optional[frozenset]:
+    """The duties a church login does (church_duties.standing, kept a
+    minute), for the pages a duty opens. None when it can't be read: the
+    login's areas alone decide then, as before."""
+    try:
+        import church_duties
+        if not _is_church(biz) or not user_id:
+            return None
+        return frozenset(church_duties.standing(str((biz or {}).get("id") or ""), str(user_id)).get("duties") or ())
+    except Exception:  # noqa: BLE001 — unread duties add no page
+        return None
+
+
+def turn_block(biz: Optional[Dict[str, Any]], message: str, scope: Optional[Dict[str, Any]] = None,
+               duties: Any = None) -> str:
     """The Help Center's answers and the pages this message matches, for
     the turn's tail. Empty unless the business is a church, the switch is
-    on, and the message reads like a "where" or a "how"."""
-    if mode() == "off" or not message or not _is_church(biz) or not _ASKS.search(message):
+    on, and the message reads like a "where" or a "how". `duties`: the
+    login's (church_duties.standing), for the pages a duty opens."""
+    if mode() == "off" or not _is_church(biz) or not asks(message):
         return ""
     try:
-        answers = match_answers(message, scope, 2)
+        answers = match_answers(message, scope, 2, duties)
         # A page is named only when no answer was: an answer already says its page.
-        named = [] if answers else match_pages(message, scope, 2)
+        named = [] if answers else match_pages(message, scope, 2, duties)
+        # A named page brings the answers of its own the message shares words with.
+        answers += [(a, p) for p in named for a in page_answers(message, p)]
     except Exception:  # noqa: BLE001 — a failed match adds nothing
         logger.warning("church findway: matching failed")
         return ""

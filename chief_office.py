@@ -21,7 +21,18 @@ things from chief in regards to admins etc like I would as well".
                             (church_duties._forget). Shown to the owner, the
                             Admins and the Managers (shown()), never a Member or
                             a Viewer. A church whose duties are off has none.
-                            It ends with the one rule for "whose job is this?"
+                            Beside each duty, where it is done (place()). It
+                            ends with the one rule for "whose job is this?"
+    place() ............... a duty's place on the church's menu, in the menu's
+                            words ("Office › Building › Rooms & spaces → Ask
+                            for a room"): its page is the one My week opens
+                            for it (church_my_week.DOOR), named by the map
+                            the frontend exports (church_findway), never typed
+                            here. INSIDE names the button a duty's work starts
+                            from, ALSO a second page; each is a page key, and
+                            each button is one a Help Center answer on that
+                            page names (test_chief_office_howto checks both).
+                            THROUGH_CHIEF: work no page has
     team_week ............. mid-turn read: the office team's week, as the Office
                             team page shows it (church_team_week.team), for
                             whoever is over the lanes, the owner and the admins,
@@ -69,6 +80,37 @@ RESULT_MAX = 11_000         # the tool loop's cap for these two is 12,000
 
 _CACHE: Dict[str, Tuple[float, str]] = {}
 
+# ─── Where each duty is done ──────────────────────────────────────────
+# Kevin, 2026-11-18: "make sure that chief is aware of how to do each thing
+# with each person … I just asked and chief said yes but then said no to
+# certain parts". Chief had the menu's pages but not which page each duty is
+# done on, nor the button inside it, so it said it had no confirmed path.
+#
+# The button a duty's work starts from inside its page (church_my_week.DOOR),
+# when the page holds more than that duty: each is named, as written, by one
+# of the Help Center's answers on that page (church_findway.json).
+INSIDE: Dict[str, str] = {
+    "weekly_text": "Announcement",
+    "leaders_note": "Text it too",
+    "rooms": "Waiting for a yes",
+    "first_guests": "Hand to",
+    "events": "Roles",
+    "serve_schedule": "Ask",
+    "announcements": "Waiting for you",
+    "oversee_lanes": "One-on-one",
+    "monthly_report": "Send to the pastor",
+}
+# A second page a duty's work is on, by page key, with its button (or "").
+ALSO: Dict[str, List[Tuple[str, str]]] = {
+    "first_guests": [("operate:sms", "New here")],
+    "events": [("operate:spaces", "Ask for a room")],
+    "outreach_nights": [("operate:spaces", "Ask for a room")],
+}
+# Work a duty holds that no page has: done by asking Chief.
+THROUGH_CHIEF: Dict[str, str] = {
+    "church_email": "addresses are given out through Chief",
+}
+
 
 def _plain(v: Any) -> str:
     return re.sub(r"\s+", " ", str(v or "")).strip()
@@ -87,6 +129,38 @@ def _cut(text: str, most: int) -> str:
 
 def _fail(atype: str, msg: str, nav: Dict[str, str]) -> Dict[str, Any]:
     return {"type": atype, "result": f"Failed: {msg}", "label": msg[:80], "failed": True, "nav": nav}
+
+
+def _at(key: str, button: str = "") -> Optional[str]:
+    import church_findway
+    page = church_findway.page(key)
+    if not page:
+        return None
+    return page["where"] + (f" → {button}" if button else "")
+
+
+def place(duty: str) -> Optional[str]:
+    """Where a duty is done, in the menu's words: its page, the button its
+    work starts from, and any second page ("Sunday › Plan and look back ›
+    Services & Events → Roles; also Office › Building › Rooms & spaces → Ask
+    for a room"); work through Chief is said so. None when its page isn't on
+    the map (test_chief_office_howto fails then)."""
+    import church_my_week as mw
+    door = mw.DOOR.get(duty)
+    first = _at(f"{door['area']}:{door['id']}", INSIDE.get(duty, "")) if door else None
+    if not first:
+        return None
+    rest = ["also " + r for r in (_at(k, b) for k, b in ALSO.get(duty, [])) if r]
+    if THROUGH_CHIEF.get(duty):
+        rest.append(THROUGH_CHIEF[duty])
+    return "; ".join([first, *rest])
+
+
+def _labelled(key: str, paths: bool) -> str:
+    import church_duties as cd
+    label = cd.CATALOG[key]["label"]
+    where = place(key) if paths else None
+    return f"{label} ({where})" if where else label
 
 
 # ─── THE OFFICE ───────────────────────────────────────────────────────
@@ -168,7 +242,7 @@ def _order(ch: Any, uid: str, overseers: set) -> Tuple[int, int, str]:
 
 
 def _person_line(ch: Any, J: Any, e: Dict[str, Any], *, overseers: set, jobs_on: bool, words: bool,
-                 labels_max: int) -> str:
+                 labels_max: int, paths: bool = True) -> str:
     import church_duties as cd
     import church_job_descriptions as cjd
     import church_map_asks as cma
@@ -196,7 +270,7 @@ def _person_line(ch: Any, J: Any, e: Dict[str, Any], *, overseers: set, jobs_on:
             bits.append("over the lanes: " + (_join(team) if team else "no Manager is under them yet"))
         if seat == "admin":
             bits.append("does every duty, money ones too")
-    labels = [cd.CATALOG[k]["label"] for k in e["own"]]
+    labels = [_labelled(k, paths) for k in e["own"]]
     if labels:
         more = len(labels) - labels_max
         listed = "; ".join(labels[:labels_max]) + (f"; and {more} more" if more > 0 else "")
@@ -215,7 +289,15 @@ def _person_line(ch: Any, J: Any, e: Dict[str, Any], *, overseers: set, jobs_on:
     return head + ": " + "; ".join(bits) + "."
 
 
-def _rule(jobs_on: bool, movers: List[str]) -> str:
+def _rule(jobs_on: bool, movers: List[str], paths: bool = True) -> str:
+    where = ("Beside each duty is where it is done, the place in the menu's words and → the button its work starts "
+             "from: confirmed, so give it as written when someone asks how or where, then the Help Center's steps. "
+             if paths else
+             # Past the cap: job_of says them a person at a time (list_duties too, while the office is small).
+             "Where a duty is done: " + ("job_of says it beside each of a person's duties, and list_duties beside "
+                                         "each duty (Done in:) while the office is small" if jobs_on else
+                                         "list_duties says it beside each duty (Done in:)")
+             + ", confirmed; then the Help Center's steps. ")
     if jobs_on:
         rule = ("Whose job is it, one rule: an office duty (the weekly text, the books…) → THE OFFICE, by name "
                 "(list_duties for the lane-by-lane detail, and before move_duty); other work (the van, the fire "
@@ -223,6 +305,7 @@ def _rule(jobs_on: bool, movers: List[str]) -> str:
     else:
         rule = ("Whose job is it: an office duty → THE OFFICE, by name (list_duties for the lane-by-lane detail); "
                 "anything else, say you don't know and that the owner or an admin can say.")
+    rule = where + rule
     who = "the owner or an admin" + (f", and {_join(movers)} for the Managers under them" if movers else "")
     rule += f" Who moves a duty: {who}."
     if jobs_on:
@@ -260,11 +343,13 @@ def build(business: Dict[str, Any]) -> str:
         tail = []
         if len(people) > len(entries):
             tail.append(f"…and {len(people) - len(entries)} more office logins: list_duties names them all.")
-        tail.append(_rule(jobs_on, movers))
-        for words, labels_max in ((True, LABELS_MAX), (False, LABELS_MAX), (False, 6)):
-            lines = [_person_line(ch, J, e, overseers=overseers, jobs_on=jobs_on, words=words, labels_max=labels_max)
+        # Past the cap: the descriptions go, then the places, then the labels shorten.
+        for words, labels_max, paths in ((True, LABELS_MAX, True), (False, LABELS_MAX, True),
+                                         (False, LABELS_MAX, False), (False, 6, False)):
+            lines = [_person_line(ch, J, e, overseers=overseers, jobs_on=jobs_on, words=words, labels_max=labels_max,
+                                  paths=paths)
                      for e in entries]
-            text = "\n".join([head, *lines, *tail])
+            text = "\n".join([head, *lines, *tail, _rule(jobs_on, movers, paths)])
             if len(text) <= ROSTER_MAX_CHARS:
                 break
         return text + "\n"

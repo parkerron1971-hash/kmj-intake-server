@@ -251,7 +251,8 @@ def test_job_of_says_their_title_duties_roles_and_whos_over_them(db):
     assert said.startswith("Jessica McCloud: Executive Pastor.\nDuties (2):")
     assert said.endswith("\nNo written job description yet: Chief can draft one from what they already do "
                          "(draft_job_description).")
-    assert "Duties (2): The monthly report (The first Monday of the month); Over the lanes (Mondays)." in said
+    assert ("Duties (2): The monthly report (The first Monday of the month; done in Office › Leaders › Monthly report "
+            "→ Send to the pastor); Over the lanes (Mondays; done in Home › Office team → One-on-one).") in said
     assert "Covers any lane's work" in said and "Role: Executive Pastor:" in said
     assert "Over Jessica: Pastor Kevin." in said and "You may write or change their job description" in said
     mine = ok(run(db, LOVE_CITY, "naiya", "job_of", who="me"))
@@ -531,7 +532,8 @@ def test_the_owner_and_an_admin_have_jobs_too(db):
     owner = ok(run(db, LOVE_CITY, "owner", "job_of", who="me"))
     assert owner.startswith("Kevin McCloud: Lead Pastor.") and "Over you: nobody (the top)." in owner
     minnie = ok(run(db, LOVE_CITY, "jessica", "job_of", who="Minnie"))
-    assert "Duties (4): The Sunday deposit (Sundays and Mondays); The books" in minnie, "money duties are her job"
+    assert "Duties (4): The Sunday deposit (Sundays and Mondays; done in Giving › Gifts); The books" in minnie, \
+        "money duties are her job"
     assert "You can't write their job description" in minnie, "an Admin is the owner's or another Admin's"
 
 
