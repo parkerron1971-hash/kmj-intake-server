@@ -305,7 +305,10 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
     # The team by name and role (the owner's hand-off list), and the names
     # on the notes: a note says who wrote it, never "a teammate".
     team = _team(biz)
-    names = {t["user_id"]: (t["name"] or t["email"]) for t in team}
+    # The owner already sees the team's addresses; anyone else sees a name
+    # or a role title, never a teammate's email address.
+    names = {t["user_id"]: (t["name"] or ((t["titles"] or [""])[0]) or t["lane_label"]
+                            or (t["email"] if not mine else "")) for t in team}
     got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=owner_id&limit=1")
     owner_id = str(got[0].get("owner_id") or "") if isinstance(got, list) and got else ""
     if owner_id:
@@ -397,6 +400,11 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
                              assigned_by=caller.user_id if caller else None)
         else:
             who = _uuid(assigned_to, "teammate")
+            if "needs_pastor" not in current:
+                # The read that carries the crisis flag failed (or the
+                # column isn't there): never hand on what might be a
+                # pastor's alone without knowing.
+                raise HTTPException(503, "That couldn't be checked just now. Nothing was changed. Try again.")
             mate = next((t for t in _team(biz) if t["user_id"] == who), None)
             if mate is None:
                 raise HTTPException(400, "That person isn't on this church's team")
@@ -533,6 +541,14 @@ LOCK_MINUTES = (0, 5, 10, 15, 30, 60)
 DEFAULT_LOCK = {"lock_minutes": 10, "require_password": True}
 
 
+def lock_mode() -> str:
+    """CHURCH_CARE_LOCK: on (the default) or off. Off is the rollback: no
+    church is asked for the password, whatever it saved; the page still
+    locks after its quiet minutes and when it's left."""
+    import os
+    return "off" if (os.environ.get("CHURCH_CARE_LOCK") or "on").strip().lower() == "off" else "on"
+
+
 def _is_sample(biz: str) -> bool:
     """The made-up sample church (sample_church.py): nothing in it is
     private, and the app never sends its password anywhere (the sample's
@@ -543,6 +559,13 @@ def _is_sample(biz: str) -> bool:
 
 
 def lock_settings(business_id: str) -> Dict[str, Any]:
+    s = _lock_settings(business_id)
+    if lock_mode() == "off":
+        s = {**s, "require_password": False}
+    return s
+
+
+def _lock_settings(business_id: str) -> Dict[str, Any]:
     biz = _uuid(business_id, "business")
     if _is_sample(biz):
         return {"lock_minutes": DEFAULT_LOCK["lock_minutes"], "require_password": False,
@@ -588,7 +611,7 @@ def save_lock_settings(business_id: str, caller: CareCaller, *, lock_minutes: An
     if not caller.owner:
         raise HTTPException(403, "Only the church's owner changes how Prayer & care locks")
     biz = _uuid(business_id, "business")
-    now = lock_settings(biz)
+    now = _lock_settings(biz)
     if not now["ready"]:
         raise HTTPException(503, "Lock settings are being switched on. Try again later.")
     minutes = now["lock_minutes"] if lock_minutes is None else lock_minutes

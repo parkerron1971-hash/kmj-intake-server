@@ -17,7 +17,9 @@ decisions:
   - "The owner may hand a shared, unprayed prayer to a different member of the prayer team (church_prayer.office_hand): due in a day, late steps start over. Never one kept with the pastors or one that needs a pastor (the database trigger refuses those too)"
   - "The lock: ministry_care_settings, default 10 quiet minutes and the password asked; a failed read is the default (locked). With the password on, every route that reads or changes a request needs a care proof (ledger_unlock scope care, bound to the church), which lasts the church's quiet minutes (an hour when it never locks by itself) and is renewed while someone works (POST .../unlock/renew). Counts and the settings read need no proof: no names, no words, no ids"
   - "Only the owner (or the People & care keeper) changes the lock, and only from behind it"
-  - "Notes carry author_name; the office sees the prayer team's leader_due_at and leader_late_level"
+  - "Notes carry author_name (a name or role title; an email address only for the owner); the office sees the prayer team's leader_due_at and leader_late_level"
+  - "Fail closed (review): a hand-off whose row came back without needs_pastor or prayer_team (a failed read, or no column) answers 503, never passes"
+  - "CHURCH_CARE_LOCK=off is the rollback: no church is asked for the password; the page still locks on its quiet minutes"
 related: [2026-11-01-care-inbox-people-care.md, 2026-10-27-church-key-doors-care.md, 2026-10-15-church-care-counts.md]
 ---
 Kevin approved the care desk mock (artifact BJhieg2rPsVoEzqj2qCGmw) and said to

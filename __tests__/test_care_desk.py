@@ -232,6 +232,57 @@ def test_a_request_that_needs_a_pastor_goes_only_to_a_pastor(fake):
     assert out["request"]["assigned_to"] == PASTOR
 
 
+def test_a_crisis_flag_that_couldnt_be_read_hands_nothing_on(fake, monkeypatch):
+    """Review, 2026-11-18: if the read that carries needs_pastor fails, the
+    fallback read has no such key; the hand-off must stop, not pass."""
+    f = fake()
+    real = f.get
+
+    def without_flags(path):
+        if "needs_pastor" in path and "id=eq." in path:
+            return None
+        rows = real(path)
+        if isinstance(rows, list) and "id=eq." in path:
+            return [{k: v for k, v in r.items() if k not in ("needs_pastor", "prayer_team")} for r in rows]
+        return rows
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", without_flags)
+    owner = P.CareCaller(OWNER, True)
+    for kw in ({"assigned_to": TREASURER}, {"leader_contact_id": PRAYS_P}):
+        with pytest.raises(HTTPException) as e:
+            P.update_request(BIZ, CRISIS, caller=owner, **kw)
+        assert e.value.status_code == 503
+    assert not any(m == "PATCH" for m, _, _ in f.calls)
+
+
+def test_a_teammate_sees_names_on_notes_never_email_addresses(fake, monkeypatch):
+    f = fake()
+    import church_follow_up as cfu
+    real = f.get
+
+    def notes_on_hers(path):
+        if path.startswith("/ministry_care_notes") and "request_id=in." in path:
+            return [{"id": NOTE, "request_id": HANDED, "body": "Called Tuesday", "created_at": "2026-11-17",
+                     "author_id": PASTOR}]
+        return real(path)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", notes_on_hers)
+    monkeypatch.setattr(cfu, "_contacts", lambda biz, ids: {})
+    monkeypatch.setitem(SEATS[0], "name", "")
+    out = P.list_requests(BIZ, P.CareCaller(CARE, False, shared=True))
+    names = [n.get("author_name") for r in out["requests"] for n in r.get("notes", [])]
+    # No name on the seat or its person: the role title, never the address.
+    assert names == ["Associate Pastor"]
+    owner = P.list_requests(BIZ, P.CareCaller(OWNER, True))
+    assert "Associate Pastor" in [n.get("author_name") for r in owner["requests"] for n in r.get("notes", [])]
+
+
+def test_the_switch_turns_the_password_off_for_every_church(client, fake, monkeypatch):
+    c, who = client
+    fake(settings={"lock_minutes": 15, "require_password": True})
+    monkeypatch.setenv("CHURCH_CARE_LOCK", "off")
+    r = c.get(f"/intake/private-care/{BIZ}")
+    assert r.status_code == 200 and r.json()["lock"] == {"lock_minutes": 15, "require_password": False}
+
+
 def test_any_teammate_may_take_a_request_that_needs_no_pastor(fake):
     fake()
     out = P.update_request(BIZ, PRIVATE, assigned_to=TREASURER, caller=P.CareCaller(OWNER, True))

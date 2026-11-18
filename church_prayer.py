@@ -363,6 +363,9 @@ def office_hand(business_id: str, row: Dict[str, Any], to_contact_id: Any) -> Di
     team, due in a day, the late steps starting over. Raises for anything
     that isn't the person's shared, unprayed prayer or isn't one of them."""
     import church_follow_up as cfu
+    if "needs_pastor" not in row or "prayer_team" not in row:
+        # The read that carries these failed: never guess.
+        raise HTTPException(503, "That couldn't be checked just now. Nothing was changed. Try again.")
     if row.get("needs_pastor"):
         raise HTTPException(400, "This request needs a pastor. It never goes to the prayer team.")
     if row.get("prayer_team") is not True:

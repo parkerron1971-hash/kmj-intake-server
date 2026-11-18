@@ -31,7 +31,7 @@ class Fake:
     def __init__(self, request=None, fail=(), seats=None, note_author=OWNER):
         self.request = request if request is not None else {
             "id": REQ, "status": "new", "prayed_at": None, "status_changed_at": None,
-            "assigned_to": None}
+            "assigned_to": None, "needs_pastor": False, "prayer_team": False}
         self.fail = set(fail)
         self.seats = seats if seats is not None else {ASSOC: "member"}
         self.note_author = note_author
