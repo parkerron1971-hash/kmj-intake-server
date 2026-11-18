@@ -57,7 +57,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import sb_clients
 from auth_supabase import AuthedUser, UserSession
@@ -949,12 +949,19 @@ def place(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed
 
 
 @router.put("/areas/login")
-def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
+def place_login(body: Dict[str, Any], request: Request = None,
+                session: UserSession = Depends(sb_clients.authed_request)):
     """Give an office login its areas (or its lane: the lane's areas), or
     send it back to Chief's guess (areas null). The owner and admins see
     everything and aren't placed; Giving opens only to admins and the
     accountant, so it isn't offered, and the Treasurer's lane is an Admin
-    login, given at the invite."""
+    login, given at the invite.
+
+    A write that leaves the login with more (an area it is shown, a duty it
+    holds: church_sheet.effect, the same answer a person's sheet gives) asks
+    for the password again, as the sheet and an invite do; one that leaves
+    it with less never does. Until 2026-11-18 this route gave more with no
+    password at all, so the sheet's question could be walked around here."""
     user = session.user
     _gate(user)
     body = body or {}
@@ -981,6 +988,10 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
                                      f"{picked['label']} from Logins & areas.")
         areas = picked["areas"]
     areas = clean_login_areas(areas)
+    import church_sheet
+    if church_sheet.areas_write_widens(biz, uid, areas=areas, job=picked["key"] if picked else KEEP):
+        import ledger_unlock
+        ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
     # A lane picked here is the login's job from now on (one of the church's
     # own jobs would otherwise stay on it: set_login keeps those by name).
     kept = set_login(biz, uid, seat[0].get("role"), areas=areas, job=picked["key"] if picked else KEEP)

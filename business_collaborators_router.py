@@ -51,8 +51,13 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
 def is_active_accountant(business_id: str, user_id: str) -> bool:
     """Reusable check for future cross-router grants (accountant can read
     reports / propose closes / run reconciliation)."""
+    from urllib.parse import quote
+    from business_users_router import safe_id
+    business_id, user_id = str(business_id or ""), str(user_id or "")
+    if not safe_id(business_id) or not safe_id(user_id):
+        return False         # an id that isn't shaped like one names no business and no login
     rows = sb_clients.sb_get_as_service(
-        f"/business_collaborators?business_id=eq.{business_id}&user_id=eq.{user_id}"
+        f"/business_collaborators?business_id=eq.{quote(business_id, safe='')}&user_id=eq.{quote(user_id, safe='')}"
         f"&status=eq.active&role=eq.accountant&select=id&limit=1") or []
     return bool(rows)
 

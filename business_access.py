@@ -59,6 +59,25 @@ def _rank(role: str) -> int:
     return _ROLE_RANK.get(role, 0)
 
 
+def _business_path_id(business_id: Any) -> str:
+    """The business id as it may go into a PostgREST path (quoted), or the
+    same 404 a business that doesn't exist gets.
+
+    The id used to reach the path as it arrived. A value ending in an
+    encoded "#" made the rest of the query a URL fragment, so the filters
+    after it were dropped: on the role lookup that meant "which user" and
+    "which status". An id is letters, digits, hyphens and underscores
+    (business_users_router.safe_id; every real one is a UUID); anything else
+    names no business, and saying so with the usual 404 tells a stranger
+    nothing new."""
+    from urllib.parse import quote
+    from business_users_router import safe_id
+    business_id = "" if business_id is None else str(business_id)
+    if not safe_id(business_id):
+        raise HTTPException(status_code=404, detail="business not found")
+    return quote(business_id, safe="")
+
+
 def business_access(min_role: str = DEFAULT_MIN_ROLE) -> Callable:
     """Dependency factory: require `min_role` on the business named by the
     request, and return that business row.
@@ -87,7 +106,7 @@ def business_access(min_role: str = DEFAULT_MIN_ROLE) -> Callable:
         # at all.
         user = session.user
         rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+            f"/businesses?id=eq.{_business_path_id(business_id)}&select=*&limit=1") or []
         if not rows:
             raise HTTPException(status_code=404, detail="business not found")
 
@@ -136,7 +155,7 @@ def assert_access(business_id: str, user: AuthedUser,
     indistinguishable 404.
     """
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
+        f"/businesses?id=eq.{_business_path_id(business_id)}&select=id&limit=1") or []
     if not rows:
         raise HTTPException(status_code=404, detail="business not found")
     try:

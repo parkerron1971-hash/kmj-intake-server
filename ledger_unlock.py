@@ -210,7 +210,9 @@ def require_unlock(request: Request, user_id: str,
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown step-up scope: {scope}")
-    token = request.headers.get(UNLOCK_HEADER) or ""
+    # No request at all (a caller with none to give) is the same as no
+    # token: locked, never a pass.
+    token = (request.headers.get(UNLOCK_HEADER) if request is not None else "") or ""
     if not verify(token, user_id, scope):
         raise HTTPException(
             status_code=403,
@@ -230,9 +232,13 @@ def require_unlock(request: Request, user_id: str,
 #
 #   danger ... the OWNER, and nobody else. A viewer seat should never be
 #              handed a password oracle for an account-deletion gate.
-#   access ... the owner, an ACTIVE Admin seat on that business, or an
+#   access ... the owner, an ACTIVE Admin seat on that business, an
 #              ACTIVE Manager seat the owner or an Admin gave "Sets up
-#              jobs and people's sheets" (church_job_defs.GRANT).
+#              jobs and people's sheets" (church_job_defs.GRANT), or an
+#              ACTIVE Manager seat that is over the office's lanes
+#              (church_duties.oversees: the Duties tab lets her move her
+#              team's duties, and since 2026-11-18 a move that gives
+#              someone a duty asks for the password).
 #
 # Why access is wider (2026-11-17). Re-proving your own password is the
 # protection against an unlocked laptop, so it has to work for whoever
@@ -281,9 +287,10 @@ def _business_uuid(business_id: Any) -> str:
 def _require_actor(business_id: str, user_id: str, scope: str) -> Dict[str, Any]:
     """Who may re-prove their password here for this scope (see the note
     above): the owner for either; for `access` also an active Admin seat,
-    or an active Manager seat that holds the jobs-and-sheets grant, on
-    this business. Everyone else is a 403; a read that fails is a 403
-    too, never a pass. `business_id` is already a UUID."""
+    or an active Manager seat that holds the jobs-and-sheets grant or is
+    over the office's lanes, on this business. Everyone else is a 403; a
+    read that fails is a 403 too, never a pass. `business_id` is already a
+    UUID."""
     import sb_clients
     from urllib.parse import quote
     rows = sb_clients.sb_get_as_service(
@@ -307,6 +314,12 @@ def _require_actor(business_id: str, user_id: str, scope: str) -> Dict[str, Any]
                 return rows[0]
         except Exception:  # noqa: BLE001 — unread is not a yes
             logger.warning("[step_up] the grant couldn't be read for %s", str(business_id)[:8])
+        try:
+            import church_duties
+            if church_duties.oversees(business_id, user_id):
+                return rows[0]
+        except Exception:  # noqa: BLE001 — unread is not a yes
+            logger.warning("[step_up] who is over the lanes couldn't be read for %s", str(business_id)[:8])
     raise HTTPException(403, "not authorized")
 
 

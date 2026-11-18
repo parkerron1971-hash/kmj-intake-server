@@ -1093,3 +1093,234 @@ def test_the_jobs_are_exported_and_their_change_record_is_not():
     sql = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "supabase",
                             "APPLY-2026-11-17-church-jobs.sql"), encoding="utf-8").read()
     assert sql.count("references public.businesses(id) on delete cascade") == 2      # both go with the church
+
+
+# ─── The sheet sets a login's level (2026-11-18) ──────────────────────
+# Kevin, on whether the sheet should change a login's level: "everything
+# else, I agree." Until then only the invite set it.
+
+def _level(db, uid):
+    return _seat_of(db, uid)["role"]
+
+
+def _options(db, viewer, target):
+    return cs.compose(_biz(db), viewer, target)["level_options"]
+
+
+def test_the_sheet_lists_the_four_levels_and_which_this_editor_may_set(db):
+    got = _options(db, OWNER, JORDAN)
+    assert [o["key"] for o in got] == ["viewer", "member", "manager", "admin"]
+    assert all(o["allowed"] and o["why"] == "" and o["label"] and o["means"] for o in got)
+    assert [o["key"] for o in got if o["current"]] == ["manager"]
+    # An Admin, and whoever sets up jobs and sheets, set every level but Admin.
+    _give_grant(db)
+    for editor in (ADMIN, RUTH):
+        got = {o["key"]: o for o in _options(db, editor, JORDAN)}
+        assert [k for k, o in got.items() if o["allowed"]] == ["viewer", "member", "manager"]
+        assert got["admin"]["why"] == cs.ADMIN_LEVEL
+    # A sheet that can't be changed offers none: your own, an Admin's for another Admin, the owner's.
+    assert _options(db, JORDAN, JORDAN) == []
+    assert _options(db, ADMIN, ADMIN2) == []
+    assert _options(db, ADMIN, OWNER) == [] and _options(db, OWNER, OWNER) == []
+    # The owner sets an Admin's.
+    assert [o["key"] for o in _options(db, OWNER, ADMIN) if o["current"]] == ["admin"]
+
+
+def test_raising_a_level_asks_for_the_password_and_lowering_one_doesnt(db):
+    def locked():
+        raise HTTPException(403, {"code": "ledger_locked"})
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, MARK, {"level": "manager"}, widening=locked)
+    assert e.value.detail == {"code": "ledger_locked"} and _level(db, MARK) == "member"     # nothing written
+    asked = []
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "manager"}, widening=lambda: asked.append(1))
+    assert asked == [1] and got["widens"] and _level(db, MARK) == "manager"
+    assert "level: Manager (was Member)" in got["summary"] and "gave " in got["summary"]
+    assert got["owner_told"] is False
+    # Down again: less, so nothing is asked.
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "viewer"}, widening=locked)
+    assert not got["widens"] and _level(db, MARK) == "viewer"
+    assert "level: Viewer (was Manager)" in got["summary"] and "took away " in got["summary"]
+    # Viewer to Member holds no duty either way, and is still a higher level.
+    asked = []
+    cs.change(_biz(db), OWNER, MARK, {"level": "member"}, widening=lambda: asked.append(1))
+    assert asked == [1] and _level(db, MARK) == "member"
+    # The same level again changes nothing and asks nothing.
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "member"}, widening=locked)
+    assert got == {"widens": False, "summary": "", "changed": False, "owner_told": False}
+
+
+@pytest.mark.parametrize("bad", ["owner", "boss", "", 3, ["manager"]])
+def test_a_level_that_isnt_one_is_a_400(db, bad):
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, MARK, {"level": bad})
+    assert e.value.status_code == 400 and e.value.detail == cs.NOT_A_LEVEL
+    assert _level(db, MARK) == "member"
+
+
+def test_an_admin_sets_every_level_but_admin_and_never_another_admins(db):
+    cs.change(_biz(db), ADMIN, MARK, {"level": "manager"})
+    assert _level(db, MARK) == "manager"
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), ADMIN, MARK, {"level": "admin"})
+    assert e.value.status_code == 403 and e.value.detail == cs.ADMIN_LEVEL and _level(db, MARK) == "manager"
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), ADMIN, ADMIN2, {"level": "manager", "areas": ["office"]})
+    assert e.value.status_code == 403 and e.value.detail == cs.ADMINS_SHEET and _level(db, ADMIN2) == "admin"
+
+
+def test_a_holder_sets_a_level_below_admin_and_the_owner_is_told(db):
+    _give_grant(db)
+    db.told.clear()
+    asked = []
+    got = cs.change(_biz(db), RUTH, MARK, {"level": "manager", "areas": ["kids_youth"]},
+                    widening=lambda: asked.append(1))
+    assert asked == [1] and _level(db, MARK) == "manager" and got["owner_told"] is True
+    assert len(db.told) == 1 and "level: Manager (was Member)" in db.told[0][0] + db.told[0][1]
+    rec = db.t["church_sheet_changes"][-1]
+    assert rec["subject_user_id"] == MARK and rec["changed_by"] == RUTH and rec["detail"]["level"] == "manager"
+    # Never Admin, never their own, never an Admin's or the owner's.
+    for target, body, word in ((MARK, {"level": "admin"}, cs.ADMIN_LEVEL), (RUTH, {"level": "member"}, cs.OWN_SHEET),
+                               (ADMIN, {"level": "manager", "areas": ["office"]}, cs.ADMINS_SHEET),
+                               (OWNER, {"level": "manager"}, cs.OWNERS_SHEET)):
+        with pytest.raises(HTTPException) as e:
+            cs.change(_biz(db), RUTH, target, body)
+        assert e.value.status_code == 403 and e.value.detail == word
+
+
+def test_a_holders_ceiling_holds_when_a_higher_level_would_bring_a_locked_duty(db):
+    """A Member whose person is the Executive Pastor would, as a Manager, do
+    the lanes' oversight: that is the owner's or an Admin's to give."""
+    _give_grant(db)
+    db.t["contacts"].append({"id": "c-mark", "business_id": BIZ, "name": "Mark Diaz",
+                             "email": "mark@gracefellowship.example"})
+    db.t["church_role_defs"].append({"id": "d-exec", "business_id": BIZ, "key": cd.EXEC, "catalog_key": cd.EXEC,
+                                     "title": "Executive Pastor", "job": "pastoral", "status": "active"})
+    db.t["church_leader_roles"].append({"business_id": BIZ, "contact_id": "c-mark", "role": cd.EXEC,
+                                        "status": "active", "scope": None})
+    _seat_of(db, MARK)["contact_id"] = "c-mark"
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), RUTH, MARK, {"level": "manager"})
+    assert e.value.status_code == 403 and e.value.detail == cs.OVERSIGHT_LOCKED and _level(db, MARK) == "member"
+    # The owner can, and it reads as giving more.
+    asked = []
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "manager"}, widening=lambda: asked.append(1))
+    assert asked == [1] and _level(db, MARK) == "manager" and cd.OVERSEE in co.Church(_biz(db)).held(MARK)
+    assert got["widens"]
+
+
+def test_a_login_lowered_below_manager_no_longer_sets_up_jobs_in_the_same_save(db):
+    _give_grant(db)
+    assert RUTH in cj.grant_holders(BIZ)
+    got = cs.change(_biz(db), OWNER, RUTH, {"level": "member"})
+    assert _level(db, RUTH) == "member" and RUTH not in cj.grant_holders(BIZ)
+    assert f"took away “{cj.GRANT_LABEL}”" in got["summary"]
+    # Raised again, the grant doesn't come back with the level.
+    cs.change(_biz(db), OWNER, RUTH, {"level": "manager"})
+    assert _level(db, RUTH) == "manager" and not cj.holds_grant(BIZ, RUTH, "manager")
+    assert cj.editor(BIZ, RUTH, "manager") is None
+
+
+def test_only_the_owner_or_an_admin_lowers_someone_who_sets_up_jobs(db):
+    _give_grant(db, RUTH)
+    _give_grant(db, JORDAN)
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), RUTH, JORDAN, {"level": "member"})
+    assert e.value.status_code == 403 and e.value.detail == cs.HOLDERS_LEVEL.format(name="Jordan Lee")
+    assert _level(db, JORDAN) == "manager" and JORDAN in cj.grant_holders(BIZ)
+    cs.change(_biz(db), ADMIN, JORDAN, {"level": "member"})
+    assert _level(db, JORDAN) == "member" and JORDAN not in cj.grant_holders(BIZ)
+
+
+def test_the_owner_makes_someone_an_admin_and_their_areas_stay_stored(db):
+    _give_grant(db, JORDAN)
+    asked = []
+    got = cs.change(_biz(db), OWNER, JORDAN,
+                    {"level": "admin", "areas": ["office"], "duties": {"add": ["first_guests"], "remove": ["website"]}},
+                    widening=lambda: asked.append(1))
+    seat = _seat_of(db, JORDAN)
+    assert asked == [1] and seat["role"] == "admin"
+    # An Admin sees the whole church: what was sent with it is left as stored, there again if moved back.
+    assert seat["areas"] == ["worship_media", "website_outreach"] and seat["lane"] == "media_comms"
+    assert "level: Admin (was Manager), so they see the whole church, giving included" in got["summary"]
+    assert "Giving & money" in got["summary"]
+    assert JORDAN not in cj.grant_holders(BIZ)            # an Admin sets jobs up already: no row left behind
+    sheet = cs.compose(_biz(db), OWNER, JORDAN)
+    assert sheet["areas"]["by"] == "all" and sheet["person"]["role"] == "admin"
+
+
+def test_an_admin_job_goes_with_the_admin_level(db):
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, JORDAN, {"job": "treasurer"})
+    assert e.value.status_code == 400 and e.value.detail == cs.ADMIN_JOB_NEEDS_LEVEL
+    cs.change(_biz(db), OWNER, JORDAN, {"job": "treasurer", "level": "admin"})
+    seat = _seat_of(db, JORDAN)
+    assert seat["role"] == "admin" and seat["lane"] == "treasurer"
+    # An Admin can't: the level it needs is the owner's to give.
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), ADMIN, SARAH, {"job": "treasurer", "level": "admin"})
+    assert e.value.status_code == 403 and e.value.detail == cs.ADMIN_LEVEL
+
+
+def test_an_admin_moved_down_must_be_left_with_areas_of_their_own(db):
+    def locked():
+        raise HTTPException(403, {"code": "ledger_locked"})
+    for body in ({"level": "manager"}, {"level": "manager", "areas": None}, {"level": "member"}):
+        with pytest.raises(HTTPException) as e:
+            cs.change(_biz(db), OWNER, ADMIN, body)
+        assert e.value.status_code == 400 and e.value.detail == cs.PICK_AREAS.format(name="Tasha Moore")
+        assert _level(db, ADMIN) == "admin"
+    # With areas it saves, and it is less than an Admin had: no password.
+    got = cs.change(_biz(db), OWNER, ADMIN, {"level": "manager", "areas": ["office", "people_care"]}, widening=locked)
+    seat = _seat_of(db, ADMIN)
+    assert seat["role"] == "manager" and seat["areas"] == ["people_care", "office"] and not got["widens"]
+    assert "level: Manager (was Admin)" in got["summary"] and "took off " in got["summary"]
+    sheet = cs.compose(_biz(db), OWNER, ADMIN)
+    assert sheet["areas"]["by"] == "picked" and sheet["areas"]["shown"] == ["people_care", "office"]
+    # Areas already on the row (kept from before they were an Admin) are enough.
+    _seat_of(db, ADMIN2)["areas"] = ["kids_youth"]
+    cs.change(_biz(db), OWNER, ADMIN2, {"level": "manager"}, widening=locked)
+    assert _level(db, ADMIN2) == "manager" and cs.compose(_biz(db), OWNER, ADMIN2)["areas"]["shown"] == ["kids_youth"]
+
+
+def test_a_level_and_what_goes_with_it_save_together(db):
+    """Start a Member from a Manager job in one save: the level, the areas
+    and a duty, each checked for the level the save leaves them with."""
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "manager", "job": "people_care",
+                                           "areas": ["people_care", "kids_youth", "groups_classes"],
+                                           "duties": {"add": ["weekly_text"]}})
+    seat = _seat_of(db, MARK)
+    assert seat["role"] == "manager" and seat["lane"] == "people_care"
+    assert seat["areas"] == ["people_care", "kids_youth", "groups_classes"]
+    assert "weekly_text" in co.Church(_biz(db)).held(MARK) and got["widens"]
+    # Lowered, a duty can't be given in the same save, and ones sent to take off are simply gone.
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, MARK, {"level": "member", "duties": {"add": ["first_guests"]}})
+    assert e.value.status_code == 400 and e.value.detail == cs.NO_OFFICE_JOBS and _level(db, MARK) == "manager"
+    cs.change(_biz(db), OWNER, MARK, {"level": "member", "duties": {"remove": ["weekly_text"]}})
+    assert _level(db, MARK) == "member" and co.Church(_biz(db)).held(MARK) == frozenset()
+
+
+def test_the_put_takes_a_level_and_asks_for_the_password_when_it_goes_up(office, db):
+    body = {"business_id": BIZ, "user_id": MARK, "level": "manager"}
+    r = office.put("/church/sheet", json=body)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access" and _level(db, MARK) == "member"
+    import ledger_unlock
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-sheet")
+    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]
+    r = office.put("/church/sheet", json=body, headers={ledger_unlock.UNLOCK_HEADER: token})
+    assert r.status_code == 200 and r.json()["person"]["role"] == "manager" and r.json()["changed"]
+    assert [o["key"] for o in r.json()["level_options"] if o["current"]] == ["manager"]
+    r = office.put("/church/sheet", json={**body, "level": "viewer"})          # down: no password
+    assert r.status_code == 200 and _level(db, MARK) == "viewer"
+
+
+def test_chief_reads_the_level_and_still_has_no_verb_that_changes_a_sheet(db):
+    import chief_church_sheet as ccs
+    cs.change(_biz(db), OWNER, MARK, {"level": "manager"})
+    got = chief(db, OWNER, "sheet_of", who="Mark")
+    assert not got.get("failed"), got["result"]
+    assert got["result"].startswith("Mark Diaz's sheet: Manager login.")
+    assert set(ccs.HANDLERS) == {"sheet_of", "list_church_jobs", "draft_church_job", "save_church_job",
+                                 "remove_church_job"}

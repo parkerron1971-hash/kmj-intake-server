@@ -259,6 +259,18 @@ def office(db, monkeypatch):
     who = {"role": "owner", "email": "kmjcreativesolution@gmail.com"}
     monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: who["role"])
     monkeypatch.setenv("CHURCH_AREAS", "owner")
+    # A write that gives a login more asks for the password again (since
+    # 2026-11-18); these tests are about everything else, so here it has
+    # been answered. The password itself is pinned in
+    # test_access_asks_by_result.py.
+    import ledger_unlock
+    monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
+    # Whether a write gives more is worked out from the church's logins and
+    # their people (church_over), which reads the owner's sign-in email.
+    import member_asks
+    import messaging_router
+    monkeypatch.setattr(member_asks, "_OWNER_CACHE", {})
+    monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: "")
     app = FastAPI()
     app.include_router(ca.router)
     app.dependency_overrides[sb_clients.authed_request] = (

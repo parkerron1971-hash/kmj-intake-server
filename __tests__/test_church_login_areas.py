@@ -31,6 +31,9 @@ import church_areas as ca  # noqa: E402
 import sb_clients  # noqa: E402
 from test_church_follow_up import BIZ  # noqa: E402
 from test_church_areas import db, office  # noqa: E402,F401
+import ledger_unlock  # noqa: E402
+
+_REAL_UNLOCK = ledger_unlock.require_unlock      # before any fixture answers it
 
 MARCUS_SEAT = "11111111-1111-1111-1111-111111111111"
 SAM_SEAT = "22222222-2222-2222-2222-222222222222"
@@ -242,3 +245,71 @@ def test_an_admin_gives_a_login_its_lane(office, seats):
     assert office.get(f"/church/lanes?business_id={BIZ}").json()["lanes"][-1]["role"] == "admin"
     assert next(s for s in seats.t["business_users"] if s["user_id"] == MARCUS_SEAT)["areas"] == [
         "worship_media", "website_outreach"]
+
+
+# ─── The password, by what the write gives (2026-11-18) ───────────────
+# This route gave a login more with no password asked, so the question a
+# person's sheet asks could be walked around here. It now asks the same
+# question, by the same reckoning (church_sheet.effect).
+
+def _real_unlock(monkeypatch):
+    """The office fixture answers the password for the tests above; these
+    put the real check back."""
+    import ledger_unlock
+    monkeypatch.setattr(ledger_unlock, "require_unlock", _REAL_UNLOCK)
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-areas")
+    from test_church_follow_up import OWNER
+    return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]}
+
+
+def _row(seats, uid):
+    return next(s for s in seats.t["business_users"] if s["user_id"] == uid)
+
+
+def test_the_areas_write_asks_for_the_password_only_when_it_gives_more(office, seats, monkeypatch):
+    unlocked = _real_unlock(monkeypatch)
+    body = {"business_id": BIZ, "user_id": NEW_SEAT}
+    # An area taken off: less, so nothing is asked.
+    r = office.put("/church/areas/login", json={**body, "areas": ["office"]})
+    assert r.status_code == 200 and _row(seats, NEW_SEAT)["areas"] == ["office"]
+    # An area added: the standard answer the app's password prompt reads.
+    r = office.put("/church/areas/login", json={**body, "areas": ["office", "kids_youth"]})
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access"
+    assert _row(seats, NEW_SEAT)["areas"] == ["office"], "nothing was written"
+    r = office.put("/church/areas/login", json={**body, "areas": ["office", "kids_youth"]}, headers=unlocked)
+    assert r.status_code == 200 and _row(seats, NEW_SEAT)["areas"] == ["kids_youth", "office"]
+    # The same areas again give nothing.
+    r = office.put("/church/areas/login", json={**body, "areas": ["office", "kids_youth"]})
+    assert r.status_code == 200
+
+
+def test_back_to_chiefs_guess_asks_when_the_guess_opens_more(office, seats, monkeypatch):
+    unlocked = _real_unlock(monkeypatch)
+    body = {"business_id": BIZ, "user_id": MARCUS_SEAT}
+    # Chief's guess for Marcus is Kids & youth. Picked down to Office alone, going back opens Kids & youth again.
+    assert office.put("/church/areas/login", json={**body, "areas": ["office"]}, headers=unlocked).status_code == 200
+    r = office.put("/church/areas/login", json={**body, "areas": None})
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert _row(seats, MARCUS_SEAT)["areas"] == ["office"]
+    assert office.put("/church/areas/login", json={**body, "areas": None}, headers=unlocked).status_code == 200
+    assert _row(seats, MARCUS_SEAT)["areas"] is None
+
+
+def test_a_lane_that_brings_more_asks_too(office, seats, monkeypatch):
+    unlocked = _real_unlock(monkeypatch)
+    body = {"business_id": BIZ, "user_id": MARCUS_SEAT, "lane": "media_comms"}
+    r = office.put("/church/areas/login", json=body)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert _row(seats, MARCUS_SEAT)["areas"] is None
+    r = office.put("/church/areas/login", json=body, headers=unlocked)
+    assert r.status_code == 200 and r.json()["lane"] == "media_comms"
+
+
+def test_a_token_for_someone_else_doesnt_answer_it(office, seats, monkeypatch):
+    import ledger_unlock
+    _real_unlock(monkeypatch)
+    other = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(MARCUS_SEAT, ledger_unlock.SCOPE_ACCESS)["token"]}
+    r = office.put("/church/areas/login", json={"business_id": BIZ, "user_id": NEW_SEAT,
+                                                "areas": ["office", "people_care", "kids_youth"]}, headers=other)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"

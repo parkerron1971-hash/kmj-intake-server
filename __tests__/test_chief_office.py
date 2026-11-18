@@ -296,6 +296,12 @@ def test_the_duties_page_agrees_with_chief(db, monkeypatch):
     roles = {s["user_id"]: s["role"] for s in db.t["business_users"] if s["business_id"] == LOVE_CITY}
     roles[church(db)["owner_id"]] = "owner"
     monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: roles.get(str(u)))
+    # A write that gives a login more asks for the password again (since
+    # 2026-11-18); these tests are about everything else, so here it has
+    # been answered. The password itself is pinned in
+    # test_access_asks_by_result.py.
+    import ledger_unlock
+    monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
     app = FastAPI()
     app.include_router(cd.router)
     app.dependency_overrides[sb_clients.authed_request] = (
@@ -314,6 +320,43 @@ def test_the_duties_page_agrees_with_chief(db, monkeypatch):
     assert client.put("/church/duties/weekly_text",
                       json={"business_id": LOVE_CITY, "user_ids": [tiara]}).status_code == 404, "as before"
     assert len(changes(db, "weekly_text")) == 2
+
+
+def test_the_overseers_move_asks_for_her_password_when_it_gives_more(db, monkeypatch):
+    """Since 2026-11-18 a move that gives a Manager a duty asks for the
+    password again. She moves her team's duties, so she can answer it:
+    without that, the one who runs the office's week could only take away."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import business_access
+    import ledger_unlock
+    jess, tiara, naiya = (uid(db, LOVE_CITY, n) for n in ("jessica", "tiara", "naiya"))
+    roles = {s["user_id"]: s["role"] for s in db.t["business_users"] if s["business_id"] == LOVE_CITY}
+    roles[church(db)["owner_id"]] = "owner"
+    monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: roles.get(str(u)))
+    monkeypatch.setenv("AUDITOR_LINK_SECRET", "test-secret-for-the-office")
+    app = FastAPI()
+    app.include_router(cd.router)
+    app.dependency_overrides[sb_clients.authed_request] = (
+        lambda: SimpleNamespace(user=SimpleNamespace(id=jess, email="jessica@lovecity.org", user_metadata={})))
+    client = TestClient(app)
+    body = {"business_id": LOVE_CITY, "user_ids": [tiara]}
+    r = client.put("/church/duties/weekly_text", json=body)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access" and changes(db, "weekly_text") == []
+    # She may answer it; a Manager who isn't over the lanes may not, and her answer is no use to anyone else.
+    assert ledger_unlock._require_actor(LOVE_CITY, jess, ledger_unlock.SCOPE_ACCESS)["id"] == LOVE_CITY
+    with pytest.raises(Exception) as e:
+        ledger_unlock._require_actor(LOVE_CITY, naiya, ledger_unlock.SCOPE_ACCESS)
+    assert e.value.status_code == 403
+    hers = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(jess, ledger_unlock.SCOPE_ACCESS)["token"]}
+    theirs = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(naiya, ledger_unlock.SCOPE_ACCESS)["token"]}
+    assert client.put("/church/duties/weekly_text", json=body, headers=theirs).status_code == 403
+    r = client.put("/church/duties/weekly_text", json=body, headers=hers)
+    assert r.status_code == 200, r.text
+    assert changes(db, "weekly_text")[-1]["changed_by"] == jess
+    # The same move again gives nobody anything: nothing asked.
+    assert client.put("/church/duties/weekly_text", json={**body, "user_ids": [tiara]}).status_code == 200
 
 
 def test_her_jobs_line_says_what_she_can_ask_chief_for(db):
