@@ -18,10 +18,10 @@ gave stays private. Step 2 adds the limit: only so many of a group, or of a depa
 one service date; days nobody takes off; two people who can't be away together; and the same
 path for volunteers when their date is full or they already said yes to serve it.
 
-**Where it stands (2026-11-18).** Seven PRs. Step 1's tables and step 2's are both in
+**Where it stands (2026-11-18).** Eight PRs. Step 1's tables and step 2's are both in
 production. The limit on how many can be away at once is built for leaders and the office (S2-2
-and S2-3, below); pairs (S2-4), the volunteers' rules (S2-5) and things that repeat (S1-7) are
-not.
+and S2-3, below), and so are people who can't be away together (S2-4); the volunteers' rules
+(S2-5) and things that repeat (S1-7) are not.
 
 **Step 1's migration is applied.** `supabase/APPLY-2026-11-19-church-schedule.sql` was run by the
 owner on 2026-11-18 and checked by the lead session with the file's own Check block: the four
@@ -85,16 +85,29 @@ production that time has passed.
   first deploy. Step 2 has its own check for its tables (`church_schedule_limits.ready()`): on a
   database with step 1's file alone, all of this is off and nothing of step 2 is read. No
   migration of its own.
+- **S2-4 (PR_NUMBER)** holds pairs: two people who can't be away together, set and read by the
+  owner and whoever oversees the office alone (`GET` / `POST` / `DELETE
+  /church/schedule/pairs`), and the `pair` flag. An ask whose days overlap, on any day, an away
+  date of the other of a pair, or an ask of theirs still waiting that was made first, is never
+  refused: it is flagged `pair` and goes up as an ask past the number does, the yes looks again,
+  and the exception is saved with `pair` in it. The one asking reads "This overlaps with someone
+  you can't be away with at the same time" and never who or which days; the flag is on the
+  calendar only for those who read the reason; whoever it went up to reads who it overlaps
+  with only when they may give the exception. A pair with someone since taken off the schedule
+  is kept and does nothing. Owner-only by default; both migrations were applied before it
+  merged, so it is live at the platform owner's church from its first deploy. No migration of
+  its own; on a database with step 1's file alone nothing of it is read.
 
 The office app has no screen yet: a login's notice still points at the office app, where the
 ask isn't shown. A login whose person is on the schedule answers in the member app, as that
 person.
 
 In sections 3 to 6, what is marked **built** describes code that exists; the rest is still the
-plan for the PRs ahead (S1-7, S2-4 and S2-5). Section 7 is what was decided; 7.4 is
+plan for the PRs ahead (S1-7 and S2-5). Section 7 is what was decided; 7.4 is
 what the build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, 7.6 what the build
-of S1-5 decided, 7.7 what the build of S1-6 decided, 7.8 what the writing of S2-1 decided, and
-7.9 what the build of S2-2 and S2-3 decided, each with where it differs from the plan above it.
+of S1-5 decided, 7.7 what the build of S1-6 decided, 7.8 what the writing of S2-1 decided,
+7.9 what the build of S2-2 and S2-3 decided, and 7.10 what the build of S2-4 decided, each with
+where it differs from the plan above it.
 
 **Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
 away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
@@ -410,8 +423,8 @@ lead session with the file's own Check block: three tables with RLS on, no polic
 browser or anon read; the five new columns; the four constraints validated; `church_away_settle`
 with six arguments and `church_away_settle_excepted` with seven, each running for `service_role`
 only; no asks). Since S2-2 and S2-3 it is read by `church_schedule_limits.py` and
-`church_schedule.py` (section 3.3); `church_away_pairs` and `team_group_id` wait for S2-4 and
-S2-5. Where it differs from the draft this section used to hold is listed, with why, in 7.8.
+`church_schedule.py` (section 3.3), and since S2-4 `church_away_pairs` too; `team_group_id`
+waits for S2-5. Where it differs from the draft this section used to hold is listed, with why, in 7.8.
 
 | Object | What it holds |
 |---|---|
@@ -545,7 +558,8 @@ every ask and away date, and the file applies again after it.
   database without it does.
 - A pair is written with the smaller id first. Postgres orders two uuids as their lower-case
   text orders (checked), so the server sorts the two ids as lower-case text before it writes;
-  the wrong way round is refused, never saved twice.
+  the wrong way round is refused, never saved twice. (Built, S2-4: `add_pair` sorts the two
+  ids `_uuid` gives, which are lower-case.)
 - The upsert keys: `department_id` for a department's number, `business_id,day` for a
   protected day (naming a day again changes its name, still one row).
 - A flag can't be taken off an ask while an exception rests on it, so anything that recomputes
@@ -823,7 +837,7 @@ The first six rows are S1-6, **built**; where the build differs from the plan th
 days, and its own router on the same `/church` prefix)
 
 ```
-FLAGS = ("over_limit", "protected_day"); NEAR_DAYS = 56; PICTURE_DAYS = 366 + 2 * 56 + 2; _FORCE
+FLAGS = ("over_limit", "protected_day", "pair"); NEAR_DAYS = 56; PICTURE_DAYS = 366 + 2 * 56 + 2; _FORCE
 ready() -> bool                                # step 2's own "are its tables there": church_protected_days answers.
                                                # church_schedule.ready's rule and cache; conftest pins it False
 default_limit(people) -> int                   # max(1, people // 4)
@@ -831,31 +845,43 @@ usual_weekdays(ch, now=None) -> List[int]      # settings.service_weekdays, else
 department_people(ch, department_id) -> Set[str]   # everyone on its Sunday teams (leaders too), each once. A team is
                                                # an active group with a serve_teams row that hangs from the department
                                                # as a group unit, or by name as a Serve option
-class Picture: lo, hi, today, roster, people, limits, weekdays, worked_out, days, departments, away
+class Picture: lo, hi, today, roster, people, limits, weekdays, worked_out, days, departments, away, pairs, held
     away_on(day, people, but="") -> Set[str]   # who of `people` has an away date that day; never `but` (the asker)
     counted(lo=None, hi=None) -> List[day]     # the days that count, soonest first
-picture(ch, lo, hi, *, now=None) -> Picture    # ONE WINDOW, READ ONCE (PICTURE_DAYS at most, a 400 past it): the roster,
-                                               # the church's numbers, its plans (a page at a time), the protected days,
-                                               # each numbered department's people, and THE FACTS (serve_away, a hundred
-                                               # people a read, each read paged). Never an ask
+    pair_hits(cid, first, last, before=None) -> Set[str]   # S2-4: the other of each of their pairs in force whose away
+                                               # date, or waiting ask made before `before`, overlaps on any day. PRIVATE
+picture(ch, lo, hi, *, now=None, who=None) -> Picture    # ONE WINDOW, READ ONCE (PICTURE_DAYS at most, a 400 past it):
+                                               # the roster, the church's numbers, its plans (a page at a time), the
+                                               # protected days, each numbered department's people, and THE FACTS
+                                               # (serve_away, a hundred people a read, each read paged). Never an ask.
+                                               # `who` (S2-4): also those people's pairs in force (one read), and, only
+                                               # when there is one, the other's waiting asks (who, days, created_at)
 service_days(ch, lo, hi) -> List[{"day": date, "kind": "service"|"event"|"protected", "name": str}]
 limit_for(ch, grp, department_id=None) -> Optional[int]   # a department: its row's number, None = no limit
 away_on(ch, day, grp, department_id=None) -> Set[str]
-flags_of(picture, cid, first, last, department_id=None) -> {"flags": [...], "why": [...]}     # pure
-flags_for(ch, asker_cid, starts_on, ends_on, *, department_id=None, now=None) -> the same, read fresh for those days
-nearest_open(picture, cid, first, last, department_id=None) -> {"before": day|None, "after": day|None}
+flags_of(picture, cid, first, last, department_id=None, *, before=None, pairs=True) -> {"flags": [...], "why": [...]}
+                                               # pure; S2-4 adds at most one {"flag": "pair"}, no day, no name
+flags_for(ch, asker_cid, starts_on, ends_on, *, department_id=None, now=None, before=None) -> the same, read fresh
+                                               # for those days, with the asker's pairs (`before`: the recheck's
+                                               # created_at, so a later waiting ask of the other never counts)
+nearest_open(picture, cid, first, last, department_id=None) -> {"before": day|None, "after": day|None}   # never pairs
 look(ch, cid, first, last, *, department_id=None, now=None) -> {"flags", "why", "open", "up"}   # the Dates page,
-                                               # before sending. Reads; never writes
+                                               # before sending. Reads; never writes. A pair alone offers no open days
 may_set_limit(ch, me, department_id=None) -> bool
 limits(ch, me) -> dict; set_limit(ch, me, body) -> dict      # GET / PUT limits
 days(ch, me, lo, hi) -> dict                                 # GET days
 protected_days(ch, me, lo, hi); add_protected(ch, me, body); drop_protected(ch, me, id)
 volunteers(ch, me, lo, hi) -> dict                           # GET volunteers (read only)
+pairs(ch) -> List[row]                                       # S2-4: every pair, paged. PRIVATE (internal)
+view_pairs(ch, me); add_pair(ch, me, a, b, note); drop_pair(ch, me, id)   # GET / POST / DELETE pairs: the owner and
+                                                             # whoever oversees the office only
+_partners(ch, who, on); _waiting(ch, people, lo, hi); _made_before(at, before)
 ```
 
 `why` has one entry a day and cause, soonest first: `{"flag": "protected_day", "day", "name"}`,
 and `{"flag": "over_limit", "day", "of": "leaders"|"office"|"department", "name", "away",
-"at_most"}`. Counts only.
+"at_most"}`. Counts only. Then, last and at most once, `{"flag": "pair"}` (S2-4), with no day
+and no name.
 
 **`church_schedule.py`**, step 2 (**built**, S2-3)
 
@@ -890,18 +916,26 @@ _send_up(ch, row, moved)                       # a yes that didn't land: one upd
   shape is step 1's, key for key.
 - `calendar` is unchanged: the counts a service day are `GET /church/schedule/days`.
 
+Since S2-4 (**built**): `DAY_FLAGS`; `NEEDS_NOW`, `WENT_UP_NEEDS`, `YOURS_NEEDS` and
+`_now_words(flags)`, the words of a yes that didn't land when what is new (or unshown) is a pair
+alone; `_recheck` passes the ask's `created_at` as `before` and returns `new`; `shape` drops
+`pair` from `flags` and `excepted` for anyone who doesn't read the reason.
+
 **`church_schedule_tell.py`**, step 2 (**built**, S2-3): `up_words(ask)` is the one sentence a
 flagged ask's notice adds ("It's past the number who can be away at once", "It's on a protected
-day"); the sweep leaves a flagged ask where it is while `held_right`, sends it to `goes_up` when
-it isn't, and never sends one back down to the nearest step.
+day", and since S2-4 "It overlaps with someone they can't be away with", or two or three of
+them in one sentence); the sweep leaves a flagged ask where it is while `held_right`, sends it
+to `goes_up` when it isn't, and never sends one back down to the nearest step.
 
 **`member_portal_dates.py`**, step 2 (**built**, S2-3): `_look`, `_Look`, `_show`, `_ask_again`,
-`_look_block`, `_up_line`, `_why_said`, `_limits` (section 4.2 and 7.9).
+`_look_block`, `_up_line`, `_why_said`, `_limits` (section 4.2 and 7.9). Since S2-4: `PAIR_YOU`,
+`PAIR_THEY`, `NOT_SENT_PAIR`, the codes `dt_up_now` and `dt_yours_now`; `_limits` reads the
+pairs of whoever asked what waits for the reader's yes and names the other only on a card the
+reader may answer; `_why_lines` says a pair once, after the days (7.10).
 
 **Still ahead** (their own PRs)
 
 ```
-pairs(ch); add_pair(ch, me, a, b, note); drop_pair(ch, me, id)                # S2-4, and the `pair` flag
 departments_of(ch, cid) -> List[dict]                                           # S2-5
 volunteer_plan(ch, cid, starts_on, ends_on) -> {"instant": bool, "flags", "to", "team_group_id", "assignments"}
 team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_members.role = leader, by name), else
@@ -957,7 +991,7 @@ team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_memb
 | `GET /church/schedule/settings?business_id=` / `PUT` | `{business_id, notice_days}` (0 to 90) | `{notice_days}` | read: on the schedule, the owner, the office overseer; write: the owner, the office overseer |
 | `GET /church/schedule/commitments?business_id=` / `POST` / `DELETE …/{id}` (**S1-7, not built**) | `{business_id, label, weekday, pattern, nth?, starts_on, until_on?}` | `{commitments: [...]}` / `{saved}` | a seat for its own person |
 
-**Step 2** (the first six rows are **built**, S2-2 and S2-3; every one answers 404 until step 2's own tables are there)
+**Step 2** (every row is **built**: S2-2 and S2-3, and the pairs rows S2-4; every one answers 404 until step 2's own tables are there)
 
 | Route | Body / answers | Who |
 |---|---|---|
@@ -968,12 +1002,15 @@ team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_memb
 | `POST /church/schedule/protected-days` | `{business_id, day, name}` (today or later; a name of 80 at most). One row a date: naming a day again renames it. `{saved: {id, day, name}}` | the owner, the office overseer |
 | `DELETE /church/schedule/protected-days/{id}?business_id=` | `{removed: {id, day, name}}`; 404 for one that isn't this church's | the owner, the office overseer |
 | `GET /church/schedule/volunteers?business_id=&from=&to=` (**built**, read only; 93 days at most) | `{from, to, departments: [{id, name, at_most\|null, people, away: [{contact_id, name, starts_on, ends_on}], waiting: [{contact_id, name, starts_on, ends_on, flags}]}]}`. `away` is the department's own people's away dates (the facts). `waiting` holds only a volunteer's ask (`grp = volunteers`), never a leader's, and the read does not select a reason. Empty until S2-5 | `serve_schedule` holders (so an Admin), the owner, the office overseer: every department. An office login whose person leads a department or is over it: that one. Anyone else: 403 |
-| `GET` / `POST` / `DELETE /church/schedule/pairs` (**S2-4, not built**) | `{business_id, a_contact_id, b_contact_id, note?}` | the owner and the office overseer only, reads too |
+| `GET /church/schedule/pairs?business_id=` (**built**, S2-4) | `{pairs: [{id, a: {contact_id, name, on_schedule}, b: {…}, note, in_force, created_at}], can_change}`, `a` the smaller id. `in_force` is false while either is off the leaders schedule (kept, and it does nothing) | the owner and the office overseer only (403 for anyone else: an Admin, a Manager who doesn't oversee the office, a department's leader, one of the pair) |
+| `POST /church/schedule/pairs` (**built**, S2-4) | `{business_id, a_contact_id, b_contact_id, note?}`, either order. Two different people (400), both this church's own (400), both on the leaders schedule (400), a note of 140 at most (400); the same two again, either order, 409. `{saved: pair}` | as `GET` |
+| `DELETE /church/schedule/pairs/{id}?business_id=` (**built**, S2-4) | `{removed: pair}`; 404 for one that isn't this church's | as `GET` |
 
 What changes on step 1's routes once step 2 is there (**built**, S2-3):
 
-- `POST /church/schedule/asks`: a planned ask past the number, or on a protected day, is saved as any other with `over_limit` and/or `protected_day` in `flags` and `to` the login `goes_up` gives. Never a refusal.
-- `POST /church/schedule/asks/{id}/answer`: 403 on a flagged ask for anyone who may not give its exception (the one it first went to, an Admin, and for a guarded asker the office overseer). A yes that runs into something new answers **409** with one of `church_schedule.WENT_UP` ("… It has gone to {name}, who can make an exception.") or `YOURS_NOW` ("… It's marked now. Say yes again to make an exception."), both starting with `FULL_NOW`; nothing is decided and the ask now carries the new flags. A yes over a flag answers with `excepted` filled. The body takes `shown: [flag]`, the flags the screen showed as being in the way; a yes lands as an exception only when every flag it would be given over is in `shown` (absent = none shown), else the same 409 with nothing written. A yes to a flagged ask while the server can't tell whether step 2's tables are there is a **503**, nothing saved.
+- `POST /church/schedule/asks`: a planned ask past the number, or on a protected day, is saved as any other with `over_limit` and/or `protected_day` in `flags` and `to` the login `goes_up` gives. Never a refusal. Since S2-4 the same with `pair`, when the other of a pair in force has an away date, or an ask still waiting, on any of the same days.
+- Every route that returns an ask (S2-4): `pair` is in `flags` and `excepted` only for those who read the reason (the asker, whoever it went to, the owner, the office overseer); the calendar's other readers get the ask without it.
+- `POST /church/schedule/asks/{id}/answer`: 403 on a flagged ask for anyone who may not give its exception (the one it first went to, an Admin, and for a guarded asker the office overseer). A yes that runs into something new answers **409** with one of `church_schedule.WENT_UP` ("… It has gone to {name}, who can make an exception.") or `YOURS_NOW` ("… It's marked now. Say yes again to make an exception."), both starting with `FULL_NOW`; nothing is decided and the ask now carries the new flags. When what is new is a pair alone (S2-4), the same two endings start with `NEEDS_NOW` instead (`WENT_UP_NEEDS`, `YOURS_NEEDS`: "Those days have changed since this was asked, and they need an exception now…"), which never says there is a pair. A yes over a flag answers with `excepted` filled. The body takes `shown: [flag]`, the flags the screen showed as being in the way; a yes lands as an exception only when every flag it would be given over is in `shown` (absent = none shown), else the same 409 with nothing written. A yes to a flagged ask while the server can't tell whether step 2's tables are there is a **503**, nothing saved.
 
 ### 4.2 Member app
 
@@ -987,7 +1024,7 @@ The first five rows are **built** (S1-5); the two commitments rows are S1-7.
 | `POST /my/lead/dates/ask` | `start, end, kind (time_off\|commitment), reason, cover (the id of someone on the schedule, or ''), cover_name`, and (step 2) `sure=yes` | on the leaders schedule. With step 2 there and no `sure`: when the days are full or protected **nothing is sent**, and the answer is the Dates page itself (200, never kept by a browser) with what they typed still in the form, what is in the way, the nearest open service days and who can make an exception. "Ask anyway" posts the same form with `sure=yes`; the other button posts it without, so changed days are looked at again. Goes back with `done=dt_asked_up` when it went up |
 | `POST /my/lead/dates/cant` | `start (today on the church's clock by default), end, reason` | on the leaders schedule |
 | `POST /my/lead/dates/{id}/withdraw` | | the asker |
-| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only), `shown` (with a Yes: the flags its card showed, comma-separated) | it went to this person (or to the login this person is). A flagged ask: only the very person it went up to. Goes back with `done=dt_yes_x` for a yes over a flag, `err=dt_up` or `err=dt_yours` for a yes that didn't land |
+| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only), `shown` (with a Yes: the flags its card showed, comma-separated) | it went to this person (or to the login this person is). A flagged ask: only the very person it went up to. Goes back with `done=dt_yes_x` for a yes over a flag, `err=dt_up` or `err=dt_yours` for a yes that didn't land (`err=dt_up_now` or `err=dt_yours_now` when what was new is a pair alone, S2-4) |
 | `POST /my/lead/dates/commitments` | `label, weekday, pattern, nth, start, until` | on the leaders schedule (S1-7) |
 | `POST /my/lead/dates/commitments/{id}/remove` | | theirs |
 
@@ -1055,15 +1092,15 @@ Every POST answers 404 while the switch is closed for the church or its tables a
 ### Step 2
 
 Computed in `flags_for` when asked, and again at yes. The leader and office rows, the protected
-day row, the yes rows and the "can't make it" row are **built** (S2-2 and S2-3); the pair row is
-S2-4 and the volunteer rows are S2-5.
+day row, the yes rows and the "can't make it" row are **built** (S2-2 and S2-3), the pair row
+too (S2-4); the volunteer rows are S2-5.
 
 | Case | Goes to | Flags | Written | Told |
 |---|---|---|---|---|
 | Core leader / office, every counted date under the group's limit, no protected day | as step 1 | as step 1 | as step 1 | as step 1 |
 | A counted date already at the limit (facts for that group on that date, the asker's own aside, >= limit), or the same for their department when they are one of the people it counts | `goes_up`: the office overseer, else the owner. For a shepherd or a senior (`co.is_guarded`), or the office overseer themself: the owner. Never refused | `+over_limit` | ask `asked`; hold | `goes_up`, and nobody else (7.9: the plan also told step 1's `to` for their information) |
 | A protected day in the range | `goes_up` | `+protected_day` | same | same. The Dates page names the day; the notice doesn't |
-| The other of a pair has a fact or a waiting ask on any of the same days (**S2-4**) | `goes_up` | `+pair` | same | same; the asker sees "This overlaps with someone you can't be away with" and no name |
+| The other of a pair (in force: both on the leaders schedule) has a fact or a waiting ask on any of the same days (**built**, S2-4). At the yes, only their waiting asks made before this one count (7.10) | `goes_up` | `+pair` | same | same; the notice adds "It overlaps with someone they can't be away with", no name. The asker sees "This overlaps with someone you can't be away with at the same time", never who or which days |
 | A yes on a flagged ask | only someone who may give the exception: the owner, or the office overseer unless the asker is guarded (403 for anyone else). In the member app, only the very person it went up to | | settle yes through `church_away_settle_excepted`, with `p_excepted` = the ask's flags still true. None still true: a plain yes through `church_away_settle` | the asker |
 | A yes on an ask that has run into something new since it was asked (a day filled, or was made a protected day) | the decider gets 409 in plain words; the ask takes the new flags and is re-addressed to `goes_up` (`to_*` changed, `told_at` cleared) unless it already sits with someone who may give the exception | the new flags added | still `asked`; nothing decided, no exception | `goes_up`, when it moved |
 | Not this one on a flagged ask | as any ask that went to them | | settle no; no exception | the asker |
@@ -1126,7 +1163,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 | **S2-1 Migration** (built, #1941) | `APPLY-2026-11-20-church-schedule-limits.sql`; `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_schedule_limits_db.mjs` and the `ci.yml` line; section 2.2 and 7.8 of this doc; the worklog entry. No Python | PGlite, 289 checks, over step 1's file with step 1 already in use: `church_away_settle` is the same function before and after (id, body, grants), and a session that had used it keeps working; every ask, away date and setting reads as it did, and `serve_away` is not touched; the writes the deployed code makes still pass; twice is a no-op, in any order with step 1's file, and leaves one function a name; the six-name call and the seven-name call (`church_away_settle_excepted`) both work; the new function gives the old one's answer for every state and every decision, saves an exception only on a yes it just made (each flag once, in order), and refuses a bad one by name with the yes undone; every constraint and trigger refused by a bad row and accepted by a good one (a pair is ordered and unique and never one person; one protected day a date; limits 1 to 99; weekdays a plain list of 1 to 7; another church's department, person or team refused); server-only under Supabase's default grants; a login, person, department, team or church deleted takes what it should, with a church's foreign keys firing both ways round; the file's Check block answers as it says and its Rollback block puts the catalog back as step 1 left it; the two ways not taken fail as the header says; step 1's own check passes unchanged with this file applied after it. Each rule was broken once to see the check go red (52). `test_export_import` green | this is it. **Applied 2026-11-18** (run by the owner; checked with the file's Check block) |
 | **S2-2 Service days and limits** (built, #1943, in one PR with S2-3) | `church_schedule_limits.py`: `ready`, `picture`, `service_days`, `usual_weekdays`, `limit_for`, `away_on`, `department_people`, `may_set_limit`, `limits`, `set_limit`, `days`, `volunteers`; `GET/PUT limits`, `GET days`, `GET volunteers` (read only); the `conftest` pin; `church_schedule_fake` taught step 2's file | `test_church_schedule_limits.py`, at New Hope: the default is `max(1, n // 4)`; the church's own number replaces it and null puts it back; a number is 1 to 99; who may set each number (an Admin sets no church-wide number and no usual days; a department's by those who run it and whoever keeps Who serves when; from the member app, as a person, deferred); a Saturday church's weekdays worked out from its plans, once is not usual, the church's own replace them; a late-evening service is counted on the church's own day; a protected day counts and says its name; event dates count for departments only; who is away is counted from the facts, each person once; a waiting ask is never counted and never shown; 1,003 away dates, 1,003 plans and a team of 1,003 are read whole; a window too wide is refused before anything is read; every value in an address is quoted; a failed read is a 503; with step 1's file alone every route is a 404, the engine is step 1 key for key and nothing of step 2 is read. Each rule was broken once to see its test go red (the PR lists them) | no. Both were applied before this merged |
 | **S2-3 Limit and protected days for leaders** (built, #1943, in one PR with S2-2) | `flags_of`, `flags_for`, `nearest_open`, `look`; `church_schedule.step2`, `flagged`, `gives_exception`, `goes_up`, `held_right`, `_recheck`, `_send_up`; `ask` / `answer` / `may_decide` / `shape` wired; the protected-days routes; `church_schedule_tell.up_words` and the sweep; the Dates page: the look before sending, the cards | `test_church_schedule_limits.py`: each step-2 leader row; never refused; at the number is full; a guarded person's flagged ask goes to the owner alone, and the office overseer's own; a department past its number; only someone who may give the exception says yes; `excepted` recorded in one transaction, kept by a yes taken back; the flags still true; the recheck at yes (past the number, a protected day, by someone who may give it, a second new flag), and "not this one" never rechecked; an ask entered for someone never goes up to whoever entered it; `cant` and the owner's own never flagged, never blocked, and still counted; a member-app session gives an exception only on an ask that went up to that very person; an Admin never gives one; a failed read is a 503 with nothing saved; a yes whose exception fails leaves nothing half made; two answers at once; no title word or role key. `test_church_schedule_tell.py`: a flagged ask's notice goes to whoever it went up to and adds only that it is past the number or on a protected day; the sweep never sends one back down, and sends it on only when it no longer sits with someone who may give the exception. `test_member_portal_dates.py`: before sending nothing is sent and the page says what is in the way, the nearest open days and who can make an exception, with what they typed still in the form; ask anyway; the card after; why it came, as a count and never a name; a protected day named; a yes that no longer lands in plain words; nobody gets an across-the-board view; with step 1 alone the page never looks. Each rule was broken once to see its test go red (the PR lists them) | no |
-| **S2-4 Pairs** | the pairs routes; `+pair` | the second ask goes up; the asker never sees the other's name; only the owner and the office overseer read pairs | yes |
+| **S2-4 Pairs** (built, PR_NUMBER) | `church_schedule_limits`: `pairs`, `view_pairs`, `add_pair`, `drop_pair`, the pairs routes, `picture(who=)`, `Picture.pair_hits`, `flags_of`/`flags_for` (`+pair`, `before`), `nearest_open` without pairs; `church_schedule`: `shape` hides `pair`, `_recheck` with `before`, `NEEDS_NOW` and `_now_words`; `church_schedule_tell.up_words`; the Dates page's words and `_limits`; `church_schedule_fake` taught the table's update | `test_church_schedule_pairs.py`, at New Hope: only the owner and the office overseer read or change pairs (an Admin, a Manager who doesn't oversee the office, a department's leader, one of the pair and every member-app session refused); two different people of this church on the schedule, saved once, the smaller first, the same two a 409 (two at once too); another church's id refused and its pair not found; the second ask goes up and the first does not, on any day, from a guarded asker to the owner alone; a pair and a full day are one ask with both flags; the recheck catches a pair that arose after the ask (a new pair, the other's "can't make it"); a later waiting ask of the other never sends the first up; an exception over `pair` only when shown; a pair dropped before the yes is a plain yes; "can't make it" and the owner's own read no pair and count for the other; never named to the asker, never on the calendar for anyone who doesn't read the reason; the other's waiting ask never shown to anyone who may not read it; the nearest open days never give the other's days away; a pair with someone off the schedule does nothing and says so to the owner; with no pairs an ask and its yes each make one read more and nothing else changes, and nothing else reads one; a failed read is a 503; every value quoted; 1,003 pairs listed whole; the fake refuses as the SQL does; no title word or role key. `test_church_schedule_tell.py`: the notice says it overlaps with someone, never who or which days. `test_member_portal_dates.py`: before sending and on the asker's card, unnamed, never the other's days, said from the flag; whoever may give the exception reads who, and their Yes carries `pair`; anyone else with the card reads no name; a yes that no longer lands for a pair alone never says pair. Each rule was broken once to see its test go red (the PR lists them) | no. Both were applied before this merged |
 | **S2-5 Volunteers** | `volunteer_plan`, `team_leader`; `add_away` branch; My serving chips and the sub offer; yes opens their places (the opening itself is built, S1-6, and runs for every yes) | instant when free; an ask when full or already serving; no-leader team goes to the department leader, then the overseer, then the owner (the #1719 cases, `test_church_map_serve.py`); the coordinator never sees a leader's ask | yes |
 
 ---
@@ -1860,3 +1897,123 @@ fix taken out)
   through the API until the office frontend exists (decision 21).
 - Nothing tells a leader whose waiting ask sits on a day that has since been made protected,
   until someone says yes to it.
+
+### 7.10 Decided while building S2-4 (PR_NUMBER)
+
+All decided in the build unless it says the lead session; none is the owner's call, and any can
+be reopened with him. Where the plan and the brief didn't settle something, the more private
+choice was taken, and the one that blocks nobody.
+
+**Where things live, and who**
+
+- **Pairs live in `church_schedule_limits.py`**, with step 2's other reads and routes, behind
+  step 2's own check: on a database with step 1's file alone the routes are a 404 and nothing of
+  a pair is read. `pairs(ch)` is the internal reader (every pair, a page at a time);
+  `view_pairs(ch, me)` is the `GET`; `add_pair`, `drop_pair`.
+- **`DELETE` takes the pair's id in the address** (`DELETE /church/schedule/pairs/{id}?business_id=`),
+  as protected days do. The plan's row gave only a body.
+- **Reading is the owner's and the office overseer's alone** (`over_all`), as the brief said: an
+  Admin, a Manager who doesn't oversee the office, a department's leader on any seat, one of the
+  pair, and every member-app session (a person, whoever it is) get a 403, for reading, adding and
+  removing alike. The answer carries `can_change: true` (whoever reads may change), kept for the
+  shape of the other routes.
+
+**What a pair is**
+
+- **Two different people (400), both this church's own (400, by the same read and the same words
+  as who covers), both on the leaders schedule when it is made (400), and a note of 140 letters at
+  most** (spaces folded to one line). The smaller id first, as lower-case text. The same two again,
+  either way round, are a 409 "Those two are already a pair.": a read before the write, and the
+  table's own uniqueness (23505) for two presses at once. The note is sent redacted, and no card,
+  notice or log line has it.
+- **Someone later taken off the schedule (the brief's question): the pair is kept, and does
+  nothing.** A pair is in force only while both people are on the leaders schedule as it stands
+  today. While either is off it, no ask of the other is flagged by it, and the owner's list shows
+  it with `in_force: false` and which of them is off. Put back, it is in force again. Nothing is
+  deleted on its own and nobody is told. Someone leaves the schedule in many ways that never pass
+  through this module (a group they led closes, a role ends, the owner takes them off), so "kept
+  and quiet" is the one rule that holds for all of them, and it says nothing to anyone. The owner
+  or the overseer takes it off when they want it gone.
+
+**What counts**
+
+- **Any of the same days**, not only the days that count for the limit: section 5's row said "any
+  of the same days", and a pair is about two people, not a Sunday's numbers. A Tuesday counts.
+- **The other's away dates are the facts in `serve_away`, whatever made them**: a yes, a "can't
+  make it", the owner's own, a plain away date from the Serve page. They are already in the
+  picture (the other is on the schedule), so a pair adds no read of the facts.
+- **First asked, first answered.** At the ask (and the look before sending) every waiting ask of
+  the other counts. At the yes (the recheck), only their waiting asks made before this one count,
+  by `created_at` (the same moment counts, and a moment that can't be read counts). Without this,
+  the second asker's waiting ask would send the first asker's ask up too at its yes: both would
+  sit with the office overseer, and the first asker would be held up by something they couldn't
+  see, and then told on their card that someone had asked since. With it, exactly the second ask
+  goes up, as the plan's test row says. An away date counts whenever it was made: once the first
+  is a yes, the second's yes needs the exception.
+- **A pair taken off before the yes** is not found by the recheck, and the yes is a plain one (the
+  flag stays on the ask as what was true when it was asked), as for a day that cleared.
+- **One read of pairs an ask**: the asker's, both columns at once, a page at a time, at the ask, at
+  the look before sending and at the yes. The other's waiting asks are read only when there is a
+  pair in force. No pair is read for "can't make it", the owner's own, "not this one", `GET days`,
+  `GET limits`, the calendar, or a Dates page with nothing flagged. "No read at all where the
+  church has no pairs" would need a kept "this church has pairs" answer, a minute stale on the
+  other replicas, so an ask in that minute would miss a pair just made; one bounded read was
+  chosen over that. Pinned: with no pairs, an ask and its yes each read exactly what S2-3 read,
+  and the one pairs read.
+
+**Private**
+
+- **The `pair` flag is shown only to those who read the reason** (`shape`: the asker, whoever it
+  went to, the owner and the office overseer). Everyone else who sees the ask on the calendar sees
+  it without `pair`, in `flags` and in `excepted`: "this person is in a pair" is the pair, and the
+  plan didn't say. The other of the pair is one of those who don't see it.
+- **The one asking is told it in these words alone**: "This overlaps with someone you can't be
+  away with at the same time." Never who, never which days are the other's, never what kind.
+  Before sending, `why` holds `{"flag": "pair"}` and nothing else, and no nearest open days are
+  offered for a pair alone (they would be guesses about the other's time away). Where a day is
+  also full or protected, the nearest open days are worked out without pairs: skipping the days
+  the other is away would say which days those are.
+- **The asker's card says it from the ask's own flag and never works it out again**: whatever
+  happens to the other's time away afterwards (taken back, answered) never reaches them. The full
+  and protected parts of the card still follow the facts, as in S2-3.
+- **"Why it came to you" names the other only on a card the reader may answer** (`can_answer`). In
+  the member app that is the owner's person, or the person of whoever oversees the office, on an
+  ask that went up to them; both may read every ask and every pair in the office app. "It overlaps
+  with time away for Esther Moss, someone they can't be away with at the same time." It never says
+  which days are the other's, or whether theirs is a yes or still waiting. Anyone else who has the
+  card (one that sits with someone who can't give its exception, until the sweep sends it on)
+  reads "It overlaps with someone they can't be away with at the same time." The pair's note is on
+  no card.
+- **The notice**: "It overlaps with someone they can't be away with, so it came to you." With the
+  other flags, one sentence: "It's past the number who can be away at once, and overlaps with…",
+  "It's on a protected day, and overlaps with…", or all three. No name, no days.
+- **A yes that no longer lands because of a pair alone never says "pair"**: whoever pressed it may
+  be the one over the asker, who doesn't read pairs. It reads `NEEDS_NOW` ("Those days have
+  changed since this was asked, and they need an exception now. Your yes didn't go through.")
+  with the usual two endings (`WENT_UP_NEEDS`, `YOURS_NEEDS`), and on Dates the codes
+  `dt_up_now` and `dt_yours_now`. Where a full or protected day is new too, S2-3's words stand,
+  unchanged. The same for a yes refused because `pair` wasn't shown.
+- **The privacy edge (the lead session, in the brief): telling the asker "this overlaps" when the
+  other has only a waiting ask says that someone they can't be away with has something waiting on
+  those days.** Accepted, in the unnamed form only, as the brief allowed: it is the least the
+  asker must be told for the flag to make sense, and nothing else of the other's waiting ask (who,
+  which days, what kind, its reason, where it stands) reaches anyone who may not already read it.
+  Accepted with it, and written down: someone who presses "Ask for these days" over and over on
+  different days (each look sends nothing) could narrow down which days the other is away or
+  waiting, and match the approved ones against the calendar. Nothing here stops that; it would
+  take a limit on looks, a later call.
+
+**Left as it is**
+
+- **An overlap with the office overseer's own time away goes up to the overseer**, as any flagged
+  ask does (`goes_up` is unchanged): they decide on an overlap with their own absence, as they
+  already do for a day that is full partly because they are away.
+- **The office app has no screen for pairs**; they are set through the API until the office
+  frontend exists (decision 21).
+- **The fake** (`church_schedule_fake`) now runs the table's before trigger, its ordering check,
+  the note's length and its uniqueness, in Postgres's order, on an update as well as an insert.
+
+**Open for the lead session or the owner**
+
+- Whether an ask that overlaps the office overseer's own time away should go to the owner.
+- Whether looks before sending should be limited (the probing above).
