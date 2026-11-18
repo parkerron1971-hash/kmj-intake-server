@@ -283,7 +283,9 @@ def view_of(biz_id: str, uid: str, role: str) -> Optional[str]:
     areas = view.get("areas")
     if areas is None or CARE_AREA in areas:
         return "care"
-    if MONEY_AREA in areas:
+    import church_money_gate
+    from types import SimpleNamespace
+    if church_money_gate.may_money(biz_id, SimpleNamespace(id=uid), "see", "help", role=role, areas=areas):
         return "money"
     return None
 

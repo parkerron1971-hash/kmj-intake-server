@@ -108,10 +108,9 @@ STATUSES = ("new", "approved", "paid", "declined")
 SOURCES = ("app", "office")
 PAID_HOWS = ("check", "transfer")
 HOW_WORD = {"check": "check", "transfer": "bank transfer"}
-TREASURERS = ("owner", "admin", "accountant")         # the treasurer's role, whatever their areas
 WRITERS = ("owner", "admin", "manager", "member", "accountant")
 KEEPS_ALL = ("owner", "admin")                          # the limit, the budgets, taking a payment back
-MONEY_AREA = "giving_money"
+MONEY_AREA = "giving_money"                             # the Giving keeper's area (church_keys)
 
 DEFAULT_LIMIT_CENTS = 25000
 LEVELS_ON = ("The money levels say who says yes: the treasurer, the pastor too from {pastor}, and a board member "
@@ -294,17 +293,14 @@ def treasurer(biz_id: str, uid: str, role: str) -> bool:
     office login whose areas include Giving & money (Who sees what). A
     login with every area, or none read, isn't one: money stays with the
     owner, admins and the accountant unless a church says otherwise. A view
-    that couldn't be read is a 503, never a yes."""
-    if role in TREASURERS:
-        return True
-    import church_areas
-    if church_areas.mode() != "on":
-        return False
-    view = church_areas.my_areas(biz_id, uid, role)
-    if view is None:
-        raise HTTPException(503, "Your areas couldn't be read just now. Try again.")
-    areas = view.get("areas")
-    return isinstance(areas, list) and MONEY_AREA in areas
+    that couldn't be read is a 503, never a yes.
+
+    The rule is church_money_gate's ("checks"), which holds the whole of
+    it. `role` is the one _role resolved (a seat's, or "accountant" for an
+    accountant with no seat), passed so nothing is read twice."""
+    import church_money_gate
+    from types import SimpleNamespace
+    return church_money_gate.may_money(biz_id, SimpleNamespace(id=uid), "work", "checks", role=role)
 
 
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:

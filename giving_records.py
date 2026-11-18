@@ -37,20 +37,19 @@ def read_gifts(business_id, start, end_exclusive, contact_id=None):
         cursor = next_cursor
     raise HTTPException(503, "Giving report is too large. Choose a shorter date range.")
 
-def require_finance(business_id, user):
-    """Giving access: owner, admin, or explicitly invited active accountant."""
-    from business_users_router import role_of
-    from business_collaborators_router import is_active_accountant
-    role = role_of(business_id, str(user.id))
-    if role in ("owner", "admin") or is_active_accountant(business_id, str(user.id)):
-        return role or "accountant"
-    raise HTTPException(403, "Giving records require owner, admin, or accountant access.")
+def require_finance(business_id, user, need="see"):
+    """Giving access: owner, admin, or explicitly invited active accountant.
+    The rule is church_money_gate's ("giving"); this name is kept for the
+    doors that already call it. `need` is "see" for a door that reads and
+    "work" for one that writes (a gift entered or corrected, a pledge, a
+    count, statements mailed): the same people today, and the place the
+    giving tick will tell them apart. Returns the role, or "accountant"."""
+    import church_money_gate
+    return church_money_gate.require_money(business_id, user, need, "giving").role or "accountant"
 
-def require_ministry_finance(business_id, user, business=None):
-    import vertical_family
-    rows = [business] if business else sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,type&limit=1")
-    if not rows:
-        raise HTTPException(404, "Business not found")
-    if vertical_family.is_nonprofit_like(rows[0].get("type")):
-        require_finance(business_id, user)
+def require_ministry_finance(business_id, user, business=None, part="books"):
+    """Reading the books or the bank of a church or nonprofit takes the
+    giving rule; any other business isn't asked here (church_money_gate,
+    "books" / "bank" at "see")."""
+    import church_money_gate
+    church_money_gate.require_money(business_id, user, "see", part, business=business)

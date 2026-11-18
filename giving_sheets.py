@@ -490,7 +490,7 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
                        user: AuthedUser = Depends(require_user)):
     """Keep the photo (always, first), then read it into a draft. A photo
     that can't be read is still kept, with what went wrong."""
-    biz = await asyncio.to_thread(lambda: _gate(business_id, user))
+    biz = await asyncio.to_thread(lambda: _gate(business_id, user, need="work"))
     count = await asyncio.to_thread(lambda: _count(business_id, count_id))
     raw = await photo.read(MAX_PHOTO_BYTES + 1)
     if len(raw) > MAX_PHOTO_BYTES:
@@ -551,7 +551,7 @@ def photo_used(business_id: str, count_id: str, photo_id: str, body: Dict[str, A
                user: AuthedUser = Depends(require_user)):
     """Tie the photo to the gifts its draft became (the checks and balances
     trail: the sheet, its photo, the gifts)."""
-    _gate(business_id, user)
+    _gate(business_id, user, need="work")
     if not UUID_RE.match(photo_id):
         raise HTTPException(404, "Photo not found")
     ids = [str(i) for i in ((body or {}).get("gift_ids") or []) if UUID_RE.match(str(i))][:200]

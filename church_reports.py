@@ -349,12 +349,12 @@ def _areas(biz_id: str, uid: str, role: str) -> Optional[List[str]]:
 
 def _finance(biz_id: str, uid: str, role: str) -> bool:
     """Giving: the owner, admins, or the church's active accountant
-    (giving_records.require_finance's rule)."""
-    if role in KEEPS_ALL:
-        return True
+    (church_money_gate's "giving" rule, the one giving_records
+    .require_finance asks). A read that fails is a no."""
     try:
-        import business_collaborators_router as bcr
-        return bool(bcr.is_active_accountant(biz_id, uid))
+        import church_money_gate
+        from types import SimpleNamespace
+        return church_money_gate.may_money(biz_id, SimpleNamespace(id=uid), "see", "giving", role=role)
     except Exception:
         return False
 

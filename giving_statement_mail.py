@@ -169,7 +169,7 @@ async def statements_mail_send(business_id: str, year: int, body: Dict[str, Any]
                                user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
     # Called directly (not via to_thread) so the access sweep can see it.
-    require_finance(_uuid(business_id), user)
+    require_finance(_uuid(business_id), user, need="work")
     church_keys.wall(_uuid(business_id), user, "giving_money")
     if (body or {}).get("confirm") is not True:
         raise HTTPException(400, "Confirm to send the statements")
