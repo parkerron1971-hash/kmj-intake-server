@@ -230,6 +230,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
     import chief_church_sheet
     out += list(chief_church_sheet.TOOLS)  # a person's sheet, the church's jobs, a job's pieces: the same
+    import chief_church_structure
+    out += list(chief_church_structure.TOOLS)  # the office team's draft and the standing check: the same
     import chief_office
     out += list(chief_office.TOOLS)  # the office team's week and the monthly report's draft: the same
     import chief_move_in
@@ -432,7 +434,8 @@ def _shrink(result: Any) -> str:
                                                            'move_in_status', 'church_email', 'whose_job', 'job_of',
                                                            'draft_job_description', 'team_week',
                                                            'monthly_report_draft', 'sheet_of',
-                                                           'list_church_jobs', 'draft_church_job'):
+                                                           'list_church_jobs', 'draft_church_job',
+                                                           'draft_church_structure', 'church_structure_status'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
         # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
@@ -492,7 +495,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "one_on_one", "whose_job", "job_of",
                                               "draft_job_description", "team_week",
                                               "monthly_report_draft", "sheet_of", "list_church_jobs",
-                                              "draft_church_job")):
+                                              "draft_church_job", "draft_church_structure",
+                                              "church_structure_status")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

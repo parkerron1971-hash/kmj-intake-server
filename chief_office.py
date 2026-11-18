@@ -341,6 +341,10 @@ def build(business: Dict[str, Any]) -> str:
                 "money duties by label only.")
         movers = [ch.login_name(u) for u in office if u in overseers]
         tail = []
+        if not office:
+            # A church with nobody in its office yet (church_structure, the standard start).
+            tail.append("Nobody but the owner has an office login yet. When the talk turns to who does what "
+                        "at the church, offer once to set up the team (SETTING UP THE TEAM).")
         if len(people) > len(entries):
             tail.append(f"…and {len(people) - len(entries)} more office logins: list_duties names them all.")
         # Past the cap: the descriptions go, then the places, then the labels shorten.
