@@ -4,8 +4,8 @@ date: 2026-11-18
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-18: "I want to be able to build Leaders schedule. this is for when leaders are planning time off and have certain obiligations so that we as a church can plan around meeting ... making sure that everyone is not gone at the same time on our services. allowing only so many people off at the same time. ... there should volunteers one and one for leadership ... divided amongs the department to manage there department as well." Then, on the five calls the plan rests on: "Yes build to all five"'
 status: in progress
-prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936, kmj-intake-server#1938, kmj-intake-server#1941]
-migrations: [supabase/APPLY-2026-11-19-church-schedule.sql (applied), supabase/APPLY-2026-11-20-church-schedule-limits.sql (not applied)]
+prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936, kmj-intake-server#1938, kmj-intake-server#1941, kmj-intake-server#1943]
+migrations: [supabase/APPLY-2026-11-19-church-schedule.sql (applied), supabase/APPLY-2026-11-20-church-schedule-limits.sql (applied)]
 left_undone:
   - "The migration is applied (2026-11-18, run by the owner, checked by the lead session with the file's Check block), and CHURCH_SCHEDULE is unset, which means owner: the schedule is open at the platform owner's own church and closed everywhere else. Everything built here is live there. Opening it for other churches means setting CHURCH_SCHEDULE=on on both services."
   - "S1-7 things that repeat (and telling whoever is over someone when one is added, its part of the Dates page, and the scheduler holding them on those days through church_schedule.holds). Its own PR, from the newest main."
@@ -14,7 +14,9 @@ left_undone:
   - "CHURCH_SCHEDULE is read on both services since S1-4 (the web service for the routes and each write's notice, the worker for the sweep). Unset means owner on both; to change it, set the same value on both. The sweep also works only the churches CHURCH_ASSIGNMENTS is open for."
   - "Open for Kevin or the lead session (docs/CHURCH_SCHEDULE.md sections 7.5 and 7.6): the owner's own time away tells nobody (the plan had the office overseer told); when the owner takes an ask back, whoever it went to is not told; who covers is picked from the people on the leaders schedule, anyone else is typed as a name; Who else is away never says what kind of time away it is; Dates does not tell a leader that their reason is cleared after 90 days."
   - "Open for Kevin or the lead session from S1-6 (docs/CHURCH_SCHEDULE.md section 7.7): when the places someone had agreed to serve can't be opened after a yes, it is logged once and nothing tries again; on a replica that has never read who is on the schedule, and can't, a leader's Away from the Serve page is saved at once, as before the leaders schedule (the lead session chose this so that a volunteer's Away never fails; one line is logged when it happens); someone on the leaders schedule sees no waiting ask under Away on My serving, only the way to Dates; the Away form there always asks for time off, tomorrow included, and can't make it stays under Dates; taking a yes back does not put them back on a place that opened; the test that renders main's own My serving beside this one is skipped in CI (one commit is checked out) and should be deleted the first time that page is changed on purpose."
-  - "Step 2, the limit: its tables are a file (S2-1, supabase/APPLY-2026-11-20-church-schedule-limits.sql) that is NOT APPLIED: the owner runs it, after step 1's file, once the lead session has reviewed it. No Python reads it yet. Then S2-2 to S2-5: service days and the numbers, protected days, pairs, volunteers. Step 2's code needs its own test for whether this file is there (church_schedule.ready() is true with step 1's tables alone), and calls church_away_settle_excepted for a yes over a flag."
+  - "Step 2, the limit: its tables are applied (2026-11-18, run by the owner, checked by the lead session with the file's Check block), and S2-2 and S2-3 are built: the numbers, the service days, the protected days, and an ask past the number or on a protected day flagged and sent up. Live at the platform owner's church. Still ahead, each its own PR: S2-4 pairs (church_away_pairs, the pair flag) and S2-5 the volunteers' rules (volunteer_plan, team_leader, the Away form's volunteer branch, team_group_id). GET /church/schedule/volunteers is there and read only; its waiting list is empty until S2-5."
+  - "The numbers, the usual service days and the protected days have no screen: they are set through the API (PUT /church/schedule/limits, POST /church/schedule/protected-days) until the office frontend exists. At the platform owner's church nothing is set, so the leaders number is the worked-out one in four, no department has a number, and no day is protected."
+  - "Open for Kevin or the lead session from S2-2 and S2-3 (docs/CHURCH_SCHEDULE.md section 7.9): the one over the asker is not told when their ask goes up (only whoever it went up to is); a department's own leader or overseer counts toward its number only when they are on one of its Sunday teams; the recheck at the yes is not a lock, so two yeses in the same moment for two people can put a Sunday one over; a leader's Away from the Serve page on a full day goes up with no look first (the look is on Dates); nothing tells a leader whose waiting ask sits on a day that was made protected afterwards, until someone says yes to it; a department's leader sets its number as an office login, not yet from the member app."
   - "The office frontend comes after the backend; the route shapes in docs/CHURCH_SCHEDULE.md section 4 are its contract."
   - "Before Dates opens for a church, its owner's own person record must be found (docs/CHURCH_SCHEDULE.md section 7, item 4)."
 decisions:
@@ -26,11 +28,47 @@ decisions:
   - "Decided while building S1-4 (docs/CHURCH_SCHEDULE.md section 7.5 lists every one; the first is the lead session's, the rest the build's): taking back tells whoever it went to when the asker does it and they had been told, and tells the asker when the owner or whoever oversees the office does it, sent once and never tried again; no notice and no log line ever says the reason or the note; time off and another commitment read the same on a lock screen; an answer and the nudge wait out quiet hours as a planned ask does; an ask is sent on only when its `to` has left the nearest step over the asker, never round the same step; one nudge an ask, for good; the sweep follows CHURCH_ASSIGNMENTS as well as CHURCH_SCHEDULE; only the reason is cleared at 90 days."
   - "Decided while building S1-5 (docs/CHURCH_SCHEDULE.md section 7.6 lists every one; the first is the lead session's, the rest the build's): the note that came with an answer is cleared with the reason, 90 days after the last day; on Dates a member-app session is always a person, so the owner's own person and the person of whoever oversees the office read and answer only what went to them; how many asks wait for someone is kept a minute beside the roster, so the Lead tab and the tab bar cost no read on a page view; what is kept decides the switcher, never the page, which reads fresh; who covers is picked from the people on the schedule (200 at most), never the whole church; Who else is away says a name, the days and who covers, never the kind; a refusal comes back as the page's own plain words by a short code; a note goes with not this one only; short notice is said before and after a planned ask and never on can't make it; the page's header shows no role names; a notice's words are unchanged, only where it opens and its button."
   - "Decided while building S1-6 (docs/CHURCH_SCHEDULE.md section 7.7 lists every one): the hold reads who and which days and nothing else, fails open, and asks the switch, then the tables, then the church, so nothing is read where it isn't open; everyone with an ask still waiting is held, and everything that asks the board gets the hold (the office, a team's own leader, a teammate finding a sub, an event date, the worker's No answer yet note); a held person reads as away in the board's own words and is never in its list of who is away; a volunteer's Away never fails because of this (the lead session, in the review of #1938): when the roster can't be read again the last one read answers, and a replica that never read one saves the Away at once, as it always was; the roster rule stands as built (everyone who leads a group is on it; the lead session counted the platform owner's church and found nobody who leads only a small group); under owner, whose church it is is kept a minute even when it couldn't be read; a date whose ask is gone or already settled comes off as a plain date; a yes opens only places that are a yes, on days still to come, saved exactly as Can't make it saves one with Away for why, in the request straight after the write and never able to fail it; the serving flag is set when asked; Dates says before the yes that a place will open."
+  - "Decided while building S2-2 and S2-3 (docs/CHURCH_SCHEDULE.md section 7.9 lists every one; the first three are the lead session's, the rest the build's): an ask past the number or on a protected day is never refused, it is flagged and goes up; can't make it and the owner's own are never looked at, never flagged, and still count for the next person; a waiting ask is neither counted nor shown, only an away date that was agreed; who may give an exception is the owner, and whoever oversees the office unless the asker is a shepherd or a senior; in the member app only the very person it went up to; only whoever it went up to is told, with one clause more than any notice (past the number, or on a protected day) and never how many, who or which day; the exception is the ask's flags still true at the yes, saved with the yes in one transaction; a yes on an ask that has run into something new never lands the first time, whoever presses it; an ask entered for someone never goes up to whoever entered it; full is at the number, and the asker's own away dates never count against them; a department's number counts the members of its Sunday teams and holds a leader only when they are one of them; two services on one day don't make a weekday usual, a service on two days does; an Admin sets no church-wide number, usual day or protected day, and can set a department's (an Admin holds every duty); on Dates the look before sending is a second press with what they typed still in the form, never a redirect (a reason never rides in an address) and never a script; step 2 has its own check for its tables, and on a database with step 1's file alone nothing of step 2 is read."
+  - "From the review of #1943 (the lead session; docs/CHURCH_SCHEDULE.md section 7.9): an ask that already sits with someone who may give the exception stays with them when its day fills, flagged before or not (it used to be sent to the office overseer and lock the owner out of his own exception); the hourly sweep reads who entered an ask and never sends a flagged one to them; a yes lands as an exception only over the flags the screen showed (the Dates page and the office route post them as shown), so a double tap never lands an exception nobody saw; a yes to a flagged ask while the server can't tell whether step 2's tables are there is a 503 with nothing saved; away_on for a department reads its own people, number or not. The recheck not being a lock is accepted for now; the later fix is a recount under an advisory lock inside the settle functions."
   - "Decided while writing S2-1 (docs/CHURCH_SCHEDULE.md section 7.8 lists every one, with each difference from the draft): church_away_settle, which the live code calls, is not dropped or changed; the exception a yes is given over has a function of its own name, church_away_settle_excepted, which calls it (this reverses decision 19: two functions of one name make Postgres refuse every six-argument call, and dropping and re-making the one would be undone by running step 1's file again); an exception sits only on a yes, is for a flag the ask has, and a bad one is refused by name with the yes undone; the person who set a department's number is checked to be the church's own; the usual service days are a plain list; the new checks are validated as they go in because both tables are days old; all three new tables are left out of the export."
 related: [2026-10-23-sunday-planning-serving.md, 2026-11-04-church-map-chain.md, 2026-11-12-church-assignments.md, 2026-11-12-church-handovers.md, 2026-11-17-event-volunteer-dates.md]
 ---
+**S2-2 and S2-3 (#1943, one PR): the limit on how many can be away at once.**
+`church_schedule_limits.py` is new: the numbers (the leaders and the office each
+have one, the church's own or one in four worked out; a department has one only
+when a row says so), which days count (the church's own planned services, else
+its usual weekdays, set or worked out from its plans, else Sunday; every
+protected day; an event date for departments only), the protected days, and the
+office routes `/church/schedule/limits`, `days`, `protected-days` and
+`volunteers` (read only). Who is away is counted from `serve_away`, each person
+once, never from an ask: a waiting ask is not counted and not shown.
+`church_schedule.ask` looks before it writes: an ask that would put a service
+day past the number, or that touches a protected day, is never refused. It is
+flagged (`over_limit`, `protected_day`) and goes up (`goes_up`): to whoever
+oversees the office, and from a shepherd or a senior to the owner alone. Only
+someone who may give the exception says yes to it (`gives_exception`; in the
+member app only the very person it went up to), and the yes is saved with its
+exception by `church_away_settle_excepted` in one transaction. Every yes looks
+again first (`_recheck`): one that has run into something new since it was asked
+does not land; the ask is flagged, sent up and told to the new person, and the
+one who pressed yes reads a 409 in plain words. "Can't make it" and the owner's
+own time away are never looked at. The sweep never sends a flagged ask back down.
+On Dates, "Ask for these days" on a full or protected day sends nothing the
+first time: the page comes back with what they typed still in the form, what is
+in the way, the nearest open service days and who can make an exception, and
+"Ask anyway" sends it; both cards then say why, as a count and never a name.
+Step 2 has its own check for its tables (`church_schedule_limits.ready()`,
+pinned False by `conftest`): on a database with step 1's file alone none of this
+runs and nothing of step 2 is read. No migration of its own; both were applied
+on 2026-11-18 before this merged, so it is live at the platform owner's church
+from its first deploy. Tests: `test_church_schedule_limits.py`, and additions
+to `test_church_schedule_tell.py` and `test_member_portal_dates.py`, at New
+Hope; each rule was broken once to see its test go red (55).
+`church_schedule_fake.build(limits=True)` is a database with step 2's file,
+and its default refuses everything that file adds.
+
 **S2-1 (#1941): step 2's tables, and nothing else.**
-`supabase/APPLY-2026-11-20-church-schedule-limits.sql` (**not applied**; run it after
+`supabase/APPLY-2026-11-20-church-schedule-limits.sql` (**applied 2026-11-18**, after
 step 1's file) adds the two group numbers and the usual service days to
 `church_schedule_settings`, makes `church_schedule_department_limits` (one number
 a department, no row = no limit), `church_protected_days` (one row a date a
@@ -38,9 +76,9 @@ church) and `church_away_pairs` (two people who can't be away together, saved
 once, private), and gives `church_away_asks` `excepted` (the flags a yes was
 given over) and `team_group_id`. `church_away_settle`, which the live code
 calls, is not touched; `church_away_settle_excepted` is new, calls it, and saves
-the exception on a yes it just made. No Python: nothing reads any of it, and the
-deployed code names every column it reads, so running the file changes nothing
-anyone sees. The three tables are in `account_lifecycle.EXPORT_EXCLUDED`; the
+the exception on a yes it just made. No Python in that PR: nothing read any of
+it until S2-2 and S2-3, and the deployed code named every column it read, so
+running the file changed nothing anyone saw. The three tables are in `account_lifecycle.EXPORT_EXCLUDED`; the
 ledger has the row; `__tests__/church_schedule_limits_db.mjs` (289 checks on
 PGlite, each rule broken once to see it go red) runs in CI's database job, and
 runs step 1's own check, unchanged, with this file applied after it.
@@ -166,3 +204,12 @@ Anything new that schedules people asks `sunday_planning._Board.is_away` (or
 `candidates`), which already knows who is held; it never reads
 `church_away_asks` itself, and never puts a held person in a list of who is
 away.
+Anything new that reads one of step 2's tables or columns, or looks at the
+limit, asks `church_schedule.step2()` first: `ready()` is true with step 1's
+tables alone.
+Anything new that counts who is away reads `church_schedule_limits.picture`
+(the facts, each person once): never a waiting ask, which a count would give
+away.
+Anything new that decides who answers an ask goes through
+`church_schedule.may_decide`: a flagged ask is answered only by someone who may
+give its exception, and in the member app only by the very person it went up to.

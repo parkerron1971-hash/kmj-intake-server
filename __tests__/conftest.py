@@ -201,3 +201,20 @@ def _leaders_schedule_tables_pinned():
     except Exception:  # pragma: no cover
         pass
     yield
+
+
+# church_schedule_limits asks once whether step 2's tables (the limit on how
+# many can be away at once) are there, and keeps the answer for minutes.
+# Every test starts with them "not there yet", so no other suite gains a
+# read and every step 1 suite runs on a database with step 1's file alone:
+# church_schedule then behaves exactly as step 1. The limits' own tests set
+# _FORCE = True (church_schedule_fake.build(limits=True)).
+@pytest.fixture(autouse=True)
+def _leaders_schedule_limits_tables_pinned():
+    try:
+        import church_schedule_limits as _csl
+        _csl._FORCE = False
+        _csl._STATE.update(yes=None, at=0.0)
+    except Exception:  # pragma: no cover
+        pass
+    yield

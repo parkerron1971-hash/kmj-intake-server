@@ -86,11 +86,13 @@ ZERO = {"churches": 0, "moved": 0, "told": 0, "answers": 0, "nudged": 0, "cleare
 
 
 @pytest.fixture
-def db(monkeypatch):
+def db(monkeypatch, request):
+    """A database with step 1's file alone; `db` asked for with True
+    (indirect) has step 2's file too."""
     monkeypatch.setenv("CHURCH_ASSIGNMENTS", "on")
     monkeypatch.setenv("CHURCH_THREADS", "on")
     monkeypatch.delenv("MEMBER_QUIET_HOURS", raising=False)
-    d = fake.build(monkeypatch)
+    d = fake.build(monkeypatch, limits=bool(getattr(request, "param", False)))
     for h in SEATED:
         fake.seat(d, HOPE, h)
     for t in ("church_thread_notes", "church_thread_reads", "member_push_subscriptions", "member_push_sends",
@@ -996,3 +998,148 @@ def test_the_sweep_runs_hourly_on_the_worker_and_the_switch_is_read_on_both_serv
         env = f.read()
     block = env[env.index("# The leaders schedule (church_schedule.py"):env.index("# CHURCH_SCHEDULE=on")]
     assert "BOTH services" in block and "kmj-intake-worker" in block and "unset means owner on both" in block
+
+
+# ─── Step 2: an ask that went up for an exception ─────────────────────
+
+LIMITS = pytest.mark.parametrize("db", [True], indirect=True)
+SUNDAY = day(32)                         # Sunday 20 December 2026: inside day(30)..day(37)
+
+
+def full(db):
+    """The leaders number at two, and two leaders away that Sunday."""
+    db.t["church_schedule_settings"].append({"business_id": HOPE, "notice_days": 14, "leaders_limit": 2,
+                                             "office_limit": None, "service_weekdays": None})
+    for h in ("wren", "kara"):
+        db.t["serve_away"].append({"id": str(uuid.uuid4()), "business_id": HOPE, "contact_id": db.who[HOPE][h],
+                                   "starts_on": SUNDAY, "ends_on": SUNDAY, "note": "", "ask_id": None, "kind": None})
+
+
+@LIMITS
+def test_a_flagged_asks_notice_goes_to_whoever_it_went_up_to_and_says_only_that_it_is_past_the_number(app, db):
+    w = db.who[HOPE]
+    full(db)
+    phone(db, "amara")
+    desk(db, w["owen@"])
+    got = ask(app, "yusuf", reason=SECRET)
+    assert got["flags"] == ["over_limit"] and got["to"]["id"] == w["owen@"]
+    assert quiet(db), "nothing is told inside the write"
+    assert fake.later(db) == 1
+    assert [(p["to"], p["staff"], p["title"], p["body"]) for p in db.rang] == [
+        (w["owen@"], True, "Yusuf asked for Dec 18 to 25",
+         "It’s past the number who can be away at once, so it came to you. Say yes or not this one when you can.")]
+    [mail] = db.mail
+    assert mail["to"] == "owen@newhope.church" and mail["subject"] == "New Hope Church: Yusuf asked for Dec 18 to 25"
+    assert ("Yusuf Grant asked to be away Friday, December 18 to Friday, December 25. It’s past the number who can "
+            "be away at once, so it came to you.") in mail["html"]
+    assert notes(db) == [], "the one over him (a person, with a phone) hears nothing: it isn't hers to answer"
+    everything = said(db)
+    assert SECRET not in everything and "Amara" not in everything
+    for word in ("Wren", "Kara", "two", "2 "):            # never who else is away, never how many
+        assert word not in json.dumps([db.rang, [m["html"].split("</style>")[-1] for m in db.mail]]), word
+    assert row(db, got["id"])["told_at"] is not None
+
+
+@LIMITS
+def test_a_yes_that_no_longer_lands_tells_the_new_person_once_and_never_the_reason(app, db):
+    w = db.who[HOPE]
+    db.t["church_schedule_settings"].append({"business_id": HOPE, "notice_days": 14, "leaders_limit": 2,
+                                             "office_limit": None, "service_weekdays": None})
+    phone(db, "amara")
+    desk(db, w["owen@"])
+    got = ask(app, "yusuf", reason=SECRET)
+    fake.later(db)
+    assert [p["to"] for p in db.rang] == [w["amara"]], "room when he asked: the one over him"
+    db.rang.clear()
+    db.mail.clear()
+    notes(db).clear()
+    for h in ("wren", "kara"):
+        db.t["serve_away"].append({"id": str(uuid.uuid4()), "business_id": HOPE, "contact_id": w[h],
+                                   "starts_on": SUNDAY, "ends_on": SUNDAY, "note": "", "ask_id": None, "kind": None})
+    as_(app, HOPE, "amara")
+    r = app.post(f"/church/schedule/asks/{got['id']}/answer", json={"business_id": HOPE, "yes": True})
+    assert r.status_code == 409 and quiet(db), "told after the write, never inside it"
+    assert fake.later(db) == 1
+    assert [(p["to"], p["title"]) for p in db.rang] == [(w["owen@"], "Yusuf asked for Dec 18 to 25")]
+    assert "past the number" in db.rang[0]["body"] and SECRET not in said(db)
+    assert tell.sweep_tick(NOW + HOUR)["told"] == 0, "once"
+    assert len(db.rang) == 1
+
+
+def test_the_words_for_a_flagged_ask_say_only_that_it_is_past_the_number_or_on_a_protected_day():
+    import re
+
+    def words(*flags):
+        return tell.new_words("New Hope Church", "Owen Diaz", "Yusuf Grant", {
+            "kind": "time_off", "starts_on": day(30), "ends_on": day(37), "flags": list(flags), "reason": SECRET})
+    assert words("over_limit")["body"] == ("It’s past the number who can be away at once, so it came to you. Say yes "
+                                           "or not this one when you can.")
+    assert words("protected_day")["body"] == ("It’s on a protected day, so it came to you. Say yes or not this one "
+                                              "when you can.")
+    assert words("short_notice", "over_limit", "protected_day")["body"] == (
+        "Short notice. It’s past the number who can be away at once, and on a protected day, so it came to you. Say "
+        "yes or not this one when you can.")
+    assert words("pair")["body"].startswith("It needs an exception, so it came to you.")
+    assert words()["body"] == "Say yes or not this one when you can." and words("serving") == words()
+    for flags in (("over_limit",), ("protected_day",), ("over_limit", "protected_day"), ("pair",)):
+        got = json.dumps(words(*flags), ensure_ascii=False)
+        assert SECRET not in got and "Dec 20" not in got and not re.search(r"\d+ (are|is) ", got), got
+    assert tell.up_words({"flags": ["short_notice", "serving"]}) == ""
+
+
+def test_the_sweep_never_sends_a_flagged_ask_back_down_to_the_nearest_step(app, db):
+    """It went up for an exception: it stays with whoever may give one."""
+    w = db.who[HOPE]
+    his = raw(db, "yusuf", flags=["over_limit"], to_user_id=w["owen@"], told_at=NOW.isoformat())
+    hers = raw(db, "elena", flags=["protected_day"], to_user_id=owner(db), told_at=NOW.isoformat())
+    plain = raw(db, "kara", to_user_id=w["owen@"], told_at=NOW.isoformat(), starts_on=day(40), ends_on=day(41))
+    got = tell.sweep_tick(NOW + HOUR)
+    assert got["moved"] == 1, "only the one with no flag, which had no business being with him"
+    assert (his["to_user_id"], his["to_contact_id"]) == (w["owen@"], None), "not back down to Amara"
+    assert (hers["to_user_id"], hers["to_contact_id"]) == (owner(db), None)
+    assert (plain["to_user_id"], plain["to_contact_id"]) == (None, w["amara"])
+    assert tell.sweep_tick(NOW + 2 * HOUR)["moved"] == 0
+
+
+def test_the_sweep_sends_a_flagged_ask_on_only_when_it_no_longer_sits_with_someone_who_may_give_the_exception(app, db):
+    w = db.who[HOPE]
+    # With the one over him (a row the routes never leave), with an Admin, and a guarded leader's with the office.
+    down = raw(db, "yusuf", flags=["over_limit"], to_contact_id=w["amara"], told_at=NOW.isoformat())
+    admin = raw(db, "celia", flags=["over_limit"], to_user_id=w["tessa@"], told_at=NOW.isoformat())
+    guarded = raw(db, "elena", flags=["over_limit"], to_user_id=w["owen@"], told_at=NOW.isoformat())
+    own = raw(db, "owen", flags=["over_limit"], to_user_id=w["owen@"], told_at=NOW.isoformat())
+    assert tell.sweep_tick(NOW + HOUR)["moved"] == 4
+    assert (down["to_user_id"], down["to_contact_id"]) == (w["owen@"], None), "up"
+    assert down["told_at"] not in (None, NOW.isoformat()), "and whoever it went up to was told in the same sweep"
+    assert admin["to_user_id"] == w["owen@"], "an Admin gives no exception"
+    assert guarded["to_user_id"] == owner(db), "a guarded leader's is the owner's alone"
+    assert own["to_user_id"] == owner(db), "nobody holds their own"
+    assert tell.sweep_tick(NOW + 2 * HOUR)["moved"] == 0
+    # Whoever oversees the office stops doing so: what sat with them goes to the owner.
+    seat = next(s for s in db.t["business_users"] if s["user_id"] == w["owen@"])
+    seat["role"] = "member"
+    assert tell.sweep_tick(NOW + 3 * HOUR)["moved"] == 2
+    assert down["to_user_id"] == owner(db) and admin["to_user_id"] == owner(db)
+
+
+def test_the_sweep_never_sends_a_flagged_ask_to_the_login_that_entered_it(app, db):
+    """Two oversee the office. One entered the ask for someone (and so can't
+    answer it); it went up to the other, who then leaves. The sweep sends
+    it to the owner: never to the one who entered it."""
+    w = db.who[HOPE]
+    lead = next(h for h in db.t["church_leader_roles"] if h["business_id"] == HOPE and h["contact_id"] == w["owen"])
+    db.t["church_leader_roles"].append(dict(lead, id=str(uuid.uuid4()), contact_id=w["olive"]))
+    assert cs.office_overseers(church(db)) == sorted([w["owen@"], w["olive@"]]), "two of them now"
+    his = raw(db, "yusuf", flags=["over_limit"], made_by=w["olive@"], to_user_id=w["owen@"], told_at=NOW.isoformat())
+    sat = raw(db, "kara", flags=["over_limit"], made_by=w["olive@"], to_user_id=w["olive@"], told_at=NOW.isoformat(),
+              starts_on=day(40), ends_on=day(41))
+    assert "made_by" in tell.FIELDS.split(",") and tell._bare(his)["made_by"] == w["olive@"]
+    desk(db, w["owen@"])
+    got = tell.sweep_tick(NOW + HOUR)
+    assert got["moved"] == 1 and his["to_user_id"] == w["owen@"], "the first is with someone who may give it: it stays"
+    assert sat["to_user_id"] == w["owen@"], "one that sat with the login that entered it goes to the other"
+    seat = next(s for s in db.t["business_users"] if s["user_id"] == w["owen@"])
+    seat["role"] = "member"                               # he leaves the office
+    assert tell.sweep_tick(NOW + 2 * HOUR)["moved"] == 2
+    assert (his["to_user_id"], sat["to_user_id"]) == (owner(db), owner(db)), "the owner, never the one who entered them"
+    assert w["olive@"] not in said(db) and "made_by" not in said(db), "who entered it is in no notice"
