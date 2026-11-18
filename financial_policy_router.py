@@ -29,7 +29,8 @@ def get_policy(business_id: UUID, user: AuthedUser = Depends(require_user)):
 def change_policy(business_id: UUID, body: Change, request: Request,
                   user: AuthedUser = Depends(require_user)):
     require_role(str(business_id), str(user.id), 'owner')
-    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
+                                 business_id=str(business_id))
     result = sb_clients.sb_post_as_service('/rpc/set_business_financial_policy', {
         'p_business_id': str(business_id), 'p_actor_id': str(user.id),
         'p_mode': body.mode, 'p_reason': body.reason})

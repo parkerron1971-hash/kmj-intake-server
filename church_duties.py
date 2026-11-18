@@ -77,7 +77,7 @@ import uuid
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import sb_clients
 from auth_supabase import AuthedUser, UserSession
@@ -1043,6 +1043,45 @@ def _write(biz: str, duty: str, user_ids: List[str], by: str, undoes: Optional[s
     return saved
 
 
+def gives_more(business: Dict[str, Any], duty: str, user_ids: List[Any]) -> bool:
+    """Whether naming these logins for this duty ([] is back to the lanes'
+    defaults) would leave any Manager login doing a duty it doesn't do now.
+    The owner and the Admins do every duty already, so naming one gives
+    nothing; a Member or Viewer can't be named at all (_check refuses). The
+    Duties tab's PUT asks for the password when this is true, as a person's
+    sheet does for the same duty (church_sheet.effect). Worked out with this
+    module's own reads (standing, the seats, the moves), the ones holds()
+    answers from. A read that fails is a 503, never a "no"."""
+    _known(duty)
+    biz = str(business["id"])
+    ids = sorted({str(u) for u in user_ids})
+    if ids:
+        for uid in ids:
+            s = standing(biz, uid)
+            if s["role"] == "manager" and duty not in s["duties"]:
+                return True
+        return False
+    if CATALOG[duty]["money"]:
+        return False                      # back to the lanes, a money duty goes to no Manager
+    moved = {k: v for k, v in _moved(biz).items() if k != duty}
+    for seat in _seats(biz):
+        if seat.get("role") != "manager":
+            continue
+        uid = str(seat["user_id"])
+        if duty in standing(biz, uid)["duties"]:
+            continue
+        lanes: Set[str] = set()
+        ln = _seat_lane(seat)
+        if ln:
+            lanes.add(ln)
+        if uid in _exec_users(biz, [seat]):
+            lanes.add(EXEC)
+        by_area = None if lanes else _area_duties(biz, uid, "manager")
+        if duty in _manager_duties(lanes, uid, moved, by_area):
+            return True
+    return False
+
+
 def _result(duty: str, holders: List[str], change: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {"ok": True, "duty": duty, "holders": holders, "follows_lanes": not holders,
             "changed": change is not None, "change": change}
@@ -1078,13 +1117,16 @@ def move(business: Dict[str, Any], duty: str, user_ids: List[Any], by: str, *,
 
 
 def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] = None, *,
-         overseer: bool = False) -> Dict[str, Any]:
+         overseer: bool = False, asking=None) -> Dict[str, Any]:
     """Put the last change to one duty back (the undo route and Chief's
     undo_duty); again puts back the one before. With `change_id`, only while
     that change is still the one an undo puts back (409 once another came
     after it). Nothing to put back is a 404; a login it would hand the duty
     back to that can't hold it now is a 409. With `overseer`, a put-back is a
-    move like any other: refused (403) outside her team (overseer_refusal)."""
+    move like any other: refused (403) outside her team (overseer_refusal).
+    `asking`, when given, is called with the logins the put-back would name
+    once nothing else can refuse it and before anything is written (the
+    route's password check, which raises)."""
     _known(duty)
     biz = str(business["id"])
     last = _undoable(_changes(biz, duty))
@@ -1102,15 +1144,44 @@ def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] 
         why = overseer_refusal(business, duty, str(by), restore)
         if why:
             raise HTTPException(403, why)
+    if asking is not None:
+        asking(restore)
     return _result(duty, restore, _write(biz, duty, restore, str(by), undoes=str(last["id"])))
 
 
+def _ask_password(request: Any, business: Dict[str, Any], user_id: str, overseer: bool) -> None:
+    """The password again, for a move or a put-back that gives a Manager
+    login a duty it doesn't do now (gives_more). Asked of whoever can answer
+    it: the owner, an Admin, or a Manager who sets up jobs and sheets
+    (ledger_unlock: the access step-up).
+
+    KNOWN LIMIT. A Manager who is over the office's lanes and is none of
+    those is NOT asked. She cannot confirm an access password (letting her
+    would have opened every other access gate to her, an invite among
+    them), so asking would only stop her doing what this route has always
+    let her do. Her moves stay inside her own team (overseer_refusal), as
+    they were before the password was asked here."""
+    if overseer:
+        import church_job_defs
+        if not church_job_defs.holds_grant(business["id"], user_id, "manager"):
+            return
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, user_id, ledger_unlock.SCOPE_ACCESS, business_id=business["id"])
+
+
 @router.put("/duties/{duty}")
-def give_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
+def give_duty(duty: str, body: Dict[str, Any], request: Request = None,
+              session: UserSession = Depends(sb_clients.authed_request)):
     """Name who does one duty. [] or null puts it back to the lanes'
     defaults. The owner or an admin, or whoever is over the lanes for the
     Managers under her; a money duty only to the owner or an Admin login; only
-    logins on this church's office."""
+    logins on this church's office.
+
+    A move that leaves a Manager login doing a duty it doesn't do now
+    (gives_more) asks for the password again, as a person's sheet does for
+    the same duty; one that only takes a duty away never does. The owner,
+    an Admin and a Manager who sets up jobs and sheets are asked; whoever
+    is over the lanes and none of those is not (_ask_password)."""
     user = session.user
     body = body or {}
     _, business, overseer = _church_for_change(body, user, duty)
@@ -1119,12 +1190,33 @@ def give_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb
         raw = []
     if not isinstance(raw, list) or len(raw) > MAX_HOLDERS:
         raise HTTPException(400, f"Name up to {MAX_HOLDERS} logins, or none to follow the lanes")
+    # Everything that can refuse the move is asked first (who, and for the
+    # overseer whose team), so the password is asked only for a move that
+    # would be made.
+    ids = sorted({_uuid(u, "login") for u in raw})
+    why = _check(str(business["id"]), business, ids, duty)
+    if why:
+        raise HTTPException(400, why)
+    if overseer:
+        why = overseer_refusal(business, duty, str(user.id), ids)
+        if why:
+            raise HTTPException(403, why)
+    if _moved(str(business["id"])).get(duty, []) != ids and gives_more(business, duty, ids):
+        _ask_password(request, business, str(user.id), overseer)
     return move(business, duty, raw, str(user.id), overseer=overseer)
 
 
 @router.post("/duties/{duty}/undo")
-def undo_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
-    """Put the last change to one duty back. Again puts back the one before."""
+def undo_duty(duty: str, body: Dict[str, Any], request: Request = None,
+              session: UserSession = Depends(sb_clients.authed_request)):
+    """Put the last change to one duty back. Again puts back the one before.
+    A put-back is a move like any other: one that gives a Manager login a
+    duty it doesn't do now asks for the password, by the same rule and of
+    the same people as the move (_ask_password)."""
     user = session.user
     _, business, overseer = _church_for_change(body or {}, user, duty)
-    return undo(business, duty, str(user.id), overseer=overseer)
+
+    def asking(restore: List[str]) -> None:
+        if gives_more(business, duty, restore):
+            _ask_password(request, business, str(user.id), overseer)
+    return undo(business, duty, str(user.id), overseer=overseer, asking=asking)

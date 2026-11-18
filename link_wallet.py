@@ -244,7 +244,7 @@ def status(business_id: str, response: Response, session: UserSession = Depends(
 def connect(business_id: str, request: Request, response: Response,
             session: UserSession = Depends(sb_clients.authed_request)):
     bid, user_id = owner(business_id, session)
-    require_unlock(request, user_id, SCOPE_DANGER)
+    require_unlock(request, user_id, SCOPE_DANGER, business_id=bid)
     require_configured()
     with safe_operation(response), Session(bid, user_id) as connection:
         if connection.state.get('auth'):
@@ -321,7 +321,7 @@ def private_action(business_id: str, body: PilotAction, request: Request, respon
     if not pilot.allowed(bid, user_id):
         raise HTTPException(403, 'The private test is available only to its configured owner.')
     if body.operation in ('connect', 'rehearse'):
-        require_unlock(request, user_id, SCOPE_DANGER)
+        require_unlock(request, user_id, SCOPE_DANGER, business_id=bid)
     with safe_operation(response):
         pilot.run(bid, user_id, body.operation)
         return wallet_snapshot(bid, user_id)

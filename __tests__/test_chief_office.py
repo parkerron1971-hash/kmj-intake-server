@@ -296,6 +296,11 @@ def test_the_duties_page_agrees_with_chief(db, monkeypatch):
     roles = {s["user_id"]: s["role"] for s in db.t["business_users"] if s["business_id"] == LOVE_CITY}
     roles[church(db)["owner_id"]] = "owner"
     monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: roles.get(str(u)))
+    # A write that gives a login more asks for the password again (since
+    # 2026-11-18); these tests are about everything else, so here it has
+    # been answered. Who is asked, and who isn't, is the next test.
+    import ledger_unlock
+    monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
     app = FastAPI()
     app.include_router(cd.router)
     app.dependency_overrides[sb_clients.authed_request] = (
@@ -314,6 +319,60 @@ def test_the_duties_page_agrees_with_chief(db, monkeypatch):
     assert client.put("/church/duties/weekly_text",
                       json={"business_id": LOVE_CITY, "user_ids": [tiara]}).status_code == 404, "as before"
     assert len(changes(db, "weekly_text")) == 2
+
+
+def test_whoever_is_over_the_lanes_is_not_asked_for_a_password_she_cant_confirm(db, monkeypatch):
+    """Since 2026-11-18 a move that gives a Manager a duty asks the owner,
+    an Admin or whoever sets up jobs and sheets for the password again. A
+    KNOWN LIMIT, on purpose: whoever is over the lanes and none of those is
+    not asked. She can't confirm an access password (letting her would have
+    opened every other access gate to her, an invite among them), so asking
+    would only stop her doing what this route has always let her do. Her
+    moves stay inside her own team, as before."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import business_access
+    import ledger_unlock
+    jess, tiara, naiya = (uid(db, LOVE_CITY, n) for n in ("jessica", "tiara", "naiya"))
+    roles = {s["user_id"]: s["role"] for s in db.t["business_users"] if s["business_id"] == LOVE_CITY}
+    roles[church(db)["owner_id"]] = "owner"
+    monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: roles.get(str(u)))
+    monkeypatch.setenv("AUDITOR_LINK_SECRET", "test-secret-for-the-office")
+    app = FastAPI()
+    app.include_router(cd.router)
+    app.dependency_overrides[sb_clients.authed_request] = (
+        lambda: SimpleNamespace(user=SimpleNamespace(id=jess, email="jessica@lovecity.org", user_metadata={})))
+    client = TestClient(app)
+    body = {"business_id": LOVE_CITY, "user_ids": [tiara]}
+    # She cannot confirm the password for who can get in, here or anywhere.
+    assert cd.oversees(LOVE_CITY, jess)
+    for who in (jess, naiya):
+        with pytest.raises(Exception) as e:
+            ledger_unlock._require_actor(LOVE_CITY, who, ledger_unlock.SCOPE_ACCESS)
+        assert e.value.status_code == 403
+    # The move gives Tiara a duty she doesn't do, and the route doesn't ask her for a password: it saves.
+    assert cd.gives_more(church(db), "weekly_text", [tiara])
+    r = client.put("/church/duties/weekly_text", json=body)
+    assert r.status_code == 200, r.text
+    assert changes(db, "weekly_text")[-1]["changed_by"] == jess
+    # Putting it back is the same: hers to do, nothing asked.
+    assert client.post("/church/duties/weekly_text/undo", json={"business_id": LOVE_CITY}).status_code == 200
+    # Her team is still the limit: a money duty and the lanes' report aren't hers to move.
+    assert client.put("/church/duties/books", json={"business_id": LOVE_CITY, "user_ids": []}).status_code == 403
+    assert client.put("/church/duties/monthly_report", json=body).status_code == 403
+    # Given "Sets up jobs and people's sheets" she can confirm it, so she is asked like the owner,
+    # and only her own password for this church answers.
+    db.t["church_duty_holders"].append({"business_id": LOVE_CITY, "duty": "jobs_and_sheets", "user_id": jess})
+    r = client.put("/church/duties/weekly_text", json=body)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access"
+
+    def proof(who, business):
+        return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(who, ledger_unlock.SCOPE_ACCESS, business)["token"]}
+    assert client.put("/church/duties/weekly_text", json=body, headers=proof(naiya, LOVE_CITY)).status_code == 403
+    assert client.put("/church/duties/weekly_text", json=body,
+                      headers=proof(jess, "0a000000-0000-4000-8000-00000000000a")).status_code == 403
+    assert client.put("/church/duties/weekly_text", json=body, headers=proof(jess, LOVE_CITY)).status_code == 200
 
 
 def test_her_jobs_line_says_what_she_can_ask_chief_for(db):

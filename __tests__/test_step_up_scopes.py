@@ -39,9 +39,9 @@ class _Req:
 # ── the scope wall ──────────────────────────────────────────────────
 
 def test_a_token_only_opens_its_own_scope():
-    tok = L.mint("u1", L.SCOPE_DANGER)["token"]
-    assert L.verify(tok, "u1", L.SCOPE_DANGER) is True
-    assert L.verify(tok, "u1", L.SCOPE_ACCESS) is False
+    tok = L.mint("u1", L.SCOPE_DANGER, "b1")["token"]
+    assert L.verify(tok, "u1", L.SCOPE_DANGER, "b1") is True
+    assert L.verify(tok, "u1", L.SCOPE_ACCESS, "b1") is False
     assert L.verify(tok, "u1", L.SCOPE_LEDGER) is False
 
 
@@ -50,27 +50,27 @@ def test_a_ledger_unlock_cannot_delete_a_business():
     it must not carry destruction with it."""
     ledger = L.mint("u1", L.SCOPE_LEDGER)["token"]
     with pytest.raises(Exception) as e:
-        L.require_unlock(_Req(ledger), "u1", L.SCOPE_DANGER)
+        L.require_unlock(_Req(ledger), "u1", L.SCOPE_DANGER, "b1")
     assert e.value.detail["code"] == "ledger_locked"
     assert e.value.detail["scope"] == L.SCOPE_DANGER
 
 
 def test_an_access_unlock_cannot_disconnect_payouts():
-    access = L.mint("u1", L.SCOPE_ACCESS)["token"]
+    access = L.mint("u1", L.SCOPE_ACCESS, "b1")["token"]
     with pytest.raises(Exception):
-        L.require_unlock(_Req(access), "u1", L.SCOPE_DANGER)
+        L.require_unlock(_Req(access), "u1", L.SCOPE_DANGER, "b1")
 
 
 def test_the_right_scope_passes():
-    danger = L.mint("u1", L.SCOPE_DANGER)["token"]
-    L.require_unlock(_Req(danger), "u1", L.SCOPE_DANGER)   # no raise
+    danger = L.mint("u1", L.SCOPE_DANGER, "b1")["token"]
+    L.require_unlock(_Req(danger), "u1", L.SCOPE_DANGER, "b1")   # no raise
 
 
 # ── the user wall (unchanged, re-pinned) ────────────────────────────
 
 def test_one_users_unlock_is_not_anothers():
-    tok = L.mint("u1", L.SCOPE_DANGER)["token"]
-    assert L.verify(tok, "u2", L.SCOPE_DANGER) is False
+    tok = L.mint("u1", L.SCOPE_DANGER, "b1")["token"]
+    assert L.verify(tok, "u2", L.SCOPE_DANGER, "b1") is False
 
 
 # ── tampering ───────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ def test_the_scope_cannot_be_edited_by_the_holder():
     forged = base64.urlsafe_b64encode(
         json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
     ).decode().rstrip("=")
-    assert L.verify(f"{forged}.{sig}", "u1", L.SCOPE_DANGER) is False
+    assert L.verify(f"{forged}.{sig}", "u1", L.SCOPE_DANGER, "b1") is False
 
 
 def test_an_unknown_scope_is_refused_at_both_ends():
@@ -99,14 +99,14 @@ def test_an_unknown_scope_is_refused_at_both_ends():
 
 def test_no_header_is_a_403_not_a_crash():
     with pytest.raises(Exception) as e:
-        L.require_unlock(_Req(), "u1", L.SCOPE_ACCESS)
+        L.require_unlock(_Req(), "u1", L.SCOPE_ACCESS, "b1")
     assert e.value.status_code == 403
 
 
 def test_expiry_is_enforced(monkeypatch):
-    tok = L.mint("u1", L.SCOPE_DANGER)["token"]
+    tok = L.mint("u1", L.SCOPE_DANGER, "b1")["token"]
     monkeypatch.setattr(time, "time", lambda: time.time() + L.UNLOCK_TTL_SECONDS + 60)
-    assert L.verify(tok, "u1", L.SCOPE_DANGER) is False
+    assert L.verify(tok, "u1", L.SCOPE_DANGER, "b1") is False
 
 
 # ── back-compat, so shipping this does not sign anyone out ──────────
@@ -125,7 +125,7 @@ def test_a_pre_scope_token_still_opens_the_ledger():
     ).decode().rstrip("=")
     legacy = f"{p}.{L._sig(p)}"
     assert L.verify(legacy, "u1", L.SCOPE_LEDGER) is True
-    assert L.verify(legacy, "u1", L.SCOPE_DANGER) is False, \
+    assert L.verify(legacy, "u1", L.SCOPE_DANGER, "b1") is False, \
         "a legacy token must not inherit the new powers"
 
 

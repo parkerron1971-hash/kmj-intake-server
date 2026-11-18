@@ -38,8 +38,9 @@ def _unlocked(user_id: str = "owner1", scope: str | None = None):
     import os
     os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
     import ledger_unlock
+    # For the business these tests redact in: a danger unlock names one.
     tok = ledger_unlock.mint(str(user_id),
-                             scope or ledger_unlock.SCOPE_DANGER)["token"]
+                             scope or ledger_unlock.SCOPE_DANGER, "b1")["token"]
     return type("R", (), {"headers": {"X-Ledger-Unlock": tok}})()
 
 _SQL = (_here.parent / "supabase" / "APPLY-2026-08-03-ledger-redaction.sql"

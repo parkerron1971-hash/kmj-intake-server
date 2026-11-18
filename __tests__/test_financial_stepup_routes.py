@@ -17,7 +17,7 @@ import stripe_payments_router as payments
 
 
 @pytest.mark.parametrize('operation', ['pay', 'refund', 'no_show', 'policy'])
-@pytest.mark.parametrize('proof', ['missing', 'ledger', 'other_user'])
+@pytest.mark.parametrize('proof', ['missing', 'ledger', 'other_user', 'other_business'])
 def test_financial_routes_require_current_user_danger_proof(monkeypatch, operation, proof):
     monkeypatch.setattr(ledger_unlock, '_secret', lambda: b'route-step-up-test-key')
     monkeypatch.setattr(business_users_router, 'require_role', lambda *a: 'owner')
@@ -32,8 +32,15 @@ def test_financial_routes_require_current_user_danger_proof(monkeypatch, operati
     monkeypatch.setattr(payments.payments_core, 'provider_for', forbidden)
     headers = []
     if proof != 'missing':
+        # The right business each time (a danger unlock names one), so what
+        # is refused is the wrong user or the wrong scope and nothing else.
+        acts_on = '00000000-0000-4000-8000-000000000001' if operation == 'policy' else 'biz'
+        if proof == 'other_business':
+            # The owner's own danger unlock, confirmed for a business that isn't this one.
+            acts_on = '00000000-0000-4000-8000-00000000000e'
         token = ledger_unlock.mint('intruder' if proof == 'other_user' else 'owner',
-                                   scope='danger' if proof == 'other_user' else 'ledger')['token']
+                                   scope='ledger' if proof == 'ledger' else 'danger',
+                                   business_id=acts_on)['token']
         headers = [(b'x-ledger-unlock', token.encode())]
     request = Request({'type': 'http', 'headers': headers})
     user = SimpleNamespace(id='owner')

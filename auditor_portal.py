@@ -106,7 +106,8 @@ def mint_link(request: Request, body: MintBody,
     # own history is routine and its unlock is granted casually; handing
     # someone else a key to it is a different question and must be asked
     # as one.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS,
+                                 business_id=body.business_id)
     biz_row = _require_owner(body.business_id, user)
     import auditor_links
     try:
@@ -201,7 +202,8 @@ def redact_subject(request: Request, body: RedactBody,
     # DANGER. Its own docstring: "the one operation that can empty rows in
     # an append-only table". A ledger unlock is granted to READ; it must
     # not also authorise permanently editing what is read.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER,
+                                 business_id=body.business_id)
     subject_type = str(body.subject_type or "").strip()[:40]
     subject_id = str(body.subject_id or "").strip()[:80]
     if not subject_type or not subject_id:

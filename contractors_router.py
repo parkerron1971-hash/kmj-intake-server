@@ -301,7 +301,8 @@ async def pay(contractor_id: str, body: PayBody, request: Request,
     from financial_policy import require_operational_write
     require_operational_write(body.business_id)
     import ledger_unlock
-    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
+                                 business_id=body.business_id)
     billing_limits.require_feature(body.business_id, "contractor_payments")
     _platform_money(body.business_id)
     if body.amount <= 0:

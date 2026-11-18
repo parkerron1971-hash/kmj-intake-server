@@ -17,6 +17,7 @@ when BILLING_ENFORCE=on.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -40,15 +41,38 @@ _ROLES = ("admin", "manager", "member", "viewer")
 _ROLE_RANK = {"viewer": 1, "member": 2, "manager": 3, "admin": 4, "owner": 5}
 
 
+# An id that goes into a PostgREST path: letters, digits, hyphens and
+# underscores, nothing else. Every real id is a UUID. Until 2026-11-18 the
+# business id reached these paths as it arrived, so a value ending in an
+# encoded "#" turned the rest of the query into a URL fragment and the
+# filters after it (which user, which status) were dropped. Checking the
+# shape, and quoting what passes, closes that for every route that resolves
+# a role here or through business_access. It is the shape and not "a UUID"
+# because a business that doesn't exist already answers "no such business",
+# and that answer is the same for an id that could never be one.
+_SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")      # fullmatch below: "$" would let a trailing newline by
+
+
+def safe_id(v: Any) -> bool:
+    """Whether a business or user id can go into a PostgREST path."""
+    return isinstance(v, str) and bool(_SAFE_ID.fullmatch(v))
+
+
 def role_of(biz: str, user_id: str) -> Optional[str]:
     """The caller's role on a business: 'owner', their active business_users
-    role, or None. The shared resolution every router can adopt."""
+    role, or None. The shared resolution every router can adopt. An id that
+    isn't shaped like one names no business and no login: None, the same
+    answer as a business that doesn't exist."""
+    biz, user_id = str(biz or ""), str(user_id or "")
+    if not safe_id(biz) or not safe_id(user_id):
+        return None
+    b, u = quote(biz, safe=""), quote(user_id, safe="")
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
+        f"/businesses?id=eq.{b}&select=id,owner_id&limit=1") or []
     if rows and str(rows[0].get("owner_id")) == str(user_id):
         return "owner"
     mem = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&user_id=eq.{user_id}"
+        f"/business_users?business_id=eq.{b}&user_id=eq.{u}"
         f"&status=eq.active&select=role&limit=1") or []
     return (mem[0].get("role") if mem else None)
 
@@ -74,9 +98,9 @@ def require_business_admin(business_id: str, user: AuthedUser) -> str:
     The 404 comes BEFORE the role check on purpose: "no such business"
     is not a permissions answer, and require_role cannot tell them apart.
     """
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id&limit=1"
-    ) or []
+    rows = (sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{quote(str(business_id), safe='')}&select=id&limit=1"
+    ) or []) if safe_id(str(business_id or "")) else []
     if not rows:
         raise HTTPException(404, "business not found")
     return require_role(business_id, str(user.id), "admin")
@@ -176,9 +200,9 @@ def seat_person(biz: str, user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
-        f"subscription_plan&limit=1") or []
+    rows = (sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=id,name,owner_id,subscription_status,"
+        f"subscription_plan&limit=1") or []) if safe_id(str(biz or "")) else []
     if not rows or str(rows[0].get("owner_id")) != str(user.id):
         raise HTTPException(403, "not your business")
     return rows[0]
@@ -192,7 +216,7 @@ def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
     never a security boundary: every router enforces server-side."""
     r = role_of(biz, str(user.id))
     accountant = False
-    if not r:
+    if not r and safe_id(str(biz or "")):
         from business_collaborators_router import is_active_accountant
         accountant = is_active_accountant(biz, str(user.id))
     out: Dict[str, Any] = {"ok": True, "role": r, "accountant": accountant}
@@ -344,7 +368,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     # STEP-UP on the GRANT only. Revoking is the emergency brake and
     # must never have friction in front of it.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz)
     inviter_role = require_role(biz, str(user.id), "manager")
     lane = None
     if body.lane:
@@ -357,7 +381,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
     # comped business resolves to NO plan and the seat cap reads 1 —
     # blocking the very accounts comp_tier exists to unblock.
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=id,name,owner_id,subscription_status,"
         f"subscription_plan,comp_tier&limit=1") or []
     biz_row = rows[0] if rows else {}
     if role not in _ROLES:
@@ -376,7 +400,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
             **{k: cap[k] for k in ("count", "limit")}})
 
     existing = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&invited_email=eq.{email}"
+        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&invited_email=eq.{quote(email, safe='@')}"
         f"&status=in.(invited,active)&select=id&limit=1") or []
     if existing:
         raise HTTPException(409, "this person is already invited or active")
@@ -397,10 +421,11 @@ async def invite(biz: str, body: InviteBody, request: Request,
 def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     require_role(biz, str(user.id), "manager")
     rows0 = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=id,subscription_status,subscription_plan,"
+        f"comp_tier&limit=1") or []
     biz_row = rows0[0] if rows0 else {}
     rows = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&status=in.(invited,active)"
+        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&status=in.(invited,active)"
         f"&order=invited_at.desc&limit=200"
         # `lane`: the office lane the invite carried, so an invitation still
         # waiting reads "People & Care lane" on Logins & areas after a reload.
@@ -482,7 +507,7 @@ class AcceptBody(BaseModel):
 def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Invitee accepts via the token link (must be signed in)."""
     rows = sb_clients.sb_get_as_service(
-        f"/business_users?token=eq.{body.token}&select=*&limit=1") or []
+        f"/business_users?token=eq.{quote(str(body.token or ''), safe='')}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "invitation not found")
     inv = rows[0]

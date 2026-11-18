@@ -1336,8 +1336,9 @@ async def delete_business(business_id: str, request: Request,
     """Permanently delete ONE business the caller owns. No undo."""
     # STEP-UP. "No undo" is the whole reason: an unattended session must
     # not be able to erase a practice, and a stolen JWT alone must not
-    # be enough either.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
+    # be enough either. The password was confirmed for THIS business: one
+    # confirmed for another the person owns does not delete this one.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER, business_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         businesses = await _owned_businesses(client, user.id)
         target = next((b for b in businesses if b["id"] == business_id), None)
@@ -1364,10 +1365,14 @@ async def delete_account(request: Request,
                          user: AuthedUser = Depends(require_user)):
     """Permanently delete EVERY owned business, then the auth user.
     The session becomes invalid immediately after. No undo."""
-    # STEP-UP. The most destructive call in the system.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         businesses = await _owned_businesses(client, user.id)
+        # STEP-UP. The most destructive call in the system. It takes every
+        # business this person owns, so the password may have been
+        # confirmed for any one of them (a step-up names one business),
+        # and for none they don't own. Nothing is deleted before this.
+        ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER,
+                                     [b["id"] for b in businesses])
         logger.warning(f"DELETE ACCOUNT user={user.id} email={user.email} businesses={len(businesses)}")
         removed = []
         for biz in businesses:

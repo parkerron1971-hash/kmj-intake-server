@@ -275,7 +275,8 @@ async def stripe_connect_disconnect(
 ) -> Dict[str, Any]:
     # STEP-UP. This is how the practitioner gets paid. Reconnecting means
     # going back through Stripe onboarding, so it is not a quick undo.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER,
+                                 business_id=(payload or {}).get("business_id"))
     business_id = (payload or {}).get("business_id")
     if not business_id:
         raise HTTPException(400, "business_id required")

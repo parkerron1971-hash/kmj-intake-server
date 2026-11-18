@@ -65,6 +65,25 @@ SCOPE_ACCESS = "access"    # let someone else in: invites, audit links, redactio
 SCOPE_DANGER = "danger"    # money, and things with no undo
 SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER)
 
+# ── AN ACCESS OR DANGER UNLOCK IS FOR ONE BUSINESS (2026-11-18) ──────
+# The step-up endpoint decides WHO MAY RE-PROVE A PASSWORD by the
+# business named to it: the owner for danger; the owner, an Admin or
+# whoever sets up jobs and sheets for access. The token it handed back
+# said only "this person, this scope", so that decision did not travel
+# with it. Anyone who owned ANY business could confirm their password
+# there and carry the token to a business where they were a Manager: an
+# invite the step-up should have stopped went through, and so did every
+# danger gate whose own route lets a Manager or an Admin act.
+#
+# So the token now names the business it was confirmed for, and each
+# gate names the business its action is for. A token for another
+# business, or one that names none, is the same `ledger_locked` as no
+# token: the app asks again, this time for the right business. The
+# ledger scope is not bound: its pre-check is "may you read this
+# ledger", which every ledger route asks again for its own business, so
+# a carried token opens nothing its holder could not already open.
+BOUND_SCOPES = (SCOPE_ACCESS, SCOPE_DANGER)
+
 # What each scope is asking the practitioner to agree to, in their
 # words. The prompt has to name the consequence or it is just a speed
 # bump people learn to type through.
@@ -112,25 +131,51 @@ def _sig(payload_b64: str) -> str:
                          hashlib.sha256).digest())
 
 
-def mint(user_id: str, scope: str = SCOPE_LEDGER) -> Dict[str, Any]:
-    """A proof that THIS user re-entered their password just now, FOR A
-    PARTICULAR KIND OF ACTION.
+def _same_business(v: Any) -> str:
+    """A business id as two of them are compared: a UUID in its one
+    spelling, anything else trimmed and lower-cased. "" for none."""
+    import uuid
+    v = "" if v is None else str(v).strip()
+    try:
+        return str(uuid.UUID(v))
+    except (ValueError, TypeError, AttributeError):
+        return v.lower()
 
-    Bound to the user, not to a business: the person is what was
-    re-verified. Which businesses they may then touch is still decided
-    by the ownership and read gates, which this does not replace.
+
+def mint(user_id: str, scope: str = SCOPE_LEDGER,
+         business_id: Any = None) -> Dict[str, Any]:
+    """A proof that THIS user re-entered their password just now, FOR A
+    PARTICULAR KIND OF ACTION, and for access and danger AT ONE BUSINESS
+    (`business_id`: the one the step-up endpoint checked them against).
+
+    A ledger unlock names no business: the person is what was
+    re-verified, and each ledger route's own read gate decides which
+    ledgers they may open. An access or danger unlock minted with no
+    business opens nothing (verify), so a caller that forgets it gets a
+    prompt that never clears rather than a token that works everywhere.
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown step-up scope: {scope}")
     now = int(time.time())
     payload = {"typ": "unlock", "sub": str(user_id), "scp": scope,
                "iat": now, "exp": now + UNLOCK_TTL_SECONDS}
+    if _same_business(business_id):
+        payload["biz"] = _same_business(business_id)
     p = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     return {"token": f"{p}.{_sig(p)}", "expires_in": UNLOCK_TTL_SECONDS}
 
 
-def verify(token: str, user_id: str, scope: str = SCOPE_LEDGER) -> bool:
-    """Signature → type → expiry → SAME USER → SAME SCOPE.
+def verify(token: str, user_id: str, scope: str = SCOPE_LEDGER,
+           business_id: Any = None) -> bool:
+    """Signature → type → expiry → SAME USER → SAME SCOPE → for access
+    and danger, SAME BUSINESS.
+
+    `business_id` is the business the action is for: one id, or a list
+    of them where one action covers several (deleting an account takes
+    every business its owner has). For access and danger the token must
+    name one of them; none given, or a token that names none (one minted
+    before 2026-11-18, at most fifteen minutes old), is a no. The ledger
+    scope ignores it.
 
     The user check stops one signed-in user's unlock being replayed by
     another. The scope check stops a ledger unlock — which a
@@ -158,7 +203,17 @@ def verify(token: str, user_id: str, scope: str = SCOPE_LEDGER) -> bool:
             return False
         if str(claims.get("sub")) != str(user_id):
             return False
-        return str(claims.get("scp") or SCOPE_LEDGER) == str(scope)
+        if str(claims.get("scp") or SCOPE_LEDGER) != str(scope):
+            return False
+        if scope not in BOUND_SCOPES:
+            return True
+        named = _same_business(claims.get("biz"))
+        if isinstance(business_id, (list, tuple, set, frozenset)):
+            wanted = {_same_business(b) for b in business_id}
+        else:
+            wanted = {_same_business(business_id)}
+        wanted.discard("")
+        return bool(named) and named in wanted
     except Exception:
         return False
 
@@ -194,8 +249,13 @@ async def check_password(email: str, password: str) -> bool:
 
 
 def require_unlock(request: Request, user_id: str,
-                   scope: str = SCOPE_LEDGER) -> None:
+                   scope: str = SCOPE_LEDGER, business_id: Any = None) -> None:
     """Gate for every surface that re-asks for the password.
+
+    `business_id`: the business this action is for (verify). Every
+    access and danger gate passes it; a token confirmed for another
+    business is the same refusal as no token, so the app's prompt asks
+    again for this one.
 
     Raises 403 with a MACHINE-READABLE code. The frontend has to be
     able to tell "you must unlock" apart from "you may not read this
@@ -210,8 +270,10 @@ def require_unlock(request: Request, user_id: str,
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown step-up scope: {scope}")
-    token = request.headers.get(UNLOCK_HEADER) or ""
-    if not verify(token, user_id, scope):
+    # No request at all (a caller with none to give) is the same as no
+    # token: locked, never a pass.
+    token = (request.headers.get(UNLOCK_HEADER) if request is not None else "") or ""
+    if not verify(token, user_id, scope, business_id):
         raise HTTPException(
             status_code=403,
             detail={"code": "ledger_locked", "scope": scope,
@@ -234,6 +296,12 @@ def require_unlock(request: Request, user_id: str,
 #              ACTIVE Manager seat the owner or an Admin gave "Sets up
 #              jobs and people's sheets" (church_job_defs.GRANT).
 #
+# A Manager who is over the office's lanes is NOT one of them. She moves
+# her own team's duties (church_duties), and that route does not ask her
+# for a password she has no way to confirm; letting her confirm one here
+# would have handed her every other access gate too (an invite needs
+# only a Manager).
+#
 # Why access is wider (2026-11-17). Re-proving your own password is the
 # protection against an unlocked laptop, so it has to work for whoever
 # is acting. It was the owner's alone, which meant an Admin could never
@@ -255,17 +323,6 @@ class _StepUpBody(BaseModel):
     business_id: str
     password: str
     scope: str
-
-
-def _require_owner(business_id: str, user_id: str) -> Dict[str, Any]:
-    import sb_clients
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1") or []
-    if not rows:
-        raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user_id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
 
 
 def _business_uuid(business_id: Any) -> str:
@@ -351,7 +408,8 @@ async def step_up(body: _StepUpBody,
             pass
         raise HTTPException(403, "That password did not match.")
 
-    out = mint(str(user.id), scope)
+    # For this business and no other: the check above was made here.
+    out = mint(str(user.id), scope, business_id)
     try:
         record(business_id, actor_type="user", actor_id=str(user.id),
                verb=f"stepup:{scope}",

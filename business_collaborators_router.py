@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -32,10 +33,30 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _biz_id(biz: Any) -> str:
+    """The business id as it may go into a PostgREST path, or the 404 a
+    business that doesn't exist gets. An id is letters, digits, hyphens and
+    underscores (business_users_router.safe_id), so the value returned is
+    the id itself. Before 2026-11-18 it went into every path here as it
+    arrived, and one ending in an encoded "#" dropped the filters after it."""
+    from business_access import _business_path_id
+    return _business_path_id(biz)
+
+
+def _row_id(v: Any, what: str) -> str:
+    """A row's id as it may go into a path, or a 404 for one that isn't an id."""
+    from business_users_router import safe_id
+    v = "" if v is None else str(v)
+    if not safe_id(v):
+        raise HTTPException(404, f"{what} not found")
+    return quote(v, safe="")
+
+
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     """Seat-access arc (7/31): collaborator management is an ADMIN
     surface — the owner passes, and so does an active admin seat. Lower
     ranks still 403 inside require_role."""
+    biz = _biz_id(biz)
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
     if not rows:
@@ -51,8 +72,12 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
 def is_active_accountant(business_id: str, user_id: str) -> bool:
     """Reusable check for future cross-router grants (accountant can read
     reports / propose closes / run reconciliation)."""
+    from business_users_router import safe_id
+    business_id, user_id = str(business_id or ""), str(user_id or "")
+    if not safe_id(business_id) or not safe_id(user_id):
+        return False         # an id that isn't shaped like one names no business and no login
     rows = sb_clients.sb_get_as_service(
-        f"/business_collaborators?business_id=eq.{business_id}&user_id=eq.{user_id}"
+        f"/business_collaborators?business_id=eq.{quote(business_id, safe='')}&user_id=eq.{quote(user_id, safe='')}"
         f"&status=eq.active&role=eq.accountant&select=id&limit=1") or []
     return bool(rows)
 
@@ -68,6 +93,7 @@ def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> D
     (period statuses, pending close signatures, reconciliation queue,
     journal recency) without the practitioner's operational noise.
     Accessible to the owner AND active accountant collaborators."""
+    biz = _biz_id(biz)
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
     if not rows:
@@ -123,8 +149,10 @@ def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> D
 async def invite(biz: str, body: InviteBody, request: Request,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     # STEP-UP on the GRANT only — an accountant invite reaches the books.
-    # Revoke stays open; the brake never gets a gate.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+    # Revoke stays open; the brake never gets a gate. The password was
+    # confirmed for THIS business (ledger_unlock: an access unlock names one).
+    biz = _biz_id(biz)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz)
     biz_row = _owner(biz, user)
     # Gate the INVITE only: accepting an already-sent invite and revoking
     # access must never be plan-locked.
@@ -168,6 +196,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
 
 @router.get("")
 def list_collaborators(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz = _biz_id(biz)
     _owner(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/business_collaborators?business_id=eq.{biz}"
@@ -189,7 +218,7 @@ class AcceptBody(BaseModel):
 def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Invitee accepts via the token link (must be signed in)."""
     rows = sb_clients.sb_get_as_service(
-        f"/business_collaborators?token=eq.{body.token}&select=*&limit=1") or []
+        f"/business_collaborators?token=eq.{quote(str(body.token or ''), safe='')}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "invitation not found")
     inv = rows[0]
@@ -197,10 +226,10 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
         raise HTTPException(409, "this invitation was revoked")
     if (inv.get("expiration_at") or "") < _now_iso():
         sb_clients.sb_patch_as_service(
-            f"/business_collaborators?id=eq.{inv['id']}", {"status": "expired"})
+            f"/business_collaborators?id=eq.{quote(str(inv['id']), safe='')}", {"status": "expired"})
         raise HTTPException(409, "this invitation has expired")
     sb_clients.sb_patch_as_service(
-        f"/business_collaborators?id=eq.{inv['id']}",
+        f"/business_collaborators?id=eq.{quote(str(inv['id']), safe='')}",
         {"status": "active", "user_id": str(user.id), "accepted_at": _now_iso()})
     return {"ok": True, "business_id": inv.get("business_id"), "role": inv.get("role")}
 
@@ -208,8 +237,18 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
 @router.post("/{collaborator_id}/revoke")
 def revoke(collaborator_id: str, biz: str,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Stop a collaborator's access: this business's row and no other's.
+
+    Both ids went into the path as they arrived, the business filter last.
+    A row id ending in an encoded "#" made everything after it a URL
+    fragment, so the business filter never reached the database: an owner
+    or Admin of one business could revoke another tenant's collaborator by
+    its row id. Both are now ids or a 404, both quoted, and the business
+    comes first in the path."""
+    biz = _biz_id(biz)
+    row = _row_id(collaborator_id, "collaborator")
     _owner(biz, user)
     sb_clients.sb_patch_as_service(
-        f"/business_collaborators?id=eq.{collaborator_id}&business_id=eq.{biz}",
+        f"/business_collaborators?business_id=eq.{biz}&id=eq.{row}",
         {"status": "revoked", "revoked_at": _now_iso()})
     return {"ok": True}

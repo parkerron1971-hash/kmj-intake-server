@@ -401,7 +401,7 @@ def confirm_route(business_id: str, body: Confirm, request: Request, response: R
                   session: UserSession = Depends(sb_clients.authed_request)):
     response.headers.update(NO_STORE)
     bid, uid = owner(business_id, session)
-    require_unlock(request, uid, SCOPE_DANGER)
+    require_unlock(request, uid, SCOPE_DANGER, business_id=bid)
     return perform(bid, uid, lambda w: checkout(w, body))
 
 

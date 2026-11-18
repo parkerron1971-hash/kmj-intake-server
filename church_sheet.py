@@ -11,6 +11,10 @@ Step one changes no rule. A login was described in six places (its level, its
 areas, its lane, its duties, the keys, its job description); the sheet reads
 them together and sets the first four through the writes they already had:
 
+    its level ....... business_users.role: Viewer, Member, Manager or Admin
+                      (church_areas.set_login, in the same row write as the
+                      areas and the job; the sheet sets it since 2026-11-18,
+                      before that only the invite did)
     its job ......... business_users.lane: one of the five starting jobs or
                       one of the church's own (church_job_defs). A label and a
                       starting point; it never changes anyone by itself
@@ -38,7 +42,7 @@ Who:
               login, as a tick on the sheet's duties
 
   GET    /church/sheet?business_id=&user_id=
-  PUT    /church/sheet        {business_id, user_id, job?, areas?, duties?: {add, remove}}
+  PUT    /church/sheet        {business_id, user_id, level?, job?, areas?, duties?: {add, remove}}
   GET    /church/sheet/jobs?business_id=      the jobs, always (see below)
   POST   /church/jobs         {business_id, label, does, description, role, areas, duties}
   PUT    /church/jobs/{key}   the same body (one of the church's own)
@@ -85,9 +89,29 @@ MONEY_DUTY = "A money job goes only to an Admin login. Only the owner or an Admi
 GRANT_LOCKED = f"Only the owner or an Admin can give or take away “{cj.GRANT_LABEL}”."
 OVERSIGHT_LOCKED = "Only the owner or an Admin moves the monthly report and Over the lanes."
 BACK_TO_GUESS = "Only the owner or an Admin can send a login back to Chief's guess: it can open the whole church."
-ADMIN_JOB = "That job is an Admin login. Only the owner makes someone an Admin: invite them as an Admin."
+ADMIN_JOB = "That job is an Admin login. Only the owner makes someone an Admin."
 KEEPS_ALL_WHY = "An Admin login sees the whole church and does every duty."
 NO_OFFICE_JOBS = "A Member or Viewer login doesn't do office jobs. Make them a Manager login first."
+
+# A login's level, lowest first (business_users.role). The sheet sets it
+# since 2026-11-18 (Kevin, on whether the sheet should change a login's
+# level: "everything else, I agree"); until then only the invite did.
+LEVELS: Tuple[str, ...] = ("viewer", "member", "manager", "admin")
+LEVEL_RANK = {k: n for n, k in enumerate(LEVELS, 1)}
+LEVEL_LABEL = {"viewer": "Viewer", "member": "Member", "manager": "Manager", "admin": "Admin"}
+LEVEL_MEANS = {
+    "viewer": "Reads, and changes nothing.",
+    "member": "Works its own records in its areas.",
+    "manager": "Works any record in its areas, and can do office duties.",
+    "admin": "Sees the whole church, giving and settings included.",
+}
+ADMIN_LEVEL = "Only the owner makes someone an Admin."
+ADMIN_JOB_NEEDS_LEVEL = "That job is an Admin login. Set their level to Admin with it."
+HOLDERS_LEVEL = ("{name} sets up jobs and people's sheets. Only the owner or an Admin lowers their level, "
+                 "because that takes it away.")
+PICK_AREAS = ("Pick the areas {name} works in before moving them down from Admin. A login with no areas "
+              "sees the whole church.")
+NOT_A_LEVEL = "Pick one of the login levels: Viewer, Member, Manager or Admin."
 
 # What Chief does for a login that works an area, and the same thing as what
 # it sends elsewhere for a login that doesn't. Each names a verb placed in
@@ -193,6 +217,30 @@ def locks(st: Dict[str, Any]) -> Dict[str, Any]:
     return {"locked_areas": [a for a in church_areas.AREA_ORDER if a in why],
             "locked_duties": [k for k in list(cd.CATALOG) + [cj.GRANT] if k in why],
             "locked_why": why, "limits": limits}
+
+
+def _level_refusal(st: Dict[str, Any], level: str) -> Optional[str]:
+    """Why this editor can't set this level on this person, in one sentence;
+    None when they can. standing() has already said whose sheet this editor
+    changes at all (never their own, never the owner's, an Admin's only for
+    the owner), so what is left is the one level that is the owner's to give."""
+    if level == "admin" and st["editor"] != "owner":
+        return ADMIN_LEVEL
+    return None
+
+
+def level_options(st: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The four levels in order, each with whether this editor may set it on
+    this person and, when not, why. Empty for a sheet that is read only and
+    for the owner, who has no level."""
+    if not st["can_edit"] or st["target_role"] not in LEVELS:
+        return []
+    out = []
+    for k in LEVELS:
+        why = _level_refusal(st, k)
+        out.append({"key": k, "label": LEVEL_LABEL[k], "means": LEVEL_MEANS[k], "allowed": why is None,
+                    "why": why or "", "current": k == st["target_role"]})
+    return out
 
 
 # ─── Reading one sheet ────────────────────────────────────────────────
@@ -397,6 +445,7 @@ def compose(business: Dict[str, Any], viewer: str, target: str) -> Dict[str, Any
             "chief": chief_words(ch, target, areas["shown"], job, duties, guarded),
             # The jobs (their descriptions too) are the office's: a Manager and up.
             "jobs": cj.jobs(ch.b) if st["viewer_role"] in ("owner", "admin", "manager") else [], **locks(st),
+            "level_options": level_options(st),
         }
 
 
@@ -439,15 +488,25 @@ def _shown(picked: Optional[List[str]], guess: List[str]) -> Optional[List[str]]
     return None
 
 
+def _exec_person(ch: co.Church, target: str) -> bool:
+    """Whether this login's person holds a role that oversees the office
+    (church_duties.overseer_keys) and said yes, whatever the login's level
+    is today: church_duties._exec_users' answer for this one seat, the rule
+    holds() itself reads. A login moved up to Manager is seen with the
+    Executive Pastor's lane it would then have."""
+    seat = ch.seats.get(target)
+    return bool(seat) and target in cd._exec_users(ch.b, [seat])
+
+
 def _held(ch: co.Church, target: str, role: Optional[str], lane: Any, picked: Optional[List[str]],
-          shown: Optional[List[str]], moved: Dict[str, List[str]]) -> frozenset:
-    """The duties a login holds with this job, these areas and these moves:
-    church_duties.standing's rule, worked out for a login as it is or as a
-    change would leave it. The owner and the Admins hold every duty; a
-    Manager its lane's (the stored one, else the lane its picked areas are
-    exactly, and the Executive Pastor's where their person holds that role),
-    or with no lane the duties in the areas it is shown, until a duty moves;
-    never money. A Member or a Viewer holds none."""
+          shown: Optional[List[str]], moved: Dict[str, List[str]], is_exec: bool = False) -> frozenset:
+    """The duties a login holds with this level, this job, these areas and
+    these moves: church_duties.standing's rule, worked out for a login as it
+    is or as a change would leave it. The owner and the Admins hold every
+    duty; a Manager its lane's (the stored one, else the lane its picked
+    areas are exactly, and the Executive Pastor's where their person holds
+    that role: `is_exec`), or with no lane the duties in the areas it is
+    shown, until a duty moves; never money. A Member or a Viewer holds none."""
     if role in church_areas.KEEPS_ALL:
         return cd.ALL
     if role != "manager":
@@ -456,7 +515,7 @@ def _held(ch: co.Church, target: str, role: Optional[str], lane: Any, picked: Op
     ln = cd._seat_lane({"role": role, "lane": lane, "areas": picked})
     if ln:
         lanes.add(ln)
-    if target in ch.exec_users:
+    if is_exec:
         lanes.add(cd.EXEC)
     by_area = None
     if not lanes:
@@ -475,36 +534,174 @@ def _str_list(v: Any, what: str) -> List[str]:
     return list(v)
 
 
+def effect(business: Dict[str, Any], ch: co.Church, target: str, *, level: Any = church_areas.KEEP,
+           areas: Any = church_areas.KEEP, job: Any = church_areas.KEEP,
+           moves: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
+    """What one write would leave a login with, beside what it has now,
+    without writing anything: its level, its job, the areas it is shown and
+    the duties it holds, before and after, and what grew and what shrank.
+
+    This is the one place "does this give them more?" is answered, for a
+    person's sheet and for the two older writes that change the same things
+    (the Logins & areas route's areas, and through church_duties.gives_more
+    the Duties tab's moves). It judges by RESULT, never by how the change
+    was asked: taking an area off can re-spell a lane and bring that lane's
+    duties; sending a login back to Chief's guess can open the whole church;
+    a higher level brings what that level holds.
+
+    `level` a new level, `areas` a clean list or None (back to the guess),
+    `job` a job's key or None; each left out is kept as it is. `moves` are
+    duty -> the logins who do it afterwards."""
+    keep = church_areas.KEEP
+    seat = ch.seats.get(target) or {}
+    role_now = ch.role(target)
+    role_then = role_now if level is keep else level
+    stored_areas = seat.get("areas")
+    picked_now = ([a for a in church_areas.AREA_ORDER if a in stored_areas] or None) if isinstance(
+        stored_areas, list) else None
+    lane_now = seat.get("lane") or None
+    now = _areas(business, ch, target)
+    shown_now, guess = now["shown"], now["guess"]
+    picked_then = picked_now if areas is keep else areas
+    lane_then = lane_now
+    if job is not keep or areas is not keep:
+        lane_then = church_areas.lane_after(role_then, lane_now, stored_areas, areas=areas, job=job,
+                                            own=church_areas.own_job(ch.b, lane_now))
+    shown_then = None if role_then in church_areas.KEEPS_ALL else _shown(picked_then, guess)
+    moved_then = dict(ch.moved)
+    for key, to in (moves or {}).items():
+        if to:
+            moved_then[key] = list(to)
+        else:
+            moved_then.pop(key, None)
+    is_exec = _exec_person(ch, target) if "manager" in (role_now, role_then) else False
+    held_now = _held(ch, target, role_now, lane_now, picked_now, shown_now, ch.moved, is_exec)
+    held_then = _held(ch, target, role_then, lane_then, picked_then, shown_then, moved_then, is_exec)
+    # "The whole church" for a login an area can be picked for never opens
+    # Giving; an Admin login's whole church does.
+    every_area = set(church_areas.AREA_ORDER) - {church_areas.FINANCE_ONLY}
+
+    def area_set(role: Optional[str], shown: Optional[List[str]]) -> Set[str]:
+        if role in church_areas.KEEPS_ALL:
+            return set(church_areas.AREA_ORDER)
+        return every_area if shown is None else set(shown)
+    areas_now, areas_then = area_set(role_now, shown_now), area_set(role_then, shown_then)
+    rank_now, rank_then = LEVEL_RANK.get(role_now or "", 0), LEVEL_RANK.get(role_then or "", 0)
+    return {
+        "role_now": role_now, "role_then": role_then, "level_up": rank_then > rank_now,
+        "level_down": rank_then < rank_now, "stored_areas": stored_areas,
+        "picked_now": picked_now, "picked_then": picked_then, "lane_now": lane_now, "lane_then": lane_then,
+        "shown_now": shown_now, "shown_then": shown_then,
+        "more_areas": [a for a in church_areas.AREA_ORDER if a in areas_then - areas_now],
+        "less_areas": [a for a in church_areas.AREA_ORDER if a in areas_now - areas_then],
+        "more_duties": [k for k in cd.CATALOG if k in held_then - held_now],
+        "less_duties": [k for k in cd.CATALOG if k in held_now - held_then],
+    }
+
+
+def _plainly_less(business_id: str, seat: Dict[str, Any], areas: Any) -> bool:
+    """Whether picking these areas for this login is plainly taking some
+    away, from the login's own row alone: it has picked areas now, every
+    area sent is one of them, and the lane its duties follow
+    (church_duties._seat_lane) is the same before and after. Then it is
+    shown no area it wasn't (a pick is what a login is shown) and holds no
+    duty it didn't (the same lane's, or with no lane the duties in fewer
+    areas), so nothing else needs reading. Anything else is not plain, and
+    the full reckoning (effect) answers."""
+    stored = seat.get("areas")
+    if not isinstance(areas, list) or not areas or not isinstance(stored, list) or not stored:
+        return False
+    if not set(areas) <= set(stored):
+        return False
+    role, lane = seat.get("role"), seat.get("lane")
+    after = church_areas.lane_after(role, lane, stored, areas=areas, own=church_areas.own_job(business_id, lane))
+    return cd._seat_lane({"role": role, "lane": lane, "areas": stored}) == cd._seat_lane(
+        {"role": role, "lane": after, "areas": areas})
+
+
+def areas_write_widens(business_id: str, target: str, *, areas: Any, job: Any = church_areas.KEEP,
+                       seat: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the Logins & areas write (church_areas.place_login) would leave
+    this login with more than it has: an area it is shown or a duty it holds.
+    The same answer a person's sheet gives for the same change. False for a
+    business that isn't a church (it has no areas to give); a read that fails
+    is a 503, never a "no". With the login's row (`seat`: role, areas, lane)
+    and no job named, areas that are plainly a subset of the ones picked are
+    answered from the row alone (_plainly_less), without the whole map."""
+    if seat is not None and job is church_areas.KEEP and _plainly_less(business_id, seat, areas):
+        return False
+    import church_follow_up as cfu
+    import church_map
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{_q(business_id)}&select=id,name,type,owner_id,settings&limit=1")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "The church couldn't be read just now. Try again.")
+    if not rows or not cfu.is_church(rows[0]):
+        return False
+    ch = co.Church(rows[0])
+    with church_map.once():
+        e = effect(rows[0], ch, target, areas=areas, job=job)
+    return bool(e["more_areas"] or e["more_duties"])
+
+
 def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, Any], *,
            widening=None) -> Dict[str, Any]:
-    """Change a person's sheet: its job, its areas, its duties, each through
-    the write it already had. Everything that can refuse is checked before
-    anything is written.
+    """Change a person's sheet: its level, its job, its areas, its duties,
+    each through the write it already had. Everything that can refuse is
+    checked before anything is written, and the writes go in an order that
+    can only ever leave the login with less if one of them fails: the grant
+    taken away first, then the level, the areas and the job in ONE row
+    write (church_areas.set_login), then the duties, then a grant given.
 
     Whether a change gives the login more is judged by its RESULT, never by
-    how it was asked: what the login is shown and the duties it holds now are
-    worked out, then what they would be after the write (its job as
-    set_login would leave it, the duties that job or those areas bring), and
-    anything that grew is "more". Taking an area off can re-spell a lane and
-    bring that lane's duties; sending a login back to Chief's guess can open
-    the whole church; clearing a job can do the same. `widening` (the route's
-    password check, which raises) is called once before any write when
-    anything grew; a change that leaves the login with less asks for nothing.
-    A holder's ceiling is applied to the result too: nothing it leaves the
-    login with may be one of the things only the owner or an Admin gives.
+    how it was asked (effect()): what the login is shown and the duties it
+    holds now are worked out, then what they would be after the write, and
+    anything that grew, a higher level too, is "more". `widening` (the
+    route's password check, which raises) is called once before any write
+    when anything grew; a change that leaves the login with less asks for
+    nothing. A holder's ceiling is applied to the result too: nothing it
+    leaves the login with may be one of the things only the owner or an
+    Admin gives.
+
+    The level: the owner sets any; an Admin or a holder sets Viewer, Member
+    or Manager on a Manager login or below, never Admin. A login that
+    becomes an Admin sees the whole church and does every duty, so areas and
+    duties sent with it are left as they are stored (there again if it is
+    ever moved back). A login moved down from Admin must be left with areas
+    (sent, or already stored): one with none would see the whole church; a
+    job that is an Admin login's (the Treasurer's) comes off it. A login
+    that stops being a Manager no longer sets up jobs and sheets: that
+    grant goes in the same save, before the level. And it never comes back
+    with the level: any move to Manager clears a grant row left on the
+    login, unless the owner or an Admin gives the grant in that same save.
     Returns {widens, summary, changed, owner_told}."""
     body = body if isinstance(body, dict) else {}
+    keep = church_areas.KEEP
     ch = co.Church(business)
     st = standing(ch, viewer, target)
     if not st["can_edit"]:
         raise HTTPException(403, st["why_not"] or NOT_AN_EDITOR)
-    lk = locks(st)
     trole, ed = st["target_role"], st["editor"]
-    seat = ch.seats.get(target) or {}
     name = ch.login_name(target)
     said: List[str] = []
 
     # ── What was asked: each part's shape, and who may ──
+    # The level.
+    level_set = "level" in body and body.get("level") is not None
+    level = trole
+    if level_set:
+        level = body.get("level")
+        if not isinstance(level, str) or level not in LEVELS:
+            raise HTTPException(400, NOT_A_LEVEL)
+        why = _level_refusal(st, level)
+        if why:
+            raise HTTPException(403, why)
+    level_changes = level != trole
+    becomes_admin = level == "admin" and trole != "admin"
+    # The rules for the rest are the ones for the level the login will have.
+    st_then = {**st, "target_role": level}
+    lk = locks(st_then)
+
     # The job.
     job_set = "job" in body
     job_key = None
@@ -513,15 +710,17 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         job = cj.find(ch.b, body.get("job")) if isinstance(body.get("job"), str) else None
         if not job:
             raise HTTPException(400, "That isn't one of this church's jobs.")
-        if job["role"] == "admin" and trole != "admin":
-            raise HTTPException(403 if ed == "holder" else 400, ADMIN_JOB)
+        if job["role"] == "admin" and level != "admin":
+            if ed != "owner":
+                raise HTTPException(403, ADMIN_JOB)
+            raise HTTPException(400, ADMIN_JOB_NEEDS_LEVEL)
         job_key, job_label = job["key"], job["label"]
 
-    # The areas.
-    areas_set = "areas" in body
+    # The areas. Sent with a level that makes an Admin, they are left as stored.
+    areas_set = "areas" in body and not becomes_admin
     areas = None
     if areas_set:
-        if trole in church_areas.KEEPS_ALL:
+        if level in church_areas.KEEPS_ALL:
             raise HTTPException(400, KEEPS_ALL_WHY)
         raw = body.get("areas")
         if raw is None and ed == "holder":
@@ -541,6 +740,10 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
     known = set(cd.CATALOG) | {cj.GRANT}
     if any(k not in known for k in add + remove) or set(add) & set(remove):
         raise HTTPException(400, "One of those isn't a duty here.")
+    if becomes_admin:
+        add, remove = [], []            # an Admin does every duty: nothing to give or take
+    elif level_changes and level != "manager":
+        remove = []                     # below Manager a login holds none: nothing left to take off
     grant = True if cj.GRANT in add else False if cj.GRANT in remove else None
     add, remove = [k for k in add if k != cj.GRANT], [k for k in remove if k != cj.GRANT]
     for k in add + remove + ([cj.GRANT] if grant is not None else []):
@@ -548,48 +751,69 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
             raise HTTPException(403 if ed == "holder" else 400, lk["locked_why"][k])
     plan = _duty_plan(ch, business, target, add, remove) if add or remove else []
     for key, to in plan:
-        why = cd._check(ch.b, business, to, key)
+        # Everything church_duties.move would refuse is asked here, before
+        # the first write: the level is saved before the duties move, and a
+        # move that then said no would leave the level changed alone.
+        if len(to) > cd.MAX_HOLDERS:
+            raise HTTPException(400, f"“{cd.CATALOG[key]['label']}” already names {cd.MAX_HOLDERS} logins, the "
+                                     "most a duty takes. Take one off it on the Duties tab first.")
+        for u in to:
+            cd._uuid(u, "login")
+        # The target is checked at the level this save leaves it with (a
+        # Member made a Manager here can be given a duty in the same save).
+        why = cd._check(ch.b, business, [u for u in to if u != target], key)
+        if not why and target in to:
+            why = cd._why_not(business, {target: {"role": level}}, target, key)
         if why:
             raise HTTPException(400, why)
-    grant_changes = False
-    if grant is not None:
-        if ed not in ("owner", "admin"):
-            raise HTTPException(403, GRANT_LOCKED)
-        if trole != "manager":
-            raise HTTPException(400, "Give that to a Manager login. An Admin sets up jobs and sheets already, and "
-                                     "a Member or Viewer login doesn't.")
+    # The grant is a row naming the login; it counts only while the login
+    # is a Manager. So a row can outlast the grant (a login moved down, a
+    # save that failed half way), and must never bring it back.
+    holders = None
+    if grant is not None or (level_changes and "manager" in (trole, level)):
         holders = cj.grant_holders(ch.b)
         if holders is None:              # unread before anything is written, never after
             raise HTTPException(503, "Who sets up jobs couldn't be read just now. Nothing changed. Try again.")
-        grant_changes = (target in holders) != grant
+    has_row = bool(holders) and target in holders
+    held_grant = has_row and trole == "manager"
+    if grant is not None:
+        if ed not in ("owner", "admin"):
+            raise HTTPException(403, GRANT_LOCKED)
+        if level != "manager":
+            raise HTTPException(400, "Give that to a Manager login. An Admin sets up jobs and sheets already, and "
+                                     "a Member or Viewer login doesn't.")
+    # A login that stops being a Manager stops setting up jobs and sheets.
+    if held_grant and level_changes and ed == "holder":
+        raise HTTPException(403, HOLDERS_LEVEL.format(name=name))
+    # Whether the row is there afterwards: as the owner or an Admin said in
+    # this save; else gone with any move to or from Manager; else as it is.
+    want_row = has_row
+    if grant is not None:
+        want_row = grant
+    elif level_changes and "manager" in (trole, level):
+        want_row = False
+    gives_grant = grant is True and not held_grant
+    takes_grant = held_grant and not want_row
+    clears_row = has_row and not want_row
+    # A job that is an Admin login's (the Treasurer's) comes off a login
+    # moved down from Admin, unless this save names another.
+    job_arg = job_key if job_set else keep
+    if trole == "admin" and level != "admin" and not job_set:
+        lane_was = (ch.seats.get(target) or {}).get("lane")
+        was = cj.find(ch.b, lane_was, gone=True) if lane_was else None
+        if was and was.get("role") == "admin":
+            job_arg = None
 
     # ── What the login has now, and what this would leave it with ──
-    stored_areas = seat.get("areas")
-    picked_now = ([a for a in church_areas.AREA_ORDER if a in stored_areas] or None) if isinstance(
-        stored_areas, list) else None
-    lane_now = seat.get("lane") or None
-    now = _areas(business, ch, target)
-    shown_now, guess = now["shown"], now["guess"]
-    picked_then = areas if areas_set else picked_now
-    lane_then = lane_now
-    if job_set or areas_set:
-        lane_then = church_areas.lane_after(
-            trole, lane_now, stored_areas, areas=areas if areas_set else church_areas.KEEP,
-            job=job_key if job_set else church_areas.KEEP, own=church_areas.own_job(ch.b, lane_now))
-    shown_then = None if trole in church_areas.KEEPS_ALL else _shown(picked_then, guess)
-    moved_then = dict(ch.moved)
-    for key, to in plan:
-        moved_then[key] = list(to)
-    held_now = _held(ch, target, trole, lane_now, picked_now, shown_now, ch.moved)
-    held_then = _held(ch, target, trole, lane_then, picked_then, shown_then, moved_then)
-    # "The whole church" for a login an area can be picked for never opens Giving.
-    every_area = set(church_areas.AREA_ORDER) - {church_areas.FINANCE_ONLY}
-    areas_now = every_area if shown_now is None else set(shown_now)
-    areas_then = every_area if shown_then is None else set(shown_then)
-    more_areas = [a for a in church_areas.AREA_ORDER if a in areas_then - areas_now]
-    more_duties = [k for k in cd.CATALOG if k in held_then - held_now]
-    less_areas = [a for a in church_areas.AREA_ORDER if a in areas_now - areas_then]
-    less_duties = [k for k in cd.CATALOG if k in held_now - held_then]
+    e = effect(business, ch, target, level=level if level_changes else keep,
+               areas=areas if areas_set else keep, job=job_arg,
+               moves={key: to for key, to in plan})
+    stored_areas = e["stored_areas"]
+    more_areas, more_duties = e["more_areas"], e["more_duties"]
+    less_areas, less_duties = e["less_areas"], e["less_duties"]
+    # Moved down from Admin, a login must be left with areas of its own.
+    if trole == "admin" and level != "admin" and not e["picked_then"]:
+        raise HTTPException(400, PICK_AREAS.format(name=name))
 
     # A holder's ceiling, on the result: nothing this leaves the login with
     # may be something only the owner or an Admin gives.
@@ -597,16 +821,19 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         for k in more_areas + more_duties:
             if k in lk["locked_why"] and (k in lk["locked_areas"] or k in lk["locked_duties"]):
                 raise HTTPException(403, lk["locked_why"][k])
-        if shown_then is None and shown_now is not None:
+        if e["shown_then"] is None and e["shown_now"] is not None:
             raise HTTPException(403, BACK_TO_GUESS)
 
-    widens = bool(more_areas or more_duties or (grant is True and grant_changes))
+    widens = bool(more_areas or more_duties or e["level_up"] or gives_grant)
     if widens and widening is not None:
         widening()
 
     # ── The words for the record, from what really changes ──
-    if lane_then != lane_now:
-        label = job_label or (cj.label_of(ch.b, lane_then) if lane_then else None)
+    if level_changes:
+        said.append(f"level: {LEVEL_LABEL[level]} (was {LEVEL_LABEL.get(trole, trole)})"
+                    + (", so they see the whole church, giving included" if becomes_admin else ""))
+    if e["lane_then"] != e["lane_now"]:
+        label = job_label or (cj.label_of(ch.b, e["lane_then"]) if e["lane_then"] else None)
         said.append(f"job: {label}" if label else "no job")
     if more_areas:
         said.append("added " + _join([_label(a) for a in more_areas]))
@@ -623,25 +850,43 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
     if less_duties:
         said.append("took away " + _duty_words(less_duties))
 
-    # ── Everything checked: write each part through its own write ──
-    if job_set or areas_set:
-        church_areas.set_login(ch.b, target, trole,
-                               areas=areas if areas_set else church_areas.KEEP,
-                               job=job_key if job_set else church_areas.KEEP)
+    # ── Everything checked: the writes, in the order that fails safe ──
+    # 1. The grant taken away, BEFORE the level. Written after it, a save
+    #    that failed here left the login moved down with the row still
+    #    there, and the next move back to Manager made them a holder again.
+    if clears_row:
+        if takes_grant:
+            cj.set_grant(business, target, False, viewer)
+            said.append(f"took away “{cj.GRANT_LABEL}”")
+        elif cj.drop_grant(ch.b, target) is False:
+            # A row left from before (they weren't a Manager): nobody's
+            # grant is being taken, but it must be gone before they are one.
+            raise HTTPException(503, "That didn't save. Nothing changed. Try again.")
+    # 2. The level, the areas and the job, in one row write: never a new
+    #    level with the old areas.
+    if level_changes or areas_set or job_arg is not keep:
+        church_areas.set_login(ch.b, target, level, areas=areas if areas_set else keep, job=job_arg,
+                               level=level if level_changes else keep)
+    # 3. The duties (each checked above, for the level just saved).
     for key, to in plan:
         cd.move(business, key, to, viewer)
-    if grant is not None and grant_changes and cj.set_grant(business, target, grant, viewer):
-        said.append(("gave" if grant else "took away") + f" “{cj.GRANT_LABEL}”")
+    # 4. The grant given, last: only ever to a login that is a Manager now.
+    if want_row and not has_row:
+        cj.set_grant(business, target, True, viewer)
+    if gives_grant:
+        said.append(f"gave “{cj.GRANT_LABEL}”")
     try:
         import chief_areas
         chief_areas.forget(ch.b)
+        church_areas._forget(ch.b, target)
         cd._forget(ch.b)
     except Exception:  # noqa: BLE001 — Chief reads the new sheet within the minute either way
         pass
     summary = f"changed {name}'s sheet: " + "; ".join(said) if said else ""
     if said:
         cj.changed(business, "sheet", viewer, ed or "", ch.login_name(viewer), summary, subject=target,
-                   detail={"job": body.get("job") if job_set else None, "areas": areas if areas_set else None,
+                   detail={"level": level if level_changes else None,
+                           "job": body.get("job") if job_set else None, "areas": areas if areas_set else None,
                            "duties": {"add": add, "remove": remove}, "grant": grant,
                            "more": {"areas": more_areas, "duties": more_duties}})
     # A holder's change is sent to the owner (cj.changed); the app says so.
@@ -743,7 +988,7 @@ def put_sheet(body: Dict[str, Any], request: Request, session: UserSession = Dep
     business = _business(biz)
     import ledger_unlock
     got = change(business, str(user.id), target, body, widening=lambda: ledger_unlock.require_unlock(
-        request, str(user.id), ledger_unlock.SCOPE_ACCESS))
+        request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz))
     return {**compose(business, str(user.id), target), "changed": got["changed"], "summary": got["summary"],
             "owner_told": got["owner_told"]}
 

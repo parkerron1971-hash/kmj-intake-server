@@ -1242,7 +1242,8 @@ async def create_portal(body: PortalBody, request: Request,
     # STEP-UP. Behind this door the card and the bank details change.
     # Stripe re-authenticates for some of it, but not all, and the URL
     # is a bearer link once minted.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER,
+                                 business_id=body.business_id)
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
     customer_id = biz.get("stripe_customer_id")

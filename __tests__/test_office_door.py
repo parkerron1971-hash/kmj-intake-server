@@ -31,8 +31,10 @@ OWNER = type("U", (), {"id": "owner1", "email": "pastor@x.com"})()
 SENT: list = []
 
 
-def _stepup(user_id):
-    return type("R", (), {"headers": {lu.UNLOCK_HEADER: lu.mint(str(user_id), lu.SCOPE_ACCESS)["token"]}})()
+def _stepup(user_id, business_id="b1"):
+    # An access unlock is for one business (ledger_unlock, 2026-11-18).
+    token = lu.mint(str(user_id), lu.SCOPE_ACCESS, business_id)["token"]
+    return type("R", (), {"headers": {lu.UNLOCK_HEADER: token}})()
 
 
 @pytest.fixture
@@ -76,7 +78,7 @@ def fb(monkeypatch):
 
 
 def _invite(biz, email, **kw):
-    out = asyncio.run(bu.invite(biz, bu.InviteBody(email=email, **kw), _stepup(OWNER.id), OWNER))
+    out = asyncio.run(bu.invite(biz, bu.InviteBody(email=email, **kw), _stepup(OWNER.id, biz), OWNER))
     row = next(r for r in FB["fb"].rows("business_users") if r["id"] == out["member"]["id"])
     row["token"] = "tok-" + row["id"]
     return out, row

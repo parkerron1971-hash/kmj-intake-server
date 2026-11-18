@@ -14,7 +14,8 @@ import ledger_unlock
 
 
 def _request():
-    token = ledger_unlock.mint('owner', scope=ledger_unlock.SCOPE_DANGER)['token']
+    # A danger unlock is for one business (ledger_unlock, 2026-11-18).
+    token = ledger_unlock.mint('owner', scope=ledger_unlock.SCOPE_DANGER, business_id='biz1')['token']
     return Request({'type': 'http', 'headers': [(b'x-ledger-unlock', token.encode())]})
 
 from test_i2_gl_sync import FakeSB

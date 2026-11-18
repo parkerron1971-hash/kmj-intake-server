@@ -408,7 +408,8 @@ async def charge_no_show(
     from financial_policy import require_operational_write
     require_operational_write(business_id)
     import ledger_unlock
-    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
+                                 business_id=business_id)
 
     data = entry.get("data") or {}
     try:
@@ -521,7 +522,8 @@ async def refund_charge(
     from financial_policy import require_operational_write
     require_operational_write(body.business_id)
     import ledger_unlock
-    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
+                                 business_id=body.business_id)
     try:
         refund = await payments_core.provider_for(biz).create_refund(
             biz,
