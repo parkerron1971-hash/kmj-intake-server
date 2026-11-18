@@ -31,8 +31,10 @@ from types import SimpleNamespace
 import pytest
 
 os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-care-desk")
-os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
+# No Supabase address is set here at import: a module-level one leaks into
+# every later test in the process and makes the live-bucket check
+# (test_product_files_private) think it is pointed at production. The client
+# fixture sets them for its own tests and puts them back.
 
 import church_areas  # noqa: E402
 import church_keys  # noqa: E402
@@ -190,7 +192,9 @@ def fake(monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     import intake_endpoint

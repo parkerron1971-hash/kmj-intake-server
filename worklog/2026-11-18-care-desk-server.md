@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "not sure if you are clear on the fact that i like the prayer mock and want that built", with "yes page should and require a password and no work has been done but that should be custom to settings because others might like something else. help request should be align logins for now ... build it"'
 status: in review
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-11-18-care-lock.sql (not applied)]
+migrations: [supabase/APPLY-2026-11-18-care-lock.sql (applied 2026-11-18)]
 left_undone:
   - "Frontend: the care desk itself (solutionist-studio worklog 2026-11-18-care-desk.md) must merge BEFORE this PR: from this PR the inbox asks for the password by default, and today's PrivateCarePanel can't answer it"
   - "Help to the treasurer (the pastor approves, the treasurer pays the provider and never sees the name or story) is church_help.py's, a separate PR: worklog 2026-11-18-help-treasurer-pays.md"
