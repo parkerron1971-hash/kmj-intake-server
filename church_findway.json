@@ -1929,6 +1929,9 @@
         "people_care",
         "office"
        ],
+       "duties": [
+        "first_guests"
+       ],
        "what": "Make the cards guests fill in, such as a connect card, and share each by link or QR code.",
        "words": [
         "form",
