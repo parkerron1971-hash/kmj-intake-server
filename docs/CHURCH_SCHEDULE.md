@@ -18,9 +18,10 @@ gave stays private. Step 2 adds the limit: only so many of a group, or of a depa
 one service date; days nobody takes off; two people who can't be away together; and the same
 path for volunteers when their date is full or they already said yes to serve it.
 
-**Where it stands (2026-11-18).** Five PRs, and step 1's tables are in production.
+**Where it stands (2026-11-18).** Six PRs. Step 1's tables are in production; step 2's are a
+file that has not been applied (S2-1, below).
 
-**The migration is applied.** `supabase/APPLY-2026-11-19-church-schedule.sql` was run by the
+**Step 1's migration is applied.** `supabase/APPLY-2026-11-19-church-schedule.sql` was run by the
 owner on 2026-11-18 and checked by the lead session with the file's own Check block: the four
 tables have RLS on, no policies and no browser or anon read; `serve_away_ask_id_fkey` and
 `serve_away_kind` are there and not validated; `church_away_settle` runs for `service_role`
@@ -64,16 +65,21 @@ production that time has passed.
   deploy: there the board makes one more read, and someone on the leaders schedule who presses
   Save under Away is asked for. With the switch closed for a church (every other church), the
   scheduler and the Serve page make no read they didn't make before. No migration of its own.
+- **S2-1** holds step 2's tables and nothing else:
+  `supabase/APPLY-2026-11-20-church-schedule-limits.sql` (**not applied**), its real-Postgres
+  check (`__tests__/church_schedule_limits_db.mjs`) and the export decision for the three new
+  tables. No Python reads it yet. It does not touch `church_away_settle` or `serve_away`, so
+  running it changes nothing the code above does (section 2.2 says what was checked).
 
 The office app has no screen yet: a login's notice still points at the office app, where the
 ask isn't shown. A login whose person is on the schedule answers in the member app, as that
 person.
 
 In sections 3 to 6, what is marked **built** describes code that exists; the rest is still the
-plan for the PRs ahead (S1-7, then step 2). Section 7 is what was decided; 7.4 is what the
-build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, 7.6 what the build of S1-5
-decided, and 7.7 what the build of S1-6 decided, each with where it differs from the plan
-above it.
+plan for the PRs ahead (S1-7, then the rest of step 2). Section 7 is what was decided; 7.4 is
+what the build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, 7.6 what the build
+of S1-5 decided, 7.7 what the build of S1-6 decided, and 7.8 what the writing of S2-1 decided,
+each with where it differs from the plan above it.
 
 **Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
 away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
@@ -381,261 +387,167 @@ may be an older Postgres, and none of this is new behaviour)
 - `church_away_asks_untold` (`where told_at is null`) keeps every ask that was answered or
   withdrawn before it was told. The sweep's reads each name their own state (built, S1-4).
 
-### 2.2 Step 2: `supabase/APPLY-2026-11-XX-church-schedule-limits.sql` (the plan for S2-1; not a file yet)
+### 2.2 Step 2: `supabase/APPLY-2026-11-20-church-schedule-limits.sql` (S2-1; built, not applied yet)
 
-This is a draft, kept here until S2-1 ships it as its own file with its own PGlite check. It carries the two changes S1-1 made to `church_away_settle` (a null state is refused by name; it never makes a fact again for an ask that is already a yes). It was rehearsed once on PGlite over the step 1 file on 2026-11-18 (see the note under it); S2-1 still reads every statement again.
+The file is the source; this is the map of it. It goes in after step 1's file, adds to step 1's
+tables and calls step 1's function. Nothing reads it yet: `church_schedule_limits.py` comes in
+S2-2 and after. Where it differs from the draft this section used to hold is listed, with why,
+in 7.8.
 
-```sql
--- APPLY-2026-11-XX-church-schedule-limits.sql
---
--- The leaders schedule, step 2: the limit (church_schedule_limits.py;
--- docs/CHURCH_SCHEDULE.md). Kevin, 2026-11-18: "making sure that everyone is
--- not gone at the same time on our services. allowing only so many people off
--- at the same time."
---
---   church_schedule_settings.leaders_limit / office_limit
---                           how many of each group may be away on one service
---                           date (null = max(1, people / 4), worked out)
---   church_schedule_settings.service_weekdays
---                           the church's usual service days, 1 Monday … 7
---                           Sunday (null = worked out from its own plans,
---                           else Sunday)
---   church_schedule_department_limits   one number a department
---   church_protected_days   a day nobody takes off (a date and its name)
---   church_away_pairs       two people who can't be away together
---   church_away_asks.excepted       the flags a yes was given over: the
---                           exception, by the owner or whoever oversees the
---                           office (decided_by says who)
---   church_away_asks.team_group_id  a volunteer's ask: the Sunday team whose
---                           leader it went to
---   church_away_settle()    takes the exception with the yes (one more
---                           argument, '{}' by default)
---
--- Server-only, one transaction, lock_timeout 5s, safe to run twice. The one
--- thing replaced is church_away_settle (dropped and made again here, in this
--- transaction, so there is never two of it for PostgREST to choose between);
--- step 1's six-argument calls keep working.
-begin;
+| Object | What it holds |
+|---|---|
+| `church_schedule_settings.leaders_limit`, `office_limit` | How many of each group may be away on one service date: 1 to 99, null = worked out (`max(1, people // 4)`) |
+| `church_schedule_settings.service_weekdays` | The church's usual service days, 1 Monday to 7 Sunday: a plain list of 1 to 7 of them, null = worked out from its own plans, else Sunday (section 5) |
+| `church_schedule_department_limits` | One number a department (`at_most`, 1 to 99), keyed by the department. No row = no limit (decision 9). Who set it: a login or a person, never both |
+| `church_protected_days` | A day nobody takes off: one row a date a church, with a `name` of 80 at most |
+| `church_away_pairs` | Two people who can't be away together, with a private `note` of 140 at most. `a_contact_id < b_contact_id`, so a pair is saved once and nobody is paired with themself. Private: only the owner and whoever oversees the office read them |
+| `church_away_asks.excepted` | The flags a yes was given over (`over_limit`, `protected_day`, `pair`): the exception. `'{}'` on every ask until one is given; `decided_by` says who gave it |
+| `church_away_asks.team_group_id` | A volunteer's ask: the team whose leader it went to |
+| `church_away_settle_excepted(p_business_id, p_ask_id, p_state, p_by_user, p_by_contact, p_note, p_excepted)` | `church_away_settle`'s decision, then the exception saved on a yes it just made, in one transaction |
 
-set local lock_timeout = '5s';
+There is no table for which dates count: that is worked out in Python (section 5).
 
-alter table public.church_schedule_settings
-  add column if not exists leaders_limit smallint,
-  add column if not exists office_limit smallint,
-  add column if not exists service_weekdays smallint[];
+**The decision function: two names, on purpose.** Step 1's `church_away_settle` (six arguments)
+is live and called by deployed code, and this file does not touch it: not its body, its
+arguments or its grants (the check compares the function's id, body and grants before and
+after). The exception gets a function of its own name, `church_away_settle_excepted`, which
+calls `church_away_settle` for the decision and then saves the exception. So there is still one
+place the decision is made, and the two can't drift apart. After the file there are exactly two
+functions, one a name, neither overloaded, so neither a six-name nor a seven-name call has
+anything to choose between. The two other ways were run on a real Postgres and turned down (the
+check keeps both runs):
 
-alter table public.church_away_asks
-  add column if not exists excepted text[] not null default '{}',
-  add column if not exists team_group_id uuid;
+1. **Two functions of one name, the new one with a defaulted seventh argument.** Postgres itself
+   refuses every call that leaves the seventh out (`function church_away_settle(p_business_id =>
+   uuid, …) is not unique`), and PostgREST refuses it first (PGRST203: it picks by argument
+   names, and both match). Every answer at the live church would fail.
+2. **Drop the six-argument function and make a seven-argument one of the same name** (the
+   draft, and decision 19). It works on the day: a six-name call lands on the new function
+   through the default. But it takes a live function away to do it, and it leaves a trap. Step
+   1's file is safe to run twice and makes the six-argument function again, so running it once
+   more after step 2 would bring back case 1 and break every answer until someone noticed. With
+   two names, no order of running the two files, however many times, leaves two functions for
+   one name.
 
-do $$
-begin
-  if not exists (select 1 from pg_constraint where conname = 'church_schedule_settings_limits'
-                   and conrelid = 'public.church_schedule_settings'::regclass) then
-    alter table public.church_schedule_settings add constraint church_schedule_settings_limits
-      check ((leaders_limit is null or leaders_limit between 1 and 99)
-             and (office_limit is null or office_limit between 1 and 99));
-  end if;
-  if not exists (select 1 from pg_constraint where conname = 'church_schedule_settings_weekdays'
-                   and conrelid = 'public.church_schedule_settings'::regclass) then
-    alter table public.church_schedule_settings add constraint church_schedule_settings_weekdays
-      check (service_weekdays is null
-             or (cardinality(service_weekdays) between 1 and 7
-                 and service_weekdays <@ array[1, 2, 3, 4, 5, 6, 7]::smallint[]));
-  end if;
-  if not exists (select 1 from pg_constraint where conname = 'church_away_asks_excepted'
-                   and conrelid = 'public.church_away_asks'::regclass) then
-    alter table public.church_away_asks add constraint church_away_asks_excepted
-      check (excepted <@ array['over_limit', 'protected_day', 'pair']::text[] and excepted <@ flags);
-  end if;
-  if not exists (select 1 from pg_constraint where conname = 'church_away_asks_team_group_id_fkey'
-                   and conrelid = 'public.church_away_asks'::regclass) then
-    alter table public.church_away_asks add constraint church_away_asks_team_group_id_fkey
-      foreign key (team_group_id) references public.groups(id) on delete set null;
-  end if;
-end $$;
+**What `church_away_settle_excepted` does**
 
-create table if not exists public.church_schedule_department_limits(
-  department_id uuid primary key references public.church_departments(id) on delete cascade,
-  business_id uuid not null references public.businesses(id) on delete cascade,
-  at_most smallint not null check (at_most between 1 and 99),
-  set_by_user_id uuid references auth.users(id) on delete set null,
-  set_by_contact_id uuid references public.contacts(id) on delete set null,
-  updated_at timestamptz not null default now(),
-  constraint church_schedule_department_limits_by_one
-    check (set_by_user_id is null or set_by_contact_id is null)
-);
-create index if not exists church_schedule_department_limits_by_church
-  on public.church_schedule_department_limits (business_id);
+| Asked for | The ask is | Written | Answers |
+|---|---|---|---|
+| `yes`, with an exception | `asked` | everything `church_away_settle` writes for a yes (2.1), then `excepted`: each flag once, in order | `changed: true`, the ask with its `excepted` |
+| `yes`, with an exception that isn't one of the ask's flags, or is `short_notice`, `serving`, null or anything else | `asked` | nothing: it raises "An exception is for a flag the ask has…", and the yes and its fact are undone with it | raises |
+| `yes`, no exception (left out, `'{}'` or null) | `asked` | what `church_away_settle` writes | what `church_away_settle` answers |
+| `yes` | anything else | nothing; an exception passed now does not replace the one on the ask | `changed: false` |
+| `no`, `withdrawn` | any | what `church_away_settle` writes; an exception passed is ignored. A yes taken back keeps the exception it was given | what `church_away_settle` answers |
+| anything | not this church's, or not there | nothing | null |
+| a state that isn't one of the three, or null | | nothing | raises, in `church_away_settle`'s own words |
 
-create table if not exists public.church_protected_days(
-  id uuid primary key default gen_random_uuid(),
-  business_id uuid not null references public.businesses(id) on delete cascade,
-  day date not null,
-  name text not null check (char_length(btrim(name)) between 1 and 80),
-  created_by uuid references auth.users(id) on delete set null,
-  created_at timestamptz not null default now()
-);
-create unique index if not exists church_protected_days_one
-  on public.church_protected_days (business_id, day);
+It does not ask who is answering: a "can't make it" (a yes nobody gave) goes through it like any
+other, so nothing here can block one. Whether an exception is ever passed with nobody deciding
+is S2-3's call (7.8).
 
-create table if not exists public.church_away_pairs(
-  id uuid primary key default gen_random_uuid(),
-  business_id uuid not null references public.businesses(id) on delete cascade,
-  a_contact_id uuid not null references public.contacts(id) on delete cascade,
-  b_contact_id uuid not null references public.contacts(id) on delete cascade,
-  note text check (note is null or char_length(note) <= 140),
-  created_by uuid references auth.users(id) on delete set null,
-  created_at timestamptz not null default now(),
-  constraint church_away_pairs_ordered check (a_contact_id < b_contact_id)     -- one row a pair
-);
-create unique index if not exists church_away_pairs_one
-  on public.church_away_pairs (business_id, a_contact_id, b_contact_id);
-create index if not exists church_away_pairs_b on public.church_away_pairs (business_id, b_contact_id);
+**What an exception may hold** (`church_away_asks_excepted`, whoever writes the row): only
+`over_limit`, `protected_day` and `pair`; only flags the ask has (so a flag can't be taken off
+an ask while an exception rests on it); and only on a `yes` or a `withdrawn` ask.
 
--- A department's limit names this church's department; a pair, two of this
--- church's people; a volunteer's ask, one of this church's groups. Each check
--- sits under its own table test (PL/pgSQL doesn't short-circuit `and`).
-create or replace function public.church_schedule_limits_same_business() returns trigger
-language plpgsql set search_path = public as $$
-begin
-  if tg_table_name = 'church_schedule_department_limits' then
-    if not exists (select 1 from public.church_departments d
-                   where d.id = new.department_id and d.business_id = new.business_id) then
-      raise exception 'That department is not in this church';
-    end if;
-  end if;
-  if tg_table_name = 'church_away_pairs' then
-    if (select count(*) from public.contacts c
-         where c.id in (new.a_contact_id, new.b_contact_id) and c.business_id = new.business_id) <> 2 then
-      raise exception 'Both people are this church''s own';
-    end if;
-  end if;
-  if tg_table_name = 'church_away_asks' then
-    if new.team_group_id is not null
-       and (tg_op = 'INSERT' or new.team_group_id is distinct from old.team_group_id) then
-      if not exists (select 1 from public.groups g
-                     where g.id = new.team_group_id and g.business_id = new.business_id) then
-        raise exception 'That team is not in this church';
-      end if;
-    end if;
-  end if;
-  return new;
-end $$;
-revoke all on function public.church_schedule_limits_same_business() from public, anon, authenticated;
+**Guards**
 
-drop trigger if exists church_schedule_limits_same_business on public.church_schedule_department_limits;
-create trigger church_schedule_limits_same_business
-  before insert or update of department_id, business_id on public.church_schedule_department_limits
-  for each row execute function public.church_schedule_limits_same_business();
-drop trigger if exists church_schedule_limits_same_business on public.church_away_pairs;
-create trigger church_schedule_limits_same_business
-  before insert or update of a_contact_id, b_contact_id, business_id on public.church_away_pairs
-  for each row execute function public.church_schedule_limits_same_business();
-drop trigger if exists church_away_asks_team_same_business on public.church_away_asks;
-create trigger church_away_asks_team_same_business
-  before insert or update of team_group_id on public.church_away_asks
-  for each row execute function public.church_schedule_limits_same_business();
+- `church_schedule_limits_same_business`, one function on three tables. On
+  `church_schedule_department_limits` (before insert, and before an update that names
+  `department_id`, `business_id` or `set_by_contact_id`): the department is the row's own
+  church's, and so is the person who set the number. On `church_away_pairs` (before insert, and
+  before an update that names either person or `business_id`): both people are that church's.
+  On `church_away_asks` (trigger `church_away_asks_team_same_business`, before insert and
+  before an update of `team_group_id`): the team is the ask's own church's. Each is checked
+  only when a write names it, so a foreign key setting one of them null checks nothing.
+- `church_away_pairs_ordered` (`a_contact_id < b_contact_id`) and `church_away_pairs_one`
+  (unique on church and both people): one row a pair. `church_away_pairs_b` (church, second
+  person) finds a pair from either side.
+- `church_protected_days_one` (unique on church and day): one row a date a church.
+- `church_schedule_settings_limits`, `church_schedule_settings_weekdays`,
+  `church_schedule_department_limits_by_one` and the column checks on `at_most`, a day's
+  `name` and a pair's `note`.
 
--- The decision, now carrying the exception a yes was given over. As in step
--- 1, it never makes a fact again for an ask that is already a yes.
-drop function if exists public.church_away_settle(uuid, uuid, text, uuid, uuid, text);
-create or replace function public.church_away_settle(
-  p_business_id uuid, p_ask_id uuid, p_state text,
-  p_by_user uuid default null, p_by_contact uuid default null, p_note text default null,
-  p_excepted text[] default '{}')
-returns jsonb
-language plpgsql set search_path = public as $$
-declare
-  v public.church_away_asks;
-begin
-  if p_state is null or p_state not in ('yes', 'no', 'withdrawn') then
-    raise exception 'An ask is answered yes or no, or withdrawn';
-  end if;
-  select * into v from public.church_away_asks a
-   where a.id = p_ask_id and a.business_id = p_business_id for update;
-  if not found then
-    return null;
-  end if;
-  if (p_state in ('yes', 'no') and v.state <> 'asked')
-     or (p_state = 'withdrawn' and v.state not in ('asked', 'yes')) then
-    return jsonb_build_object('changed', false, 'ask', to_jsonb(v));
-  end if;
-  if p_state = 'withdrawn' then
-    update public.church_away_asks a
-       set state = 'withdrawn', withdrawn_at = clock_timestamp(), updated_at = clock_timestamp()
-     where a.id = v.id returning * into v;
-    delete from public.serve_away s where s.ask_id = v.id and s.business_id = v.business_id;
-  else
-    update public.church_away_asks a
-       set state = p_state, decided_at = clock_timestamp(), decided_by_user_id = p_by_user,
-           decided_by_contact_id = p_by_contact, decided_note = nullif(btrim(left(coalesce(p_note, ''), 300)), ''),
-           excepted = case when p_state = 'yes' then coalesce(p_excepted, '{}') else '{}' end,
-           answer_told_at = null, updated_at = clock_timestamp()
-     where a.id = v.id returning * into v;
-    if p_state = 'yes' then
-      insert into public.serve_away(business_id, contact_id, starts_on, ends_on, note, ask_id, kind)
-      values (v.business_id, v.contact_id, v.starts_on, v.ends_on, '', v.id, v.kind)
-      on conflict (ask_id) where ask_id is not null do nothing;
-    end if;
-  end if;
-  return jsonb_build_object('changed', true, 'ask', to_jsonb(v));
-end $$;
-revoke all on function public.church_away_settle(uuid, uuid, text, uuid, uuid, text, text[]) from public, anon, authenticated;
-grant execute on function public.church_away_settle(uuid, uuid, text, uuid, uuid, text, text[]) to service_role;
+**Server-only.** All three tables: RLS on, no policies, `anon` and `authenticated` revoked,
+`service_role` granted. Both functions: execute revoked from `public`, `anon` and
+`authenticated`; `church_away_settle_excepted` granted to `service_role`. Neither is `security
+definer`.
 
-do $$ declare t text; begin
-  foreach t in array array['church_schedule_department_limits', 'church_protected_days', 'church_away_pairs'] loop
-    execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on public.%I from anon, authenticated', t);
-    execute format('grant all on public.%I to service_role', t);
-  end loop;
-end $$;
+**What goes with what.** A church deleted takes everything. A department deleted takes its
+number. A person deleted takes the pairs they are in; a number they set stays, with nobody in
+their place. A login deleted leaves the number, the day and the pair, and the exception on an
+ask stays when whoever gave it is gone. A team deleted leaves the ask with no team. The check
+deletes a church both ways round (its people before its departments, and after).
 
-comment on column public.church_schedule_settings.leaders_limit is
-  'How many of the leaders group may be away on one service date. Null = max(1, people / 4).';
-comment on column public.church_schedule_settings.office_limit is
-  'How many of the office group may be away on one service date. Null = max(1, people / 4).';
-comment on column public.church_schedule_settings.service_weekdays is
-  'The church''s usual service days (1 Monday … 7 Sunday), for dates with no service planned yet. Null = worked out from its own plans, else Sunday.';
-comment on table public.church_schedule_department_limits is
-  'How many of a department''s people may be away on one service date. No row = no limit. Server-only.';
-comment on table public.church_protected_days is
-  'A day nobody takes off. Only the owner or whoever oversees the office says yes to an ask on one. Server-only.';
-comment on table public.church_away_pairs is
-  'Two people who can''t be away together (a_contact_id < b_contact_id, one row a pair). Server-only.';
-comment on column public.church_away_asks.excepted is
-  'The flags (over_limit, protected_day, pair) a yes was given over: the exception. decided_by says who gave it.';
-comment on column public.church_away_asks.team_group_id is
-  'A volunteer''s ask: the Sunday team whose leader it went to.';
+**How it goes in.** One transaction, `lock_timeout` 5s, safe to run twice and in any order with
+step 1's file, ends with `NOTIFY pgrst`. Additive: no table, column, function or row is dropped
+or rewritten (the file's own triggers are dropped and made again, as every file here does), and
+`serve_away` is not touched. The new columns are null, or `'{}'` by a constant default, on every
+row that exists. The three checks and the one foreign key added to `church_away_asks` and
+`church_schedule_settings` are validated as they go in, not `NOT VALID`: both tables are days
+old and open at one church, and every row passes; the foreign key takes a short lock on
+`groups` and reads none of it. The file's own Check and Rollback blocks are at its end, and the
+check runs both as written: the rollback leaves the catalog exactly as step 1 left it, keeps
+every ask and away date, and the file applies again after it.
 
-commit;
+**What the deployed code sees the moment it runs** (read in `church_schedule.py`,
+`church_schedule_tell.py`, `member_portal_dates.py`, `sunday_serving.py` and
+`sunday_planning.py` at `9871429b`, and run for real in the check):
 
-notify pgrst, 'reload schema';
+- Every read of `church_away_asks`, `church_schedule_settings`, `church_schedule_people` and
+  `serve_away` names its columns (`FIELDS`, `FACT_FIELDS`, `notice_days`, `id`); none is
+  `select=*`. So no read returns anything new.
+- `/rpc/church_away_settle` is called with six names and answers as before, from the same
+  function. The row it answers with (`to_jsonb` of the ask) gains two keys, `excepted` (`[]`)
+  and `team_group_id` (null), and so does the row a new ask's insert returns. Both go only
+  through `shape()` and `church_schedule_tell._bare()`, which pick their keys by name.
+- The check calls the function once before the file and again after it in the same session, so
+  a connection that had already used it keeps working when the table gains its columns.
+- No write sends the new columns: an ask's insert, the notice marks, an ask sent on, the
+  reason cleared and an ask taken back all pass the new check and the new trigger untouched
+  (`excepted` is `'{}'`, `team_group_id` null). Nothing deployed updates `flags`.
+- Saving the notice days (an upsert that names `notice_days`, `updated_by`, `updated_at`)
+  leaves the three new settings columns as they were.
+- Step 1's own check, `__tests__/church_schedule_db.mjs`, passes with not a line changed when
+  this file is applied straight after every run of step 1's file (152 of 152).
 
--- Check / Rollback: same shape as step 1 (three tables true/0/false; one church_away_settle, seven arguments).
-```
+**For the PRs that write the code**
 
-**Rehearsed 2026-11-18** (a one-off run on PGlite 0.5.8, over the step 1 file; not a kept
-check): the draft applies twice; one `church_away_settle` is left, with seven arguments; a
-six-argument call still answers; a yes records `excepted` and a no clears it; an exception that
-isn't one of the ask's flags, or is `serving`, is refused; a null state is refused by name; a
-team, a pair or a department of another church is refused; a pair is ordered and unique; one
-protected day a date; weekdays outside 1 to 7, an empty list and a limit of 0 are refused; the
-three tables and both functions are server-only; a person in a pair and the church delete
-cleanly. S2-1 turns that into `__tests__/church_schedule_limits_db.mjs`.
+- **Step 2 needs its own "is it there yet".** `church_schedule.ready()` is true as soon as step
+  1's tables answer, with or without this file. Whatever reads a step 2 table, or passes
+  `p_excepted`, first asks whether step 2 is there (a read of one of its tables, kept as
+  `ready()` is), and until it is everything behaves as step 1 does today.
+- An answer that may carry an exception calls `/rpc/church_away_settle_excepted` with seven
+  names. `church_away_settle` stays for every caller that has none, and both give the same
+  answer for the same decision (the check runs every state against every decision through
+  both). `__tests__/church_schedule_fake.py` models the new one when S2-3 first calls it.
+- A pair is written with the smaller id first. Postgres orders two uuids as their lower-case
+  text orders (checked), so the server sorts the two ids as lower-case text before it writes;
+  the wrong way round is refused, never saved twice.
+- The upsert keys: `department_id` for a department's number, `business_id,day` for a
+  protected day (naming a day again changes its name, still one row).
+- A flag can't be taken off an ask while an exception rests on it, so anything that recomputes
+  an answered ask's flags leaves them alone.
+
+**Checked** on PGlite 0.5.8 (PostgreSQL 18.3; production may be an older Postgres, and none of
+this is new behaviour): `__tests__/church_schedule_limits_db.mjs`, 289 checks, in CI's database
+job. Each rule of the file was broken once in a scratch copy to see the check go red (52 rules:
+every constraint, every trigger check and its column list, each line of the new function, the
+revokes, RLS, the Check and Rollback blocks, and "the old function is not touched").
 
 ### 2.3 Lifecycle registration
 
 All in `account_lifecycle.EXPORT_EXCLUDED` (`:100`), each with a reason sentence. Step 1's four
-went in with S1-1; step 2's three go in with S2-1.
+went in with S1-1; step 2's three went in with S2-1 (built), which also made the settings
+sentence true of its new columns.
 
 | Table | Reason, in short |
 |---|---|
 | `church_away_asks` | who it went to and who answered are sign-in user ids; a private reason and told marks a restore must not carry; cascade on business and person |
 | `church_away_commitments`, `church_schedule_people` | cite people by an id an import mints anew; the church sets them again |
-| `church_schedule_settings` | one number; set again |
-| step 2: `church_schedule_department_limits`, `church_protected_days`, `church_away_pairs` | same reasons |
+| `church_schedule_settings` | a few numbers (the notice days and, from step 2, the two limits and the usual service days); set again |
+| `church_schedule_department_limits` | keyed by a department id an import mints anew, set by a login or a person; each department sets its number again, and until then has no limit |
+| `church_protected_days` | a date, a name and the login that added it; the church names its days again |
+| `church_away_pairs` | both people are ids an import mints anew, and a pair is private; the church pairs them again |
 
 `serve_away` stays where it is (`BUSINESS_CHILD_TABLES`, exported, not re-imported). Its export
 now carries `ask_id` and `kind`: an id of an ask the export leaves out, and that ask's kind.
@@ -905,7 +817,8 @@ pairs(ch); add_pair(ch, me, a, b, note); drop_pair(ch, me, id)
 
 Changes to existing code:
 - `church_schedule.ask`: `flags_for`, then `goes_up` when a flag says so.
-- `church_schedule.answer`: recompute the flags; pass `p_excepted`.
+- `church_schedule.answer`: recompute the flags; a yes over a flag goes through `/rpc/church_away_settle_excepted` with `p_excepted` (section 2.2; `church_away_settle` itself is unchanged).
+- A "step 2 is there" test of its own beside `ready()`, which is true with step 1's tables alone (section 2.2).
 - `church_schedule.calendar`: counts per service date.
 - `sunday_serving.add_away`: the volunteer branch (`volunteer_plan`).
 - `sunday_serving.mine` `:101`: a volunteer's waiting asks beside the away chips.
@@ -1053,7 +966,7 @@ Computed in `flags_for` when asked, and again at yes.
 | A counted date already at the limit (facts for that group on that date >= limit) | `goes_up`: the office overseer, else the owner. For a pastor or elder (`co.is_guarded`), or the office overseer themself: the owner | `+over_limit` | ask `asked`; hold | `goes_up`; step 1's `to` for their information |
 | A protected day in the range | `goes_up` | `+protected_day` | same | same; the page names the day |
 | The other of a pair has a fact or a waiting ask on any of the same days | `goes_up` | `+pair` | same | same; the asker sees "This overlaps with someone you can't be away with" and no name |
-| A yes on a flagged ask | only the owner or the office overseer (403 for anyone else) | | settle yes with `p_excepted` = the flags still true | the asker |
+| A yes on a flagged ask | only the owner or the office overseer (403 for anyone else) | | settle yes through `church_away_settle_excepted`, with `p_excepted` = the flags still true | the asker |
 | A yes on an unflagged ask that became over / protected / paired since it was asked | the decider gets 409; the ask is re-addressed to `goes_up` (`to_*` changed, `told_at` cleared, flags added) | the new flags | still `asked` | `goes_up` |
 | Can't make it, any of the above | nobody decides; never blocked | the flags are recorded | fact at once | `to`, at once; `goes_up` too when flagged |
 | The dates hold no service date and no protected day (a Monday to Thursday trip) | as step 1 | never `over_limit` | | |
@@ -1104,7 +1017,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 
 | PR | Contains | Tests | Migration |
 |---|---|---|---|
-| **S2-1 Migration** | the limits file; ledger; `EXPORT_EXCLUDED`; `church_schedule_limits_db.mjs` | twice is a no-op; a pair is ordered and unique; one protected day a date; the seven-argument settle with `excepted`, and the six-argument call still works; server-only | this is it |
+| **S2-1 Migration** (built) | `APPLY-2026-11-20-church-schedule-limits.sql`; `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_schedule_limits_db.mjs` and the `ci.yml` line; section 2.2 and 7.8 of this doc; the worklog entry. No Python | PGlite, 289 checks, over step 1's file with step 1 already in use: `church_away_settle` is the same function before and after (id, body, grants), and a session that had used it keeps working; every ask, away date and setting reads as it did, and `serve_away` is not touched; the writes the deployed code makes still pass; twice is a no-op, in any order with step 1's file, and leaves one function a name; the six-name call and the seven-name call (`church_away_settle_excepted`) both work; the new function gives the old one's answer for every state and every decision, saves an exception only on a yes it just made (each flag once, in order), and refuses a bad one by name with the yes undone; every constraint and trigger refused by a bad row and accepted by a good one (a pair is ordered and unique and never one person; one protected day a date; limits 1 to 99; weekdays a plain list of 1 to 7; another church's department, person or team refused); server-only under Supabase's default grants; a login, person, department, team or church deleted takes what it should, with a church's foreign keys firing both ways round; the file's Check block answers as it says and its Rollback block puts the catalog back as step 1 left it; the two ways not taken fail as the header says; step 1's own check passes unchanged with this file applied after it. Each rule was broken once to see the check go red (52). `test_export_import` green | this is it. **Not applied** |
 | **S2-2 Service days and limits (read and set, nothing enforced)** | `service_days`, `usual_weekdays`, `limit_for`, `away_on`, `department_people`; `GET/PUT limits`, `GET days`, `GET volunteers` | the default is `max(1, n // 4)`; who may set each number (the department's leader and overseer as persons from the member app are deferred; a login whose person leads it may); a Saturday church's weekdays worked out from its plans; event dates count for departments only; a read over 1,000 rows is paged or chunked | yes |
 | **S2-3 Limit and protected days for leaders** | `flags_for`, `goes_up`; `ask` / `answer` wired; the protected-days routes; the Dates page words | each step-2 leader row; the recheck at yes; a pastor's or elder's flagged ask goes to the owner, never the office overseer; `excepted` recorded; `cant` never blocked | yes |
 | **S2-4 Pairs** | the pairs routes; `+pair` | the second ask goes up; the asker never sees the other's name; only the owner and the office overseer read pairs | yes |
@@ -1163,7 +1076,7 @@ The numbers are the build spec's open questions, kept so the PRs ahead can cite 
 | 16 | Away dates written before the switch opened | A core leader's old instant `serve_away` rows have no ask. The calendar shows them as plain "away" with no kind, and `drop_away` deletes them as today. |
 | 17 | Roster cost | Kept 60 seconds a replica for the member side; an add or remove on one replica can show up to a minute late on another. The office routes always read fresh. |
 | 18 | Two clocks | `ch.tz` for "today" and notice; the scheduler keeps its own zone for the service day. |
-| 19 | Step 2 drops and re-makes `church_away_settle` | Kept, and its file's header says so. It avoids two functions for PostgREST to choose between; a six-argument call from an old replica still resolves through the new argument's default. |
+| 19 | Step 2 drops and re-makes `church_away_settle` | **Reversed in S2-1 (7.8, section 2.2).** `church_away_settle` is not touched; the exception has a function of its own name, `church_away_settle_excepted`, which calls it. As first decided: kept, to avoid two functions for PostgREST to choose between, a six-argument call resolving through the new argument's default. That holds on the day, and stops holding the first time step 1's file is run again. |
 | 20 | The name `church_away_asks` | Kept. This doc's header and the table's own comment say it is unrelated to `church_map_asks` and `member_asks`. |
 | 21 | The office frontend | Comes after the backend. The route shapes in section 4 are its contract. Until it exists, a login's yes is reachable only through the member app as their own person, and the roster, settings and limits writes are API-only. |
 | | Short notice | Flagged, never blocked, and it goes to the same person. |
@@ -1575,3 +1488,89 @@ one that changes the least for volunteers was taken.
   single commit, so that one is **skipped in CI** and runs on a full clone. It should be
   deleted the first time My serving is changed on purpose for everyone.
 - **Tests run at New Hope**, as S1-5's do.
+
+### 7.8 Decided while writing S2-1
+
+All decided in the build; none is the owner's call, and any can be reopened. The file is
+`supabase/APPLY-2026-11-20-church-schedule-limits.sql`; section 2.2 is the map of it. Every
+difference from the draft that section 2.2 used to hold:
+
+**The decision function**
+
+1. **`church_away_settle` is not dropped and re-made; the exception has a function of its own
+   name.** This reverses decision 19. The draft dropped the six-argument function and made a
+   seven-argument one of the same name. That works on the day and leaves a trap: step 1's file
+   is safe to run twice and makes the six-argument function again, and two functions of one
+   name where one only adds a defaulted argument make Postgres refuse every six-argument call
+   ("is not unique"; PGRST203 from PostgREST). The check runs both. With two names, no order
+   of running the two files leaves two functions for one name, and the function the live code
+   calls is the same function before and after (same id, body and grants).
+2. **`church_away_settle_excepted` calls `church_away_settle`** instead of repeating its body
+   with one more column. One place makes the decision, so the two can't drift apart. The
+   exception is saved after the yes, in the same statement, so a refusal undoes the yes.
+3. **A bad exception is refused by name.** In the draft the only refusal was the table's check
+   constraint, with a message nobody would read as "that isn't one of this ask's flags" (the
+   same reasoning as S1-1's null state). The constraint still stands behind it for any other
+   writer.
+4. **The exception is saved each flag once, in order**, whatever was passed (a flag twice, a
+   list of lists).
+5. **A no leaves `excepted` alone** rather than writing `'{}'` over it. It is `'{}'` on every
+   waiting ask already, and the constraint below keeps it so.
+
+**The tables**
+
+6. **`church_away_asks_excepted` also says where an exception may sit**: only on a `yes`, or
+   on a `withdrawn` ask (a yes taken back keeps it). The draft allowed one on a waiting ask or
+   a no, where it means nothing and would be counted by anything that lists exceptions.
+7. **`service_weekdays` is a plain list**: `array_ndims = 1` beside the draft's two tests. A
+   list of lists passed both of those.
+8. **The person who set a department's number is the church's own.** The draft checked the
+   department and not `set_by_contact_id`; the trigger now checks both and also fires when
+   that column is updated.
+9. **Each trigger check runs only when a write names what it checks**, as step 1's do. The
+   draft looked the department and the pair up again on every fire. With `set_by_contact_id`
+   in the trigger's columns, a person's delete sets it null, which is an update: checked this
+   way it can never refuse a delete, whichever way round a church's foreign keys fire (the
+   check deletes a church both ways).
+10. **The pair's refusal reads "A pair is two people in this church"** (the draft: "Both
+    people are this church's own"), since it is also what someone paired with themself gets,
+    before `church_away_pairs_ordered` is reached.
+11. **A comment on the pair's note** (private, like the pair) **and on the new function.**
+
+**The file**
+
+12. **Its date is 2026-11-20**, and its header says to run it after step 1's file.
+13. **The header names nobody**: the owner's words are given as the platform owner's.
+14. **The header no longer says the function is "dropped and made again"**; it says what was
+    chosen, the two ways turned down, and that nothing is dropped.
+15. **Full Check and Rollback blocks**, where the draft had one line. The Check block's
+    answers are stated (three tables, five columns, four validated constraints, two functions
+    with one a name, no exception yet); the check runs both blocks as written.
+
+**Kept as drafted, on purpose**
+
+- **The three checks and the foreign key are validated as they go in**, not `NOT VALID` as
+  step 1's two on `serve_away` were. `church_away_asks` and `church_schedule_settings` are
+  days old and open at one church; every row passes (the new columns are `'{}'` or null); and a
+  validated constraint is one nobody has to come back for.
+- **A limit is 1 to 99.** Nothing here can say "nobody may be away" with a 0; a protected day
+  is how a church says that.
+- **`team_group_id` is not tied to `grp = 'volunteers'`** and the team's kind is not checked:
+  S2-5 writes it, and nothing here should refuse what it turns out to need.
+- **No table for which dates count.** Worked out in Python (section 5).
+- **All three new tables are left out of the export** (section 2.3).
+
+**Left open for the PRs ahead**
+
+- **A "can't make it" with flags.** `church_away_settle_excepted` does not ask who is
+  answering, so it never refuses a yes nobody gave, with or without an exception: nothing in
+  the database can block a "can't make it". Whether S2-3 records an exception on one (nobody
+  gave it) or leaves `excepted` empty and lets the flags speak is S2-3's call; the column's
+  comment says `decided_by` says who gave it, which argues for leaving it empty.
+- **Step 2's own "is it there yet"** (section 2.2): `ready()` can't tell whether this file has
+  been applied.
+- **A real PostgREST was not run.** The check calls both functions by argument names on a
+  real Postgres, which is the call PostgREST makes, and there is one function a name, so
+  PostgREST has nothing to choose between. What PostgREST does with two of one name
+  (PGRST203) is from its documentation, not from a run here; the "is not unique" refusal from
+  Postgres itself is from a run.
