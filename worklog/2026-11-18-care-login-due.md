@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "build the heads-up and due time for logins run supabase as well so I can click run if need be"'
 status: in review
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-11-18-care-login-due.sql]
+migrations: [supabase/APPLY-2026-11-18-care-login-due.sql (applied 2026-11-18)]
 left_undone:
   - "Frontend: the desk draws the due time, the heads-up and the late steps, and gives the login an \"I'm on it\" (solutionist-studio worklog 2026-11-18-care-login-due.md). Either order works: the app reads the new fields when they come"
 decisions:
