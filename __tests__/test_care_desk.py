@@ -86,7 +86,7 @@ def _row(rid, **kw):
 
 
 class Fake:
-    def __init__(self, settings=None, settings_fail=False):
+    def __init__(self, settings=None, settings_fail=False, sample=False):
         self.requests = [
             _row(CRISIS, needs_pastor=True, submission={"name": "Ada Example", "prayer_request": "My brother died"}),
             _row(SHARED, prayer_team=True, leader_contact_id=LEADER_P),
@@ -96,6 +96,7 @@ class Fake:
         ]
         self.settings = settings
         self.settings_fail = settings_fail
+        self.sample = sample
         self.calls = []
 
     def get(self, path):
@@ -105,6 +106,8 @@ class Fake:
         if table == "businesses":
             if "owner_name" in query:
                 return [{"owner_name": "Andre Mitchell"}]
+            if "is_sample" in query:
+                return [{"is_sample": self.sample}]
             return [{"id": BIZ, "owner_id": OWNER}]
         if table == "business_users":
             if "user_id=eq." in query:
@@ -358,6 +361,14 @@ def test_a_church_that_doesnt_ask_opens_without_it(client, fake):
     fake(settings={"lock_minutes": 0, "require_password": False})
     r = c.get(f"/intake/private-care/{BIZ}")
     assert r.status_code == 200 and r.json()["lock"] == {"lock_minutes": 0, "require_password": False}
+
+
+def test_the_made_up_sample_church_opens_without_a_password(client, fake):
+    c, who = client
+    fake(sample=True)
+    r = c.get(f"/intake/private-care/{BIZ}")
+    assert r.status_code == 200 and r.json()["lock"]["require_password"] is False
+    assert c.get(f"/intake/private-care/{BIZ}/settings").json()["can_change"] is False
 
 
 def test_a_failed_settings_read_keeps_the_lock_on(fake):

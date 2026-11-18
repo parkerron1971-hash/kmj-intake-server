@@ -533,8 +533,20 @@ LOCK_MINUTES = (0, 5, 10, 15, 30, 60)
 DEFAULT_LOCK = {"lock_minutes": 10, "require_password": True}
 
 
+def _is_sample(biz: str) -> bool:
+    """The made-up sample church (sample_church.py): nothing in it is
+    private, and the app never sends its password anywhere (the sample's
+    guard refuses /auth/step-up), so it opens without one. A read that
+    fails, or no such column yet, is not a sample."""
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=is_sample&limit=1")
+    return isinstance(rows, list) and bool(rows) and rows[0].get("is_sample") is True
+
+
 def lock_settings(business_id: str) -> Dict[str, Any]:
     biz = _uuid(business_id, "business")
+    if _is_sample(biz):
+        return {"lock_minutes": DEFAULT_LOCK["lock_minutes"], "require_password": False,
+                "saved": False, "ready": False, "sample": True}
     rows = sb_clients.sb_get_as_service(
         f"/ministry_care_settings?business_id=eq.{biz}&select=lock_minutes,require_password&limit=1")
     if not isinstance(rows, list):
