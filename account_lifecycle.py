@@ -144,6 +144,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # the sermon it became, which IS exported.
     "church_streams": "stream key hash and encrypted YouTube/Facebook stream keys; credentials, never portable — a restored church makes a new key; cascade on business deletion",
     "stream_sessions": "the stream relay's run log (when, how long, where the recording is); the recording's link is exported with its sermon; cascade on business deletion",
+    "ministry_care_settings": "how Prayer & care locks (private_care.py): two choices the church makes again in a moment, keyed to the business; cascade on business deletion",
     "church_storage_notes": "whether the 80% storage heads-up went out for this crossing (church_storage.py): a server send stamp; a restored church hears again if it is past 80%, nothing to restore; cascade on business deletion",
     # The practitioner's other calendar. The feed link is a credential
     # (it reads their whole calendar), and the busy blocks are re-derived

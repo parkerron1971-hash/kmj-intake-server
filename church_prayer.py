@@ -327,6 +327,64 @@ def pass_on(business_id: str, leader: Dict[str, Any], request_id: str, to_contac
     return out[0]
 
 
+# ─── The office hands a shared prayer to someone else (2026-11-18) ─────
+#
+# The care desk (Kevin, 2026-11-18): the owner sees who on the prayer team
+# has a shared prayer, and can hand it to a different one. The same people
+# a request could reach on its own (a role that takes prayer_shared) or be
+# passed to (a role that takes prayer_passed); never a request kept with the
+# pastors or one that needs a pastor (the database's care_leader_guard
+# refuses those too), never one already prayed over.
+
+def office_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Who prays with the prayer team: one row a person, with their role's
+    title and how many they have waiting. None when the roles can't be read."""
+    import church_roles as cr
+    biz = str(business_id)
+    lead, passed = _prayer_holders(biz, "prayer_shared"), _prayer_holders(biz, "prayer_passed")
+    load = _waiting(biz)
+    if lead is None or passed is None:
+        return None
+    defs = cr.defs(biz) or []
+    out: Dict[str, Dict[str, Any]] = {}
+    for h, leads in [(h, True) for h in lead] + [(h, False) for h in passed]:
+        cid = str(h["contact_id"])
+        if cid in out:
+            out[cid]["leads"] = out[cid]["leads"] or leads
+            continue
+        out[cid] = {"contact_id": cid, "name": h["name"], "role": h["role"],
+                    "role_title": cr.title_of(h["role"], defs), "leads": leads,
+                    "waiting": (load or {}).get(cid, 0)}
+    return sorted(out.values(), key=lambda p: (not p["leads"], p["waiting"], p["name"].casefold()))
+
+
+def office_hand(business_id: str, row: Dict[str, Any], to_contact_id: Any) -> Dict[str, Any]:
+    """The columns that hand one shared prayer to a member of the prayer
+    team, due in a day, the late steps starting over. Raises for anything
+    that isn't the person's shared, unprayed prayer or isn't one of them."""
+    import church_follow_up as cfu
+    if "needs_pastor" not in row or "prayer_team" not in row:
+        # The read that carries these failed: never guess.
+        raise HTTPException(503, "That couldn't be checked just now. Nothing was changed. Try again.")
+    if row.get("needs_pastor"):
+        raise HTTPException(400, "This request needs a pastor. It never goes to the prayer team.")
+    if row.get("prayer_team") is not True:
+        raise HTTPException(400, "They kept this with the pastors, so it can't go to the prayer team.")
+    if row.get("leader_prayed_at"):
+        raise HTTPException(400, "Someone on the prayer team already prayed over this one.")
+    cid = cfu._uid(to_contact_id, "person")
+    people = office_people(business_id)
+    if people is None:
+        raise HTTPException(503, "The prayer team couldn't be read just now. Try again.")
+    to = next((p for p in people if p["contact_id"] == cid), None)
+    if not to:
+        raise HTTPException(400, "Pick someone on the prayer team.")
+    now = _now()
+    return {"leader_contact_id": cid, "leader_role": to["role"], "leader_assigned_at": _iso(now),
+            "leader_due_at": _iso(now + timedelta(days=DUE_DAYS)), "leader_told_at": None,
+            "leader_late_level": 0}
+
+
 # ─── The office's Prayer & care list ──────────────────────────────────
 
 def office_fields(rows: List[Dict[str, Any]], business_id: str) -> List[Dict[str, Any]]:
@@ -345,7 +403,11 @@ def office_fields(rows: List[Dict[str, Any]], business_id: str) -> List[Dict[str
                     "prayer_team": bool(r.get("prayer_team")), "wants_call": bool(r.get("wants_call")),
                     "needs_pastor": bool(r.get("needs_pastor")),
                     "leader": ({"name": p["name"], "role_title": cr.title_of(r.get("leader_role") or "", defs)} if p else None),
-                    "leader_prayed_at": r.get("leader_prayed_at"), "leader_noted_at": r.get("leader_noted_at")})
+                    "leader_prayed_at": r.get("leader_prayed_at"), "leader_noted_at": r.get("leader_noted_at"),
+                    # The office sees the day's due time and how far up the
+                    # late steps it went (Kevin, 2026-11-18: nobody waits).
+                    "leader_due_at": r.get("leader_due_at"),
+                    "leader_late_level": int(r.get("leader_late_level") or 0)})
     return out
 
 

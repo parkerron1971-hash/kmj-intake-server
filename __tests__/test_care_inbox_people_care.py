@@ -116,7 +116,11 @@ def fake(monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Who sees what, not the care desk's lock (test_care_desk.py covers
+    # the lock): these routes run as a church that doesn't ask for it.
+    monkeypatch.setattr(P, "lock_settings",
+                        lambda biz: {"lock_minutes": 10, "require_password": False, "saved": True, "ready": True})
     os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
     os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
     from fastapi import FastAPI
