@@ -433,19 +433,61 @@ def sunday_spots(ctx: Ctx, day: date) -> Optional[tuple]:
     planned that day (plans: the calendar's own read). None when nothing is
     planned that day or the teams have no places."""
     def read() -> Optional[tuple]:
-        services = [p["id"] for p in plans(ctx) if p["day"] == day]
-        if not services:
-            return None
-        places = {str(p["id"]): max(1, int(p.get("needed") or 1)) for p in _volunteer_places(ctx)}
-        if not places:
-            return None
-        rows = ctx.rows(f"/serve_assignments?business_id=eq.{_q(ctx.b)}"
-                        f"&service_id=in.({','.join(_q(s) for s in services)})&status=eq.yes"
-                        "&select=service_id,position_id,slot&limit=5000")
-        yes = {(str(r.get("service_id")), str(r.get("position_id")), int(r.get("slot") or 1)) for r in rows
-               if str(r.get("position_id")) in places and int(r.get("slot") or 1) <= places[str(r.get("position_id"))]}
-        return len(yes), len(services) * sum(places.values())
+        return _volunteer_spots(ctx, [p["id"] for p in plans(ctx) if p["day"] == day])
     return ctx.once(("spots", day), read)
+
+
+def _volunteer_spots(ctx: Ctx, services: List[str]) -> Optional[tuple]:
+    """(places with a yes, places) on the volunteers' teams at these
+    services; None with no services or no places."""
+    if not services:
+        return None
+    places = {str(p["id"]): max(1, int(p.get("needed") or 1)) for p in _volunteer_places(ctx)}
+    if not places:
+        return None
+    rows = ctx.rows(f"/serve_assignments?business_id=eq.{_q(ctx.b)}"
+                    f"&service_id=in.({','.join(_q(s) for s in services)})&status=eq.yes"
+                    "&select=service_id,position_id,slot&limit=5000")
+    yes = {(str(r.get("service_id")), str(r.get("position_id")), int(r.get("slot") or 1)) for r in rows
+           if str(r.get("position_id")) in places and int(r.get("slot") or 1) <= places[str(r.get("position_id"))]}
+    return len(yes), len(services) * sum(places.values())
+
+
+def event_dates(ctx: Ctx) -> List[Dict[str, Any]]:
+    """The event dates on Who serves when (serve_dates: an outreach night, a
+    Saturday event, scheduled for the volunteer teams only) from last week's
+    Monday to eight weeks from this one: each {id, day, title}. None of them
+    is a Sunday plan (plans). Nothing before the migration."""
+    def read() -> List[Dict[str, Any]]:
+        import serve_dates as sd
+        if not sd.ready():
+            return []
+        lo, hi = ctx.bounds(ctx.monday - timedelta(days=7), ctx.monday + timedelta(days=7 * WEEKS - 1))
+        out = []
+        for r in ctx.rows(f"/worship_services?business_id=eq.{_q(ctx.b)}&archived_at=is.null&is_template=eq.false"
+                          f"&kind=eq.{sd.EVENT}&starts_at=gte.{_q(lo.isoformat())}&starts_at=lt.{_q(hi.isoformat())}"
+                          "&select=id,title,starts_at&order=starts_at.asc&limit=200"):
+            day = _local_day(r.get("starts_at"), ctx.tz)
+            if day:
+                out.append({"id": str(r["id"]), "day": day, "title": " ".join(str(r.get("title") or "").split())})
+        return out
+    return ctx.once("event_dates", read)
+
+
+def _event_lines(ctx: Ctx, monday: date) -> List[str]:
+    """"4 of 6 for Thursday's Outreach night", for each event date that week
+    with volunteer places. A read that fails says nothing here: the Sunday's
+    count still stands."""
+    try:
+        week = [e for e in event_dates(ctx) if monday <= e["day"] <= monday + timedelta(days=6)]
+        out = []
+        for e in week:
+            got = ctx.once(("event_spots", e["id"]), lambda e=e: _volunteer_spots(ctx, [e["id"]]))
+            if got:
+                out.append(f"{got[0]} of {got[1]} for {_day_name(e['day'])}'s {e['title'] or 'event'}")
+        return out
+    except Unread:
+        return []
 
 
 CLASS_NIGHT = "class night"
@@ -589,12 +631,21 @@ def job_first_guests(ctx: Ctx, due: date, monday: date, until: datetime) -> Dict
 
 def job_serve_schedule(ctx: Ctx, due: date, monday: date, until: datetime) -> Dict[str, Any]:
     """Every place on the volunteers' teams has a yes for the services
-    planned that week's Sunday (the answers as they stand now)."""
+    planned that week's Sunday (the answers as they stand now). The week's
+    event dates (serve_dates) are said beside it, never judged: "…, and 4
+    of 6 for Thursday's Outreach night"."""
     got = sunday_spots(ctx, monday + timedelta(days=6))
+    extra = _event_lines(ctx, monday)
     if got is None:
-        return {"done": None, "text": f"Nothing planned to fill {_this(ctx, monday)} Sunday"}
+        return {"done": None, "text": f"Nothing planned to fill {_this(ctx, monday)} Sunday"
+                                      + (f"; {_and(extra)}" if extra else "")}
     yes, total = got
-    return {"done": yes >= total, "text": f"{yes} of {total} places on Sunday's volunteer teams have a yes"}
+    return {"done": yes >= total, "text": f"{yes} of {total} places on Sunday's volunteer teams have a yes"
+                                          + (f", and {_and(extra)}" if extra else "")}
+
+
+def _and(parts: List[str]) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
 def job_calendar(ctx: Ctx, due: date, monday: date, until: datetime) -> Dict[str, Any]:

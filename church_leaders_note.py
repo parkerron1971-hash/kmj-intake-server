@@ -248,8 +248,11 @@ def _item(day: date, at: Optional[datetime], title: str, where: str = "", kind: 
 
 def _plans(biz_id: str, lo: datetime, hi: datetime, tz) -> List[Dict[str, Any]]:
     """The Sunday plans in the days (worship_services: ChurchSavvy's and
-    Sunday Planning's one table)."""
+    Sunday Planning's one table). An event date (serve_dates) is the
+    volunteers' schedule for an event, not a plan: it stays out."""
+    import serve_dates
     rows = _need(f"/worship_services?business_id=eq.{_q(biz_id)}&archived_at=is.null&is_template=eq.false"
+                 f"{serve_dates.plans_only()}"
                  f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lt.{_q(_iso(hi))}"
                  "&select=id,title,starts_at&order=starts_at.asc&limit=100")
     out = []

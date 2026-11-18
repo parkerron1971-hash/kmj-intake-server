@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from fastapi import HTTPException
 
 import sb_clients
+import serve_dates as sd
 import sunday_planning as sp
 from sunday_planning import _ids, _q, _read
 
@@ -52,16 +53,20 @@ def on() -> bool:
 
 
 def _services(biz: str, zone, lo: datetime, hi: datetime, ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+    """The services (a Sunday, or an event date: serve_dates) by id, each
+    with its day on the church's clock and the day's own name."""
     path = (f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
             + (f"&id=in.({_ids(ids)})" if ids is not None else
                f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lt.{_q(_iso(hi))}")
-            + "&select=id,title,starts_at&order=starts_at.asc")
+            + f"&select=id,title,starts_at{sd.fields()}&order=starts_at.asc")
     out = {}
     for r in (_read(path) if ids is None or ids else []):
         at = _when(r, zone)
         if at:
-            out[str(r["id"])] = {"id": str(r["id"]), "title": r.get("title") or "Sunday service", "at": at,
-                                 "day": at.date().isoformat()}
+            event = sd.is_event(r)
+            out[str(r["id"])] = {"id": str(r["id"]), "title": r.get("title") or ("An event" if event else "Sunday service"),
+                                 "at": at, "day": at.date().isoformat(), "weekday": sd.weekday(at),
+                                 "event": event, "where": (r.get("place") or "") if event else ""}
     return out
 
 
@@ -141,6 +146,7 @@ def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
                          and str((places.get(str(r["position_id"])) or {}).get("group_id")) == c["group_id"]
                          and str(r["contact_id"]) in names_]
     by_time = lambda x: x["service"]["at"]
+    served = _served_counts(biz_id, cid, zone, now)
     teams_out = []
     for gid in member_of:
         # In the team's own order of places, as the office set it.
@@ -150,27 +156,37 @@ def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
     return {
         "teams": sorted(teams_out, key=lambda t: t["name"].lower()),
         "asks": sorted(asks + covers, key=by_time), "coming": sorted(coming, key=by_time), "open": sorted(open_, key=by_time),
-        "this_year": _served_this_year(biz_id, cid, zone, now),
+        "this_year": served[0], "this_year_sundays": served[1],
         "away": [{"id": str(a["id"]), "starts_on": str(a["starts_on"]), "ends_on": str(a["ends_on"]),
                   "note": a.get("note") or ""} for a in away],
         "often": (pref[0].get("often") if pref else None),
         # The church's next service: "this Sunday" means that one, not
-        # whichever Sunday this member serves next.
-        "next_day": min((s["day"] for s in soon.values()), default=None),
+        # whichever Sunday this member serves next. An event date is its own
+        # day: one in the coming week is "this Thursday" (soon_days).
+        "next_day": min((s["day"] for s in soon.values() if not s["event"]), default=None),
+        "soon_days": sorted({s["day"] for s in soon.values()
+                             if s["event"] and s["at"] - now < timedelta(days=7)}),
     }
 
 
 def _served_this_year(biz_id: str, cid: str, zone, now: datetime) -> int:
+    return _served_counts(biz_id, cid, zone, now)[0]
+
+
+def _served_counts(biz_id: str, cid: str, zone, now: datetime) -> Tuple[int, int]:
+    """(the days this year they said yes to that have come, the Sundays
+    among them): My serving says "Sundays" only when every one was."""
     said = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&status=eq.yes&select=service_id")
     ids = sorted({str(r["service_id"]) for r in said})
     if not ids:
-        return 0
-    n = 0
+        return 0, 0
+    n = sundays = 0
     for i in range(0, len(ids), 150):
         for s in _services(biz_id, zone, now, now, ids[i:i + 150]).values():
             if s["at"].year == now.year and s["at"] <= now:
                 n += 1
-    return n
+                sundays += sd.is_sunday(s["at"])
+    return n, sundays
 
 
 def serves(biz: Dict[str, Any], cid: str) -> bool:
@@ -211,11 +227,16 @@ def _row(biz_id: str, aid: str) -> Dict[str, Any]:
 
 
 def _future(biz_id: str, row: Dict[str, Any]) -> Tuple[Any, datetime]:
+    zone, s = _future_service(biz_id, row)
+    return zone, s["at"]
+
+
+def _future_service(biz_id: str, row: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     zone = sp._zone(biz_id)
     s = _services(biz_id, zone, sp._now(), sp._now(), [str(row["service_id"])]).get(str(row["service_id"]))
     if not s or s["at"] <= sp._now().astimezone(zone):
-        raise HTTPException(409, "That Sunday has already passed.")
-    return zone, s["at"]
+        raise HTTPException(409, "That day has already passed.")
+    return zone, s
 
 
 def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
@@ -238,6 +259,7 @@ def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
             raise HTTPException(404, "That isn't on the schedule anymore.")
     svc = board.service[sid]
     at = datetime.fromisoformat(str(svc["starts_at"]).replace("Z", "+00:00")).astimezone(board.zone)
+    event = svc.get("kind") == sd.EVENT
     others = sp._people(biz_id, [r.get("contact_id") for r in board.rows])
     with_ = []
     for p in team["places"]:
@@ -261,14 +283,20 @@ def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
         "place": next(p["name"] for p in team["places"] if p["id"] == pid), "team": team["name"], "group_id": team["group_id"],
         "call_time": team.get("call_time"), "at": at, "title": svc["title"], "asked_by": asker,
         "leader": leaders[0] if leaders else None, "note": row.get("note") or "", "past": at <= sp._now().astimezone(board.zone),
-        "with": with_, "can_do": _next_free(biz_id, cid, board.zone, at) if mine_ and row["status"] in ("asked", "no") else None,
+        "weekday": sd.weekday(at), "event": event, "where": svc.get("place") or "",
+        # "I can't, but I can do (another Sunday)": an event date has no other one.
+        "with": with_, "can_do": (_next_free(biz_id, cid, board.zone, at)
+                                  if mine_ and row["status"] in ("asked", "no") and not event else None),
     }
 
 
 def free_sundays(biz_id: str, cid: str, zone, after: datetime, n: int = 2, days: int = 29) -> List[Dict[str, Any]]:
     """The next services (up to n, within `days`) that this member isn't
-    away for and isn't already serving at: "I can't, but I can do …"."""
-    later = _services(biz_id, zone, after + timedelta(hours=12), after + timedelta(days=days))
+    away for and isn't already serving at: "I can't, but I can do …". Only
+    the Sunday services: an event date is its own occasion, never "another
+    Sunday"."""
+    later = {k: v for k, v in _services(biz_id, zone, after + timedelta(hours=12), after + timedelta(days=days)).items()
+             if not v["event"]}
     if not later:
         return []
     rows = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&service_id=in.({_ids(later)})"
@@ -316,7 +344,8 @@ def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "",
         raise HTTPException(400, "The answer is yes or no.")
     why = why if why in WHY else ""
     row = _row(biz_id, aid)
-    zone, at = _future(biz_id, row)
+    zone, svc = _future_service(biz_id, row)
+    at = svc["at"]
     now = sp._now().isoformat()
     if str(row.get("swap_to")) == cid and row["status"] == "yes":
         if ans != "yes":
@@ -334,6 +363,8 @@ def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "",
     if ans == "yes":
         return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}", {"status": "yes", "answered_at": now, "note": ""})
     note = why
+    if ans == "other" and svc["event"]:
+        ans = "no"    # an event date has no other Sunday to offer
     if ans == "other":
         if offer:
             nxt = next((f for f in free_sundays(biz_id, cid, zone, at) if f["id"] == offer), None)
@@ -541,7 +572,7 @@ def pack(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
     if str(row.get("contact_id")) != cid or row["status"] != "yes":
         raise HTTPException(404, "That isn't on the schedule anymore.")
     zone = sp._zone(biz_id)
-    svc = so._service(biz_id, str(row["service_id"]), zone)
+    svc = so._service(biz_id, str(row["service_id"]), zone, plans=False)
     at = _when(svc, zone)
     if not at:
         raise HTTPException(404, "That isn't on the schedule anymore.")
@@ -586,8 +617,11 @@ def pack(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
                if role["call"] else at)
     ends = (datetime.combine(at.date(), datetime.strptime(order["ends"], "%H:%M").time(), tzinfo=zone)
             if order.get("ends") else at + timedelta(hours=2))
+    event = sd.is_event(svc)
     return {
-        "id": aid, "title": svc.get("title") or "Sunday service", "at": at, "role": role, "roles": roles,
+        "id": aid, "title": svc.get("title") or ("An event" if event else "Sunday service"), "at": at,
+        "weekday": sd.weekday(at), "event": event, "where": (svc.get("place") or "") if event else "",
+        "role": role, "roles": roles,
         "songs": song_rows, "moments": moments,
         "order": [{"time": i["time"], "title": i["title"], "who": i.get("who") or ""} for i in items if i.get("part") == "service"],
         "here_open": now.date() == at.date() and call_at - timedelta(hours=HERE_FROM_HOURS) <= now <= ends,

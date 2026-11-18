@@ -262,7 +262,8 @@ def test_the_switch(api, monkeypatch):
     # A business that isn't a church has one door: whoever schedules changes every team.
     assert as_("planner").get(f"/planning/status?business_id={BIZ}").json() == {
         "enabled": True, "can_write": True, "roles": ["planner"], "can_setup": False, "email_asks": False,
-        "member_app": False, "two_doors": False, "change": ["churchsavvy", "volunteers"], "new_team_owner": None}
+        "member_app": False, "two_doors": False, "change": ["churchsavvy", "volunteers"], "new_team_owner": None,
+        "event_dates": False}
     # A word the switch doesn't know is off, never on.
     monkeypatch.setenv("SUNDAY_PLANNING", "yes please")
     assert as_("owner").get("/planning/status").status_code == 404

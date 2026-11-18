@@ -481,7 +481,9 @@ def sunday(ctx: Dict[str, Any]) -> Lines:
         teams = {str(g["id"]) for g in _all(f"/groups?business_id=eq.{b}&kind=eq.team&active=eq.true&select=id",
                                              "Sunday teams")} & {str(s["group_id"]) for s in serve}
         if teams:
+            import serve_dates
             plans = _all(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false"
+                         f"{serve_dates.plans_only()}"
                          f"&starts_at=gte.{_q(_iso(ctx['lo']))}&starts_at=lt.{_q(_iso(ctx['hi']))}&select=id",
                          "Sunday teams")
             places = _all_in(f"/serve_positions?business_id=eq.{b}&active=eq.true&select=id,group_id,needed",
