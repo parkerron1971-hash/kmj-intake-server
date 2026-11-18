@@ -22,11 +22,12 @@ and never raises.
 
 WHAT IS COUNTED (used)
 ----------------------
-  recordings  what each of the church's sessions not removed keeps in the
-              media bucket (private), stored_bytes: stream_sessions.bytes
-              (the full-quality recording) plus copy_bytes (its smaller
-              copy, recording_copy.py) while the full recording is there,
-              only copy_bytes once full_removed_at is set. Before
+  recordings  one size per session not removed (the media bucket,
+              private), stored_bytes: stream_sessions.bytes (the
+              full-quality recording) while it is there, copy_bytes (its
+              smaller copy, recording_copy.py) once full_removed_at is set.
+              Never both: the copy is our saving, so making it never costs
+              the church room. Before
               APPLY-2026-11-17-recording-small-copy.sql there are no copy
               columns and it is bytes alone.
   classes     academy_live_sessions.recording_bytes for the church's
@@ -244,11 +245,14 @@ def session_cols() -> Optional[str]:
 
 
 def stored_bytes(s: Dict[str, Any]) -> int:
-    """What one recording keeps in the media bucket: the full-quality
-    recording (bytes) until full_removed_at, plus its smaller copy
-    (copy_bytes, set only once the copy is made and checked)."""
-    full = 0 if s.get("full_removed_at") else _int(s.get("bytes"))
-    return full + _int(s.get("copy_bytes"))
+    """What one recording counts against the church's room, and what
+    deleting it frees: the full-quality recording (bytes) while it is
+    there, its smaller copy (copy_bytes) once full_removed_at is set. Never
+    both: the copy is ours to make (a saving), so it never pushes a church
+    over its allowance or into a 14-day hold."""
+    if s.get("full_removed_at"):
+        return _int(s.get("copy_bytes"))
+    return _int(s.get("bytes"))
 
 
 def sessions_of(business_id: str) -> Optional[List[Dict[str, Any]]]:

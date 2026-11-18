@@ -15,9 +15,9 @@ A manager or the owner (the stream relay's check, kids_router.require):
            recordings: [{session_id, started_at, duration_s, bytes,
            published, sermon_id, keep_until, download_url}] (ended, not
            removed, newest first, at most 50)}. A recording's bytes are what
-           it keeps now (church_storage.stored_bytes: the full recording
-           plus its smaller copy, then the copy alone after day 14), which
-           is what deleting it frees. download_url is a private https link
+           it counts against the room (church_storage.stored_bytes: the full
+           recording while it is there, then its smaller copy after day 14,
+           never both), which is what deleting it frees. download_url is a private https link
            to its smaller copy (an MP4 that saves as "<church> <date>.mp4",
            good for an hour) once that copy is made and while can_download
            is true; null otherwise.

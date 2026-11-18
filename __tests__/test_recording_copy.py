@@ -10,12 +10,16 @@ Pinned here:
      the write key, a finished playlist); a busy answer puts it back.
   3. Following it: ready only once its size is read back from the bucket and
      its length matches; anything else fails the try and deletes the object;
-     a try that made way for clips isn't counted; three tries at most; a
-     recording deleted meanwhile is tidied; nothing twice across replicas.
+     a try that made way for clips isn't counted; rounds of three tries a
+     week apart, four rounds, then it stops and the platform owner (never
+     the church) hears once; a recording deleted meanwhile is tidied;
+     nothing twice across replicas.
   4. Day 14: the full-quality segments and playlist go, never copy.mp4, only
      with a checked copy that is still there; marked only once all are gone.
-  5. The meter: full + copy, then the copy alone; a Sunday stays full size;
-     unknown columns decide nothing; the page's rows and the delete agree.
+  5. The meter: the full size while the full recording exists, then the
+     copy's, never both (a copy never pushes a church over or into a hold);
+     a Sunday stays full size; unknown columns decide nothing; the page's
+     rows and the delete agree.
   6. The download: can_download and download_url, an hour, the church's name
      and date, the read key.
   7. The player: the copy from day 14 (and after the switch goes off), under
@@ -541,22 +545,93 @@ def test_a_short_recording_has_ten_seconds_of_slack():
     assert not rc.length_ok(0, 7200) and not rc.length_ok(7200, 0)
 
 
-def test_a_failed_try_is_tried_again_an_hour_later_three_times_in_all(world):
+def _findings(d):
+    return [r for r in d.t.get("platform_changelog", []) if r.get("agent") == rc.FINDING_AGENT]
+
+
+def test_failed_tries_come_in_rounds_a_week_apart_then_stop_and_tell_the_owner_once(world, capsys):
     d, bucket, clip = world
     s = d.session(1)
     bucket.add_recording(BIZ, s["id"])
+    assert (rc.TRIES_PER_ROUND, rc.ROUNDS, rc.MAX_TRIES) == (3, 4, 12)
     at = T0
     for n in range(1, rc.MAX_TRIES + 1):
         assert _tick(at)["started"] == 1, n
         clip.end(d.one(s["id"])["copy_job"], "failed", "copy.segment", "Part of the recording could not be read.")
         assert _tick(at + timedelta(minutes=2))["failed"] == 1
         assert _tick(at + timedelta(minutes=30))["started"] == 0       # not before the hour
-        at += timedelta(hours=1, minutes=5)
+        if n % rc.TRIES_PER_ROUND:
+            at += timedelta(hours=1, minutes=5)
+        elif n < rc.MAX_TRIES:
+            # A round's third failed try: nothing for a week, then a new round.
+            assert _tick(at + timedelta(days=6, hours=23))["started"] == 0, n
+            at += timedelta(days=7, minutes=5)
+        assert _findings(d) == [] or n == rc.MAX_TRIES                 # nobody told before the end
     row = d.one(s["id"])
     assert row["copy_state"] == "failed" and row["copy_tries"] == rc.MAX_TRIES
-    assert "could not be read" in row["copy_error"]
-    assert _tick(at + timedelta(days=1))["started"] == 0              # no more tries
-    assert row["full_removed_at"] is None                             # the full recording stays
+    assert "could not be read" in row["copy_error"] and row["full_removed_at"] is None
+    assert _tick(at + timedelta(days=60))["started"] == 0             # stopped for good
+    # The platform owner hears once, on Mission Control's Today; the church never does.
+    [f] = _findings(d)
+    assert f["status"] == "pending" and f["category"] == "pending"
+    assert f["title"].startswith("Grace Church's") and "no smaller copy after 12 tries" in f["title"]
+    assert "copy_tries = 0" in f["detail"] and s["id"] in f["detail"] and "could not be read" in f["detail"]
+    assert "text" not in f["title"].lower()                           # Today files it under Systems
+    assert not any(n.get("business_id") == BIZ for n in d.t["chief_notifications"])
+    assert "stopped for good (Mission Control told)" in capsys.readouterr().out
+    # The church's page shows no error: just no Download button.
+    got = _page().get(f"/church/storage?business_id={BIZ}").json()
+    assert got["can_download"] is True and got["recordings"][0]["download_url"] is None
+    assert set(got["recordings"][0]) == {"session_id", "started_at", "duration_s", "bytes", "published",
+                                         "sermon_id", "keep_until", "download_url"}
+
+
+def test_a_copy_stuck_after_its_first_round_is_tried_again_a_week_later(world):
+    """The review's case: three failed tries no longer mean never."""
+    d, bucket, clip = world
+    s = d.session(1, copy_state="failed", copy_tries=3, copy_error="the clip service lost it",
+                  copy_at=(T0 - timedelta(days=6)).isoformat())
+    bucket.add_recording(BIZ, s["id"])
+    assert _tick()["started"] == 0
+    assert _tick(T0 + timedelta(days=1, minutes=1))["started"] == 1
+    assert d.one(s["id"])["copy_tries"] == 4
+    assert rc.due_again({"copy_tries": 12, "copy_at": None}, T0) is False
+    assert rc.due_again({"copy_tries": 4, "copy_at": (T0 - timedelta(minutes=61)).isoformat()}, T0) is True
+
+
+def test_only_the_write_that_ends_it_tells_the_owner(world):
+    d, bucket, clip = world
+    s = d.session(1, copy_state="working", copy_job="j-12", copy_tries=12, copy_at=T0.isoformat())
+    assert rc._fail(dict(s), "it stopped", T0) == "failed"
+    assert rc._fail(dict(s), "it stopped", T0) == "failed"           # a replica's late repeat
+    assert len(_findings(d)) == 1
+    t = d.session(2, copy_state="working", copy_job="j-11", copy_tries=11, copy_at=T0.isoformat())
+    rc._fail(dict(t), "it stopped", T0)
+    assert len(_findings(d)) == 1                                     # 11 tries: there is one more
+
+
+def test_a_round_opening_try_that_made_way_for_clips_isnt_a_week_lost(world):
+    d, bucket, clip = world
+    s = d.session(1, copy_state="failed", copy_tries=3, copy_at=(T0 - timedelta(days=8)).isoformat())
+    bucket.add_recording(BIZ, s["id"])
+    assert _tick()["started"] == 1
+    job = d.one(s["id"])["copy_job"]
+    clip.end(job, "cancelled", "job.yielded")
+    _tick(T0 + timedelta(minutes=2))
+    row = d.one(s["id"])
+    assert row["copy_state"] == "failed" and row["copy_tries"] == 3
+    assert _tick(T0 + timedelta(minutes=30))["started"] == 0
+    assert _tick(T0 + timedelta(hours=1, minutes=5))["started"] == 1
+
+
+def test_a_copy_missing_at_the_last_try_tells_the_owner_once(world):
+    d, bucket, clip = world
+    s = _ready(d, bucket, ended=T0 - timedelta(days=20), copy_tries=12)
+    bucket.objects.pop(f"live/{BIZ}/{s['id']}/copy.mp4")
+    _tick()
+    _tick(T0 + timedelta(minutes=2))
+    assert d.one(s["id"])["copy_state"] == "failed" and len(_findings(d)) == 1
+    assert d.one(s["id"])["full_removed_at"] is None                  # the full recording stays
 
 
 def test_a_copy_that_made_way_for_clips_is_not_counted(world):
@@ -637,6 +712,7 @@ def test_a_finished_copy_whose_size_cant_be_read_waits(world):
 # ─── 4. Day 14 ───────────────────────────────────────────────────────
 
 def _ready(d, bucket, n=1, *, ended, size=1_400_000_000, **kw):
+    kw.setdefault("copy_tries", 1)
     s = d.session(n, ended=ended, copy_state="ready", copy_bytes=size, copy_seconds=7199.9,
                   copy_made_at=ended.isoformat(), **kw)
     bucket.add_recording(s["business_id"], s["id"], n=4, size=GIB)
@@ -672,7 +748,18 @@ def test_a_copy_gone_from_storage_keeps_the_full_recording_and_is_made_again(wor
     row = d.one(s["id"])
     assert row["full_removed_at"] is None and row["copy_state"] == "failed" and row["copy_bytes"] is None
     assert sum(k.endswith(".ts") for k in bucket.objects) == 4
-    assert _tick(T0 + timedelta(hours=2))["started"] == 1             # made again
+    assert _tick(T0 + timedelta(minutes=30))["started"] == 0
+    assert _tick(T0 + timedelta(hours=1, minutes=5))["started"] == 1  # made again within the hour
+
+
+def test_a_copy_missing_after_a_full_round_is_made_again_within_the_hour(world):
+    """It went missing: that isn't a failed try, so no week's wait."""
+    d, bucket, clip = world
+    s = _ready(d, bucket, ended=T0 - timedelta(days=20), copy_tries=3)
+    bucket.objects.pop(f"live/{BIZ}/{s['id']}/copy.mp4")
+    _tick()
+    assert _tick(T0 + timedelta(hours=1, minutes=5))["started"] == 1
+    assert d.one(s["id"])["copy_tries"] == 4 and _findings(d) == []
 
 
 @pytest.mark.parametrize("fault", ["head", "list", "delete"])
@@ -709,16 +796,27 @@ def test_day_14_only_where_it_is_switched_on(world, monkeypatch):
 
 # ─── 5. The meter ────────────────────────────────────────────────────
 
-def test_the_meter_counts_the_copy_beside_the_full_recording_then_alone(world):
+def test_the_meter_counts_the_full_recording_then_the_copy_never_both(world):
     d, bucket, clip = world
     d.session(1, size=6 * GIB)                                                     # no copy yet
-    d.session(2, size=6 * GIB, copy_state="ready", copy_bytes=GIB)                 # both, for now
+    d.session(2, size=6 * GIB, copy_state="ready", copy_bytes=GIB)                 # the full one, for now
     d.session(3, size=6 * GIB, copy_state="ready", copy_bytes=GIB,
               full_removed_at=T0.isoformat())                                      # the copy alone
-    d.session(4, size=6 * GIB, copy_state="working")                               # not counted twice
+    d.session(4, size=6 * GIB, copy_state="working")
     m = cs.used(BIZ)
-    assert m["parts"]["recordings"] == 6 * GIB + 7 * GIB + GIB + 6 * GIB
+    assert m["parts"]["recordings"] == 6 * GIB + 6 * GIB + GIB + 6 * GIB
     assert m["bytes_per_sunday"] == 6 * GIB                                        # a Sunday is still full size
+
+
+def test_making_copies_never_fills_a_church_or_holds_a_recording(world, monkeypatch):
+    d, bucket, clip = world
+    monkeypatch.setenv("LIMIT_CHURCH_SMALL_STORAGE_GB", "13")
+    d.session(1, size=6 * GIB, copy_state="ready", copy_bytes=GIB + 1)
+    s = d.session(2, size=6 * GIB, ended=T0, copy_state="ready", copy_bytes=GIB + 1)
+    m = cs.used(BIZ)
+    assert m["used_bytes"] == 12 * GIB and m["state"] != "full"     # 14 GB would be over 13
+    assert cs.recording_ended(BIZ, s["id"], now=T0) != "held"
+    assert d.one(s["id"])["keep_until"] is None
 
 
 def test_unknown_columns_decide_nothing(world, monkeypatch):
@@ -743,11 +841,15 @@ def test_the_page_rows_and_the_delete_say_what_a_recording_keeps(world):
     app.include_router(csr.router)
     app.dependency_overrides[require_user] = lambda: _User(OWNER)
     c = TestClient(app)
+    trimmed = _ready(d, bucket, 2, ended=T0 - timedelta(days=30), size=GIB, full_removed_at=T0.isoformat())
     got = c.get(f"/church/storage?business_id={BIZ}").json()
-    assert got["recordings"][0]["bytes"] == 7 * GIB                   # 6 GB full + its 1 GB copy
+    by = {r["session_id"]: r["bytes"] for r in got["recordings"]}
+    assert by == {s["id"]: 6 * GIB, trimmed["id"]: GIB}                # the full one while it exists, then the copy
     r = c.delete(f"/church/storage/recordings/{s['id']}?business_id={BIZ}")
-    assert r.json() == {"removed": True, "freed_bytes": 7 * GIB}
+    assert r.json() == {"removed": True, "freed_bytes": 6 * GIB}
     assert not any(k.startswith(f"live/{BIZ}/{s['id']}/") for k in bucket.objects)   # the copy went too
+    r = c.delete(f"/church/storage/recordings/{trimmed['id']}?business_id={BIZ}")
+    assert r.json() == {"removed": True, "freed_bytes": GIB}
 
 
 # ─── 6. The download ─────────────────────────────────────────────────

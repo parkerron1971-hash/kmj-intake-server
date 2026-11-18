@@ -37,8 +37,15 @@ columns are APPLY-2026-11-17-recording-small-copy.sql's)
                        matches what the clip service uploaded, and its
                        length is within 2% (10 s at least) of the
                        recording's own duration_s
-              failed   a try failed (copy_error says why); tried again an
-                       hour later, MAX_TRIES tries in all
+              failed   a try failed (copy_error says why). Tries come in
+                       rounds of three, an hour apart; after a round's
+                       third failed try it waits ROUND_GAP (7 days) for the
+                       next round. After ROUNDS rounds (12 tries) it stops
+                       for good and the platform owner is told once, on
+                       Mission Control's Today (a pending platform_changelog
+                       finding, like the other watchers'). The church is
+                       never told: its row just has no Download button,
+                       and its full recording stays.
   copy_job (the clip service's job id), copy_tries, copy_at (when the state
   last moved), copy_bytes and copy_seconds (only once ready), copy_made_at,
   copy_error, full_removed_at. Every move is a conditional write on the job
@@ -56,9 +63,10 @@ DAY 14 (trim)
   is still pending, and with the switch off once the segments are gone.
 
 THE METER (church_storage.stored_bytes)
-  bytes + copy_bytes while the full recording is there, copy_bytes after
-  full_removed_at. A copy therefore takes its room on top of the recording
-  for its first 14 days. bytes_per_sunday stays the full size.
+  bytes while the full recording is there, copy_bytes after
+  full_removed_at, never both: the copy is our saving, so making it never
+  pushes a church over its allowance or into a 14-day hold (we carry the
+  copy's room for its first 14 days). bytes_per_sunday stays the full size.
 
 CLIPS
   "Find my best clips" makes clips from recordings uploaded to the media
@@ -91,8 +99,12 @@ import sb_clients
 
 COPY_NAME = "copy.mp4"
 KEEP_FULL_DAYS = 14
-MAX_TRIES = 3
-RETRY_AFTER = timedelta(hours=1)
+TRIES_PER_ROUND = 3
+ROUNDS = 4
+MAX_TRIES = TRIES_PER_ROUND * ROUNDS     # then it stops for good
+RETRY_AFTER = timedelta(hours=1)        # between tries in a round
+ROUND_GAP = timedelta(days=7)           # after a round's third failed try
+FINDING_AGENT = "recordings"            # how Mission Control's Today names the finding
 STUCK_AFTER = timedelta(hours=4)        # the clip service stops its own job at 3 hours
 JOB_LINK_S = 4 * 3600                   # the clip service's segment links and upload link
 DOWNLOAD_LINK_S = 3600
@@ -458,24 +470,78 @@ def _claim(s: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
 def _revert(s: Dict[str, Any], now: datetime, why: str) -> str:
     """Not this try's fault (the clip service was busy, a clip run came
     first, a read failed): back to where it was, the try not counted."""
-    n = _int(s.get("copy_tries"))
+    back = max(_int(s.get("copy_tries")) - 1, 0)
+    # Due again within the hour, even when this try opened a new round:
+    # making way for clips never costs a week.
     sb_clients.sb_patch_as_service(_on_job(s), {
-        "copy_state": None if n <= 1 else "failed", "copy_tries": max(n - 1, 0), "copy_at": _iso(now)})
+        "copy_state": "failed" if back else None, "copy_tries": back,
+        "copy_at": _due_within_the_hour(back, now)})
     print(f"[recording_copy] copy of {_sid8(s)} waits: {why}", flush=True)
     return "waiting"
 
 
+def due_again(s: Dict[str, Any], now: datetime) -> bool:
+    """A failed copy's next try is due: RETRY_AFTER after a failed try in a
+    round, ROUND_GAP after a round's third, never after MAX_TRIES."""
+    n = _int(s.get("copy_tries"))
+    if n >= MAX_TRIES:
+        return False
+    at = _at(s.get("copy_at"))
+    return at is None or at <= now - _wait_after(n)
+
+
+def _wait_after(n: int) -> timedelta:
+    return ROUND_GAP if n and n % TRIES_PER_ROUND == 0 else RETRY_AFTER
+
+
+def _due_within_the_hour(n: int, now: datetime) -> str:
+    """A copy_at that makes the next try due RETRY_AFTER from now, whatever
+    round it is in: for a setback that wasn't a failed try."""
+    return _iso(now - _wait_after(n) + RETRY_AFTER)
+
+
+def _next_try_words(n: int) -> str:
+    if n >= MAX_TRIES:
+        return "no more tries"
+    return "next round in 7 days" if _wait_after(n) == ROUND_GAP else "tried again in an hour"
+
+
 def _fail(s: Dict[str, Any], why: str, now: datetime) -> str:
-    """This try failed (it stays counted). Tried again RETRY_AFTER later,
-    MAX_TRIES tries in all; the full recording is kept meanwhile."""
+    """This try failed (it stays counted). The full recording is kept
+    meanwhile. The last of MAX_TRIES tells the platform owner, once: only
+    the write that moved this try to failed does."""
     got = sb_clients.sb_patch_as_service(_on_job(s), {
         "copy_state": "failed", "copy_at": _iso(now), "copy_error": why[:300]})
     if not isinstance(got, list):
         return "working"                     # not saved: the next tick sees it again
-    left = MAX_TRIES - _int(s.get("copy_tries"))
-    print(f"[recording_copy] copy of {_sid8(s)} failed ({why}); "
-          f"{f'{left} more tries' if left > 0 else 'no more tries'}", flush=True)
+    n = _int(s.get("copy_tries"))
+    print(f"[recording_copy] copy of {_sid8(s)} failed, try {n} ({why}); {_next_try_words(n)}", flush=True)
+    if got and n >= MAX_TRIES:
+        tell_platform_owner(s, why)
     return "failed"
+
+
+def tell_platform_owner(s: Dict[str, Any], why: str) -> bool:
+    """A recording's copy stopped for good: one finding on Mission Control's
+    Today (a pending platform_changelog row, the queue the watchers write
+    to), for the platform owner. Never the church. Always printed too.
+    True when the finding saved."""
+    name = church_label(str(s.get("business_id") or ""))[0].strip() or "A church"
+    when = _at(s.get("started_at")) or _at(s.get("ended_at"))
+    day = f"{when:%b} {when.day}" if when else "a"
+    sid = str(s.get("id") or "")
+    title = f"{name}'s {day} recording has no smaller copy after {MAX_TRIES} tries"
+    detail = (f"Its full-quality recording is kept, so nothing is lost: the church sees no Download "
+              f"button and the recording stays at full size. Last reason: {why}. To try again, run "
+              f"update stream_sessions set copy_state = null, copy_tries = 0 where id = '{sid}';")
+    out = sb_clients.sb_post_as_service("/platform_changelog", {
+        "category": "pending", "status": "pending", "agent": FINDING_AGENT,
+        "title": title[:300], "detail": detail[:2000]})
+    saved = isinstance(out, list) and bool(out)
+    print(f"[recording_copy] {sid[:8]} of {str(s.get('business_id') or '')[:8]}: no smaller copy after "
+          f"{MAX_TRIES} tries; stopped for good ({'Mission Control told' if saved else 'Mission Control NOT told'}). "
+          f"Reset: update stream_sessions set copy_state = null, copy_tries = 0 where id = '{sid}';", flush=True)
+    return saved
 
 
 def _tidy_removed(s: Dict[str, Any], now: datetime) -> str:
@@ -590,8 +656,9 @@ def follow(s: Dict[str, Any], now: datetime) -> str:
 
 
 def candidates(now: datetime) -> Optional[List[Dict[str, Any]]]:
-    """Ended recordings with no copy (or a failed try due again), for
-    churches where it is switched on, oldest first. None when a read failed."""
+    """Ended recordings with no copy (or a failed one whose next try is due,
+    due_again), for churches where it is switched on, oldest first. None
+    when a read failed."""
     import sample_church
     base = f"/stream_sessions?status=eq.ended&removed_at=is.null&full_removed_at=is.null&select={COLS}"
     due = _q(_iso(now - RETRY_AFTER))
@@ -606,6 +673,8 @@ def candidates(now: datetime) -> Optional[List[Dict[str, Any]]]:
     on: Dict[str, bool] = {}
     out = []
     for s in sample_church.drop_samples(rows):
+        if s.get("copy_state") == "failed" and not due_again(s, now):
+            continue
         biz = str(s.get("business_id") or "")
         if biz not in on:
             on[biz] = switched_on(biz)
@@ -692,12 +761,18 @@ def trim_one(s: Dict[str, Any], now: datetime) -> bool:
     if size is None:
         return False
     if size != _int(s.get("copy_bytes")):
-        # Gone or changed: it is made again, and the full recording stays.
-        sb_clients.sb_patch_as_service(
+        # Gone or changed: not a failed try, so it is made again within the
+        # hour while tries are left (and the full recording stays).
+        why = "the copy in storage didn't match"
+        n = _int(s.get("copy_tries"))
+        got = sb_clients.sb_patch_as_service(
             f"{_path(s)}&copy_state=eq.ready&full_removed_at=is.null",
-            {"copy_state": "failed", "copy_bytes": None, "copy_seconds": None, "copy_at": _iso(now),
-             "copy_error": "the copy in storage didn't match"})
-        print(f"[recording_copy] {sid8}: the copy in storage didn't match ({size} bytes); made again", flush=True)
+            {"copy_state": "failed", "copy_bytes": None, "copy_seconds": None,
+             "copy_at": _due_within_the_hour(n, now), "copy_error": why})
+        print(f"[recording_copy] {sid8}: the copy in storage didn't match ({size} bytes); "
+              f"{'made again within the hour' if n < MAX_TRIES else 'no more tries'}", flush=True)
+        if isinstance(got, list) and got and n >= MAX_TRIES:
+            tell_platform_owner(s, why)
         return False
     prefix = key[: -len(COPY_NAME)]
     with cs._client() as client:

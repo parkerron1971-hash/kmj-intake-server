@@ -10,7 +10,8 @@
 --                                   ready (made and checked) | failed
 --   stream_sessions.copy_job        the clip service's job id for this try
 --   stream_sessions.copy_tries      tries made (a try that made way for a
---                                   clip run isn't counted); at most 3
+--                                   clip run isn't counted): rounds of 3,
+--                                   a week between rounds, 12 at most
 --   stream_sessions.copy_at         when copy_state last moved
 --   stream_sessions.copy_bytes      the copy's size, read back from the
 --                                   bucket; set only while it is ready
@@ -20,8 +21,8 @@
 --   stream_sessions.full_removed_at the full-quality segments were deleted;
 --                                   only ever with a ready copy (checked)
 --
--- The storage meter counts bytes + copy_bytes while the full recording is
--- there and copy_bytes after full_removed_at (church_storage.stored_bytes).
+-- The storage meter counts bytes while the full recording is there and
+-- copy_bytes after full_removed_at, never both (church_storage.stored_bytes).
 --
 -- Additive: nine columns (the one default needs no table rewrite), four
 -- checks, two partial indexes. No data changed, one transaction,
