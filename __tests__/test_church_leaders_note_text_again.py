@@ -253,6 +253,52 @@ def test_a_failed_read_is_a_503_never_a_send(db, texts, monkeypatch):
     assert ok(again())["reached"] == 2
 
 
+def _saves_once(monkeypatch):
+    """The claim saves; every write after it fails (a database blip)."""
+    real = cln.swap
+    calls = {"n": 0}
+
+    def swap(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k) if calls["n"] == 1 else False
+    monkeypatch.setattr(cln, "swap", swap)
+    calls["real"] = real
+    return calls
+
+
+def test_a_try_that_cant_be_given_back_says_so_and_never_texts_twice(db, texts, monkeypatch):
+    failed_send(db, texts)
+    calls = _saves_once(monkeypatch)
+    texts["yes"] = None
+    got = again()
+    assert got.status_code == 503 and "couldn't be put back" in got.json()["detail"]
+    assert calls["n"] == 3 and texts["sent"] == []            # the give-back was asked twice
+    monkeypatch.setattr(cln, "swap", calls["real"])
+    # The claim is left as it was taken: "going out now", then unsure.
+    texts["yes"] = {A, B}
+    a = ok(page())["text_again"]
+    assert a["allowed"] is False and "going out now" in a["why"]
+    assert again().status_code == 409
+    db.now = db.now + cln.STUCK + timedelta(minutes=1)
+    a = ok(page())["text_again"]
+    assert a["allowed"] is False and a["why"] == cln.UNSURE
+    assert again().status_code == 409 and texts["sent"] == []
+
+
+def test_a_text_that_went_but_didnt_save_says_so_and_isnt_offered_again(db, texts, monkeypatch):
+    failed_send(db, texts)
+    calls = _saves_once(monkeypatch)
+    r = ok(again())
+    assert texts["sent"] == [(B, BODY)] and calls["n"] == 3   # the save was asked twice
+    assert r["recorded"] is False and r["text_again"] is None
+    assert r["warning"] == "The text went, but who it reached couldn't be saved, so it can't be sent again this week."
+    monkeypatch.setattr(cln, "swap", calls["real"])
+    assert again().status_code == 409 and len(texts["sent"]) == 1
+    db.now = db.now + cln.STUCK + timedelta(minutes=1)
+    assert ok(page())["text_again"]["why"] == cln.UNSURE
+    assert again().status_code == 409 and len(texts["sent"]) == 1
+
+
 def test_two_presses_text_once(db, texts, monkeypatch):
     failed_send(db, texts)
     real = cln.recipients

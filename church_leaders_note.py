@@ -720,6 +720,7 @@ def _texts_view(t: Any) -> Optional[Dict[str, Any]]:
 AGAIN_LIMIT = (f"The text was sent again {AGAIN_MOST} times this week, the most a week allows. "
                "The next note can go with its own text.")
 UNSURE = "It isn't clear whether the text reached them, so it can't be sent again this week."
+STUCK = timedelta(minutes=10)        # a try still "sending" after this never finished saving
 
 
 def _int(v: Any) -> int:
@@ -766,6 +767,12 @@ def again_of(rec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["tries"] = tries
     short = _short(t.get("short"))
     if t.get("state") == "sending":
+        # A try that never finished saving (a save that failed, a replica
+        # gone mid-send) can't say who it reached: after STUCK it says so,
+        # and it never goes again.
+        at = _at(t.get("at"))
+        if not at or _now() - at > STUCK:
+            return {**out, "mode": "again", "why": UNSURE}
         return {**out, "mode": "again", "why": "The text is going out now. Open the page again in a moment."}
     if t.get("error"):
         if t.get("none_went") is True and not t.get("unsure") and short:
@@ -1065,12 +1072,20 @@ def text_again(me: Dict[str, Any]) -> Dict[str, Any]:
                             if again else "None of the leaders has a number on their record, so there's no one to text.")
     old = last["texts"] if again else {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": ""}
     tries = a["tries"] + 1
-    claim = {**last, "id": uuid.uuid4().hex, "texts": {**old, "short": a["short"], "state": "sending", "tries": tries}}
+    claim = {**last, "id": uuid.uuid4().hex,
+             "texts": {**old, "short": a["short"], "state": "sending", "at": _iso(_now()), "tries": tries}}
+    claim["texts"].pop("unsure", None)
     if not swap(biz_id, last["id"], claim):
         raise HTTPException(409, "Someone else is texting the leaders right now. Open the page again in a moment.")
     out = _text(biz_id, to, a["short"])
     if out.get("error") and not out.get("unsure"):
-        swap(biz_id, claim["id"], last)          # nothing went: the try is given back
+        # Nothing went: the try is given back (asked twice; the swap only
+        # lands on our own claim). If it still won't save, the claim reads
+        # as unsure after STUCK and never texts twice; say so now.
+        if not (swap(biz_id, claim["id"], last) or swap(biz_id, claim["id"], last)):
+            print(f"[leaders_note] {biz_id[:8]}: text-again sent nothing and its try couldn't be given back")
+            raise HTTPException(503, f"{out['error']} The page couldn't be put back either, "
+                                     "so the text may not be offered again this week.")
         raise HTTPException(503, out["error"])
     if out.get("error"):
         # It broke partway: who got it can't be told, so it never goes again.
@@ -1090,17 +1105,23 @@ def text_again(me: Dict[str, Any]) -> Dict[str, Any]:
                      "skipped": max(0, people["leaders"] - len(reached) - len(still)), "failed": len(still)}
         texts.update({"body": str(out.get("body") or old.get("body") or ""), "short": a["short"],
                       "failed_ids": still[:IDS_MOST], "tries": tries})
-    texts.pop("state", None)
-    texts.pop("none_went", None)
+    for k in ("state", "at", "none_went"):
+        texts.pop(k, None)
     kept = old.get("again") if again else None
     earlier = [x for x in kept if isinstance(x, dict)] if isinstance(kept, list) else []
     texts["again"] = (earlier + [{"at": _iso(_now()), "by_name": sender_name(fresh, me["user"]),
                                   "sent": len(reached), "failed": len(still)}])[-AGAIN_MOST:]
     done = {**claim, "texts": texts}
-    recorded = swap(biz_id, claim["id"], done)
+    recorded = swap(biz_id, claim["id"], done) or swap(biz_id, claim["id"], done)
+    warning = ""
+    if not recorded:
+        # The texts went but who they reached isn't saved: the claim stays
+        # "sending", reads as unsure after STUCK, and is never pressed again.
+        print(f"[leaders_note] {biz_id[:8]}: text-again went (reached={len(reached)}) but its record didn't save")
+        warning = "The text went, but who it reached couldn't be saved, so it can't be sent again this week."
     return {"reached": len(reached), "failed": len(still), "recorded": recorded, "unsure": bool(out.get("error")),
-            "texts": _texts_view(texts), "last": last_view(done, tz),
-            "text_failed": text_failed_of(done), "text_again": again_view(fresh, done, None)}
+            "warning": warning, "texts": _texts_view(texts), "last": last_view(done, tz),
+            "text_failed": text_failed_of(done), "text_again": again_view(fresh, done, None) if recorded else None}
 
 
 # ─── Routes ───────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ prs: [kmj-intake-server (this PR), "solutionist-studio (the frontend PR)"]
 migrations: []
 left_undone:
   - "A Text them again that breaks partway (an exception mid-send, not a failed text) is kept as unsure: who got it can't be told, so it never goes again that week. Same for the note's own send"
-  - "A record stuck at texts.state 'sending' (a replica that died mid-retry) blocks Text them again until Monday: it fails closed, it never texts twice"
+  - "A try whose record won't save (the give-back after nothing went, or the save after the texts went; each asked twice) or whose replica died mid-send stays at texts.state 'sending': 'going out now' for 10 minutes (STUCK), then unsure, and never pressed again that week. It fails closed: the leaders it missed don't get a second try. The 503 / the response's `warning` say so, and Railway gets a [leaders_note] print"
   - "After an email-only send, the 'Text it to N leaders' offer shows when the page is opened again (the send's own response doesn't read who said yes, so it can't count them)"
   - "Chief and My week don't say a text failed; only the leaders note page does"
 decisions:
@@ -32,10 +32,11 @@ again_of, text_failed_of, again_view, text_again, the route, quiet_words'
 `again`), `rate_limit.py` (the bucket), `docs/CHURCH_DUTIES.md`'s
 leaders_note row.
 
-Tests: `test_church_leaders_note_text_again.py` (21): who gets it, never a
+Tests: `test_church_leaders_note_text_again.py` (23): who gets it, never a
 STOP or no-yes number (even one the record names), a leader who left the
 room, still-failed kept, twice a week, this week only, the gate, quiet
 hours, the card, every failed read a 503 with the try given back, two
-presses, a send that breaks partway, the first-time text, a record in a
+presses, a send that breaks partway, a give-back or a save that won't
+save (review on #1914), the first-time text, a record in a
 shape no send writes. `test_church_leaders_note_text.py` pins the record's
 new keys.
