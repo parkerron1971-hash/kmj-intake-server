@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-18: "I want to be able to build Leaders schedule. this is for when leaders are planning time off and have certain obiligations so that we as a church can plan around meeting ... making sure that everyone is not gone at the same time on our services. allowing only so many people off at the same time. ... there should volunteers one and one for leadership ... divided amongs the department to manage there department as well." Then, on the five calls the plan rests on: "Yes build to all five"'
 status: in progress
-prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934]
+prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936]
 migrations: [supabase/APPLY-2026-11-19-church-schedule.sql (not applied)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-19-church-schedule.sql by hand after review. Until it is there every /church/schedule route answers 404, nobody is told anything, the hourly sweep reads nothing, and nothing else changes."
@@ -26,7 +26,7 @@ decisions:
   - "Decided while building S1-5 (docs/CHURCH_SCHEDULE.md section 7.6 lists every one; the first is the lead session's, the rest the build's): the note that came with an answer is cleared with the reason, 90 days after the last day; on Dates a member-app session is always a person, so the owner's own person and the person of whoever oversees the office read and answer only what went to them; how many asks wait for someone is kept a minute beside the roster, so the Lead tab and the tab bar cost no read on a page view; what is kept decides the switcher, never the page, which reads fresh; who covers is picked from the people on the schedule (200 at most), never the whole church; Who else is away says a name, the days and who covers, never the kind; a refusal comes back as the page's own plain words by a short code; a note goes with not this one only; short notice is said before and after a planned ask and never on can't make it; the page's header shows no role names; a notice's words are unchanged, only where it opens and its button."
 related: [2026-10-23-sunday-planning-serving.md, 2026-11-04-church-map-chain.md, 2026-11-12-church-assignments.md, 2026-11-12-church-handovers.md, 2026-11-17-event-volunteer-dates.md]
 ---
-**S1-5: Dates on the member app's Lead tab.** `member_portal_dates.py` serves
+**S1-5 (#1936): Dates on the member app's Lead tab.** `member_portal_dates.py` serves
 `/my/lead/dates` and its writes. One of the church's people asks for time off
 (first day, last day, time off or another commitment, a private reason, who
 covers), says "I can't make it" (the days just ahead, on the calendar at once,

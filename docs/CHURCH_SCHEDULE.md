@@ -33,7 +33,7 @@ path for volunteers when their date is full or they already said yes to serve it
   when who is over someone changes, a private reason and an answer's note cleared 90 days after
   the last day). Owner-only by default, and silent until the migration is applied: the sweep
   reads nothing before it. No migration of its own.
-- **S1-5** holds `member_portal_dates.py`: Dates on the member app's Lead tab, where one of the
+- **S1-5 (#1936)** holds `member_portal_dates.py`: Dates on the member app's Lead tab, where one of the
   church's people asks for time off, says "I can't make it", takes one back, says yes or not
   this one to what went to them, and sees who else is away. `church_schedule.section` gives the
   Lead tab its Dates entry, and `member_portal._leads` gives the tab to someone on the schedule
