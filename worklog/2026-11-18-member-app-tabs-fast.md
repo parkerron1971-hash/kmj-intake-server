@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-18: "the members app move slow when send messages in chat, switching from one tab to another… what is the problem and how can that be sped up?" Then, on the four fixes: "yes build all four". This entry is the faster tab switching (the stopwatch and server caching, and instant chat send, are other sessions'').'
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1947]
 migrations: []
 left_undone:
   - "Not checked on a real iPhone or Android phone, only Playwright WebKit 26.5 and Chromium 149 on Windows. Worth a tap-through on Kevin's phone once live: the tab bar should stay still and pages cross-fade."
@@ -46,5 +46,6 @@ A page's HTML went from 95-114 KB to 8-29 KB; the stylesheet is 88 KB once (17.9
 cold first visit fetches it as one more request, about the bytes it saved on that page; every
 page after saves it. Pixel check: 264 Chromium pages (three churches, black / white / light gray
 bases and three accents; Church, Youth, Kids; phone, 1280 and 1440 wide; light and dark scheme)
-matched origin/main pixel for pixel; WebKit: see the PR. Before building, both repos' worklog/
+matched origin/main pixel for pixel (two full runs); WebKit 26.5, 162 of them (phone and
+1440 wide; Kids for one church), matched too. Before building, both repos' worklog/
 had only the 2026-10-20 member-app speed work (server reads), nothing on the client side.
