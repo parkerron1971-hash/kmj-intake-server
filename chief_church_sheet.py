@@ -271,6 +271,16 @@ def _sheet(business: Dict[str, Any], uid: str, action: Dict[str, Any]) -> Dict[s
                      "an Admin): never an Admin job, Giving & money, or their own sheet.")
     for g in s["guarded"]:
         lines.append(f"{g['label']}: {'open to them' if g['holds'] else 'not open to them'}. {g['how']}")
+    # Giving as its own tick (church_money_ticks): there only while it is
+    # switched on for this church. Chief reads it; only the owner gives it.
+    m = s.get("money")
+    if m:
+        waiting = ""
+        if m.get("pending"):
+            waiting = (f" A request is waiting for the owner: {m['pending']['wants_words']}, asked by "
+                       f"{m['pending']['asked_by_name'] or 'someone in the office'}.")
+        lines.append(f"Giving: {m['words']}.{waiting} Only the owner gives giving access, on the person's sheet, "
+                     "with the password. You never give it, ask for it or answer a request.")
     d = s["description"]
     if d["written"]:
         lines.append("A job description is written for them (job_of reads it).")

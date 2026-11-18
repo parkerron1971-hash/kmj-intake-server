@@ -621,4 +621,15 @@ def hand_back_login(biz: str, user_id: Any) -> Dict[str, int]:
     except Exception:  # noqa: BLE001 — the revoke itself is done; this is counted and said in the log
         out["failed"] += 1
         logger.warning("revoke: the jobs grant couldn't be cleared on %s", str(biz)[:8], exc_info=True)
+    # Its giving tick, and any request waiting about it, go with the login
+    # (church_money_ticks). The tick already counts only on the seat it was
+    # given to, so this is the tidy half: nothing is left to come back.
+    try:
+        import church_money_ticks
+        if not church_money_ticks.seat_gone(biz, user_id):
+            out["failed"] += 1
+            logger.warning("revoke: a removed login's giving tick is still stored on %s", str(biz)[:8])
+    except Exception:  # noqa: BLE001 — as above
+        out["failed"] += 1
+        logger.warning("revoke: the giving tick couldn't be cleared on %s", str(biz)[:8], exc_info=True)
     return out

@@ -626,17 +626,20 @@ def test_a_time_with_no_zone_is_read_as_utc(reads):
     assert mh.open_ask(BIZ, USER, now=NOW) is not None
 
 
-def test_this_file_decides_nothing_and_no_door_reads_it_yet():
-    """The tick is not wired into any decision in this PR: the money gate's
-    table does not name it, and nothing but this test imports the module."""
+def test_this_file_decides_nothing_and_one_module_reads_it_behind_the_switch():
+    """The reads here decide nothing. Since the server piece (2026-11-18)
+    ONE module calls them, church_money_ticks, and only with its switch on;
+    the money gate asks that module, never this one."""
     import church_money_gate
     gate = _read(ROOT / "church_money_gate.py")
-    assert "church_money_holders" not in gate and "money_holder(" not in gate
+    assert "money_holder(" not in gate and "import church_money_holders" not in gate
+    assert "church_money_ticks.holder(self.business_id, self.uid)" in gate
     assert not hasattr(church_money_gate, "money_holder")
     users = [p.name for p in ROOT.glob("*.py")
-             if p.name != "church_money_holders.py" and re.search(r"\bchurch_money_holders\b", _read(p))
-             and p.name != "account_lifecycle.py"]
-    assert users == [], users
+             if p.name != "church_money_holders.py" and re.search(r"import church_money_holders\b", _read(p))]
+    assert users == ["church_money_ticks.py"], users
+    ticks = _read(ROOT / "church_money_ticks.py")
+    assert "    if not open_for(business_id):\n        return None\n    return mh.money_holder(business_id, user_id)" in ticks
     src = _read(ROOT / "church_money_holders.py")
     assert "HTTPException" not in src and "sb_post" not in src and "sb_patch" not in src and "sb_delete" not in src
     assert "sb_get_as_service" in src and "SUPABASE_ANON" not in src

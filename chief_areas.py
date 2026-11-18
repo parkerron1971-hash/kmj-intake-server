@@ -219,6 +219,17 @@ OWNERS = frozenset({
 })
 # The views of show_view that are money.
 MONEY_VIEWS = {"invoices", "products"}
+# Giving as its own tick (church_money_ticks): a login that only SEES giving
+# has a Chief that reads money and changes none of it. These are the money
+# verbs that only read; every other verb placed in MONEY is a change, and is
+# refused unless the tick is Work or Lead. (The handlers ask the money gate
+# again, part by part: who gave, the bank. This is the first filter.)
+MONEY_READS = frozenset({
+    "giving_statement", "giving_statements_run", "growth_report", "show_revenue", "review_books",
+    "list_bookkeeping_proposals", "search_transactions", "bank_to_file", "giving_deposits", "bills",
+    "giving_counts", "expense_categories", "fund_status", "find_fund_payments", "bank_history", "list_expenses",
+    "check_balance", "unbilled_time", "list_products", "list_offerings", "offering_readiness", "check_inventory",
+    "show_view"})
 
 # Events and timeline entries that are money.
 MONEY_EVENT = re.compile(r"^(giv|gift|donat|pledge|invoice|payment|paid|pay_|payout|refund|charge|order|product_sold|"
@@ -275,7 +286,22 @@ def _read_scope(business_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     if not isinstance(areas, list):
         return None
     areas = [a for a in church_areas.AREA_ORDER if a in areas]
-    return {"areas": areas, "role": role, "lane": church_areas.lane_of(role, areas)}
+    scope = {"areas": areas, "role": role, "lane": church_areas.lane_of(role, areas)}
+    # The giving tick: what the owner ticked on this login's sheet. With
+    # "who gave" the login's Chief reads Giving & money whole; without it
+    # the money verbs are let through to their own gates (the books, the
+    # bills) but Chief's context stays trimmed of gifts and givers.
+    try:
+        import church_money_ticks
+        tick = church_money_ticks.holder(business_id, user_id)
+    except Exception:  # noqa: BLE001 — couldn't tell: no tick
+        tick = None
+    if tick:
+        scope["money"] = {"level": tick["level"], "can_work": tick["can_work"], "who_gave": tick["who_gave"],
+                          "bank": tick["bank"]}
+        if tick["who_gave"] and MONEY[0] not in scope["areas"]:
+            scope["areas"] = [a for a in church_areas.AREA_ORDER if a in areas or a == MONEY[0]]
+    return scope
 
 
 def forget(business_id: Any = None) -> None:
@@ -335,6 +361,12 @@ def refusal(verb: str, action: Optional[Dict[str, Any]], scope: Optional[Dict[st
     if scope is None:
         return None
     needs = areas_of(verb, action)
+    tick = scope.get("money")
+    if needs == MONEY and tick:
+        if verb not in MONEY_READS and not tick.get("can_work"):
+            return ("This login sees Giving & money but doesn't change it. The owner, an admin or whoever works "
+                    "giving does that.")
+        return None                      # its own gate decides the rest: who gave, the bank
     if needs and (ALL in needs or has(scope, *needs)):
         if verb == "schedule_action":
             inner = (action or {}).get("action")

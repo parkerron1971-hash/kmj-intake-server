@@ -472,6 +472,11 @@ app.include_router(church_sheet_router)
 # grants nothing.
 from church_structure import router as church_structure_router
 app.include_router(church_structure_router)
+# Giving as its own tick (church_money_ticks.py): the requests waiting for
+# the owner, and marking alerts read. CHURCH_MONEY_TICKS=off (the default)
+# answers 404 on the requests and changes nothing anywhere.
+from church_money_ticks import router as church_money_ticks_router
+app.include_router(church_money_ticks_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -1920,6 +1925,15 @@ async def startup():
                           id="db_health", max_instances=1)
     except Exception as e:
         print(f"   [warn] database health check not scheduled: {e}")
+    # Requests for giving access (church_money_ticks.py): hourly, mark the
+    # ones that ran out (seven days) and remind each owner once, 48 hours
+    # in. CHURCH_MONEY_TICKS=off: the job reads nothing.
+    try:
+        import church_money_ticks as _money_ticks
+        scheduler.add_job(g("church_money_asks", _money_ticks.tick), "interval", hours=1,
+                          id="church_money_asks", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] giving requests sweep not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in

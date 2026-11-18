@@ -498,6 +498,10 @@ class RefundBody(BaseModel):
 
 
 def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """The owner; or, with giving as its own tick switched on for the church
+    (Kevin, 2026-11-18: "let them refund freely for now"), whoever the owner
+    ticked "bank and payouts" for at Work or Lead (church_money_gate
+    .TICK_DOORS, "payouts" / "work"). Switched off, the owner alone."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,stripe_account_id,settings&limit=1"
@@ -505,7 +509,9 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
+        import church_money_gate
+        if not church_money_gate.tick_admits(business_id, user, "work", "payouts"):
+            raise HTTPException(403, "not authorized")
     if not payments_core.provider_for(rows[0]).is_connected(rows[0]):
         raise HTTPException(409, "payment provider not connected")
     return rows[0]
@@ -522,8 +528,19 @@ async def refund_charge(
     from financial_policy import require_operational_write
     require_operational_write(body.business_id)
     import ledger_unlock
-    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
-                                 business_id=body.business_id)
+    by_owner = str(biz.get("owner_id")) == str(user.id)
+    by_holder = False
+    if not by_owner:
+        import church_money_gate
+        by_holder = church_money_gate.tick_admits(body.business_id, user, "work", "payouts")
+    if not by_holder:
+        # The password again, as ever. A danger password is the owner's
+        # alone to confirm, so the ONE login not asked is the one the money
+        # gate has just named as the bank-and-payouts holder (the switch on,
+        # the tick on its active seat). Everyone else is asked, and every
+        # refund is recorded below, whoever made it.
+        ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER,
+                                     business_id=body.business_id)
     try:
         refund = await payments_core.provider_for(biz).create_refund(
             biz,
@@ -534,6 +551,17 @@ async def refund_charge(
     except RuntimeError as e:
         logger.warning(f"refund failed: charge={charge_id} err={e}")
         raise HTTPException(502, f"refund failed: {e!s}")
+    # Every refund is recorded: who made it, on what, for how much. No giver
+    # is named (the charge id is Stripe's), so it sits with the payments.
+    try:
+        import asyncio
+        await asyncio.to_thread(sb_clients.sb_post_as_service, "/events", {
+            "business_id": body.business_id, "event_type": "payment_refund_issued", "source": "stripe_payments",
+            "data": {"charge_id": charge_id, "refund_id": refund.get("id"), "amount_cents": refund.get("amount"),
+                     "by": str(user.id), "by_owner": by_owner, "reason": body.reason}},
+            "return=minimal")
+    except Exception:  # noqa: BLE001 — the refund is made; Stripe's own record stands
+        logger.warning("refund made but not recorded here: charge=%s", charge_id)
     return {
         "ok": True,
         "refund": {

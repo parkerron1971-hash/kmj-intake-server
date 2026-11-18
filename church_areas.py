@@ -1079,6 +1079,13 @@ def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job
             raise HTTPException(503, "That didn't save. Try again.")
         fields["lane"] = lane_after(role, got[0].get("lane"), got[0].get("areas"), areas=areas, job=job,
                                     own=own_job(biz, got[0].get("lane")))
+    if fields.get("role") == "viewer":
+        # A Viewer login only Sees giving (church_money_ticks). Its tick is
+        # lowered BEFORE the level, so moving it back up later never brings
+        # Work back without the owner; a lowering that fails stops the save.
+        import church_money_ticks
+        if not church_money_ticks.seat_lowered_to_viewer(biz, uid):
+            raise HTTPException(503, "That didn't save. Try again.")
     saved = sb_clients.sb_patch_as_service(
         f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", fields)
     if not isinstance(saved, list) or not saved:
