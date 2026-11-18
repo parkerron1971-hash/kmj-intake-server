@@ -123,3 +123,62 @@ def test_composer_gate_is_member(fake):
     sc._require_owner("b1", "owner1")
     with pytest.raises(HTTPException):
         sc._require_owner("b1", "stranger")
+
+
+# ─── A church's payroll, contractors and period closes are its books ───
+# 2026-11-18: these three let any seat on a church read through the server,
+# a Viewer included, while the ledger, reports and bank refused the same
+# login. They now ask the same wall the ledger asks, first.
+
+@pytest.fixture
+def church(fake):
+    fake.rows("businesses").append({
+        "id": "c1", "owner_id": "pastor1", "is_active": True, "name": "c1",
+        "type": "church", "settings": {}, "subscription_status": None,
+        "subscription_plan": None, "comp_tier": None})
+    for uid, role in (("cv1", "viewer"), ("cm1", "member"),
+                      ("cg1", "manager"), ("ca1", "admin")):
+        fake.rows("business_users").append({
+            "id": f"seat_{uid}", "business_id": "c1", "user_id": uid,
+            "role": role, "status": "active"})
+    return fake
+
+
+@pytest.mark.parametrize("module", ["payroll_router", "contractors_router", "accounting_periods_router"])
+def test_a_churchs_books_routers_refuse_every_seat_below_admin(church, module):
+    import importlib
+    r = importlib.import_module(module)
+    for uid in ("cv1", "cm1", "cg1", "stranger"):
+        for need in ("viewer", "manager"):
+            with pytest.raises(HTTPException) as e:
+                r._access("c1", _user(uid), need)
+            assert e.value.status_code == 403, (module, uid, need)
+    assert r._access("c1", _user("pastor1"), "viewer")["id"] == "c1"
+    assert r._access("c1", _user("pastor1"), "admin")["id"] == "c1"
+    assert r._access("c1", _user("ca1"), "viewer")["id"] == "c1"
+    assert r._access("c1", _user("ca1"), "manager")["id"] == "c1"
+
+
+@pytest.mark.parametrize("module", ["payroll_router", "contractors_router", "accounting_periods_router"])
+def test_a_business_that_is_not_a_church_keeps_its_ladder(fake, module):
+    import importlib
+    r = importlib.import_module(module)
+    assert r._access("b1", _user("v1"), "viewer")["id"] == "b1"
+    assert r._access("b1", _user("g1"), "manager")["id"] == "b1"
+    with pytest.raises(HTTPException) as e:
+        r._access("b1", _user("v1"), "manager")
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        r._access("b1", _user("stranger"), "viewer")
+    assert e.value.status_code == 403
+
+
+def test_the_three_ask_the_wall_before_anything_else():
+    """The wall sits before the owner shortcut and the seat ladder, so no
+    later branch can answer for a church first."""
+    for name in ("payroll_router", "contractors_router", "accounting_periods_router"):
+        src = (_here.parent / f"{name}.py").read_text(encoding="utf-8")
+        body = src[src.index("def _access("):]
+        body = body[:body.index("\ndef ", 10)]
+        wall = body.index("require_ministry_finance(biz, user, row)")
+        assert wall < body.index('str(row.get("owner_id"))') and wall < body.index("require_role("), name
