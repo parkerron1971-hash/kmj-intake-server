@@ -49,6 +49,10 @@ MONDAY. From 8 AM Eastern on Monday the week's verdict is written once
 the owner hears once, through the owner alert inbox (dev_alerts, source
 "database"): a push that opens Mission Control → Systems → Database.
 
+MEMBER APP. Each reading also keeps how long member pages took on the
+server copy that took it (member_stopwatch.py), as metrics.member_app; the
+card adds last Sunday's up into one line ("Tabs open in 0.9 s typical ...").
+
 Owner-only (require_owner on the router). DB_HEALTH_CHECK=off stops the
 readings, the report and the card. Until supabase/APPLY-2026-11-18-db-
 health.sql is applied nothing is read or written and the card says it
@@ -762,6 +766,12 @@ async def take_reading(slot: datetime, kind: str, *, top: bool) -> Dict[str, Any
     async with httpx.AsyncClient() as c:
         metrics, why = await read_metrics(c)
     pg, pg_why = await asyncio.to_thread(read_pg, 5 if top else 0)
+    # How long member pages took on this server copy (member_stopwatch.py),
+    # kept in the same jsonb: no table of its own, no migration.
+    import member_stopwatch
+    member = member_stopwatch.for_reading(kind)
+    if member:
+        metrics = {**(metrics or {}), "member_app": member}
     taken_at = _now()
     problem = " ".join(w for w in (why, pg_why) if w)[:300] or None
     if why:
@@ -931,6 +941,7 @@ def build_summary(now: datetime, rows: Optional[List[Dict[str, Any]]],
         got["verdict"] = judge(size, got["peak"], churches)
     local = now.astimezone(ET)
     so_far = local.date() == sunday and local.timetz().replace(tzinfo=None) <= SUNDAY_LAST
+    import member_stopwatch
     return {
         "enabled": True, "set_up": True,
         "size": {"key": size["key"], "label": size["label"], "memory_gb": size["memory_gb"],
@@ -946,6 +957,7 @@ def build_summary(now: datetime, rows: Optional[List[Dict[str, Any]]],
         "history": [{"week": w.get("week"), "level": w.get("level"), "headline": w.get("headline"),
                      "told": bool(w.get("told_at"))} for w in weeks],
         "schedule": SCHEDULE_WORDS, "disk_note": DISK_BALANCE_WORDS,
+        "member_app": member_stopwatch.card(in_week, rows, so_far=so_far, when_words=when_words),
     }
 
 

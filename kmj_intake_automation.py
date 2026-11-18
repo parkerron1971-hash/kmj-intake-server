@@ -194,6 +194,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # and strips Accept-Encoding before gzip decides. See sse_middleware.py.
 from sse_middleware import NoGzipForStreams
 app.add_middleware(NoGzipForStreams)
+# The member app's stopwatch (member_stopwatch.py): a Server-Timing header
+# and one log line on every /my request. Outside gzip, so the time includes
+# compressing the page; inside the custom-domain cache rule, which stays
+# outermost.
+from member_stopwatch import MemberStopwatch
+app.add_middleware(MemberStopwatch)
 # A custom domain's pages are never stored by Cloudflare: the SaaS Worker
 # fetches the Railway URL, so every custom domain shared one cache entry per
 # path (churchsavvy.app's home showed on lovecityc.com, 2026-10-25). See
@@ -556,6 +562,9 @@ app.include_router(church_event_signups_router)
 # …) and the owner switch (/member-portal/...). BEFORE public_site_router.
 from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
+# The phone's page timing (POST /my/timing, member_stopwatch.py).
+from member_stopwatch import router as member_stopwatch_router
+app.include_router(member_stopwatch_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
 # The member directory (member_directory.py): a member's own yes and what
