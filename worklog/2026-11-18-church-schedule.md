@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-18: "I want to be able to build Leaders schedule. this is for when leaders are planning time off and have certain obiligations so that we as a church can plan around meeting ... making sure that everyone is not gone at the same time on our services. allowing only so many people off at the same time. ... there should volunteers one and one for leadership ... divided amongs the department to manage there department as well." Then, on the five calls the plan rests on: "Yes build to all five"'
 status: in progress
-prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936, kmj-intake-server#1938]
+prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936, kmj-intake-server#1938, kmj-intake-server#1941]
 migrations: [supabase/APPLY-2026-11-19-church-schedule.sql (applied), supabase/APPLY-2026-11-20-church-schedule-limits.sql (not applied)]
 left_undone:
   - "The migration is applied (2026-11-18, run by the owner, checked by the lead session with the file's Check block), and CHURCH_SCHEDULE is unset, which means owner: the schedule is open at the platform owner's own church and closed everywhere else. Everything built here is live there. Opening it for other churches means setting CHURCH_SCHEDULE=on on both services."
@@ -29,7 +29,7 @@ decisions:
   - "Decided while writing S2-1 (docs/CHURCH_SCHEDULE.md section 7.8 lists every one, with each difference from the draft): church_away_settle, which the live code calls, is not dropped or changed; the exception a yes is given over has a function of its own name, church_away_settle_excepted, which calls it (this reverses decision 19: two functions of one name make Postgres refuse every six-argument call, and dropping and re-making the one would be undone by running step 1's file again); an exception sits only on a yes, is for a flag the ask has, and a bad one is refused by name with the yes undone; the person who set a department's number is checked to be the church's own; the usual service days are a plain list; the new checks are validated as they go in because both tables are days old; all three new tables are left out of the export."
 related: [2026-10-23-sunday-planning-serving.md, 2026-11-04-church-map-chain.md, 2026-11-12-church-assignments.md, 2026-11-12-church-handovers.md, 2026-11-17-event-volunteer-dates.md]
 ---
-**S2-1: step 2's tables, and nothing else.**
+**S2-1 (#1941): step 2's tables, and nothing else.**
 `supabase/APPLY-2026-11-20-church-schedule-limits.sql` (**not applied**; run it after
 step 1's file) adds the two group numbers and the usual service days to
 `church_schedule_settings`, makes `church_schedule_department_limits` (one number
