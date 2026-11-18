@@ -183,7 +183,7 @@ def test_the_rollback_recreates_each_dropped_policy_and_says_it_reopens_the_hole
             word = n.split()[2]
             assert (cmd, body) == {"deletes": ("delete", "using (true)"), "inserts": ("insert", "with check (true)"),
                                    "reads": ("select", "using (true)"),
-                                   "updates": ("update", "using (true) with check (true)")}[word], (t, n)
+                                   "updates": ("update", "using (true)")}[word], (t, n)
         assert code.count(f"drop policy if exists {_name(n)} on public.{t};") == 1
     granted = set(re.findall(r"grant select, insert, update, delete on public\.(\w+) to anon;", code))
     assert granted == set(TABLES) - BROWSER_READS
@@ -298,13 +298,16 @@ def test_no_server_module_sends_the_anon_key_to_one_of_the_twenty_tables():
 
 def test_chiefs_patterns_are_written_as_the_server_and_pinned_to_the_business(monkeypatch):
     import chief_of_staff as cos
-    as_user, as_server = [], []
+    as_user, as_server, reads = [], [], []
 
     async def user(client, method, path, body=None):
         as_user.append((method, path))
         return [{"id": "p1", "occurrences": 2, "pattern_value": {"a": 1}}] if "pattern_key=eq.seen" in path else []
 
     async def server(client, method, path, body=None):
+        if method == "GET":
+            reads.append(path)
+            return [{"id": "p1", "occurrences": 2, "pattern_value": {"a": 1}}] if "pattern_key=eq.seen" in path else []
         as_server.append((method, path, body))
         return [{}]
 
@@ -312,8 +315,9 @@ def test_chiefs_patterns_are_written_as_the_server_and_pinned_to_the_business(mo
     monkeypatch.setattr(cos, "_sb_service", server)
     asyncio.run(cos._upsert_pattern(None, "biz-1", "habit", "seen", {"b": 2}, increment=True))
     asyncio.run(cos._upsert_pattern(None, "biz-1", "habit", "new", {"c": 3}))
-    # Reads stay under the person's own login; the two writes are the server's.
-    assert [m for m, _ in as_user] == ["GET", "GET"]
+    # The read and the write are both the server's, so they see the same row
+    # whoever is signed in; each read is pinned to the chat's business.
+    assert as_user == [] and len(reads) == 2 and all("business_id=eq.biz-1" in p for p in reads)
     (m1, p1, b1), (m2, p2, b2) = as_server
     assert (m1, p1) == ("PATCH", "/chief_patterns?id=eq.p1&business_id=eq.biz-1")
     assert b1["pattern_value"] == {"a": 1, "b": 2} and b1["occurrences"] == 3

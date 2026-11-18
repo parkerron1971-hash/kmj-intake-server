@@ -15,10 +15,10 @@
 -- Each policy is recreated as its original migration wrote it (TO public,
 -- FOR ALL, USING true WITH CHECK true). The eight per-command policies on
 -- site_chat_history and site_content_overrides were made in the dashboard
--- and no file holds their text; they are recreated in the dashboard
--- template's shape (the read and the delete USING true, the insert WITH
--- CHECK true, the update both), which is what pg_policies showed on
--- 2026-11-18 as far as it was read (each had a literal true).
+-- and no file holds their text; they are recreated exactly as pg_policies
+-- showed them on production on 2026-11-18: the read, the delete and the
+-- update USING true (the update has no WITH CHECK), the insert WITH CHECK
+-- true, all TO public.
 --
 -- The nine scoped policies the APPLY file added are LEFT IN PLACE: they are
 -- correct with or without the allow-all ones, and dropping them is the
@@ -61,7 +61,7 @@ create policy "Allow all inserts on site_chat_history" on public.site_chat_histo
 drop policy if exists "Allow all reads on site_chat_history" on public.site_chat_history;
 create policy "Allow all reads on site_chat_history" on public.site_chat_history for select using (true);
 drop policy if exists "Allow all updates on site_chat_history" on public.site_chat_history;
-create policy "Allow all updates on site_chat_history" on public.site_chat_history for update using (true) with check (true);
+create policy "Allow all updates on site_chat_history" on public.site_chat_history for update using (true);
 
 drop policy if exists "Allow all deletes on site_content_overrides" on public.site_content_overrides;
 create policy "Allow all deletes on site_content_overrides" on public.site_content_overrides for delete using (true);
@@ -70,7 +70,7 @@ create policy "Allow all inserts on site_content_overrides" on public.site_conte
 drop policy if exists "Allow all reads on site_content_overrides" on public.site_content_overrides;
 create policy "Allow all reads on site_content_overrides" on public.site_content_overrides for select using (true);
 drop policy if exists "Allow all updates on site_content_overrides" on public.site_content_overrides;
-create policy "Allow all updates on site_content_overrides" on public.site_content_overrides for update using (true) with check (true);
+create policy "Allow all updates on site_content_overrides" on public.site_content_overrides for update using (true);
 
 drop policy if exists sms_bindings_all on public.sms_bindings;
 create policy sms_bindings_all on public.sms_bindings for all using (true) with check (true);

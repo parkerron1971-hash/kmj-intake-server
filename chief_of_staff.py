@@ -13976,7 +13976,10 @@ async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
                           value: Dict[str, Any], increment: bool = False) -> None:
     """Insert or merge a chief_patterns row. Confidence ramps with occurrences."""
     try:
-        existing = await _sb(
+        # Read as the server too, so the read and the write that follows see
+        # the same row whoever is signed in (a read the login could not make
+        # would add the pattern again every time).
+        existing = await _sb_service(
             client, "GET",
             f"/chief_patterns?business_id=eq.{biz_id}"
             f"&pattern_type=eq.{pattern_type}&pattern_key=eq.{pattern_key}"
