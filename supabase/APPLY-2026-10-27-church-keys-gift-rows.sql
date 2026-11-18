@@ -1,3 +1,9 @@
+-- WARNING, 2026-11-18. RUNNING THIS FILE AGAIN after
+-- APPLY-2026-11-18-church-money-holders.sql resets ministry_giving_access to
+-- the body below, which does not know the giving tick: a holder's "who gave"
+-- opens nothing (gift rows, giving events, gift alerts) until you run that
+-- file again. Nobody gains anything from a re-run of this one.
+--
 -- Church Areas, step 2, part 3: the Giving keeper in the database. Kevin
 -- 2026-10-23: "if Pastor look at money another leader is notified and have
 -- to recieve a code from that person to get into money"; his picks

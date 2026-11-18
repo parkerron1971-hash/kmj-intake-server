@@ -1,3 +1,11 @@
+-- WARNING, 2026-11-18. RUNNING THIS FILE AGAIN after
+-- APPLY-2026-11-18-church-money-holders.sql resets ministry_finance_guard to
+-- the body below, which does not know the giving tick: every holder of a
+-- tick reads no money row until that file is run again. It also resets the
+-- gift rule to before the Giving keeper, so run
+-- APPLY-2026-10-27-church-keys-gift-rows.sql again first, then run that file
+-- again. Nobody gains anything from a re-run of this one.
+--
 -- Ministry readiness repairs. Apply before the corresponding backend/frontend release.
 -- Idempotent. No gifts inferred from ordinary service invoices or generic restricted categories.
 begin;
