@@ -283,7 +283,7 @@ def test_help_requests_are_confidential_by_area(db):
     seen = _by(money, bill["id"])
     assert seen["approved_cents"] == 15000 and seen["given_cents"] == 15000 and seen["need"] == "bill"
     assert money["fund"]["given_month_cents"] == 15000
-    assert money["me"] == {"view": "money", "approve": False, "settings": False}
+    assert money["me"] == {"view": "money", "approve": False, "settings": False, "send": False, "pay": True}
     assert _decide("treasurer", private["id"]).status_code == 403, "amounts only: no yes without the story"
     assert _add("viewer").status_code == 403, "a viewer only reads"
 
