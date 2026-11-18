@@ -13,7 +13,12 @@ the PGlite check runs the real one):
     it, an office login's person, a leader who is also an office login, the
     add list, the owner's own person, someone not on the schedule
   * answers and withdrawals: who may, what is written, and that two answers
-    at once (or an answer after a withdraw) are a 409
+    at once (or an answer after a withdraw) are a 409; nobody answers one
+    they entered, the owner aside; the owner and whoever oversees the office
+    take one back, and having entered it is not enough
+  * "can't make it" is for the days just ahead (the church's notice days,
+    two at least); only the one person the owner is needs no yes; a login
+    that has left the office no longer holds what went to it
   * the refusals: the days, the same days already waiting, too many waiting,
     who covers, a long reason
   * PRIVACY: the reason (and the note that came with the answer) reaches the
@@ -347,14 +352,34 @@ def test_the_asker_takes_it_back_waiting_or_already_a_yes(app, db):
 
 
 def test_who_may_take_one_back(app, db):
+    """The asker; in the office app also the owner and whoever oversees the
+    office. Having entered it is not enough on its own."""
+    w = db.who[LOVE_CITY]
     as_(app, LOVE_CITY, "jessica")
-    got = saved(ask(app, **{"for": f"person:{db.who[LOVE_CITY]['yolanda']}"}))
-    for handle in ("andre", "minnie", "owner", "ruth"):
+    got = saved(ask(app, **{"for": f"person:{w['yolanda']}"}))
+    assert got["can_withdraw"] is True, "she oversees the office"
+    for handle in ("andre", "minnie", "naiya", "ruth"):
         as_(app, LOVE_CITY, handle)
         r = withdraw(app, got["id"])
         assert r.status_code == 403 and r.json()["detail"] == cs.NOT_ASKER, handle
+    # The office is now overseen by two others: she entered it, and that alone no longer takes it back.
+    db.t["church_duty_holders"] += [{"business_id": LOVE_CITY, "duty": "oversee_lanes", "user_id": w[h + "@"]}
+                                    for h in ("naiya", "tiara")]
+    cd._CACHE.clear()
     as_(app, LOVE_CITY, "jessica")
-    assert saved(withdraw(app, got["id"]))["state"] == "withdrawn", "the login that entered it"
+    assert row(db, got["id"])["made_by"] == w["jessica@"]
+    r = withdraw(app, got["id"])
+    assert r.status_code == 403 and r.json()["detail"] == cs.NOT_ASKER
+    assert row(db, got["id"])["state"] == "asked"
+    as_(app, LOVE_CITY, "naiya")
+    assert saved(withdraw(app, got["id"]))["state"] == "withdrawn", "whoever oversees the office today"
+    got = planned(app)
+    as_(app, LOVE_CITY, "andre")
+    saved(answer(app, got["id"], True))
+    as_(app, LOVE_CITY, "owner")
+    [seen] = [a for a in box(app, "all") if a["id"] == got["id"]]
+    assert seen["can_withdraw"] is True
+    assert saved(withdraw(app, got["id"]))["state"] == "withdrawn" and facts(db) == [], "the owner, a yes too"
     got = planned(app)
     as_(app, LOVE_CITY, "andre")
     saved(answer(app, got["id"], False))
@@ -808,3 +833,228 @@ def test_every_ask_is_read_whole_past_a_thousand(app, db):
     mine = db.who[NEW_HOPE]["nathan"]
     assert len(box(app, "all", NEW_HOPE)) == 1050
     assert len(box(app, "to_me", NEW_HOPE)) == 1050 - sum(1 for r in db.t["church_away_asks"] if r["contact_id"] == mine)
+
+
+# ─── From the review of #1930 ─────────────────────────────────────────
+
+def demote(db, handle, role):
+    next(s for s in db.t["business_users"] if s["user_id"] == db.who[LOVE_CITY][handle + "@"])["role"] = role
+
+
+@pytest.mark.parametrize("role", ["member", "viewer"])
+def test_a_login_that_left_the_office_for_another_seat_no_longer_holds_what_went_to_it(app, db, role):
+    """It went to a Manager login. Her seat changes: she has left the office,
+    and neither the reason nor the yes is hers any more. The owner holds it."""
+    w = db.who[LOVE_CITY]
+    got = planned(app, "naiya")
+    assert got["to"]["id"] == w["jessica@"]
+    ch = co.Church(c3.church(db, LOVE_CITY))
+    her = co.who(co.PERSON, w["jessica"])
+    assert cs.sees_reason(ch, her, row(db, got["id"])), "the office login tied to exactly her"
+    demote(db, "jessica", role)
+    ch = co.Church(c3.church(db, LOVE_CITY))
+    asked = row(db, got["id"])
+    for me in (co.who(co.LOGIN, w["jessica@"]), her):
+        assert not cs.sees_reason(ch, me, asked) and not cs.may_decide(ch, me, asked), me
+    assert cs.shape(ch, co.who(co.LOGIN, w["jessica@"]), asked, cs._names(ch, [asked]))["reason"] is None
+    if role == "member":                                         # a Viewer seat opens none of these routes
+        as_(app, LOVE_CITY, "jessica")
+        assert box(app, "to_me") == [] and SECRET not in everything_read(app)
+        r = answer(app, got["id"], True)
+        assert r.status_code == 403 and r.json()["detail"] == cs.NOT_TO_YOU
+    as_(app, LOVE_CITY, "owner")
+    [mine] = box(app, "to_me")
+    assert mine["id"] == got["id"] and mine["can_answer"] is True and mine["reason"] == SECRET
+    assert saved(answer(app, got["id"], True))["state"] == "yes"
+
+
+def test_nobody_answers_an_ask_they_entered_the_owner_aside(app, db):
+    """Whoever oversees the office and enters an ask for someone leaves the
+    yes to the one it went to, or the owner."""
+    w = db.who[LOVE_CITY]
+    as_(app, LOVE_CITY, "jessica")
+    got = saved(ask(app, **{"for": f"person:{w['yolanda']}"}))
+    assert got["can_answer"] is False
+    r = answer(app, got["id"], True)
+    assert r.status_code == 403 and r.json()["detail"] == cs.NOT_TO_YOU and not db.rpcs
+    as_(app, LOVE_CITY, "andre")
+    assert saved(answer(app, got["id"], True))["decided"]["by"] == "Andre Wallace"
+    as_(app, LOVE_CITY, "owner")
+    mine = saved(ask(app, starts_on=day(40), ends_on=day(41), **{"for": f"person:{w['tyrone']}"}))
+    assert mine["can_answer"] is True and saved(answer(app, mine["id"], True))["state"] == "yes", "the owner may"
+
+
+def test_a_login_matched_to_no_person_cant_say_yes_to_its_own_record(app, db):
+    """The reviewer's case: she oversees the office, her login names no
+    record, she adds her own record, asks for it, and answers it herself."""
+    w = db.who[LOVE_CITY]
+    seat = next(s for s in db.t["business_users"] if s["user_id"] == w["laquesha@"])
+    seat.update(contact_id=None, invited_email="someone.else@lovecity.org")
+    db.t["church_duty_holders"] += [{"business_id": LOVE_CITY, "duty": "oversee_lanes", "user_id": w[h + "@"]}
+                                    for h in ("laquesha", "jessica")]
+    cd._CACHE.clear()
+    as_(app, LOVE_CITY, "laquesha")
+    me = app.get(f"/church/schedule/status?business_id={LOVE_CITY}").json()["me"]
+    assert me["person"] is None and me["can_set"] is True
+    assert app.put("/church/schedule/people", json={"business_id": LOVE_CITY, "contact_id": w["laquesha"],
+                                                    "listed": "add"}).status_code == 200
+    got = saved(ask(app, reason=SECRET, **{"for": f"person:{w['laquesha']}"}))
+    assert got["state"] == "asked" and got["can_answer"] is False
+    assert answer(app, got["id"], True).status_code == 403
+    assert row(db, got["id"])["state"] == "asked" and facts(db) == []
+    as_(app, LOVE_CITY, "jessica")
+    assert saved(answer(app, got["id"], True))["decided"]["by"] == "Jessica McCloud", "someone else who oversees it"
+
+
+def test_two_presses_of_cant_make_it_at_once_end_as_one_ask_and_one_away_date(app, db, monkeypatch):
+    """The table keeps one WAITING ask for the same days, so once the first
+    press has settled the second insert goes in too."""
+    as_(app, LOVE_CITY, "yolanda")
+    real = sb_clients.sb_post_as_service
+    other = {}
+
+    def racing(path, body, prefer=None, **k):
+        if path.startswith("/church_away_asks") and not other:
+            other["r"] = None                     # the other press lands whole, between this one's reads and its insert
+            other["r"] = ask(app, starts_on=day(0), ends_on=day(0), kind="cant")
+        return real(path, body, prefer, **k)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", racing)
+    mine = saved(ask(app, starts_on=day(0), ends_on=day(0), kind="cant"))
+    first = saved(other["r"])
+    assert mine["id"] == first["id"] and mine["state"] == "yes", "this press answers with the one that stands"
+    assert [(a["id"], a["state"]) for a in db.t["church_away_asks"]] == [(first["id"], "yes")]
+    assert [f["ask_id"] for f in facts(db)] == [first["id"]]
+
+
+def test_a_reason_never_reaches_the_log_through_a_refused_write(app, db):
+    """sb_clients logs a refusal's body unless the call is redacted, and
+    PostgREST's body for a failed check echoes the row ("Failing row
+    contains ..."). The ask's insert and every settle are sent redacted."""
+    got = planned(app)
+    as_(app, LOVE_CITY, "andre")
+    saved(answer(app, got["id"], False, note=NOTE))
+    as_(app, LOVE_CITY, "yolanda")
+    saved(ask(app, starts_on=day(0), ends_on=day(0), kind="cant", reason=SECRET))
+    saved(withdraw(app, saved(ask(app, starts_on=day(50), ends_on=day(51), reason=SECRET))["id"]))
+    carrying = [(path, redact) for path, redact in db.posts
+                if path in ("/church_away_asks", "/rpc/church_away_settle")]
+    assert len(carrying) == 6 and all(redact for _path, redact in carrying), carrying
+
+
+def test_days_at_the_very_end_of_the_calendar_are_a_400_or_an_ask_never_a_500(app, db):
+    as_(app, LOVE_CITY, "owner")
+    for q in ("from=9999-12-31", "from=9999-11-15", "to=9999-12-31", "from=0001-01-01&to=9999-12-31",
+              "from=9999-12-31&to=0001-01-01"):
+        r = app.get(f"/church/schedule/leaders?business_id={LOVE_CITY}&{q}")
+        assert r.status_code == 400, (q, r.text)
+    assert app.get(f"/church/schedule/leaders?business_id={LOVE_CITY}&from=9999-12-01&to=9999-12-31").status_code == 200
+    assert app.get(f"/church/schedule/leaders?business_id={LOVE_CITY}&from=0001-01-01").status_code == 200
+    as_(app, LOVE_CITY, "yolanda")
+    assert ask(app, starts_on="0001-01-01", ends_on="0001-01-02").status_code == 400
+    assert ask(app, starts_on="0001-01-01", ends_on="9999-12-31").status_code == 400
+    assert ask(app, starts_on="9999-12-31", ends_on="9999-12-31", kind="cant").status_code == 400
+    far = saved(ask(app, starts_on="9999-12-30", ends_on="9999-12-31"))
+    assert far["state"] == "asked" and far["flags"] == []
+
+
+def test_only_the_one_person_the_owner_is_needs_no_yes(app, db):
+    """church_over puts everyone who carries the owner's sign-in email at the
+    top (a family address). Only the owner is the owner: his wife's ask goes
+    to him, like anyone's with nobody else over them."""
+    w = db.who[LOVE_CITY]
+    owner = c3.church(db, LOVE_CITY)["owner_id"]
+    next(c for c in db.t["contacts"] if c["id"] == w["dana"])["email"] = c3.OWNER_EMAIL[owner]
+    biz = next(b for b in db.t["businesses"] if b["id"] == LOVE_CITY)
+    biz["settings"] = {**biz["settings"], "church_owner_contact_id": w["kevin"]}      # the church said which one he is
+    ch = co.Church(c3.church(db, LOVE_CITY))
+    assert ch.top == {w["kevin"], w["dana"]} and ch.owner_person == w["kevin"]
+    assert cs.goes_to(ch, w["kevin"]) is None
+    assert cs.goes_to(ch, w["dana"]) == {"kind": "login", "id": owner, "name": "Pastor Kevin"}
+    as_(app, LOVE_CITY, "jessica")
+    app.put("/church/schedule/people", json={"business_id": LOVE_CITY, "contact_id": w["dana"], "listed": "add"})
+    got = saved(ask(app, starts_on=day(3), ends_on=day(4), reason=SECRET, **{"for": f"person:{w['dana']}"}))
+    assert got["state"] == "asked" and got["flags"] == ["short_notice"] and facts(db) == []
+    assert got["to"] == {"kind": "login", "id": owner, "name": "Pastor Kevin"}
+    as_(app, LOVE_CITY, "owner")
+    [mine] = box(app, "to_me")
+    assert mine["id"] == got["id"] and mine["mine"] is False and mine["can_answer"] is True
+    assert saved(answer(app, got["id"], True))["state"] == "yes"
+    own = saved(ask(app, starts_on=day(3), ends_on=day(4)))
+    assert own["state"] == "yes" and own["to"] is None and own["name"] == "Kevin McCloud", "the owner himself, as before"
+
+
+def left_waiting(app, db, who="yolanda", **kw):
+    """An ask that needs no yes whose settle failed and that couldn't be taken back."""
+    as_(app, LOVE_CITY, who)
+    db.fail = {"post": "/rpc/church_away_settle", "delete": "/church_away_asks"}
+    assert ask(app, **kw).status_code == 503
+    db.fail = {}
+    [left] = [r for r in db.t["church_away_asks"] if r["state"] == "asked"]
+    return left
+
+
+def test_a_cant_make_it_left_waiting_is_never_answered(app, db):
+    left = left_waiting(app, db, starts_on=day(0), ends_on=day(0), kind="cant", reason=SECRET)
+    assert left["to_contact_id"] == db.who[LOVE_CITY]["andre"]
+    for handle in ("andre", "owner", "jessica"):
+        as_(app, LOVE_CITY, handle)
+        assert box(app, "to_me") == [], handle
+        for yes in (True, False):
+            r = answer(app, left["id"], yes)
+            assert r.status_code == 409 and r.json()["detail"] == cs.NO_YES, (handle, yes)
+    as_(app, LOVE_CITY, "owner")
+    [seen] = [a for a in box(app, "all") if a["id"] == left["id"]]
+    assert seen["state"] == "asked" and seen["can_answer"] is False
+    assert not db.rpcs[1:] and row(db, left["id"])["state"] == "asked" and facts(db) == []
+    as_(app, LOVE_CITY, "yolanda")
+    got = saved(ask(app, starts_on=day(0), ends_on=day(0), kind="cant"))
+    assert got["id"] == left["id"] and got["state"] == "yes" and len(facts(db)) == 1, "asking again still settles it"
+
+
+def test_the_owners_own_left_waiting_is_never_answered_either(app, db):
+    left = left_waiting(app, db, "owner")
+    as_(app, LOVE_CITY, "jessica")
+    r = answer(app, left["id"], False)
+    assert r.status_code == 409 and r.json()["detail"] == cs.NO_YES
+    assert [a["can_answer"] for a in box(app, "all")] == [False]
+    as_(app, LOVE_CITY, "owner")
+    assert saved(ask(app))["id"] == left["id"] and len(facts(db)) == 1
+
+
+def test_finishing_one_that_moved_meanwhile_is_a_409_never_saved_as_it_stands(app, db):
+    left = left_waiting(app, db, starts_on=day(0), ends_on=day(0), kind="cant")
+    db.before_settle = lambda: fake.settle(db, {"p_business_id": LOVE_CITY, "p_ask_id": left["id"],
+                                                "p_state": "withdrawn"})       # she took it back on another screen
+    r = ask(app, starts_on=day(0), ends_on=day(0), kind="cant")
+    assert r.status_code == 409 and r.json()["detail"] == cs.MOVED
+    assert row(db, left["id"])["state"] == "withdrawn" and facts(db) == []
+    assert saved(ask(app, starts_on=day(0), ends_on=day(0), kind="cant"))["state"] == "yes", "then it is a new one"
+
+
+def test_cant_make_it_is_for_the_days_just_ahead(app, db):
+    """Kevin's fifth call: two weeks' notice for planned time off; sickness
+    and emergencies are never blocked. Farther out than the church's notice
+    days is planned, so it is asked for."""
+    as_(app, LOVE_CITY, "yolanda")
+    r = ask(app, starts_on=day(14), ends_on=day(14), kind="cant")
+    assert r.status_code == 400 and r.json()["detail"] == cs.CANT_FAR.format(n=14)
+    assert "ask for time off instead" in r.json()["detail"] and db.t["church_away_asks"] == []
+    assert ask(app, starts_on=day(30), ends_on=day(31), kind="cant").status_code == 400
+    assert saved(ask(app, starts_on=day(13), ends_on=day(20), kind="cant"))["state"] == "yes", "the first day decides"
+    assert saved(ask(app, starts_on=day(14), ends_on=day(14)))["state"] == "asked", "time off that far out is asked for"
+
+    def notice(n):
+        as_(app, LOVE_CITY, "owner")
+        assert app.put("/church/schedule/settings", json={"business_id": LOVE_CITY, "notice_days": n}).status_code == 200
+        as_(app, LOVE_CITY, "tyrone")
+    notice(30)
+    assert saved(ask(app, starts_on=day(29), ends_on=day(29), kind="cant"))["state"] == "yes"
+    assert ask(app, starts_on=day(30), ends_on=day(30), kind="cant").status_code == 400
+    notice(0)                                                    # no notice asked for: today and tomorrow still work
+    assert saved(ask(app, starts_on=day(0), ends_on=day(0), kind="cant"))["flags"] == []
+    assert saved(ask(app, starts_on=day(1), ends_on=day(1), kind="cant"))["state"] == "yes"
+    r = ask(app, starts_on=day(2), ends_on=day(2), kind="cant")
+    assert r.status_code == 400 and r.json()["detail"] == cs.CANT_FAR.format(n=2)
+    as_(app, LOVE_CITY, "owner")
+    assert ask(app, starts_on=day(2), ends_on=day(2), kind="cant").status_code == 400, "the owner's too: it is time off"
+    assert saved(ask(app, starts_on=day(2), ends_on=day(2)))["state"] == "yes"

@@ -16,6 +16,8 @@ included. A write the database would refuse answers None, as sb_clients does,
 and `db.refused` keeps why.
 
     db.fail = {"post": "/church_away_asks", ...}   that write (or read) fails
+    db.posts = [(table or rpc, redact)]             every POST, with whether it
+                                                    was sent redacted
     db.before_settle = fn                           runs just before the
                                                     function locks the row: the
                                                     other answer landing first
@@ -157,7 +159,7 @@ def build(monkeypatch, *, mode: str = "on", **kw):
     for t in ("church_schedule_settings", "church_schedule_people", "church_away_asks", "church_away_commitments",
               "serve_away"):
         d.t[t] = []
-    d.refused, d.fail, d.before_settle, d.ticks, d.reads = [], {}, None, 0, []
+    d.refused, d.fail, d.before_settle, d.ticks, d.reads, d.posts = [], {}, None, 0, [], []
     real = {n: getattr(d, n) for n in ("get", "post", "patch", "delete")}
 
     def failing(verb, path):
@@ -169,6 +171,7 @@ def build(monkeypatch, *, mode: str = "on", **kw):
         return None if failing("get", path) else real["get"](path, **k)
 
     def post(path, body, prefer=None, **k):
+        d.posts.append((path.split("?")[0], bool(k.get("redact"))))
         if failing("post", path):
             return None
         if path.startswith("/rpc/church_away_settle"):

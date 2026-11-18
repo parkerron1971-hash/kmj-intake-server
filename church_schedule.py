@@ -45,10 +45,18 @@ The rules (docs/CHURCH_SCHEDULE.md section 5, step 1):
   short notice ...... inside the church's notice days (14 unless it says
                       otherwise): flagged, never blocked, the same person
   can't make it ..... nobody decides: settled yes at once, with nobody in
-                      decided_by
-  the owner's own ... nobody is over them: settled yes at once
+                      decided_by. For the days just ahead only (inside the
+                      church's notice days, two days at least): farther out
+                      is planned, so it is asked for as time off
+  the owner's own ... the one person the owner is (church_over's
+                      owner_person): nobody is over them, settled yes at
+                      once. Anyone else who shares the owner's sign-in email
+                      asks as anyone does, and it goes to the owner
   who answers ....... whoever it went to; in the office app also the owner
-                      and whoever oversees the office. Never your own ask
+                      and whoever oversees the office. Never your own ask,
+                      and (the owner aside) never one you entered
+  who takes it back . the one who asked; in the office app also the owner
+                      and whoever oversees the office
   who changes the ... the owner and whoever oversees the office. Not an
   roster, the days    Admin (decision 7)
 
@@ -99,6 +107,7 @@ NOTICE_DAYS = 14
 NOTICE_MAX = 90
 MAX_OPEN = 20              # asks one person can have waiting at once
 MAX_DAYS = 366
+CANT_FLOOR = 2             # "can't make it" always covers today and tomorrow, whatever the notice days
 ROSTER_SECONDS = 60        # the member side's roster, a replica (church_duties.CACHE_SECONDS)
 REASON_MAX, NOTE_MAX, COVER_MAX = 500, 300, 80
 MINE_DAYS = 90             # my asks: every one still waiting, and the last three months
@@ -128,8 +137,12 @@ NOT_FOR = "Only the owner, or whoever oversees the office, asks for someone else
 NOT_ALL = "Only the owner, or whoever oversees the office, sees every ask."
 NOT_YOURS = "That isn't one of the asks you can see."
 NOT_TO_YOU = "That one isn't yours to answer."
-NOT_ASKER = "Only the one who asked takes it back."
+NOT_ASKER = "Only the one who asked, the owner, or whoever oversees the office takes it back."
 ALREADY = "That one was already answered."
+NO_YES = "That one needs no yes. It settles by itself when they ask for those days again."
+MOVED = "That one changed just now. Open it again."
+CANT_FAR = ("Can't make it is for the next {n} days. For days farther out, ask for time off instead, so everyone "
+            "can plan for it.")
 NOT_OPEN = "That one can't be taken back anymore."
 WAITING = "Those days are already waiting for an answer."
 TOO_MANY = "That's a lot of asks still waiting. Take one back first."
@@ -339,36 +352,67 @@ def over_all(ch: co.Church, me: Dict[str, Any]) -> bool:
 def goes_to(ch: co.Church, asker_cid: Any) -> Optional[Dict[str, str]]:
     """Who an ask of this person's goes to: the first one church_over.above
     gives (decision 1: naming every one at that step would widen who reads
-    the reason). {kind, id, name}; None only for the owner's own identity."""
-    rows = co.above(ch, co.who(co.PERSON, asker_cid))
-    return rows[0] if rows else None
+    the reason). {kind, id, name}; None only for the one person the owner is
+    (Church.owner_person). church_over puts everyone who carries the owner's
+    sign-in email at the top (a husband or wife on a family address too);
+    here only the owner needs no yes, so anyone else there goes to the
+    owner's login, as any ask with nobody else over it does."""
+    cid = str(asker_cid or "")
+    if ch.owner_person and cid == ch.owner_person:
+        return None
+    rows = co.above(ch, co.who(co.PERSON, cid))
+    if rows:
+        return rows[0]
+    return {"kind": co.LOGIN, "id": ch.owner, "name": ch.login_name(ch.owner)} if ch.owner else None
 
 
 def _is_asker(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
     return str(ask.get("contact_id") or "") in ch.persons_of(me)
 
 
+def _in_office(ch: co.Church, uid: str) -> bool:
+    """The owner, or a login on an office seat today (Admin or Manager). An
+    ask only ever names a login because it was the office's; one that has
+    since moved to another seat, or left, has left the office, and what went
+    to it is no longer its own."""
+    return bool(uid) and (uid == ch.owner or uid in ch.office)
+
+
 def _went_to(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
-    """Whether this ask went to `me`. A login: it names the login, or the
-    person the login is; and the owner holds one nobody else can answer
-    (both empty, or a login that has left the office). A person (the member
-    app): it names them, or the login tied to exactly them."""
+    """Whether this ask went to `me`. A login: it names the login while that
+    login is still in the office, or the person the login is; and the owner
+    holds one nobody else can answer (both empty, or a login that has left
+    the office). A person (the member app): it names them, or the office
+    login tied to exactly them."""
     to_user, to_person = str(ask.get("to_user_id") or ""), str(ask.get("to_contact_id") or "")
+    live = _in_office(ch, to_user)              # the login it names still holds an office seat
     if me["kind"] == co.PERSON:
         cid = str(me["id"])
-        return bool(cid) and (to_person == cid or (bool(to_user) and ch.login_person.get(to_user) == cid))
+        return bool(cid) and (to_person == cid or (live and ch.login_person.get(to_user) == cid))
     uid = str(me["id"])
-    if (to_user and to_user == uid) or (to_person and to_person in ch.persons_of(me)):
+    if (live and to_user == uid) or (to_person and to_person in ch.persons_of(me)):
         return True
-    gone = not to_person and (not to_user or (to_user != ch.owner and to_user not in ch.seats))
-    return gone and uid == ch.owner
+    return not to_person and not live and uid == ch.owner
+
+
+def needs_no_yes(ch: co.Church, ask: Dict[str, Any]) -> bool:
+    """"Can't make it", and the owner's own person's ask: nobody decides
+    either. One still waiting is one whose settle failed; nobody answers it,
+    and it settles when they ask for those days again."""
+    return ask.get("kind") == "cant" or (
+        bool(ch.owner_person) and str(ask.get("contact_id") or "") == ch.owner_person)
 
 
 def may_decide(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
     """Whether `me` may say yes or not this one: it went to them, or (an
     office login) they are the owner or oversee the office. Never your own
-    ask, whatever your standing."""
+    ask, whatever your standing; and never one you entered, the owner aside
+    (a login matched to no person could otherwise enter one for its own
+    record and say yes to it): whoever oversees the office and enters an ask
+    for someone leaves the yes to the one it went to, or the owner."""
     if _is_asker(ch, me, ask):
+        return False
+    if me["kind"] == co.LOGIN and str(me["id"]) != ch.owner and str(ask.get("made_by") or "") == str(me["id"]):
         return False
     return _went_to(ch, me, ask) or over_all(ch, me)
 
@@ -382,9 +426,10 @@ def sees_reason(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
 
 
 def may_withdraw(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
-    """The one who asked, or the login that entered it for them."""
-    return _is_asker(ch, me, ask) or (me["kind"] == co.LOGIN and bool(ask.get("made_by"))
-                                      and str(ask["made_by"]) == str(me["id"]))
+    """The one who asked, or (an office login) the owner or whoever oversees
+    the office. Having entered it is not enough: a login that entered one
+    and has since lost that standing can't take it back."""
+    return _is_asker(ch, me, ask) or over_all(ch, me)
 
 
 # ─── The church's settings ────────────────────────────────────────────
@@ -640,7 +685,7 @@ def _prime(ch: co.Church, me: Dict[str, Any]) -> None:
     """Before a write: read what shape() asks of the church (who `me` is,
     who oversees the office), so nothing after the write can fail on a read
     and answer 503 for something that saved (church_assignments._ready)."""
-    _ = (ch.persons_of(me), over_all(ch, me), ch.seats)
+    _ = (ch.persons_of(me), over_all(ch, me), ch.seats, ch.owner_person)
 
 
 def shape(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any], names: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
@@ -681,7 +726,7 @@ def shape(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any], names: Dict[st
         "to": to, "cover": cover, "decided": decided,
         "reason": reason if sees else None, "reason_hidden": bool(reason) and not sees,
         "mine": _is_asker(ch, me, row),
-        "can_answer": state == "asked" and may_decide(ch, me, row),
+        "can_answer": state == "asked" and not needs_no_yes(ch, row) and may_decide(ch, me, row),
         "can_withdraw": state in ("asked", "yes") and may_withdraw(ch, me, row),
         "created_at": row.get("created_at"),
     }
@@ -720,7 +765,7 @@ def _settle(ch: co.Church, ask_id: Any, state: str, *, by_user: Optional[str] = 
     ask}. A call that fails, or that finds no such ask, is a 503."""
     got = sb_clients.sb_post_as_service("/rpc/church_away_settle", {
         "p_business_id": ch.b, "p_ask_id": str(ask_id), "p_state": state, "p_by_user": by_user,
-        "p_by_contact": by_contact, "p_note": note})
+        "p_by_contact": by_contact, "p_note": note}, redact=True)     # a refusal's body can echo the row: never logged
     if not isinstance(got, dict) or not isinstance(got.get("ask"), dict):
         raise HTTPException(503, UNSAVED)
     return got
@@ -728,6 +773,26 @@ def _settle(ch: co.Church, ask_id: Any, state: str, *, by_user: Optional[str] = 
 
 def _has_fact(ch: co.Church, ask_id: Any) -> bool:
     return bool(_need(f"/serve_away?business_id=eq.{_q(ch.b)}&ask_id=eq.{_q(ask_id)}&select=id&limit=1"))
+
+
+def _settled(ch: co.Church, cid: str, kind: str, a: date, b: date) -> Optional[Dict[str, Any]]:
+    """This person's ask for exactly these days and this kind that already
+    settled with nobody deciding, its away date still there: the same press
+    landing twice."""
+    for r in _need(f"/church_away_asks?business_id=eq.{_q(ch.b)}&contact_id=eq.{_q(cid)}&state=eq.yes"
+                   f"&kind=eq.{kind}&starts_on=eq.{a.isoformat()}&ends_on=eq.{b.isoformat()}"
+                   f"&decided_by_user_id=is.null&decided_by_contact_id=is.null&select={FIELDS}&limit=5"):
+        if _has_fact(ch, r["id"]):
+            return r
+    return None
+
+
+def _take_back(ch: co.Church, ask_id: str) -> None:
+    """Remove an ask that is still waiting for a yes it doesn't need. If
+    this fails too, asking again finds it and finishes it."""
+    if not sb_clients.sb_delete_as_service(
+            f"/church_away_asks?id=eq.{_q(ask_id)}&business_id=eq.{_q(ch.b)}&state=eq.asked"):
+        print(f"[church_schedule] {ch.b[:8]}: an ask that didn't settle wasn't taken back", flush=True)
 
 
 def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -738,10 +803,12 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
     nothing saved).
 
     For yourself; `for` (person:<id>) only by the owner or whoever oversees
-    the office. "Can't make it", and the owner's own person, need no yes:
-    the ask is saved and settled yes at once, with nobody in decided_by. If
-    that second step fails the ask is taken back and the answer is a 503;
-    asking again finds whatever was left and finishes it, never a second
+    the office. "Can't make it" (for the days just ahead: inside the church's
+    notice days, two days at least), and the owner's own person, need no
+    yes: the ask is saved and settled yes at once, with nobody in
+    decided_by. If that second step fails the ask is taken back and the
+    answer is a 503; asking again finds whatever was left and finishes it,
+    and two presses at once end as one ask and one away date, never a second
     copy."""
     body = body or {}
     kind = str(body.get("kind") or "")
@@ -781,7 +848,11 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
             if cover_id == cid:
                 raise HTTPException(400, "Someone else covers, not the one who is away")
             _person(ch, cover_id)
-        top = cid in ch.top                    # the owner's own identity: nobody is over them
+        notice = settings(ch)["notice_days"]
+        near = max(notice, CANT_FLOOR)
+        if kind == "cant" and a >= today + timedelta(days=near):
+            raise HTTPException(400, CANT_FAR.format(n=near))    # farther out is planned: it is asked for
+        top = bool(ch.owner_person) and cid == ch.owner_person    # the one person the owner is: nobody is over them
         instant = kind == "cant" or top
         open_ = _need(f"/church_away_asks?business_id=eq.{_q(ch.b)}&contact_id=eq.{_q(cid)}&state=eq.asked"
                       f"&select=id,kind,starts_on,ends_on&limit={MAX_OPEN + 30}")
@@ -794,16 +865,10 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
             raise HTTPException(409, WAITING)
         elif not instant and len(open_) >= MAX_OPEN:    # one that needs no yes never waits, so it is never one too many
             raise HTTPException(400, TOO_MANY)
-        done: Optional[Dict[str, Any]] = None  # one that did settle, though its answer was lost
-        if instant and not left:
-            for r in _need(f"/church_away_asks?business_id=eq.{_q(ch.b)}&contact_id=eq.{_q(cid)}&state=eq.yes"
-                           f"&kind=eq.{kind}&starts_on=eq.{a.isoformat()}&ends_on=eq.{b.isoformat()}"
-                           f"&decided_by_user_id=is.null&decided_by_contact_id=is.null&select={FIELDS}&limit=5"):
-                if _has_fact(ch, r["id"]):
-                    done = r
-                    break
+        # One that did settle, though its answer was lost on the way back.
+        done = _settled(ch, cid, kind, a, b) if instant else None
         to = None if top else goes_to(ch, cid)
-        flags = ["short_notice"] if not top and is_short(ch, a, today) else []
+        flags = ["short_notice"] if not top and is_short(ch, a, today, notice) else []
         dept = department_of(ch, cid)
         row = {"business_id": ch.b, "contact_id": cid, "made_by": str(me["id"]) if me["kind"] == co.LOGIN else None,
                "grp": grp, "department_id": str(dept["id"]) if dept else None, "kind": kind,
@@ -814,11 +879,14 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
         names = _names(ch, [row] + ([done] if done else []))
         _prime(ch, me)
     if done:
+        if left:
+            _take_back(ch, left)                # a leftover beside the one that settled
         return shape(ch, me, done, names)
     if left:
         saved_id = left
     else:
-        saved = sb_clients.sb_post_as_service("/church_away_asks", row)
+        # redact: a refusal's body ("Failing row contains ...") would put the reason in the log.
+        saved = sb_clients.sb_post_as_service("/church_away_asks", row, redact=True)
         if not isinstance(saved, list) or not saved or not saved[0].get("id"):
             # Two presses at once: the table keeps one waiting ask for the same days.
             if str((sb_clients.last_error() or {}).get("code") or "") == "23505":
@@ -827,15 +895,25 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
         if not instant:
             return shape(ch, me, saved[0], names)
         saved_id = str(saved[0]["id"])
+    twin: Optional[Dict[str, Any]] = None
     try:
-        got = _settle(ch, saved_id, "yes")
+        if not left:
+            # Two presses at once: the table keeps one WAITING ask for the same
+            # days, so once the other press has settled this insert goes in
+            # too. Look again before settling: the other one stands, and this
+            # one goes.
+            twin = _settled(ch, cid, kind, a, b)
+            if twin:
+                names = _names(ch, [twin])
+        got = None if twin else _settle(ch, saved_id, "yes")
     except HTTPException:
-        # Nothing is left waiting for a yes it doesn't need. If this fails
-        # too, asking again finds it (`left`) and settles it.
-        if not sb_clients.sb_delete_as_service(
-                f"/church_away_asks?id=eq.{_q(saved_id)}&business_id=eq.{_q(ch.b)}&state=eq.asked"):
-            print(f"[church_schedule] {ch.b[:8]}: an ask that didn't settle wasn't taken back", flush=True)
+        _take_back(ch, saved_id)                # nothing is left waiting for a yes it doesn't need
         raise
+    if twin:
+        _take_back(ch, saved_id)
+        return shape(ch, me, twin, names)
+    if not got.get("changed"):
+        raise HTTPException(409, MOVED)         # it moved under us (taken back, say): never "saved" as it stands
     return shape(ch, me, got["ask"], names)
 
 
@@ -851,9 +929,11 @@ def _ask(ch: co.Church, ask_id: Any) -> Dict[str, Any]:
 def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any = None) -> Dict[str, Any]:
     """Yes, or not this one (with a note, 300 letters at most): whoever it
     went to; in the office app also the owner and whoever oversees the
-    office (403 for anyone else, and for your own ask). The database
-    decides it in one transaction, so two answers at once land one after the
-    other and the second is a 409, as is an answer after a withdraw."""
+    office (403 for anyone else, for your own ask, and for one you entered
+    unless you are the owner). The database decides it in one transaction,
+    so two answers at once land one after the other and the second is a 409,
+    as is an answer after a withdraw. One that needs no yes (a "can't make
+    it" left waiting by a failed settle) is never answered: a 409."""
     if not isinstance(yes, bool):
         raise HTTPException(400, "Say yes, or not this one")
     note = _note(note)
@@ -864,6 +944,8 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
             raise HTTPException(403, NOT_TO_YOU)
         if row.get("state") != "asked":
             raise HTTPException(409, ALREADY)
+        if needs_no_yes(ch, row):
+            raise HTTPException(409, NO_YES)
         by = {"by_user": str(me["id"])} if me["kind"] == co.LOGIN else {"by_contact": str(me["id"])}
         names = _names(ch, [dict(row, decided_by_user_id=by.get("by_user"),
                                  decided_by_contact_id=by.get("by_contact"))])
@@ -875,9 +957,10 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
 
 
 def withdraw(ch: co.Church, me: Dict[str, Any], ask_id: Any) -> Dict[str, Any]:
-    """Take an ask back: the one who asked, or the login that entered it
-    (403 for anyone else). One still waiting, or one already said yes to
-    (its away date goes with it); anything else is a 409."""
+    """Take an ask back: the one who asked, or (an office login) the owner
+    or whoever oversees the office (403 for anyone else). One still waiting,
+    or one already said yes to (its away date goes with it); anything else
+    is a 409."""
     row = _ask(ch, ask_id)
     import church_map
     with church_map.once():
@@ -925,7 +1008,8 @@ def waiting(ch: co.Church, me: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows = _every(f"/church_away_asks?business_id=eq.{_q(ch.b)}&state=eq.asked&select={FIELDS}")
     import church_map
     with church_map.once():
-        rows = [r for r in rows if r.get("state") == "asked" and _went_to(ch, me, r) and not _is_asker(ch, me, r)]
+        rows = [r for r in rows if r.get("state") == "asked" and _went_to(ch, me, r) and not _is_asker(ch, me, r)
+                and not needs_no_yes(ch, r)]
         return _shaped(ch, me, sorted(rows, key=lambda r: (str(r.get("starts_on") or ""), str(r.get("id")))))
 
 
@@ -1013,7 +1097,7 @@ def status(ch: co.Church, me: Dict[str, Any]) -> Dict[str, Any]:
         over = over_all(ch, me)
         return {"open": True,
                 "me": {"person": cid, "group": grp,
-                       "goes_to": goes_to(ch, cid) if cid and grp and cid not in ch.top else None,
+                       "goes_to": goes_to(ch, cid) if cid and grp else None,
                        "sees_all": over, "can_set": over},
                 "owner_how": ch.owner_how, "notice_days": settings(ch)["notice_days"]}
 
@@ -1055,7 +1139,10 @@ def schedule_leaders(business_id: str, start: Optional[str] = Query(None, alias=
     (from today for two months when no days are named)."""
     ch = _church(session, biz)
     lo = _day(start) if start else _today(ch)
-    hi = _day(end) if end else (lo + timedelta(days=WINDOW_DEFAULT) if lo else None)
+    try:
+        hi = _day(end) if end else (lo + timedelta(days=WINDOW_DEFAULT) if lo else None)
+    except OverflowError:                       # a first day at the very end of the calendar
+        hi = None
     if not lo or not hi:
         raise HTTPException(400, "A day is like 2026-11-20")
     return calendar(ch, _me(session), lo, hi)
