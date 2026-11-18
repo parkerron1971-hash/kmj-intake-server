@@ -1929,6 +1929,9 @@
         "people_care",
         "office"
        ],
+       "duties": [
+        "first_guests"
+       ],
        "what": "Make the cards guests fill in, such as a connect card, and share each by link or QR code.",
        "words": [
         "form",
@@ -1977,6 +1980,31 @@
           "turn off a form",
           "close sign-ups",
           "stop taking answers"
+         ]
+        },
+        {
+         "id": "print-guest-cards-with-a-qr-code",
+         "q": "Print guest cards with a QR code",
+         "a": "Press Print for guests, pick where the code goes (a card such as Plan your visit, or the New here text) and pick a table tent, seat cards or a connect card. Press Print and it prints in your church’s colors.",
+         "words": [
+          "table tent",
+          "pew cards",
+          "seat cards",
+          "welcome table",
+          "guest qr code",
+          "print a connect card",
+          "cards for first-time guests"
+         ]
+        },
+        {
+         "id": "choose-the-card-guests-scan-on-the-bulletin",
+         "q": "Choose the card guests scan on the bulletin",
+         "a": "Press Print for guests, pick the card and press Make it our guest card (whoever welcomes first-time guests, the owner and admins can). The bulletin’s New here code then opens it.",
+         "words": [
+          "guest card",
+          "bulletin qr code",
+          "new here code",
+          "where the bulletin code goes"
          ]
         }
        ]

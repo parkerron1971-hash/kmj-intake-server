@@ -187,7 +187,8 @@ CATALOG: Dict[str, Dict[str, Any]] = {
     "first_guests": _duty(
         "First-time guests and welcome calls", "people_care", ["people_care"], "Mon",
         "Every first-time guest has a person and a call date on Monday, and the calls are made by Wednesday.",
-        ["Follow-up", "New here: the guest texts, and asking for its slide on Sunday's screen"]),
+        ["Follow-up", "New here: the guest texts, and asking for its slide on Sunday's screen",
+         "The guest card: which card a guest opens when they scan the bulletin's New here code"]),
     "care_visits": _duty(
         "Care and visits", "people_care", ["people_care"], "Tue",
         "The care board: visits, meals, the hospital and the grieving, with the deacons.",

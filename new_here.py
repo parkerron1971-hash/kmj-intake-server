@@ -883,9 +883,13 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
         raise HTTPException(503, "The church couldn't be read just now. Try again in a minute.")
     if not is_church(business):
         raise HTTPException(404, "New here is for churches.")
-    settings = dict(business.get("settings") or {})
-    settings["new_here"] = clean(body)
-    if sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz)}", {"settings": settings}) is None:
+    # Only New here's own keys, laid over settings.new_here in one write
+    # (business_settings.merge): the rest of the row, and a key another
+    # endpoint keeps inside new_here (the church's guest card, guest_card.py),
+    # stay as they are, whatever was written a moment ago.
+    import business_settings
+    settings = business_settings.merge(biz, set=clean(body), under=["new_here"])
+    if settings is None:
         raise HTTPException(503, "That didn't save just now. Try again in a minute.")
     return overview({**business, "settings": settings}, can_edit=True)
 

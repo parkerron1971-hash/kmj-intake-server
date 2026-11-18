@@ -638,6 +638,10 @@ app.include_router(devotional_daily_router)
 # church's own pages; this router holds the card's POST and /new-here/*.
 from new_here import router as new_here_router
 app.include_router(new_here_router)
+# The church's guest card (guest_card.py): which card a guest lands on when
+# they scan the bulletin's "New here?" code; the first-time guests' choice.
+from guest_card import router as guest_card_router
+app.include_router(guest_card_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)
