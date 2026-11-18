@@ -801,19 +801,87 @@ async def intake_health():
     }
 
 
-@router.get("/intake/private-care/{business_id}")
-def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user)):
+# ─── Prayer & care: the care desk (Kevin, 2026-11-18) ─────────────────
+#
+# Who may open it is private_care.care_access (the owner, or an active
+# seat; a seat sees what it was handed and, working People & care, what
+# people shared with the prayer team). When the church asks for the
+# password (private_care.lock_settings), every route that reads or changes
+# a request also needs a care proof for this church (POST /auth/step-up,
+# scope "care"), or answers 403 `ledger_locked` for the app's lock. The
+# numbers and the lock settings themselves are read without it: they carry
+# no name and no word of a request.
+
+class CareLockIn(BaseModel):
+    lock_minutes: Optional[int] = None
+    require_password: Optional[bool] = None
+
+
+@router.get("/intake/private-care/{business_id}/counts")
+def private_care_counts(business_id: str, user: AuthedUser = Depends(require_user)):
     import private_care
     caller = private_care.care_access(business_id, user)
-    return private_care.list_requests(business_id, caller)
+    return private_care.counts(business_id, caller)
+
+
+@router.get("/intake/private-care/{business_id}/settings")
+def private_care_lock_settings(business_id: str, user: AuthedUser = Depends(require_user)):
+    import private_care
+    caller = private_care.care_access(business_id, user)
+    s = private_care.lock_settings(business_id)
+    return {"lock_minutes": s["lock_minutes"], "require_password": s["require_password"],
+            "choices": list(private_care.LOCK_MINUTES), "can_change": caller.owner and s["ready"],
+            "scope": caller.scope}
+
+
+@router.put("/intake/private-care/{business_id}/settings")
+def private_care_save_lock_settings(business_id: str, body: CareLockIn, request: Request,
+                                    user: AuthedUser = Depends(require_user)):
+    import private_care
+    caller = private_care.care_access(business_id, user)
+    # Changing the lock is behind the lock: a walk-up can't switch it off.
+    private_care.require_open(request, business_id, user)
+    return private_care.save_lock_settings(business_id, caller, lock_minutes=body.lock_minutes,
+                                           require_password=body.require_password)
+
+
+@router.post("/intake/private-care/{business_id}/unlock/renew")
+def private_care_renew_unlock(business_id: str, request: Request,
+                              user: AuthedUser = Depends(require_user)):
+    """A fresh care proof for someone still working, in exchange for one
+    that hasn't run out. Nothing to renew when the church doesn't ask for
+    the password."""
+    import ledger_unlock
+    import private_care
+    private_care.care_access(business_id, user)
+    s = private_care.require_open(request, business_id, user)
+    if not s["require_password"]:
+        return {"ok": True, "required": False}
+    out = ledger_unlock.mint(str(user.id), ledger_unlock.SCOPE_CARE, business_id,
+                             private_care.unlock_ttl(business_id))
+    return {"ok": True, "required": True, **out}
+
+
+@router.get("/intake/private-care/{business_id}")
+def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user),
+                          request: Request = None):  # type: ignore[assignment]
+    import private_care
+    caller = private_care.care_access(business_id, user)
+    lock = private_care.require_open(request, business_id, user)
+    out = private_care.list_requests(business_id, caller)
+    out["lock"] = {"lock_minutes": lock["lock_minutes"], "require_password": lock["require_password"]}
+    return out
 
 
 class CareRequestPatch(BaseModel):
     status: Optional[str] = None
     prayed: Optional[bool] = None
-    # A teammate's user id, or null to take the request back. Absent means
-    # "leave it as it is", which is why the handler reads the set fields.
+    # A teammate's user id, or null to take the request back (or, for the
+    # teammate who has it, to give it back). Absent means "leave it as it
+    # is", which is why the handler reads the set fields.
     assigned_to: Optional[str] = None
+    # A member of the prayer team (contact id), for a shared prayer.
+    leader_contact_id: Optional[str] = None
 
 
 class CareNoteIn(BaseModel):
@@ -824,27 +892,33 @@ class CareNoteIn(BaseModel):
 # one handed to them (private_care.care_access). The browser has no grant
 # on either table, so these are the only way in.
 @router.patch("/intake/private-care/{business_id}/{request_id}")
-def private_care_update(business_id: str, request_id: str, body: CareRequestPatch,
+def private_care_update(business_id: str, request_id: str, body: CareRequestPatch, request: Request,
                         user: AuthedUser = Depends(require_user)):
     import private_care
     caller = private_care.care_access(business_id, user)
-    extra = ({"assigned_to": body.assigned_to}
-             if "assigned_to" in body.model_fields_set else {})
+    private_care.require_open(request, business_id, user)
+    extra: Dict[str, Any] = {}
+    if "assigned_to" in body.model_fields_set:
+        extra["assigned_to"] = body.assigned_to
+    if "leader_contact_id" in body.model_fields_set:
+        extra["leader_contact_id"] = body.leader_contact_id
     return private_care.update_request(business_id, request_id, status=body.status,
                                        prayed=body.prayed, caller=caller, **extra)
 
 
 @router.post("/intake/private-care/{business_id}/{request_id}/notes")
-def private_care_add_note(business_id: str, request_id: str, body: CareNoteIn,
+def private_care_add_note(business_id: str, request_id: str, body: CareNoteIn, request: Request,
                           user: AuthedUser = Depends(require_user)):
     import private_care
     caller = private_care.care_access(business_id, user)
+    private_care.require_open(request, business_id, user)
     return private_care.add_note(business_id, request_id, body.body, str(user.id), caller)
 
 
 @router.delete("/intake/private-care/{business_id}/notes/{note_id}")
-def private_care_delete_note(business_id: str, note_id: str,
+def private_care_delete_note(business_id: str, note_id: str, request: Request,
                              user: AuthedUser = Depends(require_user)):
     import private_care
     caller = private_care.care_access(business_id, user)
+    private_care.require_open(request, business_id, user)
     return private_care.delete_note(business_id, note_id, caller)

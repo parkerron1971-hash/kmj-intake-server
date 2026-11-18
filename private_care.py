@@ -21,7 +21,8 @@ _FIELDS = ("id,created_at,status,submission,contact_id,prayed_at,status_changed_
 # How a request went through the prayer team (church_prayer,
 # APPLY-2026-10-17-church-role-library.sql): read with the rest when the
 # columns are there, and left out (the list still loads) when they aren't.
-_PRAYER_FIELDS = ",prayer_team,wants_call,needs_pastor,leader_contact_id,leader_role,leader_prayed_at,leader_noted_at"
+_PRAYER_FIELDS = (",prayer_team,wants_call,needs_pastor,leader_contact_id,leader_role,leader_prayed_at,leader_noted_at,"
+                  "leader_assigned_at,leader_due_at,leader_late_level")
 _LEGACY_FIELDS = "id,created_at,status,submission"
 
 def needs_private_care(form, data):
@@ -153,13 +154,99 @@ def care_access(business_id: str, user) -> CareCaller:
 
 
 def _team(biz: str) -> List[Dict[str, Any]]:
-    """Who the owner can hand a request to: the active seats."""
+    """Who the owner can hand a request to: the active seats, each with the
+    person behind it and what they do (Kevin, 2026-11-18, the care desk:
+    hand-offs by name and role, never an email address and a login level).
+
+    `pastor`: the login's person holds a senior or pastoral role in the
+    church's role library (church_roles); only they take a request that
+    needs a pastor. `care`: works People & care (the lane) or holds a care
+    role. `office`: the Office & Leadership lane or an office role.
+    `treasurer`: the Treasurer lane or a role titled treasurer; the
+    treasurer pays approved help (church_help) and isn't handed the ask.
+    Anything that can't be read leaves the flags false and the name to the
+    email: the list still loads."""
     rows = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{biz}&status=eq.active"
-        "&select=user_id,invited_email,role&limit=200")
-    return [{"user_id": str(r["user_id"]), "email": r.get("invited_email") or "",
-             "role": r.get("role") or ""}
-            for r in (rows if isinstance(rows, list) else []) if r.get("user_id")]
+        "&select=user_id,invited_email,role,name,contact_id,lane&limit=200")
+    if not isinstance(rows, list):
+        # Before the seat-person columns (APPLY 2026-10-28): the old read.
+        rows = sb_clients.sb_get_as_service(
+            f"/business_users?business_id=eq.{biz}&status=eq.active"
+            "&select=user_id,invited_email,role&limit=200")
+    seats = [r for r in (rows if isinstance(rows, list) else []) if r.get("user_id")]
+    cids = sorted({str(r["contact_id"]) for r in seats if r.get("contact_id")})
+    people: Dict[str, Dict[str, Any]] = {}
+    held: Dict[str, List[str]] = {}
+    defs: List[Dict[str, Any]] = []
+    if cids:
+        try:
+            import church_follow_up as cfu
+            people = cfu._contacts(biz, cids) or {}
+            got = sb_clients.sb_get_as_service(
+                f"/church_leader_roles?business_id=eq.{biz}&status=eq.active"
+                f"&contact_id=in.({','.join(cids)})&select=contact_id,role&limit=1000")
+            for h in got if isinstance(got, list) else []:
+                held.setdefault(str(h.get("contact_id")), []).append(str(h.get("role") or ""))
+            if held:
+                import church_roles
+                defs = church_roles.defs(biz) or []
+        except Exception:
+            defs = []
+    by = {d["key"]: d for d in defs if d.get("key")}
+    try:
+        import church_areas
+        lane_label = {k: v["label"] for k, v in church_areas.LANES.items()}
+    except Exception:
+        lane_label = {}
+    out = []
+    for r in seats:
+        cid = str(r.get("contact_id") or "")
+        keys = [k for k in held.get(cid, []) if k]
+        mine = [by[k] for k in keys if k in by]
+        jobs = {d.get("job") for d in mine}
+        handles = {h for d in mine for h in (d.get("handles") or [])}
+        titles = [str(d.get("title") or "") for d in mine if d.get("title")]
+        lane = str(r.get("lane") or "")
+        treasurer = (lane == "treasurer" or "treasurer" in keys
+                     or any("treasurer" in t.lower() for t in titles))
+        name = " ".join(str(r.get("name") or "").split()) or str((people.get(cid) or {}).get("name") or "")
+        out.append({
+            "user_id": str(r["user_id"]), "email": r.get("invited_email") or "", "role": r.get("role") or "",
+            "name": "" if name == "Someone" else name, "titles": titles[:3], "lane": lane,
+            "lane_label": lane_label.get(lane, ""),
+            "pastor": bool(jobs & {"senior", "pastoral"}),
+            "care": lane == "people_care" or "care" in jobs or "care_need" in handles,
+            "office": lane == "office_leadership" or ("office" in jobs and not treasurer),
+            "treasurer": treasurer,
+        })
+    return out
+
+
+def _owner_name(biz: str) -> str:
+    """The name the church's settings give its owner, or ''."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=owner_name:settings->>practitioner_name&limit=1")
+    if isinstance(rows, list) and rows:
+        return " ".join(str(rows[0].get("owner_name") or "").split())
+    return ""
+
+
+def _finished(r: Dict[str, Any]) -> bool:
+    return bool(r.get("prayed_at")) or r.get("status") == "closed"
+
+
+def lane_of(r: Dict[str, Any], caller: Optional[CareCaller]) -> str:
+    """Where a request sits on the care desk, the same rule the app draws:
+    the owner's needs_pastor / waiting / with / done; a teammate's mine /
+    team / done."""
+    if _finished(r):
+        return "done"
+    if caller is None or caller.owner:
+        if r.get("assigned_to") or r.get("leader_contact_id"):
+            return "with"
+        return "needs_pastor" if r.get("needs_pastor") else "waiting"
+    return "mine" if str(r.get("assigned_to") or "") == caller.user_id else "team"
 
 
 def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict[str, Any]:
@@ -215,9 +302,35 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
             rows = church_prayer.office_fields(rows, biz)
         except Exception:
             pass
-    return {"requests": [dict(r, notes=notes.get(str(r.get("id")), [])) for r in rows],
-            "actions": True, "scope": scope,
-            "team": [] if mine else _team(biz)}
+    # The team by name and role (the owner's hand-off list), and the names
+    # on the notes: a note says who wrote it, never "a teammate".
+    team = _team(biz)
+    names = {t["user_id"]: (t["name"] or t["email"]) for t in team}
+    got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=owner_id&limit=1")
+    owner_id = str(got[0].get("owner_id") or "") if isinstance(got, list) and got else ""
+    if owner_id:
+        names[owner_id] = _owner_name(biz) or "The pastor"
+    for ns in notes.values():
+        for n in ns:
+            n["author_name"] = names.get(str(n.get("author_id") or ""), "")
+    out: Dict[str, Any] = {
+        "requests": [dict(r, notes=notes.get(str(r.get("id")), [])) for r in rows],
+        "actions": True, "scope": scope, "team": [],
+    }
+    if not mine:
+        waiting: Dict[str, int] = {}
+        for r in rows:
+            if r.get("assigned_to") and not _finished(r):
+                waiting[str(r["assigned_to"])] = waiting.get(str(r["assigned_to"]), 0) + 1
+        out["team"] = [dict(t, waiting=waiting.get(t["user_id"], 0)) for t in team]
+        # Who prays with the prayer team (members, in the member app), so
+        # the office can hand a shared prayer to a different one.
+        try:
+            import church_prayer
+            out["prayer_team"] = church_prayer.office_people(biz) or []
+        except Exception:
+            out["prayer_team"] = []
+    return out
 
 
 def _may_touch(row: Dict[str, Any], caller: Optional[CareCaller]) -> bool:
@@ -235,9 +348,10 @@ def _may_touch(row: Dict[str, Any], caller: Optional[CareCaller]) -> bool:
 def _request(biz: str, request_id: str, caller: Optional[CareCaller] = None) -> Dict[str, Any]:
     one = (f"/ministry_care_requests?id=eq.{request_id}&business_id=eq.{biz}"
            "&select=id,status,prayed_at,status_changed_at,assigned_to,contact_id")
-    rows = None
-    if caller is not None and caller.shared:
-        rows = sb_clients.sb_get_as_service(one + ",prayer_team,needs_pastor&limit=1")
+    # The prayer columns for every caller: a hand-off reads needs_pastor
+    # (the pastors' alone) and leader_prayed_at. Without them, the old read.
+    rows = sb_clients.sb_get_as_service(
+        one + ",prayer_team,needs_pastor,leader_contact_id,leader_prayed_at&limit=1")
     if rows is None:
         rows = sb_clients.sb_get_as_service(one + "&limit=1")
     if rows is None:
@@ -254,10 +368,14 @@ _UNSET = object()
 
 def update_request(business_id: str, request_id: str, *, status: Optional[str] = None,
                    prayed: Optional[bool] = None, assigned_to: Any = _UNSET,
+                   leader_contact_id: Any = _UNSET,
                    caller: Optional[CareCaller] = None) -> Dict[str, Any]:
     """Move a request along, mark it prayed (prayed=False clears it), or,
     for the owner only, hand it to a teammate (assigned_to=None takes it
-    back)."""
+    back). The teammate it was handed to may give it back (assigned_to=None
+    on their own request). A request that needs a pastor goes only to a
+    login whose person holds a pastor role. `leader_contact_id`: the owner
+    hands a shared prayer to a different member of the prayer team."""
     biz, rid = _uuid(business_id, "business"), _uuid(request_id, "request")
     if status is not None and status not in STATUSES:
         raise HTTPException(400, "A request is new, reviewed or closed")
@@ -269,7 +387,9 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
     if prayed is not None:
         patch["prayed_at"] = _now() if prayed else None
     if assigned_to is not _UNSET:
-        if caller is not None and not caller.owner:
+        giving_back = (caller is not None and not caller.owner and assigned_to is None
+                       and str(current.get("assigned_to") or "") == caller.user_id)
+        if caller is not None and not caller.owner and not giving_back:
             raise HTTPException(403, "Only the church's owner hands a request to someone")
         if assigned_to is None:
             if current.get("assigned_to"):
@@ -277,11 +397,23 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
                              assigned_by=caller.user_id if caller else None)
         else:
             who = _uuid(assigned_to, "teammate")
-            if who not in {t["user_id"] for t in _team(biz)}:
+            mate = next((t for t in _team(biz) if t["user_id"] == who), None)
+            if mate is None:
                 raise HTTPException(400, "That person isn't on this church's team")
+            if current.get("needs_pastor") and not mate.get("pastor"):
+                # Words about a death, abuse or someone in danger: the
+                # pastors' alone (church_prayer.needs_pastor). Kevin,
+                # 2026-11-18: never offered to the treasurer or the office.
+                raise HTTPException(400, "This request needs a pastor. Hand it to a login whose person holds "
+                                         "a pastor role (Follow-up, Leaders), or keep it.")
             if who != str(current.get("assigned_to") or ""):
                 patch.update(assigned_to=who, assigned_at=_now(),
                              assigned_by=caller.user_id if caller else None)
+    if leader_contact_id is not _UNSET:
+        if caller is not None and not caller.owner:
+            raise HTTPException(403, "Only the church's owner hands a request to someone")
+        import church_prayer
+        patch.update(church_prayer.office_hand(biz, current, leader_contact_id))
     if not patch:
         return {"ok": True, "request": current}
     patch["updated_at"] = _now()
@@ -295,9 +427,17 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
         # "Prayer" notification, if the church and they have it on).
         import member_push
         member_push.tell_prayed(biz, current.get("contact_id"), rid)
-    return {"ok": True, "request": {k: row.get(k) for k in
-                                    ("id", "status", "prayed_at", "status_changed_at",
-                                     "assigned_to")}}
+    out = {k: row.get(k) for k in ("id", "status", "prayed_at", "status_changed_at", "assigned_to",
+                                    "assigned_at")}
+    if "leader_contact_id" in patch:
+        out.update({k: row.get(k) for k in ("leader_contact_id", "leader_role", "leader_assigned_at",
+                                            "leader_due_at", "leader_late_level")})
+        try:
+            import church_prayer
+            out["leader"] = (church_prayer.office_fields([row], biz)[0] or {}).get("leader")
+        except Exception:
+            pass
+    return {"ok": True, "request": out}
 
 
 def add_note(business_id: str, request_id: str, body: str, author_id: str,
@@ -334,3 +474,124 @@ def delete_note(business_id: str, note_id: str,
     if not sb_clients.sb_delete_as_service(where):
         raise HTTPException(503, "That note wasn't removed. Try again.")
     return {"ok": True}
+
+
+# ─── The desk's numbers (2026-11-18) ──────────────────────────────────
+#
+# The locked page shows how many requests sit in each lane and nothing
+# else: no name, no word of a request, no id. It needs no password (that
+# is the point of a locked page), only a login that may open the inbox.
+
+COUNT_KEYS = {"all": ("needs_pastor", "waiting", "with", "done"),
+              "shared": ("mine", "team", "done"), "assigned": ("mine", "team", "done")}
+
+
+def counts(business_id: str, caller: CareCaller) -> Dict[str, Any]:
+    biz = _uuid(business_id, "business")
+    scope = caller.scope
+    root = f"/ministry_care_requests?business_id=eq.{biz}&order=created_at.desc&limit=100"
+    lean = "id,status,prayed_at,assigned_to"
+    extra = ",needs_pastor,prayer_team,leader_contact_id"
+    me = _uuid(caller.user_id, "user")
+    rows = None
+    if scope == "shared":
+        rows = sb_clients.sb_get_as_service(f"{root}&or=(assigned_to.eq.{me},{SHARED})&select={lean}{extra}")
+        if not isinstance(rows, list):
+            scope = "assigned"
+    if scope != "shared":
+        base = root + ("" if caller.owner else f"&assigned_to=eq.{me}")
+        rows = sb_clients.sb_get_as_service(f"{base}&select={lean}{extra}")
+        if not isinstance(rows, list):
+            rows = sb_clients.sb_get_as_service(f"{base}&select={lean}")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "The numbers couldn't be read just now. Try again.")
+    out = {k: 0 for k in COUNT_KEYS[caller.scope]}
+    for r in rows:
+        k = lane_of(r, caller)
+        if k in out:
+            out[k] += 1
+    return {"scope": caller.scope, "counts": out}
+
+
+# ─── The lock (Kevin, 2026-11-18) ─────────────────────────────────────
+#
+# The page should lock when no work has been done and ask for a password
+# to open again, "but that should be custom to settings because others
+# might like something else". One row a church (ministry_care_settings,
+# APPLY-2026-11-18-care-lock.sql). No row, no table yet, or a read that
+# failed: the default, which is the careful one.
+#
+# When the church asks for the password, the inbox's own routes refuse a
+# request that doesn't carry a care proof for this church and this login
+# (ledger_unlock.require_unlock, scope "care"). A proof lasts the church's
+# quiet minutes and the app renews it while someone is working (POST
+# .../unlock/renew), so a page left alone locks on the server too. A
+# church that never locks by itself gets an hour at a time, renewed the
+# same way.
+
+LOCK_MINUTES = (0, 5, 10, 15, 30, 60)
+DEFAULT_LOCK = {"lock_minutes": 10, "require_password": True}
+
+
+def lock_settings(business_id: str) -> Dict[str, Any]:
+    biz = _uuid(business_id, "business")
+    rows = sb_clients.sb_get_as_service(
+        f"/ministry_care_settings?business_id=eq.{biz}&select=lock_minutes,require_password&limit=1")
+    if not isinstance(rows, list):
+        return {**DEFAULT_LOCK, "saved": False, "ready": False}
+    if not rows:
+        return {**DEFAULT_LOCK, "saved": False, "ready": True}
+    r = rows[0]
+    try:
+        minutes = int(r.get("lock_minutes"))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_LOCK["lock_minutes"]
+    if minutes not in LOCK_MINUTES:
+        minutes = DEFAULT_LOCK["lock_minutes"]
+    return {"lock_minutes": minutes, "require_password": r.get("require_password") is not False,
+            "saved": True, "ready": True}
+
+
+def unlock_ttl(business_id: str) -> int:
+    """How long one care proof lasts, in seconds: the church's quiet
+    minutes, an hour for a church that never locks by itself."""
+    return (lock_settings(business_id)["lock_minutes"] or 60) * 60
+
+
+def require_open(request: Any, business_id: str, user: Any) -> Dict[str, Any]:
+    """The gate in front of the inbox's routes: when the church asks for
+    the password, a care proof for this church and this login, or a 403
+    `ledger_locked` (scope care) for the app to show its lock."""
+    s = lock_settings(business_id)
+    if s["require_password"]:
+        import ledger_unlock
+        ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_CARE,
+                                     _uuid(business_id, "business"))
+    return s
+
+
+def save_lock_settings(business_id: str, caller: CareCaller, *, lock_minutes: Any = None,
+                       require_password: Any = None) -> Dict[str, Any]:
+    """The owner (or the People & care keeper) changes how the page locks."""
+    if not caller.owner:
+        raise HTTPException(403, "Only the church's owner changes how Prayer & care locks")
+    biz = _uuid(business_id, "business")
+    now = lock_settings(biz)
+    if not now["ready"]:
+        raise HTTPException(503, "Lock settings are being switched on. Try again later.")
+    minutes = now["lock_minutes"] if lock_minutes is None else lock_minutes
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        minutes = -1
+    if minutes not in LOCK_MINUTES:
+        raise HTTPException(400, "Pick how long it waits: never, 5, 10, 15, 30 or 60 minutes")
+    password = now["require_password"] if require_password is None else bool(require_password)
+    rows = sb_clients.sb_post_as_service(
+        "/ministry_care_settings?on_conflict=business_id",
+        {"business_id": biz, "lock_minutes": minutes, "require_password": password,
+         "updated_by": caller.user_id, "updated_at": _now()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(503, "That didn't save. Nothing was changed. Try again.")
+    return {"lock_minutes": minutes, "require_password": password, "saved": True, "ready": True}

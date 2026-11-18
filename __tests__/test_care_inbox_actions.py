@@ -99,7 +99,7 @@ def test_requests_come_back_with_their_notes(fake):
     assert out["actions"] is True
     assert out["requests"][0]["notes"] == [
         {"id": NOTE, "body": "Called her Tuesday", "created_at": "2026-10-13T10:00:00Z",
-         "author_id": OWNER}]
+         "author_id": OWNER, "author_name": "The pastor"}]
 
 
 def test_the_inbox_still_reads_before_the_migration(fake):
@@ -202,6 +202,11 @@ def test_notes_follow_the_owner_archive_and_erasure():
 
 @pytest.fixture
 def client(monkeypatch):
+    # Who sees what, not the care desk's lock (test_care_desk.py covers
+    # the lock): these routes run as a church that doesn't ask for it.
+    import private_care
+    monkeypatch.setattr(private_care, "lock_settings",
+                        lambda biz: {"lock_minutes": 10, "require_password": False, "saved": True, "ready": True})
     os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
     os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
     from fastapi import FastAPI
@@ -245,7 +250,11 @@ def test_the_owner_sees_everything_and_the_team(client, fake):
     fake()
     j = c.get(f"/intake/private-care/{BIZ}").json()
     assert j["scope"] == "all" and len(j["requests"]) == 1
-    assert j["team"] == [{"user_id": ASSOC, "email": "member@church.test", "role": "member"}]
+    # The team carries who each login is and what they do (the care desk,
+    # 2026-11-18); a seat with no person or roles reads by its email.
+    assert [{k: t[k] for k in ("user_id", "email", "role", "name", "pastor", "waiting")} for t in j["team"]] == [
+        {"user_id": ASSOC, "email": "member@church.test", "role": "member", "name": "", "pastor": False,
+         "waiting": 0}]
 
 
 # ─── handing a request to a teammate ─────────────────────────────────
@@ -326,8 +335,20 @@ def test_a_teammate_cannot_reassign(client, fake):
     f = fake(request={"id": REQ, "status": "new", "prayed_at": None,
                       "status_changed_at": None, "assigned_to": ASSOC})
     _as(c, who, ASSOC)
-    assert c.patch(f"/intake/private-care/{BIZ}/{REQ}", json={"assigned_to": None}).status_code == 403
+    assert c.patch(f"/intake/private-care/{BIZ}/{REQ}", json={"assigned_to": OWNER}).status_code == 403
     assert not any(m == "PATCH" for m, _, _ in f.calls)
+
+
+def test_a_teammate_gives_their_request_back(client, fake):
+    """The care desk (2026-11-18): "Give it back to the pastor"."""
+    c, who = client
+    f = fake(request={"id": REQ, "status": "new", "prayed_at": None,
+                      "status_changed_at": None, "assigned_to": ASSOC})
+    _as(c, who, ASSOC)
+    r = c.patch(f"/intake/private-care/{BIZ}/{REQ}", json={"assigned_to": None})
+    assert r.status_code == 200 and r.json()["request"]["assigned_to"] is None
+    patches = [b for m, _, b in f.calls if m == "PATCH"]
+    assert patches and patches[-1]["assigned_to"] is None and patches[-1]["assigned_by"] == ASSOC
 
 
 def test_a_teammate_removes_only_their_own_note(client, fake):

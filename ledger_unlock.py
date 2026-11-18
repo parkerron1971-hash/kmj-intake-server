@@ -63,7 +63,8 @@ UNLOCK_HEADER = "X-Ledger-Unlock"
 SCOPE_LEDGER = "ledger"    # read the record
 SCOPE_ACCESS = "access"    # let someone else in: invites, audit links, redaction
 SCOPE_DANGER = "danger"    # money, and things with no undo
-SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER)
+SCOPE_CARE = "care"        # open Prayer & care (private_care.py), when the church asks for it
+SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE)
 
 # ── AN ACCESS OR DANGER UNLOCK IS FOR ONE BUSINESS (2026-11-18) ──────
 # The step-up endpoint decides WHO MAY RE-PROVE A PASSWORD by the
@@ -82,7 +83,11 @@ SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER)
 # ledger scope is not bound: its pre-check is "may you read this
 # ledger", which every ledger route asks again for its own business, so
 # a carried token opens nothing its holder could not already open.
-BOUND_SCOPES = (SCOPE_ACCESS, SCOPE_DANGER)
+#
+# The care scope (2026-11-18) is bound the same way: a church's Prayer &
+# care asks for the password when that church says so, and a proof
+# confirmed at one church opens no other's requests.
+BOUND_SCOPES = (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE)
 
 # What each scope is asking the practitioner to agree to, in their
 # words. The prompt has to name the consequence or it is just a speed
@@ -91,6 +96,7 @@ SCOPE_PROMPT = {
     SCOPE_LEDGER: "Confirm your password to open the ledger.",
     SCOPE_ACCESS: "Confirm your password to change who can get in.",
     SCOPE_DANGER: "Confirm your password — this one cannot be undone.",
+    SCOPE_CARE: "Enter your password to open Prayer & care.",
 }
 
 # Same key as the rest of the ledger's signing, in its own DOMAIN. The
@@ -143,7 +149,7 @@ def _same_business(v: Any) -> str:
 
 
 def mint(user_id: str, scope: str = SCOPE_LEDGER,
-         business_id: Any = None) -> Dict[str, Any]:
+         business_id: Any = None, ttl_seconds: Optional[int] = None) -> Dict[str, Any]:
     """A proof that THIS user re-entered their password just now, FOR A
     PARTICULAR KIND OF ACTION, and for access and danger AT ONE BUSINESS
     (`business_id`: the one the step-up endpoint checked them against).
@@ -156,13 +162,16 @@ def mint(user_id: str, scope: str = SCOPE_LEDGER,
     """
     if scope not in SCOPES:
         raise ValueError(f"unknown step-up scope: {scope}")
+    # Fifteen minutes, unless the caller names its own (Prayer & care's
+    # lock: the church's quiet minutes), held between one minute and an hour.
+    ttl = UNLOCK_TTL_SECONDS if ttl_seconds is None else max(60, min(3600, int(ttl_seconds)))
     now = int(time.time())
     payload = {"typ": "unlock", "sub": str(user_id), "scp": scope,
-               "iat": now, "exp": now + UNLOCK_TTL_SECONDS}
+               "iat": now, "exp": now + ttl}
     if _same_business(business_id):
         payload["biz"] = _same_business(business_id)
     p = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-    return {"token": f"{p}.{_sig(p)}", "expires_in": UNLOCK_TTL_SECONDS}
+    return {"token": f"{p}.{_sig(p)}", "expires_in": ttl}
 
 
 def verify(token: str, user_id: str, scope: str = SCOPE_LEDGER,
@@ -384,13 +393,23 @@ async def step_up(body: _StepUpBody,
     """
     import rate_limit
     scope = (body.scope or "").strip()
-    if scope not in (SCOPE_ACCESS, SCOPE_DANGER):
+    if scope not in (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE):
         # SCOPE_LEDGER deliberately excluded: it has its own endpoint
         # with its own, correct, read-based pre-check.
         raise HTTPException(400, "unknown step-up scope")
 
     business_id = _business_uuid(body.business_id)
-    _require_actor(business_id, str(user.id), scope)
+    ttl: Optional[int] = None
+    if scope == SCOPE_CARE:
+        # Who may open Prayer & care at all (the owner or an active seat;
+        # private_care.care_access is a 403 for anyone else, before any
+        # password is checked), and how long the church lets it stay open
+        # with nothing done.
+        import private_care
+        private_care.care_access(business_id, user)
+        ttl = private_care.unlock_ttl(business_id)
+    else:
+        _require_actor(business_id, str(user.id), scope)
 
     if not rate_limit.allow_strict("step_up", str(user.id)):
         raise HTTPException(429, "Too many attempts. Wait a moment.")
@@ -409,7 +428,7 @@ async def step_up(body: _StepUpBody,
         raise HTTPException(403, "That password did not match.")
 
     # For this business and no other: the check above was made here.
-    out = mint(str(user.id), scope, business_id)
+    out = mint(str(user.id), scope, business_id, ttl)
     try:
         record(business_id, actor_type="user", actor_id=str(user.id),
                verb=f"stepup:{scope}",
