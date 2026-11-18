@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-17, "build that": a printed connect card / guest QR that Tiara (People & Care, the first-time guests) can make herself'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (the frontend PR, guest-print-cards)]
+prs: [kmj-intake-server#1915, solutionist-studio#1622]
 migrations: []
 left_undone:
   - "Merge this backend first: Print for guests' Make it our guest card calls PUT /church/guest-card. Until then the print sheet still prints, from intake_forms, with nothing to choose"
