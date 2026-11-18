@@ -32,6 +32,39 @@ afterwards.
 
 One job at a time. A second `POST` while busy gets `409`; the API queues.
 
+## A service recording's smaller copy (`POST /copies/{uuid}`)
+
+The API's `recording_copy.py` (switch `CHURCH_STORAGE_SMALL_COPY`) also has
+this service make one smaller MP4 of each church service recorded through the
+stream relay: about 720p (aspect kept, never upscaled), H.264 ~1.5 Mbps,
+AAC 96 kbps, `+faststart`, about 0.7 GB an hour. The API sends the recording's
+HLS playlist with every segment a signed link, and a signed `PUT` link for the
+finished file; this service still holds no storage key.
+
+1. Checks the playlist: every segment and the upload link are https on
+   `CLIPPER_COPY_HOSTS` (the media bucket's host alone; clip jobs keep reading
+   `CLIPPER_SOURCE_HOSTS`), no tag points anywhere else, and it is read as a
+   finished video (`#EXT-X-ENDLIST` added when missing).
+2. ffmpeg reads the segments over https (`-seg_max_retry 3`) and encodes. A
+   segment it couldn't read fails the job, never a copy with a hole in it. No
+   progress for 10 minutes, or `CLIPPER_COPY_SECONDS`, stops it.
+3. Probes the result (`seconds`, `width`, `height`, `audio`), uploads it in
+   one `PUT` with its length declared, checks the bucket's ETag against the
+   file's MD5, and deletes it here. The API reads the size back and checks the
+   length before it relies on the copy.
+
+**Clip jobs go first.** A `POST /jobs/{uuid}` that arrives while a copy is
+being made stops the copy (status `cancelled`, code `job.yielded`) and takes
+the service within `YIELD_WAIT_SECONDS`; the API makes that copy again later
+without counting it as a failed try. A copy never stops a clip job: `POST
+/copies` while anything runs is a `409`.
+
+Measured with this command on a 22-core desktop limited to 8 threads
+(2026-11-17, a 1080p30 7 Mbps test recording with a resume in the middle):
+`veryfast` encoded at about 6x real time and wrote 1.63 Mbps (1.4 GB for two
+hours). Railway's 8 vCPU should be roughly half that: 20 to 40 minutes for a
+two-hour service.
+
 ## API (all but `/health` need `Authorization: Bearer $CLIPPER_TOKEN`)
 
 | Call | What it does |
@@ -43,6 +76,12 @@ One job at a time. A second `POST` while busy gets `409`; the API queues.
 | `POST /faces` `{source_url, start, end, count?}` | A face close-up (JPEG) from that stretch of a video, read with one ffmpeg pass over range requests; with `count` 2-3, JSON with that many, best first. 404 when no usable face, 502 when the video cannot be read. |
 | `POST /likeness` `{image_b64, references_b64[1-4]}` | How much the face on a design looks like the person in the photos: SFace cosine, best over the photos (`score`, `scores`, `face_found`). |
 | `DELETE /jobs/{uuid}` | Stops a running job, or forgets a finished one and deletes its files. |
+| `POST /copies/{uuid}` | `{playlist, upload_url, seconds}` → `202`. A recording's smaller copy (above). `422` for a link off `CLIPPER_COPY_HOSTS`, `409` while busy. |
+| `GET /copies/{uuid}` | `{status, stage, percent, error, result}`. `stage` is `making`, `checking`, `uploading` or `done`; `result` is `{seconds, bytes, width, height, audio, md5, timings}`. |
+| `DELETE /copies/{uuid}` | Stops a copy being made, or forgets a finished one. |
+
+`GET /health` also says `copies` (`CLIPPER_COPY_HOSTS` is set) and `job`
+(`clips` or `copy` while busy).
 
 `result.clips[]` carries `index`, `title`, `start_ms`, `end_ms`, `duration_ms`,
 `score`, `tags`, `layout`, `review_flags`, `video`, `poster`, `frame`, `face`, `bytes`,
@@ -60,6 +99,9 @@ engine's own provider-reported cost breakdown; OpenRouter's bill is the authorit
 | `CLIPPER_MAX_SOURCE_SECONDS` | no | Default 7200 (2 hours). |
 | `CLIPPER_JOB_SECONDS` | no | Default 3600. A job running longer is stopped. |
 | `CLIPPER_RESULT_TTL` | no | Default 7200. Finished jobs are forgotten after this. |
+| `CLIPPER_COPY_HOSTS` | for copies | The media bucket's hostname (`<account>.r2.cloudflarestorage.com`, the host of the API's `STREAM_R2_ENDPOINT`). Empty means every copy is refused and `/health` says `copies: false`. |
+| `CLIPPER_COPY_SECONDS` | no | Default 10800. A copy taking longer is stopped. |
+| `CLIPPER_COPY_MAX_SECONDS` | no | Default 21600 (6 hours): the longest recording copied (one upload stays under 5 GB). |
 
 On Railway: the `solutionist-clipper` service, connected to this repo's `main`
 with **Root Directory `/clipper_worker`**. The Dockerfile builds from this

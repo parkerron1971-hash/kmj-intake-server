@@ -2,6 +2,7 @@
 and the empty-spot check. The engine, the download and the face detector are
 faked; nothing here needs FFmpeg, OpenCV or a network."""
 import json
+import shutil
 import sys
 import threading
 import time
@@ -725,3 +726,330 @@ def test_the_image_builds_from_inside_its_own_folder():
     import tomllib
     build = tomllib.loads((here / 'railway.toml').read_text(encoding='utf-8'))['build']
     assert build['dockerfilePath'] == 'Dockerfile' and build['watchPatterns'] == ['/clipper_worker/**']
+
+
+# -- a service recording's smaller copy (2026-11-17) -----------------------
+
+BUCKET_HOST = 'acct123.r2.cloudflarestorage.com'
+SEG = f'https://{BUCKET_HOST}/media/live/b/s/seg_000000.ts?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=ab'
+UPLOAD = f'https://{BUCKET_HOST}/media/live/b/s/copy.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=cd'
+
+
+def copy_playlist(*segments):
+    lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-PLAYLIST-TYPE:EVENT']
+    for seg in segments or (SEG, SEG.replace('000000', '000001')):
+        lines += ['#EXTINF:4.000000,', seg]
+    return '\n'.join(lines) + '\n'
+
+
+def copy_body(**over):
+    return {'playlist': copy_playlist(), 'upload_url': UPLOAD, 'seconds': 8.0, **over}
+
+
+@pytest.fixture
+def copies(client, monkeypatch):
+    monkeypatch.setenv('CLIPPER_COPY_HOSTS', BUCKET_HOST)
+    return client
+
+
+def fake_copy(monkeypatch, *, hold=None):
+    """Swap ffmpeg, ffprobe and the upload for fakes; `hold` keeps the copy
+    'encoding' (checking for a cancel) until it is set."""
+    seen = {}
+
+    def run_copy(state, cmd, job_dir, seconds):
+        seen.update(cmd=cmd, playlist=(job_dir / 'recording.m3u8').read_text(encoding='utf-8'), seconds=seconds)
+        while hold is not None and not hold.is_set():
+            svc.check_cancel(state)
+            time.sleep(0.01)
+        (job_dir / 'copy.mp4').write_bytes(b'm' * 1234)
+    monkeypatch.setattr(svc, 'run_copy', run_copy)
+    monkeypatch.setattr(svc, 'probe_copy', lambda path: (7.98, 1280, 720, True))
+
+    def upload(url, path, state, transport=None):
+        seen.update(upload=url, bytes=path.stat().st_size)
+        return 'f' * 32
+    monkeypatch.setattr(svc, 'upload', upload)
+    return seen
+
+
+def wait_copy(client, job_id):
+    for _ in range(300):
+        body = client.get(f'/copies/{job_id}', headers=AUTH).json()
+        if body['status'] != 'working':
+            return body
+        time.sleep(0.02)
+    raise AssertionError('copy never finished')
+
+
+def test_every_copy_route_needs_the_token(copies):
+    job = uuid4()
+    assert copies.post(f'/copies/{job}', json=copy_body()).status_code == 401
+    assert copies.get(f'/copies/{job}').status_code == 401
+    assert copies.delete(f'/copies/{job}', headers={'Authorization': 'Bearer wrong'}).status_code == 401
+    assert copies.get('/health').json()['copies'] is True
+
+
+def test_a_copy_is_made_uploaded_and_reported(copies, monkeypatch):
+    seen = fake_copy(monkeypatch)
+    job = uuid4()
+    assert copies.post(f'/copies/{job}', json=copy_body(), headers=AUTH).status_code == 202
+    body = wait_copy(copies, job)
+    assert body['status'] == 'completed' and body['stage'] == 'done' and body['percent'] == 100.0
+    assert body['result']['seconds'] == 7.98 and body['result']['bytes'] == 1234
+    assert (body['result']['width'], body['result']['height'], body['result']['audio']) == (1280, 720, True)
+    assert seen['upload'] == UPLOAD and seen['bytes'] == 1234 and seen['seconds'] == 8.0
+    assert seen['playlist'].rstrip().endswith('#EXT-X-ENDLIST')       # read as a finished video
+    assert svc.lock.acquire(timeout=5)                                # its cleanup is done
+    svc.lock.release()
+    assert not (svc.ROOT / str(job)).exists()                         # nothing kept here
+    assert 'playlist' not in json.dumps(body)
+    # A copy is not a clip job, and the clip routes never see it.
+    assert copies.get(f'/jobs/{job}', headers=AUTH).status_code == 404
+    assert copies.get(f'/jobs/{job}/files/clip_00.mp4', headers=AUTH).status_code == 404
+    assert copies.delete(f'/copies/{job}', headers=AUTH).status_code == 200
+    assert copies.get(f'/copies/{job}', headers=AUTH).status_code == 404
+
+
+def test_a_clip_job_is_never_read_as_a_copy(client, monkeypatch):
+    fake_pipeline(monkeypatch)
+    job = uuid4()
+    client.post(f'/jobs/{job}', json={'source_url': SOURCE}, headers=AUTH)
+    wait_done(client, job)
+    assert client.get(f'/copies/{job}', headers=AUTH).status_code == 404
+    client.delete(f'/copies/{job}', headers=AUTH)
+    assert client.get(f'/jobs/{job}', headers=AUTH).status_code == 200      # untouched
+
+
+@pytest.mark.parametrize('playlist', [
+    copy_playlist(SEG.replace('https://', 'http://')),
+    copy_playlist('https://evil.example/seg_000000.ts'),
+    copy_playlist(SEG.replace(BUCKET_HOST, 'project.supabase.co')),   # a clip source host is not a copy host
+    copy_playlist(SEG.replace('https://', 'https://user:pw@')),
+    copy_playlist('file:///etc/passwd'),
+    copy_playlist('seg_000000.ts'),
+    copy_playlist(SEG).replace('#EXT-X-VERSION:3', f'#EXT-X-KEY:METHOD=AES-128,URI="https://evil.example/k"'),
+    copy_playlist(SEG).replace('#EXT-X-VERSION:3', f'#EXT-X-MAP:URI="{SEG}"'),
+    copy_playlist(SEG).replace('#EXTM3U', '#EXT-X-STREAM-INF:BANDWIDTH=1'),
+    '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ENDLIST\n',
+])
+def test_a_copy_reads_only_signed_links_from_the_media_bucket(copies, playlist):
+    assert svc.checked_playlist(playlist) is None
+    assert copies.post(f'/copies/{uuid4()}', json=copy_body(playlist=playlist), headers=AUTH).status_code == 422
+
+
+@pytest.mark.parametrize('upload', [UPLOAD.replace('https://', 'http://'), 'https://evil.example/copy.mp4',
+                                    UPLOAD.replace(BUCKET_HOST, 'project.supabase.co')])
+def test_a_copy_uploads_only_to_the_media_bucket(copies, upload):
+    assert copies.post(f'/copies/{uuid4()}', json=copy_body(upload_url=upload), headers=AUTH).status_code == 422
+
+
+def test_copies_have_their_own_hosts(client, monkeypatch):
+    monkeypatch.delenv('CLIPPER_COPY_HOSTS', raising=False)
+    assert client.get('/health').json()['copies'] is False
+    assert client.post(f'/copies/{uuid4()}', json=copy_body(), headers=AUTH).status_code == 422
+    monkeypatch.setenv('CLIPPER_COPY_HOSTS', BUCKET_HOST)
+    # Allowing copies never widens what a clip job may fetch.
+    assert client.post(f'/jobs/{uuid4()}', json={'source_url': SEG}, headers=AUTH).status_code == 422
+    assert svc.checked_playlist(copy_playlist()).count('#EXT-X-ENDLIST') == 1
+    assert svc.checked_playlist(copy_playlist() + '#EXT-X-ENDLIST\n').count('#EXT-X-ENDLIST') == 1
+
+
+def test_copy_requests_are_checked_before_anything_runs():
+    with pytest.raises(ValidationError):
+        svc.CopyRequest(playlist=copy_playlist(), upload_url=UPLOAD, seconds=0)
+    with pytest.raises(ValidationError):
+        svc.CopyRequest(playlist=copy_playlist(), upload_url=UPLOAD, seconds=svc.COPY_MAX_SECONDS + 1)
+    with pytest.raises(ValidationError):
+        svc.CopyRequest(playlist=copy_playlist(), upload_url=UPLOAD, seconds=10, source_url=SOURCE)
+
+
+def test_a_copy_waits_its_turn_behind_a_clip_job(copies, monkeypatch):
+    release = threading.Event()
+    fake_pipeline(monkeypatch)
+    original = svc.run_engine
+    monkeypatch.setattr(svc, 'run_engine', lambda *a: (release.wait(5), original(*a))[1])
+    clip = uuid4()
+    assert copies.post(f'/jobs/{clip}', json={'source_url': SOURCE}, headers=AUTH).status_code == 202
+    assert copies.get('/health').json()['job'] == 'clips'
+    assert copies.post(f'/copies/{uuid4()}', json=copy_body(), headers=AUTH).status_code == 409
+    release.set()
+    assert wait_done(copies, clip)['status'] == 'completed'
+
+
+def test_a_clip_job_stops_a_copy_and_takes_its_turn(copies, monkeypatch):
+    hold = threading.Event()
+    fake_copy(monkeypatch, hold=hold)
+    fake_pipeline(monkeypatch)
+    job = uuid4()
+    assert copies.post(f'/copies/{job}', json=copy_body(), headers=AUTH).status_code == 202
+    assert copies.get('/health').json()['job'] == 'copy'
+    assert copies.post(f'/copies/{uuid4()}', json=copy_body(), headers=AUTH).status_code == 409   # one at a time
+    clip = uuid4()
+    assert copies.post(f'/jobs/{clip}', json={'source_url': SOURCE}, headers=AUTH).status_code == 202
+    body = copies.get(f'/copies/{job}', headers=AUTH).json()
+    assert body['status'] == 'cancelled' and body['error']['code'] == 'job.yielded'
+    assert wait_done(copies, clip)['status'] == 'completed'
+    assert not (svc.ROOT / str(job)).exists()                         # the stopped copy left nothing
+
+
+def test_a_clip_job_waits_for_a_copy_only_so_long(copies, monkeypatch):
+    """A copy that doesn't stop in time leaves the clip job a 409, as before."""
+    monkeypatch.setattr(svc, 'YIELD_WAIT_SECONDS', 0.05)
+    stuck = threading.Event()
+
+    def run_copy(state, cmd, job_dir, seconds):
+        stuck.wait(5)                                 # ignores the cancel for a while
+        svc.check_cancel(state)
+    monkeypatch.setattr(svc, 'run_copy', run_copy)
+    job = uuid4()
+    copies.post(f'/copies/{job}', json=copy_body(), headers=AUTH)
+    assert copies.post(f'/jobs/{uuid4()}', json={'source_url': SOURCE}, headers=AUTH).status_code == 409
+    stuck.set()
+    assert wait_copy(copies, job)['error']['code'] == 'job.yielded'
+
+
+def test_delete_stops_a_copy_and_forgets_it(copies, monkeypatch):
+    fake_copy(monkeypatch, hold=threading.Event())
+    job = uuid4()
+    copies.post(f'/copies/{job}', json=copy_body(), headers=AUTH)
+    assert copies.delete(f'/copies/{job}', headers=AUTH).status_code == 200
+    for _ in range(200):
+        if svc.jobs.get(str(job)) is None and not svc.lock.locked():
+            break
+        time.sleep(0.02)
+    assert copies.get(f'/copies/{job}', headers=AUTH).status_code == 404
+    assert not (svc.ROOT / str(job)).exists()
+
+
+def test_a_failed_copy_says_why_without_paths(copies, monkeypatch):
+    fake_copy(monkeypatch)
+    monkeypatch.setattr(svc, 'probe_copy', lambda path: (_ for _ in ()).throw(RuntimeError(f'{path} token=abc')))
+    job = uuid4()
+    copies.post(f'/copies/{job}', json=copy_body(), headers=AUTH)
+    body = wait_copy(copies, job)
+    assert body['status'] == 'failed' and body['error']['code'] == 'job.crashed'
+    assert 'token' not in json.dumps(body) and 'copy.mp4' not in json.dumps(body)
+
+
+def test_a_copy_past_its_time_limit_is_stopped(monkeypatch):
+    state = fresh_state() | {'started': time.monotonic() - 11, 'limit': 10, 'too_long': 'Making the copy took too long.'}
+    with pytest.raises(svc.JobError) as caught:
+        svc.check_cancel(state)
+    assert caught.value.code == 'job.timeout' and 'copy' in caught.value.message
+
+
+def test_the_copy_is_720p_never_upscaled_and_reads_https_only():
+    cmd = svc.copy_cmd('rec.m3u8', 'copy.mp4')
+    flags = dict(zip(cmd, cmd[1:]))
+    assert flags['-protocol_whitelist'] == 'file,https,tls,tcp,crypto'          # no plain http
+    assert flags['-c:v'] == 'libx264' and flags['-b:v'] == '1500k' and flags['-c:a'] == 'aac' and flags['-b:a'] == '96k'
+    maps = [b for a, b in zip(cmd, cmd[1:]) if a == '-map']
+    assert flags['-movflags'] == '+faststart' and maps == ['0:v:0', '0:a:0?']   # audio when there is some
+    assert 'min(1280,iw)' in flags['-vf'] and 'min(720,ih)' in flags['-vf']
+    assert 'force_original_aspect_ratio=decrease' in flags['-vf'] and cmd[-1] == 'copy.mp4'
+
+
+def _script(tmp_path, body):
+    path = tmp_path / 'fake_ffmpeg.py'
+    path.write_text(body, encoding='utf-8')
+    return [sys.executable, str(path)]
+
+
+def test_run_copy_follows_the_progress(tmp_path):
+    cmd = _script(tmp_path, "import sys\nfor us in (2000000, 4000000, 8000000):\n"
+                            "    print(f'out_time_us={us}', flush=True)\nprint('progress=end', flush=True)\n")
+    state = fresh_state()
+    svc.run_copy(state, cmd, tmp_path, 8.0)
+    assert state['percent'] == 89.0
+
+
+@pytest.mark.parametrize('stderr,code', [
+    ('[in#0/hls] Failed to open segment 4 of playlist 0', 'copy.segment'),
+    ('[in#0/hls] Segment 4 of playlist 0 failed too many times, skipping', 'copy.segment'),
+])
+def test_a_segment_ffmpeg_skipped_fails_the_copy(tmp_path, stderr, code):
+    cmd = _script(tmp_path, f"import sys\nsys.stderr.write({stderr!r} + '\\n')\nprint('progress=end')\n")
+    with pytest.raises(svc.JobError) as caught:
+        svc.run_copy(fresh_state(), cmd, tmp_path, 8.0)
+    assert caught.value.code == code
+
+
+def test_ffmpeg_failing_fails_the_copy_and_corrupt_packets_do_not(tmp_path):
+    with pytest.raises(svc.JobError) as caught:
+        svc.run_copy(fresh_state(), _script(tmp_path, 'import sys\nsys.exit(1)\n'), tmp_path, 8.0)
+    assert caught.value.code == 'copy.ffmpeg'
+    # What a resumed stream prints at the join: not a failure.
+    ok = _script(tmp_path, "import sys\nsys.stderr.write('[mpegts] Packet corrupt (stream = 0)\\n"
+                           "[vist#0:0/h264] timestamp discontinuity\\n')\n")
+    svc.run_copy(fresh_state(), ok, tmp_path, 8.0)
+
+
+def test_a_stalled_read_stops_the_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(svc, 'COPY_STALL_SECONDS', 0.3)
+    cmd = _script(tmp_path, "import time\nprint('out_time_us=1000000', flush=True)\ntime.sleep(20)\n")
+    started = time.monotonic()
+    with pytest.raises(svc.JobError) as caught:
+        svc.run_copy(fresh_state(), cmd, tmp_path, 8.0)
+    assert caught.value.code == 'copy.stalled' and time.monotonic() - started < 15
+
+
+def test_upload_is_one_whole_put_checked_against_its_etag(tmp_path):
+    import hashlib
+    import httpx
+    target = tmp_path / 'copy.mp4'
+    target.write_bytes(b'v' * (3 * 1024 * 1024 + 7))
+    md5 = hashlib.md5(target.read_bytes()).hexdigest()
+    seen = {}
+
+    def answer(request):
+        seen.update(method=request.method, url=str(request.url), headers=dict(request.headers), body=request.read())
+        return httpx.Response(200, headers={'etag': f'"{md5}"'})
+    state = fresh_state()
+    assert svc.upload(UPLOAD, target, state, transport=httpx.MockTransport(answer)) == md5
+    assert seen['method'] == 'PUT' and seen['url'] == UPLOAD and len(seen['body']) == target.stat().st_size
+    assert seen['headers']['content-length'] == str(target.stat().st_size)
+    assert 'transfer-encoding' not in seen['headers'] and seen['headers']['content-type'] == 'video/mp4'
+    assert state['percent'] == 99.0
+    for transport, code in [
+            (httpx.MockTransport(lambda r: httpx.Response(200, headers={'etag': '"0000"'})), 'upload.mismatch'),
+            (httpx.MockTransport(lambda r: httpx.Response(403)), 'upload.status'),
+            (httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError('down'))), 'upload.failed')]:
+        with pytest.raises(svc.JobError) as caught:
+            svc.upload(UPLOAD, target, fresh_state(), transport=transport)
+        assert caught.value.code == code
+
+
+def test_an_upload_stops_when_cancelled(tmp_path):
+    import httpx
+    target = tmp_path / 'copy.mp4'
+    target.write_bytes(b'v' * (2 * 1024 * 1024))
+    state = fresh_state()
+    state['cancel'].set()
+    with pytest.raises(svc.Cancelled):
+        svc.upload(UPLOAD, target, state, transport=httpx.MockTransport(lambda r: (r.read(), httpx.Response(200))[1]))
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='needs FFmpeg')
+def test_the_real_ffmpeg_reads_a_resumed_recording_and_writes_the_copy(tmp_path):
+    """The command as it runs on the clip service, on a tiny relay-style
+    recording (an EVENT playlist, a resume with its timestamps restarting),
+    read from local files instead of signed links."""
+    import subprocess
+    rec = tmp_path / 'rec'
+    rec.mkdir()
+    for run, flags in enumerate(('append_list+omit_endlist', 'append_list+omit_endlist+discont_start')):
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30',
+                        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '4',
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '30', '-c:a', 'aac', '-f', 'hls',
+                        '-hls_time', '2', '-hls_list_size', '0', '-hls_playlist_type', 'event', '-hls_flags', flags,
+                        '-hls_segment_filename', str(rec / 'seg_%06d.ts'), str(rec / 'index.m3u8')],
+                       check=True, capture_output=True, timeout=120)
+    text = (rec / 'index.m3u8').read_text(encoding='utf-8')
+    lines = [str(rec / line) if line.startswith('seg_') else line for line in text.splitlines()]
+    playlist = tmp_path / 'recording.m3u8'
+    playlist.write_text('\n'.join(lines + ['#EXT-X-ENDLIST']) + '\n', encoding='utf-8')
+    target = tmp_path / 'copy.mp4'
+    svc.run_copy(fresh_state(), svc.copy_cmd(playlist, target), tmp_path, 8.0)
+    seconds, width, height, audio = svc.probe_copy(target)
+    assert (width, height, audio) == (1280, 720, True) and abs(seconds - 8.0) < 0.5

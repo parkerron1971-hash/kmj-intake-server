@@ -76,6 +76,8 @@ TICKS = {
     "stream_relay_sweep": "stream_relay_router:sweep_stale",
     # A church plan's storage: the church rows and held recordings go through drop_samples.
     "church_storage": "church_storage:storage_tick",
+    # A recording's smaller copy: the recordings it would copy or trim go through drop_samples.
+    "recording_copy": "recording_copy:copy_tick",
     "trial_expiry": "trial_expiry:expire_tick",
     "email_domain_monitor": "email_domain_monitor:monitor_tick",
     "sms_reminder_sweep": "sms_alerts:reminder_sweep",
