@@ -96,6 +96,8 @@ TICKS = {
     "church_team_rollup": "church_team_week:rollup_tick",
     "church_assignments_sweep": "church_assignments:sweep_tick",
     "church_handovers_sweep": "church_handovers:sweep_tick",
+    # The leaders schedule's notices: its churches go through drop_samples, and each notice asks skip() first.
+    "church_schedule_sweep": "church_schedule_tell:sweep_tick",
     "church_mail_alert_sweep": "church_mail_alerts:sweep",
     "church_mail_trash_sweep": "church_mail_alerts:trash_sweep",
     # ChurchSavvy's countdown that starts by itself: a sample's screens show nothing, so it skips the sample (skip_id).

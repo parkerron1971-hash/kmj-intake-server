@@ -75,9 +75,12 @@ Switched by CHURCH_SCHEDULE: off | owner | on, owner when unset (the platform
 owner's own church, and the platform owner's own login). Closed, not a
 church, or before the migration (ready()): every route answers 404.
 
-Not here yet (their own PRs): the notices and the hourly sweep
-(church_schedule_tell), Dates on the member app's Lead tab, the Serving Away
-form and the scheduler's hold, things that repeat.
+Who is told is church_schedule_tell's (S1-4): ask, answer and withdraw hand
+it the row once the write is back (_after), never inside the write, and its
+hourly sweep tells whatever was missed.
+
+Not here yet (their own PRs): Dates on the member app's Lead tab, the Serving
+Away form and the scheduler's hold, things that repeat.
 """
 from __future__ import annotations
 
@@ -349,21 +352,29 @@ def over_all(ch: co.Church, me: Dict[str, Any]) -> bool:
     return bool(uid) and (uid == ch.owner or uid in office_overseers(ch))
 
 
-def goes_to(ch: co.Church, asker_cid: Any) -> Optional[Dict[str, str]]:
-    """Who an ask of this person's goes to: the first one church_over.above
-    gives (decision 1: naming every one at that step would widen who reads
-    the reason). {kind, id, name}; None only for the one person the owner is
-    (Church.owner_person). church_over puts everyone who carries the owner's
-    sign-in email at the top (a husband or wife on a family address too);
-    here only the owner needs no yes, so anyone else there goes to the
-    owner's login, as any ask with nobody else over it does."""
+def nearest(ch: co.Church, asker_cid: Any) -> List[Dict[str, str]]:
+    """Everyone at the nearest step over this person, in the library's order
+    (church_over.above): [{kind, id, name}]. [] only for the one person the
+    owner is (Church.owner_person). church_over puts everyone who carries the
+    owner's sign-in email at the top (a husband or wife on a family address
+    too); here only the owner needs no yes, so anyone else there has the
+    owner's login over them, as anyone with nobody else over them does."""
     cid = str(asker_cid or "")
     if ch.owner_person and cid == ch.owner_person:
-        return None
+        return []
     rows = co.above(ch, co.who(co.PERSON, cid))
     if rows:
-        return rows[0]
-    return {"kind": co.LOGIN, "id": ch.owner, "name": ch.login_name(ch.owner)} if ch.owner else None
+        return rows
+    return [{"kind": co.LOGIN, "id": ch.owner, "name": ch.login_name(ch.owner)}] if ch.owner else []
+
+
+def goes_to(ch: co.Church, asker_cid: Any) -> Optional[Dict[str, str]]:
+    """Who an ask of this person's goes to: the first one at the nearest
+    step over them (decision 1: naming every one at that step would widen
+    who reads the reason). {kind, id, name}; None only for the one person
+    the owner is."""
+    rows = nearest(ch, asker_cid)
+    return rows[0] if rows else None
 
 
 def _is_asker(ch: co.Church, me: Dict[str, Any], ask: Dict[str, Any]) -> bool:
@@ -795,6 +806,29 @@ def _take_back(ch: co.Church, ask_id: str) -> None:
         print(f"[church_schedule] {ch.b[:8]}: an ask that didn't settle wasn't taken back", flush=True)
 
 
+def _after(what: str, ch: co.Church, row: Dict[str, Any], **kw: Any) -> None:
+    """Hand a notice to church_schedule_tell once the write has landed: off
+    this request (member_push._later, a thread of its own), on a Church of
+    its own (this request's is still answering), and never able to fail the
+    write it follows: anything that goes wrong here is logged and dropped
+    (the hourly sweep tells an ask or an answer that was missed; a take-back
+    is not tried again). `what` is one of church_schedule_tell's tell_new,
+    tell_answer, tell_withdrawn. The row is handed over whole;
+    church_schedule_tell keeps only what a notice may say (never the reason,
+    never the note)."""
+    try:
+        import member_push
+        biz, row = dict(ch.business), dict(row)
+
+        def run() -> None:
+            import church_schedule_tell as tell
+            getattr(tell, what)(co.Church(biz), row, **kw)
+
+        member_push._later(run)
+    except Exception:  # noqa: BLE001 — a notice is never worth failing the write it is about
+        print(f"[church_schedule] {ch.b[:8]}: a notice wasn't handed on ({what})", flush=True)
+
+
 def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """The one write of an ask. Everything is read before it: who it is for
     and their group, the days against the church's clock and its notice
@@ -881,6 +915,7 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
     if done:
         if left:
             _take_back(ch, left)                # a leftover beside the one that settled
+        _after("tell_new", ch, done)            # its own answer was lost, so its notice may have been too (told once)
         return shape(ch, me, done, names)
     if left:
         saved_id = left
@@ -893,6 +928,7 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
                 raise HTTPException(409, WAITING)
             raise HTTPException(503, UNSAVED)
         if not instant:
+            _after("tell_new", ch, saved[0])    # whoever it went to hears, once the write is back
             return shape(ch, me, saved[0], names)
         saved_id = str(saved[0]["id"])
     twin: Optional[Dict[str, Any]] = None
@@ -914,6 +950,7 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
         return shape(ch, me, twin, names)
     if not got.get("changed"):
         raise HTTPException(409, MOVED)         # it moved under us (taken back, say): never "saved" as it stands
+    _after("tell_new", ch, got["ask"])          # "can't make it": whoever is over them hears at once
     return shape(ch, me, got["ask"], names)
 
 
@@ -953,6 +990,7 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
     got = _settle(ch, row["id"], "yes" if yes else "no", note=note, **by)
     if not got.get("changed"):
         raise HTTPException(409, ALREADY)
+    _after("tell_answer", ch, got["ask"])       # the one who asked hears the answer
     return shape(ch, me, got["ask"], names)
 
 
@@ -973,6 +1011,7 @@ def withdraw(ch: co.Church, me: Dict[str, Any], ask_id: Any) -> Dict[str, Any]:
     got = _settle(ch, row["id"], "withdrawn")
     if not got.get("changed"):
         raise HTTPException(409, NOT_OPEN)
+    _after("tell_withdrawn", ch, got["ask"], by=dict(me))
     return shape(ch, me, got["ask"], names)
 
 

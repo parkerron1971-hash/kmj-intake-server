@@ -2058,6 +2058,19 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # The leaders schedule (2026-11-18): an ask to be away, and its answer,
+    # are told once; one nudge after three days; a waiting ask follows whoever
+    # is over the asker now; a private reason is cleared 90 days after the
+    # last day (church_schedule_tell.sweep_tick; CHURCH_SCHEDULE, read here on
+    # the worker too). Nothing is read while the switch is off, and before
+    # supabase/APPLY-2026-11-19-church-schedule.sql only whether its tables
+    # are there.
+    try:
+        import church_schedule_tell as _cst
+        scheduler.add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1,
+                          id="church_schedule_sweep")
+    except Exception as e:
+        print(f"   [warn] leaders schedule sweep not scheduled: {e}")
     # ChurchSavvy's countdown that starts by itself (2026-11-14, Kevin: "a pre
     # service clock starts it that a person can set"): every minute, each
     # church's countdown times that have come go up on its screens, once a day,

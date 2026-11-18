@@ -21,6 +21,11 @@ and `db.refused` keeps why.
     db.before_settle = fn                           runs just before the
                                                     function locks the row: the
                                                     other answer landing first
+    db.later = [fn, ...]                            the notices a write handed
+                                                    on (member_push._later),
+                                                    kept and NOT run: nothing
+                                                    is told inside a write.
+                                                    later(db) runs them
 """
 from __future__ import annotations
 
@@ -203,7 +208,27 @@ def build(monkeypatch, *, mode: str = "on", **kw):
     monkeypatch.setattr(cs, "_now", lambda: NOW)
     monkeypatch.setattr(cs, "_FORCE", True)
     monkeypatch.setattr(cs, "_KEPT", {})
+    # What a write hands on to be told (church_schedule._after) waits here, as
+    # it waits for its own thread in production: never run inside the write.
+    import member_push
+    d.later = []
+    monkeypatch.setattr(member_push, "_later", lambda fn, *a, **k: d.later.append(lambda: fn(*a, **k)))
     return d
+
+
+def later(d):
+    """Run what the writes handed on, oldest first, as member_push._later's
+    thread does (a notice that fails is dropped, never raised). Answers with
+    how many ran."""
+    ran = 0
+    while d.later:
+        fn = d.later.pop(0)
+        ran += 1
+        try:
+            fn()
+        except Exception:  # noqa: BLE001
+            d.dropped = getattr(d, "dropped", 0) + 1
+    return ran
 
 
 def seat(d, biz, handle, role="member", tie=True):
@@ -243,4 +268,5 @@ def as_(app, biz, handle):
     return u
 
 
-__all__ = ["NOW", "TODAY", "LOVE_CITY", "NEW_HOPE", "as_", "build", "client", "day", "seat", "settle", "uid"]
+__all__ = ["NOW", "TODAY", "LOVE_CITY", "NEW_HOPE", "as_", "build", "client", "day", "later", "seat", "settle",
+           "uid"]
