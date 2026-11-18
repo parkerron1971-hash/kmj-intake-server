@@ -27,7 +27,8 @@ WHAT IS KEPT, AND FOR HOW LONG (per server copy, in memory):
     request. The owner's preview never uses it.
   - whether a member gets the Lead tab and the Board tab: TAB_SECONDS (60).
     These only draw the tab bar; the Lead and Board pages read who may see
-    what on their own.
+    what on their own. A "no" is kept only when no read behind it failed
+    (sb_clients.failures counts the ones a helper answers as "nothing").
 Left alone, read every time: what is unread (member_portal_threads keeps it
 15 s already), a member's spaces (space_leaders decides who reaches the Youth
 and Kids rooms: a leader taken off must lose them at once), and every page's

@@ -218,6 +218,87 @@ def test_the_lead_tab_is_kept_a_minute_when_known(monkeypatch, clean, roles, led
     assert calls.count("roles") == (3 if kept else 4)
 
 
+@pytest.mark.parametrize("step", ["tasks", "schedule", "parts"])
+def test_a_no_behind_a_failed_later_read_is_never_kept(monkeypatch, step):
+    """A task, a place on the leaders schedule or a serving part answer
+    "nothing" for a failed read too: that "no" is asked again next page."""
+    import church_follow_up as cfu
+    import church_leader_tasks
+    import church_schedule
+    import group_lead
+    import member_app_ui
+    import member_portal_lead
+    monkeypatch.setattr(cfu, "roles_for", lambda b, m: [])
+    monkeypatch.setattr(group_lead, "led_groups", lambda b, m: [])
+    monkeypatch.setattr(member_app_ui, "serve_mode", lambda: True)
+    asked = []
+
+    def read(name, answer):
+        def fn(*a):
+            asked.append(name)
+            if name == step:
+                sb_clients._failed()            # what a refused or lost read does in sb_clients
+            return answer
+        return fn
+    monkeypatch.setattr(church_leader_tasks, "section", read("tasks", None))
+    monkeypatch.setattr(church_schedule, "section", read("schedule", None))
+    monkeypatch.setattr(member_portal_lead, "parts", read("parts", {"serving": False, "kids": False, "team": []}))
+    for _ in range(2):
+        assert asyncio.run(mp._leads(BIZ, ME["id"], dict(BUSINESS), dict(ME), kept=True)) is False
+    assert asked.count(step) == 2 and len(member_cache.tabs) == 0
+
+
+def test_a_no_with_every_read_answered_is_kept(monkeypatch):
+    import church_follow_up as cfu
+    import church_leader_tasks
+    import church_schedule
+    import group_lead
+    import member_app_ui
+    import member_portal_lead
+    monkeypatch.setattr(cfu, "roles_for", lambda b, m: [])
+    monkeypatch.setattr(group_lead, "led_groups", lambda b, m: [])
+    monkeypatch.setattr(member_app_ui, "serve_mode", lambda: True)
+    monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: None)
+    monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    asked = []
+    monkeypatch.setattr(member_portal_lead, "parts",
+                        lambda *a: asked.append(1) or {"serving": False, "kids": False, "team": []})
+    for _ in range(2):
+        assert asyncio.run(mp._leads(BIZ, ME["id"], dict(BUSINESS), dict(ME), kept=True)) is False
+    assert asked == [1]
+
+
+def test_sb_clients_counts_failed_reads_in_this_thread(monkeypatch):
+    import httpx
+
+    class Down:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "k")
+    monkeypatch.setattr(httpx, "Client", Down)
+
+    def lost(client, method, url, headers, body):
+        raise httpx.ConnectError("down")
+
+    def refused(client, method, url, headers, body):
+        return httpx.Response(503, text='{"message":"busy"}')
+    before = sb_clients.failures()
+    monkeypatch.setattr(sb_clients, "_send", lost)
+    assert sb_clients._sync_request("GET", "/contacts?x=1", {}) is None
+    monkeypatch.setattr(sb_clients, "_send", refused)
+    assert sb_clients._sync_request("GET", "/contacts?x=1", {}) is None
+    monkeypatch.setattr(sb_clients, "_send", lambda *a: httpx.Response(200, text="[]"))
+    assert sb_clients._sync_request("GET", "/contacts?x=1", {}) == []
+    assert sb_clients.failures() - before == 2
+
+
 def test_the_board_tab_is_kept_a_minute_and_a_failed_read_never(monkeypatch):
     import member_portal_board as mpb
     monkeypatch.setattr(mpb, "tab_on", lambda: True)

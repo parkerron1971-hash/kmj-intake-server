@@ -3,12 +3,13 @@ title: Member app stops repeating itself — the church, the member and the tab 
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: '"the members app move slow when send messages in chat, switching from one tab to another… what is the problem and how can that be sped up?" … "yes build all four" (Kevin, 2026-11-18). Fix two of four, after the stopwatch (2026-11-18-member-app-stopwatch.md).'
-status: in review
-prs: [kmj-intake-server (this PR)]
+status: shipped (a fix after review in review)
+prs: [kmj-intake-server#1949, "kmj-intake-server (a no behind a failed read is never kept)"]
 migrations: []
 left_undone:
   - "A change the owner makes elsewhere (taking the site offline, the theme, the custom domain, giving settings) shows on the member app within a minute: only the member app switch (PATCH /member-portal/{id}) forgets the church at once, and only on the server copy that saved it."
   - "A member's spaces (space_leaders: who reaches the Youth and Kids rooms) are still read on every page, on purpose: a leader taken off must lose those rooms at once."
+  - "Kevin to decide: 'sign everyone out' and switching the member app off reach other server copies within a minute (the review of #1949 flagged it). If that's too long, either a 30 s church TTL or a small fresh read of settings->member_portal on every request (about 40 ms back) would close it."
   - "Signed-in pages weren't timed live (no member session can be made for a real member); the after numbers for them come from the stopwatch's [member] lines and the Database card."
 decisions:
   - "The church on an address: kept 60 s per address (the PostgREST filter is the key), only when a row with its church came back; a failed read and 'no such site' are read again. Offline and a sample church's preview cookie are still checked on every request"
@@ -27,6 +28,16 @@ the member's spaces) the Lead tab's chain (roles and groups, then tasks, then se
 parts) and the Board tab. `member_cache.py` keeps those answers per server copy, briefly;
 `member_portal._site_row`, `_people_for` and `_leads`, and `member_portal_board.on_board`
 use it.
+
+**Live after #1949 (measured 2026-11-18, lovecityc.com/my/groups, signed out, 20 requests):**
+the church lookup went from 126-183 ms to 1.4-4.6 ms on a warm copy, and the server total from
+135-198 ms to 6-59 ms; the first request on a cold copy still paid 168 ms. From Kevin's PC over
+one kept-open connection, first byte went from 0.24-0.39 s to 0.08-0.21 s.
+
+**After review (second PR):** a "no" for the Lead tab is kept only when no read behind it
+failed. A task, a place on the leaders schedule and a serving part answer "nothing" for a failed
+read too, so `member_portal._counted` runs each where `sb_clients.failures()` (a per-thread
+count of failed sync requests) can tell.
 
 Tests: `__tests__/test_member_cache.py`. A signed-in member's second page skips the
 church, record, roles and groups reads: with every other read faked empty, 15 reads before
