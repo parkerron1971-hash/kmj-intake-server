@@ -77,23 +77,6 @@ def role_of(biz: str, user_id: str) -> Optional[str]:
     return (mem[0].get("role") if mem else None)
 
 
-def set_level(biz: str, user_id: str, level: str) -> None:
-    """Set an active seat's level (viewer, member, manager, admin): the one
-    write of business_users.role after the invite. A person's sheet
-    (church_sheet.change) is the caller, and it has checked who may set
-    which level on whom, and asked for the password where the level goes
-    up. A save that fails is a 503."""
-    if level not in _ROLES:
-        raise HTTPException(400, f"role must be one of {_ROLES}")
-    if not safe_id(str(biz or "")) or not safe_id(str(user_id or "")):
-        raise HTTPException(404, "That login isn't on this team")
-    saved = sb_clients.sb_patch_as_service(
-        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&user_id=eq.{quote(str(user_id), safe='')}"
-        "&status=eq.active", {"role": level})
-    if not isinstance(saved, list) or not saved:
-        raise HTTPException(503, "That didn't save. Try again.")
-
-
 def require_role(biz: str, user_id: str, min_role: str) -> str:
     """403 unless the caller's role rank ≥ min_role. Returns the role."""
     from fastapi import HTTPException as _HTTPException
@@ -385,7 +368,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     # STEP-UP on the GRANT only. Revoking is the emergency brake and
     # must never have friction in front of it.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz)
     inviter_role = require_role(biz, str(user.id), "manager")
     lane = None
     if body.lane:
@@ -398,7 +381,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
     # comped business resolves to NO plan and the seat cap reads 1 —
     # blocking the very accounts comp_tier exists to unblock.
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=id,name,owner_id,subscription_status,"
         f"subscription_plan,comp_tier&limit=1") or []
     biz_row = rows[0] if rows else {}
     if role not in _ROLES:
@@ -417,7 +400,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
             **{k: cap[k] for k in ("count", "limit")}})
 
     existing = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&invited_email=eq.{email}"
+        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&invited_email=eq.{quote(email, safe='@')}"
         f"&status=in.(invited,active)&select=id&limit=1") or []
     if existing:
         raise HTTPException(409, "this person is already invited or active")
@@ -438,10 +421,11 @@ async def invite(biz: str, body: InviteBody, request: Request,
 def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     require_role(biz, str(user.id), "manager")
     rows0 = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=id,subscription_status,subscription_plan,"
+        f"comp_tier&limit=1") or []
     biz_row = rows0[0] if rows0 else {}
     rows = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&status=in.(invited,active)"
+        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&status=in.(invited,active)"
         f"&order=invited_at.desc&limit=200"
         # `lane`: the office lane the invite carried, so an invitation still
         # waiting reads "People & Care lane" on Logins & areas after a reload.

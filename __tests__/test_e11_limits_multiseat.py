@@ -27,8 +27,9 @@ _os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-step-up")
 import ledger_unlock as _lu
 
 
-def _stepup(user_id):
-    tok = _lu.mint(str(user_id), _lu.SCOPE_ACCESS)["token"]
+def _stepup(user_id, business_id="b1"):
+    # An access unlock is for one business (ledger_unlock, 2026-11-18).
+    tok = _lu.mint(str(user_id), _lu.SCOPE_ACCESS, business_id)["token"]
     return type("R", (), {"headers": {_lu.UNLOCK_HEADER: tok}})()
 
 

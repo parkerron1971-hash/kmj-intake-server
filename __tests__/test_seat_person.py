@@ -29,8 +29,10 @@ FB_ROWS: dict = {}
 OWNER = type("U", (), {"id": "owner1", "email": "kevin@x.com"})()
 
 
-def _stepup(user_id):
-    return type("R", (), {"headers": {lu.UNLOCK_HEADER: lu.mint(str(user_id), lu.SCOPE_ACCESS)["token"]}})()
+def _stepup(user_id, business_id="b1"):
+    # An access unlock is for one business (ledger_unlock, 2026-11-18).
+    token = lu.mint(str(user_id), lu.SCOPE_ACCESS, business_id)["token"]
+    return type("R", (), {"headers": {lu.UNLOCK_HEADER: token}})()
 
 
 def _user(uid, email):

@@ -261,8 +261,7 @@ def office(db, monkeypatch):
     monkeypatch.setenv("CHURCH_AREAS", "owner")
     # A write that gives a login more asks for the password again (since
     # 2026-11-18); these tests are about everything else, so here it has
-    # been answered. The password itself is pinned in
-    # test_access_asks_by_result.py.
+    # been answered. The password itself is pinned in test_church_login_areas.py.
     import ledger_unlock
     monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
     # Whether a write gives more is worked out from the church's logins and

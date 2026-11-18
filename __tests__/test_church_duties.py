@@ -457,8 +457,7 @@ def office(db, monkeypatch):
     monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: who["role"])
     # A write that gives a login more asks for the password again (since
     # 2026-11-18); these tests are about everything else, so here it has
-    # been answered. The password itself is pinned in
-    # test_access_asks_by_result.py.
+    # been answered. The password itself is pinned at the end of this file.
     import ledger_unlock
     monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
     app = FastAPI()
@@ -748,7 +747,7 @@ def _real_unlock(monkeypatch, uid=OWNER):
     import ledger_unlock
     monkeypatch.setattr(ledger_unlock, "require_unlock", _REAL_UNLOCK)
     os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-duties")
-    return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(uid, ledger_unlock.SCOPE_ACCESS)["token"]}
+    return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(uid, ledger_unlock.SCOPE_ACCESS, BIZ)["token"]}
 
 
 def test_a_move_that_gives_a_manager_a_duty_asks_for_the_password(office, db, monkeypatch):
@@ -787,13 +786,15 @@ def test_a_move_that_would_be_refused_is_refused_before_the_password_is_asked(of
 
 
 def test_who_may_answer_the_password_for_who_can_get_in(db):
-    """The owner, an Admin, whoever sets up jobs and sheets, and whoever is
-    over the office's lanes (she moves her team's duties). Nobody else, and
-    nobody but the owner for the danger scope."""
+    """The owner, an Admin, and a Manager who sets up jobs and sheets.
+    Whoever is over the office's lanes and none of those may NOT: letting
+    her would have opened every other access gate to her (an invite needs
+    only a Manager). Nobody but the owner for the danger scope."""
     import ledger_unlock
-    for uid in (OWNER, ADMIN, JESS):
+    assert cd.oversees(BIZ, JESS)
+    for uid in (OWNER, ADMIN):
         assert ledger_unlock._require_actor(BIZ, uid, ledger_unlock.SCOPE_ACCESS)["id"] == BIZ
-    for uid in (NAIYA, TIARA, MEM, STRANGER):
+    for uid in (JESS, NAIYA, TIARA, MEM, STRANGER):
         with pytest.raises(HTTPException) as e:
             ledger_unlock._require_actor(BIZ, uid, ledger_unlock.SCOPE_ACCESS)
         assert e.value.status_code == 403
@@ -801,9 +802,42 @@ def test_who_may_answer_the_password_for_who_can_get_in(db):
         with pytest.raises(HTTPException) as e:
             ledger_unlock._require_actor(BIZ, uid, ledger_unlock.SCOPE_DANGER)
         assert e.value.status_code == 403
-    # Once she no longer does "Over the lanes", she can't.
-    cd.move(db.t["businesses"][0], cd.OVERSEE, [NAIYA], OWNER)
-    with pytest.raises(HTTPException) as e:
-        ledger_unlock._require_actor(BIZ, JESS, ledger_unlock.SCOPE_ACCESS)
-    assert e.value.status_code == 403
+    # Given "Sets up jobs and people's sheets", a Manager may.
+    db.t["church_duty_holders"].append({"business_id": BIZ, "duty": "jobs_and_sheets", "user_id": NAIYA})
     assert ledger_unlock._require_actor(BIZ, NAIYA, ledger_unlock.SCOPE_ACCESS)["id"] == BIZ
+
+
+def test_putting_a_move_back_asks_for_the_password_when_that_gives_a_duty_back(office, db, monkeypatch):
+    unlocked = _real_unlock(monkeypatch)
+
+    def put(ids, **kw):
+        return office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": ids}, **kw)
+
+    def undo(**kw):
+        return office.post("/church/duties/weekly_text/undo", json={"business_id": BIZ}, **kw)
+    # Naiya and Jess do it by the lanes. Named for Naiya alone, Jess no longer does; then Tiara is added.
+    assert put([NAIYA]).status_code == 200
+    assert put([NAIYA, TIARA], headers=unlocked).status_code == 200
+    # Putting the last move back only takes it from Tiara: nothing is asked.
+    assert undo().status_code == 200
+    assert "weekly_text" not in cd.standing(BIZ, TIARA)["duties"]
+    # Again puts back the one before, and that hands it to Jess again: more, so the password.
+    before = [dict(r) for r in db.t["church_duty_holders"]]
+    r = undo()
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access"
+    assert [dict(r) for r in db.t["church_duty_holders"]] == before, "nothing was put back"
+    assert undo(headers=unlocked).status_code == 200
+    assert "weekly_text" in cd.standing(BIZ, JESS)["duties"]
+
+
+def test_a_password_confirmed_for_another_church_moves_no_duty_here(office, db, monkeypatch):
+    _real_unlock(monkeypatch)
+    elsewhere = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(
+        OWNER, ledger_unlock.SCOPE_ACCESS, "0a000000-0000-4000-8000-00000000000a")["token"]}
+    body = {"business_id": BIZ, "user_ids": [NAIYA, TIARA]}
+    r = office.put("/church/duties/weekly_text", json=body, headers=elsewhere)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [NAIYA]}).status_code == 200
+    assert office.post("/church/duties/weekly_text/undo", json={"business_id": BIZ},
+                       headers=elsewhere).status_code == 403

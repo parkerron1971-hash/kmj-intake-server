@@ -452,6 +452,6 @@ def operate(business_id: str, purchase_id: UUID, operation: str, body: Answer | 
         if operation == "answer" and isinstance(body, Answer):
             return answer(bid, uid, pid, body)
         if operation == "checkout":
-            require_unlock(request, uid, SCOPE_DANGER)
+            require_unlock(request, uid, SCOPE_DANGER, business_id=bid)
             return checkout(bid, uid, pid, body.revision)
         raise HTTPException(404, "Unknown purchase action.", headers=NO_STORE)

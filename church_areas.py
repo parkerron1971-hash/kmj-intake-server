@@ -972,7 +972,7 @@ def place_login(body: Dict[str, Any], request: Request = None,
         raise HTTPException(400, "That login isn't valid")
     assert_access(biz, user, "admin")
     seat = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
-                                        "&status=eq.active&select=role&limit=1")
+                                        "&status=eq.active&select=role,areas,lane&limit=1")
     if not isinstance(seat, list):
         raise HTTPException(503, "That didn't save. Try again.")
     if not seat:
@@ -989,9 +989,10 @@ def place_login(body: Dict[str, Any], request: Request = None,
         areas = picked["areas"]
     areas = clean_login_areas(areas)
     import church_sheet
-    if church_sheet.areas_write_widens(biz, uid, areas=areas, job=picked["key"] if picked else KEEP):
+    if church_sheet.areas_write_widens(biz, uid, areas=areas, job=picked["key"] if picked else KEEP,
+                                       seat=seat[0]):
         import ledger_unlock
-        ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+        ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS, business_id=biz)
     # A lane picked here is the login's job from now on (one of the church's
     # own jobs would otherwise stay on it: set_login keeps those by name).
     kept = set_login(biz, uid, seat[0].get("role"), areas=areas, job=picked["key"] if picked else KEEP)
@@ -1039,20 +1040,38 @@ def lane_after(role: Optional[str], stored: Any, stored_areas: Any, *, areas: An
     return spelled
 
 
-def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job: Any = KEEP) -> Optional[str]:
-    """The one write of an office login's areas and its job
-    (business_users.areas, .lane): the Logins & areas route and a person's
-    sheet (church_sheet) both land here, after each checked who may. `areas`
-    is already clean (clean_login_areas). `job` is a job's key the caller
-    checked (a lane, or one of the church's own: church_job_defs); left out,
-    the lane is the one the areas are exactly, as before, kept by name for
-    the office's header (office_door). Returns the job kept. A save that
-    fails is a 503."""
+LOGIN_LEVELS = ("viewer", "member", "manager", "admin")
+
+
+def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job: Any = KEEP,
+              level: Any = KEEP) -> Optional[str]:
+    """The one write of an office login's areas, its job and its level
+    (business_users.areas, .lane, .role): the Logins & areas route and a
+    person's sheet (church_sheet) both land here, after each checked who
+    may. `areas` is already clean (clean_login_areas). `job` is a job's key
+    the caller checked (a lane, or one of the church's own:
+    church_job_defs); left out, the lane is the one the areas are exactly,
+    as before, kept by name for the office's header (office_door). `level`
+    is the level the sheet moves the login to, and `role` is then that
+    level (the one the login has once this is saved).
+
+    ONE PATCH. The level, the areas and the job a save changes land in the
+    same row write, so a login is never left with a new level and the old
+    areas (an Admin moved down to Manager with no areas saved would see the
+    whole church). A level alone leaves the areas and the job as they are
+    stored. Returns the job kept. A save that fails is a 503."""
     fields: Dict[str, Any] = {}
+    if level is not KEEP:
+        if level not in LOGIN_LEVELS:
+            raise HTTPException(400, "That isn't one of the levels.")
+        fields["role"] = level
     if areas is not KEEP:
         fields["areas"] = areas
     if job is not KEEP and job:
         fields["lane"] = job
+    elif areas is KEEP and job is KEEP:
+        if not fields:
+            raise HTTPException(400, "Nothing to save.")
     else:
         got = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
                                            "&status=eq.active&select=areas,lane&limit=1")
@@ -1065,7 +1084,7 @@ def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     _forget(biz, uid)
-    return fields["lane"]
+    return fields["lane"] if "lane" in fields else (saved[0] or {}).get("lane")
 
 
 @router.get("/lanes")

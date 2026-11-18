@@ -259,7 +259,7 @@ def _real_unlock(monkeypatch):
     monkeypatch.setattr(ledger_unlock, "require_unlock", _REAL_UNLOCK)
     os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-areas")
     from test_church_follow_up import OWNER
-    return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]}
+    return {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS, BIZ)["token"]}
 
 
 def _row(seats, uid):
@@ -309,7 +309,58 @@ def test_a_lane_that_brings_more_asks_too(office, seats, monkeypatch):
 def test_a_token_for_someone_else_doesnt_answer_it(office, seats, monkeypatch):
     import ledger_unlock
     _real_unlock(monkeypatch)
-    other = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(MARCUS_SEAT, ledger_unlock.SCOPE_ACCESS)["token"]}
+    other = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(MARCUS_SEAT, ledger_unlock.SCOPE_ACCESS,
+                                                             BIZ)["token"]}
     r = office.put("/church/areas/login", json={"business_id": BIZ, "user_id": NEW_SEAT,
                                                 "areas": ["office", "people_care", "kids_youth"]}, headers=other)
     assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+
+
+def test_a_password_confirmed_for_another_church_gives_no_area_here(office, seats, monkeypatch):
+    from test_church_follow_up import OWNER
+    _real_unlock(monkeypatch)
+    elsewhere = {ledger_unlock.UNLOCK_HEADER: ledger_unlock.mint(
+        OWNER, ledger_unlock.SCOPE_ACCESS, "0a000000-0000-4000-8000-00000000000a")["token"]}
+    body = {"business_id": BIZ, "user_id": NEW_SEAT, "areas": ["office", "people_care", "kids_youth"]}
+    before = list(_row(seats, NEW_SEAT)["areas"])
+    r = office.put("/church/areas/login", json=body, headers=elsewhere)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+    assert r.json()["detail"]["scope"] == "access" and _row(seats, NEW_SEAT)["areas"] == before
+
+
+def test_taking_areas_away_is_answered_from_the_logins_own_row(office, seats, monkeypatch):
+    """Areas that are plainly some of the ones already picked can't give
+    more, so the whole map isn't read to find that out."""
+    unlocked = _real_unlock(monkeypatch)
+    body = {"business_id": BIZ, "user_id": NEW_SEAT}
+    assert office.put("/church/areas/login", json={**body, "areas": ["office", "people_care", "kids_youth"]},
+                      headers=unlocked).status_code == 200
+
+    real, light = ca.build, {"only": True}
+
+    def build(*a, **k):
+        assert not light["only"], "the whole map was read to take an area away"
+        return real(*a, **k)
+    monkeypatch.setattr(ca, "build", build)
+    r = office.put("/church/areas/login", json={**body, "areas": ["office", "kids_youth"]})
+    assert r.status_code == 200 and _row(seats, NEW_SEAT)["areas"] == ["kids_youth", "office"]
+    assert office.put("/church/areas/login", json={**body, "areas": ["office"]}).status_code == 200
+    # One that isn't plain is still worked out in full: an area added.
+    light["only"] = False
+    r = office.put("/church/areas/login", json={**body, "areas": ["office", "people_care"]})
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "ledger_locked"
+
+
+def test_a_subset_that_spells_another_lane_is_not_plain(seats):
+    """Fewer areas can still be more: the ones left may be exactly a lane,
+    and a lane brings its duties. Those go the long way round."""
+    import church_sheet
+    seat = {"role": "manager", "lane": None, "areas": ["messages_safety", "office", "kids_youth"]}
+    assert church_sheet._plainly_less(BIZ, seat, ["office", "kids_youth"])
+    assert not church_sheet._plainly_less(BIZ, seat, ["messages_safety", "office"]), "that is Office & Leadership"
+    assert not church_sheet._plainly_less(BIZ, seat, ["office", "people_care"]), "an area it didn't have"
+    assert not church_sheet._plainly_less(BIZ, {**seat, "areas": None}, ["office"]), "from Chief's guess"
+    assert not church_sheet._plainly_less(BIZ, seat, None)
+    # A lane it has, with an area taken off, stops being that lane: not plain either.
+    lane = {"role": "manager", "lane": "office_leadership", "areas": ["messages_safety", "office"]}
+    assert not church_sheet._plainly_less(BIZ, lane, ["office"])

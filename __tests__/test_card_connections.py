@@ -73,7 +73,7 @@ def api(monkeypatch):
         return copy.deepcopy(row)
     def check(bid,user,role):
         if bid!=BID or store['role']!='owner': raise HTTPException(404)
-    def unlock(request,user,scope):
+    def unlock(request,user,scope,business_id=None):
         if request.headers.get('x-ledger-unlock')!='fixture': raise HTTPException(403)
     def stripe(method,path,key,**kwargs):
         if path=='/oauth/token': return dict(TOKENS)
@@ -118,10 +118,15 @@ def test_card_routes_verify_real_user_bound_step_up(api,monkeypatch,action,token
     connect(client)
     monkeypatch.setenv('AUDITOR_LINK_SECRET','synthetic-step-up-regression-secret')
     monkeypatch.setattr(cc,'require_unlock',ledger_unlock.require_unlock)
-    token=ledger_unlock.mint(token_user,scope)['token']
+    token=ledger_unlock.mint(token_user,scope,BID)['token']
     response=client.post(path(action),headers={'x-ledger-unlock':token},
         json={'card_id':'ic_fixture'} if action=='select' else {})
     assert response.status_code==expected,response.text
+    # The same person's danger unlock, confirmed for another business: not this one's.
+    elsewhere=ledger_unlock.mint(UID,'danger',CID)['token']
+    response=client.post(path(action),headers={'x-ledger-unlock':elsewhere},
+        json={'card_id':'ic_fixture'} if action=='select' else {})
+    assert response.status_code==403 and response.json()['detail']['code']=='ledger_locked'
 
 
 def test_external_test_channel_preserves_state_and_callback(api,monkeypatch):

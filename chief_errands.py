@@ -494,7 +494,7 @@ async def approve(row, user, request, *, via_chat=False):
     if via_chat and stepup:
         raise HTTPException(403,{'code':'ledger_locked','scope':'danger','message':'Approve this errand on its card.'})
     if stepup:
-        require_unlock(request,str(user.id),SCOPE_DANGER)
+        require_unlock(request,str(user.id),SCOPE_DANGER,business_id=row['business_id'])
     if not execution_enabled(row['business_id']):
         raise HTTPException(503,'Chief computer execution is not enabled yet. Your plan is saved.')
     prepared=await asyncio.to_thread(rpc,'chief_errand_approve',p_business_id=row['business_id'],
@@ -640,7 +640,7 @@ async def _secure_entry(errand_id,request,session):
         await send_command(row['id'],command)
         return {'ok':True}
     if save or saved:
-        require_unlock(request,str(session.user.id),SCOPE_DANGER)
+        require_unlock(request,str(session.user.id),SCOPE_DANGER,business_id=row['business_id'])
     if saved and (body.get('fields') or save):
         raise HTTPException(422,'Choose saved credentials or new fields.')
     command=Command('secret',str(session.user.id),hold_id=hold['id'])
@@ -680,7 +680,7 @@ async def continue_errand(errand_id:str,request:Request,session:UserSession=Depe
     settings=settings_of(biz)
     verified=False
     if needs_stepup(hold.get('observed_total_cents'),min(row['spend_limit_cents'],settings['spend_limit_cents']),settings):
-        require_unlock(request,str(session.user.id),SCOPE_DANGER)
+        require_unlock(request,str(session.user.id),SCOPE_DANGER,business_id=row['business_id'])
         verified=True
     await send_command(row['id'],Command('continue',str(session.user.id),hold_id=hold['id'],stepup_verified=verified))
     return {'errand':outward(await asyncio.to_thread(get_row,row['id']))}
@@ -730,7 +730,7 @@ async def get_settings(business_id:str,session:UserSession=Depends(sb_clients.au
 async def put_settings(request:Request,session:UserSession=Depends(sb_clients.authed_request)):
     body=await json_body(request)
     biz=await asyncio.to_thread(business,body.get('business_id'),session.user,'owner')
-    require_unlock(request,str(session.user.id),SCOPE_DANGER)
+    require_unlock(request,str(session.user.id),SCOPE_DANGER,business_id=biz['id'])
     settings=validate_settings(body.get('settings'))
     await asyncio.to_thread(rpc,'chief_computer_settings',p_business_id=biz['id'],p_settings=settings)
     return {'settings':settings}

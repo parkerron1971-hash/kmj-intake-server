@@ -581,7 +581,7 @@ def test_the_put_asks_for_the_password_only_when_it_gives_more(office, db):
     # With the password just re-proved (the invite's own unlock), it saves.
     import ledger_unlock
     os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-sheet")
-    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]
+    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS, BIZ)["token"]
     r = office.put("/church/sheet", json={**body, "areas": ["kids_youth", "office"]},
                    headers={ledger_unlock.UNLOCK_HEADER: token})
     assert r.status_code == 200 and _seat_of(db, SARAH)["areas"] == ["kids_youth", "office"]
@@ -1050,8 +1050,10 @@ def test_the_step_up_route_keeps_its_limit_its_fail_closed_check_and_both_ledger
         return asyncio.run(L.step_up(L._StepUpBody(business_id=biz, password="pw", scope=scope),
                                      SimpleNamespace(id=uid, email="someone@example.com")))
     out = go(ADMIN, "access")                                     # an Admin can confirm now
-    assert out["ok"] and L.verify(out["token"], ADMIN, L.SCOPE_ACCESS)
-    assert not L.verify(out["token"], ADMIN, L.SCOPE_DANGER) and rows[-1] == (BIZ, "stepup:access")
+    assert out["ok"] and L.verify(out["token"], ADMIN, L.SCOPE_ACCESS, BIZ)
+    assert not L.verify(out["token"], ADMIN, L.SCOPE_ACCESS), "it is for this church and names it"
+    assert not L.verify(out["token"], ADMIN, L.SCOPE_ACCESS, "0a000000-0000-4000-8000-00000000000a")
+    assert not L.verify(out["token"], ADMIN, L.SCOPE_DANGER, BIZ) and rows[-1] == (BIZ, "stepup:access")
     for uid, scope, status in ((ADMIN, "danger", 403), (JORDAN, "access", 403), (OWNER, "ledger", 400)):
         with pytest.raises(HTTPException) as e:
             go(uid, scope)
@@ -1308,7 +1310,7 @@ def test_the_put_takes_a_level_and_asks_for_the_password_when_it_goes_up(office,
     assert r.json()["detail"]["scope"] == "access" and _level(db, MARK) == "member"
     import ledger_unlock
     os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-sheet")
-    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]
+    token = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS, BIZ)["token"]
     r = office.put("/church/sheet", json=body, headers={ledger_unlock.UNLOCK_HEADER: token})
     assert r.status_code == 200 and r.json()["person"]["role"] == "manager" and r.json()["changed"]
     assert [o["key"] for o in r.json()["level_options"] if o["current"]] == ["manager"]
@@ -1324,3 +1326,171 @@ def test_chief_reads_the_level_and_still_has_no_verb_that_changes_a_sheet(db):
     assert got["result"].startswith("Mark Diaz's sheet: Manager login.")
     assert set(ccs.HANDLERS) == {"sheet_of", "list_church_jobs", "draft_church_job", "save_church_job",
                                  "remove_church_job"}
+
+
+# ─── The review of the level on the sheet (2026-11-18) ────────────────
+# The grant must never come back; nothing is written when any part of a
+# save refuses; the level, the areas and the job land in one row write.
+
+def _grant_rows(db):
+    return sorted(r["user_id"] for r in db.t["church_duty_holders"] if r["duty"] == cj.GRANT)
+
+
+def _writes(db, monkeypatch):
+    """Every write a save makes, in order: ("grant", ids), ("seat", fields),
+    ("duty", key)."""
+    seen = []
+    real_write, real_patch = cd._write, sb_clients.sb_patch_as_service
+
+    def write(biz, duty, ids, by, undoes=None):
+        seen.append(("grant" if duty == cj.GRANT else "duty", duty if duty != cj.GRANT else list(ids)))
+        return real_write(biz, duty, ids, by, undoes)
+
+    def patch(path, body, **kw):
+        if path.startswith("/business_users?"):
+            seen.append(("seat", dict(body)))
+        return real_patch(path, body, **kw)
+    monkeypatch.setattr(cd, "_write", write)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    return seen
+
+
+def test_the_grant_is_taken_away_before_the_level_is_written(db, monkeypatch):
+    _give_grant(db)
+    seen = _writes(db, monkeypatch)
+    cs.change(_biz(db), OWNER, RUTH, {"level": "member"})
+    assert seen == [("grant", []), ("seat", {"role": "member"})]
+
+
+def test_a_grant_that_wont_come_off_stops_the_whole_save(db, monkeypatch):
+    """It was written after the level: the login was moved down, the row
+    stayed, and the next move up made them a holder again."""
+    _give_grant(db)
+    real = cd._write
+
+    def no_grant_write(biz, duty, ids, by, undoes=None):
+        if duty == cj.GRANT:
+            raise HTTPException(503, "That didn't save. Try again.")
+        return real(biz, duty, ids, by, undoes)
+    monkeypatch.setattr(cd, "_write", no_grant_write)
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, RUTH, {"level": "member"})
+    assert e.value.status_code == 503
+    assert _level(db, RUTH) == "manager" and _grant_rows(db) == [RUTH], "nothing was written"
+    assert db.t["church_sheet_changes"][-1]["subject_user_id"] == RUTH and "level" not in (
+        db.t["church_sheet_changes"][-1]["summary"]), "and nothing recorded as changed"
+
+
+@pytest.mark.parametrize("editor", [OWNER, ADMIN, RUTH])
+def test_a_grant_row_left_on_a_login_never_makes_them_a_holder_when_they_are_moved_up(db, editor):
+    """However the row came to be left (a save that failed half way, a
+    login moved down some other way): a move to Manager clears it."""
+    _give_grant(db)
+    db.t["church_duty_holders"].append({"business_id": BIZ, "duty": cj.GRANT, "user_id": MARK})
+    assert not cj.holds_grant(BIZ, MARK, "member")
+    got = cs.change(_biz(db), editor, MARK, {"level": "manager", "areas": ["kids_youth"]})
+    assert _level(db, MARK) == "manager"
+    assert _grant_rows(db) == [RUTH] and cj.editor(BIZ, MARK, "manager") is None
+    assert cj.GRANT_LABEL not in got["summary"], "nobody's grant was taken: nothing to say"
+
+
+def test_a_left_over_row_that_wont_clear_stops_the_move_up(db, monkeypatch):
+    db.t["church_duty_holders"].append({"business_id": BIZ, "duty": cj.GRANT, "user_id": MARK})
+    monkeypatch.setattr(cj, "drop_grant", lambda biz, uid: False)
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), ADMIN, MARK, {"level": "manager"})
+    assert e.value.status_code == 503 and _level(db, MARK) == "member"
+
+
+def test_the_owner_can_give_the_grant_in_the_same_save_as_the_level(db, monkeypatch):
+    db.t["church_duty_holders"].append({"business_id": BIZ, "duty": cj.GRANT, "user_id": MARK})   # a row left over
+    asked = []
+    got = cs.change(_biz(db), OWNER, MARK, {"level": "manager", "duties": {"add": [cj.GRANT]}},
+                    widening=lambda: asked.append(1))
+    assert asked == [1] and cj.editor(BIZ, MARK, "manager") == "holder"
+    assert f"gave “{cj.GRANT_LABEL}”" in got["summary"]
+    # A Member with no row, the same way: the grant is written last, once they are a Manager.
+    _seat_of(db, SARAH)["role"] = "member"
+    seen = _writes(db, monkeypatch)
+    cs.change(_biz(db), ADMIN, SARAH, {"level": "manager", "duties": {"add": [cj.GRANT]}})
+    assert [w[0] for w in seen] == ["seat", "grant"] and cj.editor(BIZ, SARAH, "manager") == "holder"
+
+
+def test_a_demoted_holder_moved_up_again_by_an_admin_is_not_a_holder(db):
+    _give_grant(db)
+    cs.change(_biz(db), OWNER, RUTH, {"level": "member"})
+    cs.change(_biz(db), ADMIN, RUTH, {"level": "manager"})
+    assert cj.editor(BIZ, RUTH, "manager") is None and _grant_rows(db) == []
+
+
+def test_a_duty_that_is_already_full_refuses_before_the_level_is_saved(db):
+    """church_duties.move refuses more than MAX_HOLDERS. It answered after
+    the level was saved, so the login was moved up and the save said no."""
+    extra = [f"c{n:07d}-0000-4000-8000-00000000000{n % 10}" for n in range(cd.MAX_HOLDERS)]
+    for n, u in enumerate(extra):
+        db.t["business_users"].append(_seat(u, "manager", f"m{n}@gracefellowship.example", f"Helper {n}",
+                                            areas=["office"]))
+        db.t["church_duty_holders"].append({"business_id": BIZ, "duty": "first_guests", "user_id": u})
+    before = [dict(r) for r in db.t["church_duty_holders"]]
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, MARK, {"level": "manager", "areas": ["kids_youth"],
+                                         "duties": {"add": ["first_guests"]}})
+    assert e.value.status_code == 400 and str(cd.MAX_HOLDERS) in e.value.detail
+    seat = _seat_of(db, MARK)
+    assert seat["role"] == "member" and not seat.get("areas"), "nothing was written"
+    assert [dict(r) for r in db.t["church_duty_holders"]] == before
+
+
+def test_the_level_the_areas_and_the_job_are_one_row_write(db, monkeypatch):
+    seen = _writes(db, monkeypatch)
+    cs.change(_biz(db), OWNER, ADMIN2, {"level": "manager", "areas": ["office", "kids_youth"]})
+    assert seen == [("seat", {"role": "manager", "areas": ["kids_youth", "office"], "lane": None})]
+    seen.clear()
+    cs.change(_biz(db), OWNER, MARK, {"level": "manager", "job": "people_care",
+                                     "areas": ["people_care", "kids_youth", "groups_classes"]})
+    assert seen == [("seat", {"role": "manager", "areas": ["people_care", "kids_youth", "groups_classes"],
+                              "lane": "people_care"})]
+    # A level alone touches nothing else on the row.
+    seen.clear()
+    cs.change(_biz(db), OWNER, MARK, {"level": "member"})
+    assert seen == [("seat", {"role": "member"})]
+
+
+def test_an_admin_moved_down_is_never_left_with_no_areas_by_a_save_that_fails(db, monkeypatch):
+    """Two writes left a Manager with no areas ("sees the whole church")
+    when the second failed. One write: either all of it, or none."""
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body, **kw: None)
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), OWNER, ADMIN2, {"level": "manager", "areas": ["office"]})
+    seat = _seat_of(db, ADMIN2)
+    assert e.value.status_code == 503 and seat["role"] == "admin" and not seat.get("areas")
+
+
+def test_an_admin_moved_down_loses_a_job_that_is_an_admin_logins(db):
+    _seat_of(db, ADMIN)["areas"] = ["office"]
+    assert _seat_of(db, ADMIN)["lane"] == "treasurer"
+    got = cs.change(_biz(db), OWNER, ADMIN, {"level": "manager"})
+    seat = _seat_of(db, ADMIN)
+    assert seat["role"] == "manager" and seat["lane"] is None and seat["areas"] == ["office"]
+    assert "no job" in got["summary"]
+    assert cs.compose(_biz(db), OWNER, ADMIN)["job"]["key"] is None
+    # Unless the save names another job for them.
+    _seat_of(db, ADMIN2).update(lane="treasurer", areas=["office", "messages_safety"])
+    cs.change(_biz(db), OWNER, ADMIN2, {"level": "manager", "job": "office_leadership"})
+    assert _seat_of(db, ADMIN2)["lane"] == "office_leadership"
+
+
+def test_a_password_confirmed_for_another_church_doesnt_change_a_sheet_here(office, db):
+    import ledger_unlock
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-the-sheet")
+    body = {"business_id": BIZ, "user_id": MARK, "level": "manager"}
+    elsewhere = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS, "0a000000-0000-4000-8000-00000000000a")
+    r = office.put("/church/sheet", json=body, headers={ledger_unlock.UNLOCK_HEADER: elsewhere["token"]})
+    assert r.status_code == 403 and r.json()["detail"] == {
+        "code": "ledger_locked", "scope": "access", "message": ledger_unlock.SCOPE_PROMPT["access"]}
+    assert _level(db, MARK) == "member"
+    nowhere = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS)["token"]         # names no business
+    assert office.put("/church/sheet", json=body,
+                      headers={ledger_unlock.UNLOCK_HEADER: nowhere}).status_code == 403
+    here = ledger_unlock.mint(OWNER, ledger_unlock.SCOPE_ACCESS, BIZ.upper())["token"]
+    assert office.put("/church/sheet", json=body, headers={ledger_unlock.UNLOCK_HEADER: here}).status_code == 200

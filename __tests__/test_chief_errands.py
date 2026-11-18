@@ -47,7 +47,8 @@ def api(monkeypatch):
             return [copy.deepcopy(row)]
         return None
     monkeypatch.setattr(ce,'db',database)
-    def unlock(request,user,scope):
+    def unlock(request,user,scope,business_id=None):
+        assert business_id==BID, 'a danger unlock is asked for the errand\'s own business'
         state['stepup'].append(scope)
         if request.headers.get('X-Ledger-Unlock')!='fixture-stepup':
             raise HTTPException(403,{'code':'ledger_locked','scope':scope})
