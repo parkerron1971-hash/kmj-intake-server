@@ -10,16 +10,24 @@ A manager or the owner (the stream relay's check, kids_router.require):
           {enabled, allowance_bytes, extra_bytes, used_bytes,
            parts: {recordings, classes, files}, files_counted, percent,
            state ("ok" | "near" at 80% | "full" at 100%), bytes_per_sunday,
-           sundays_left, can_delete, can_download (false until downloads
-           ship), recordings: [{session_id, started_at, duration_s, bytes,
-           published, sermon_id, keep_until}] (ended, not removed, newest
-           first, at most 50),
-           extra_offer: {gb, cents, every, blocks, can_buy, trial}} (2026-11-17:
-           more room is bought in blocks of `gb` (100) for `cents` each time
-           the plan bills, `every` month, quarter or year; `blocks` is what
-           the church bought, null when that can't be read; `can_buy` only
-           for the owner, with the price set, on a paid church plan. The
-           purchase itself is POST /billing/church/extra-storage).
+           sundays_left, can_delete, can_download (CHURCH_STORAGE_SMALL_COPY
+           is on for this church, recording_copy.downloads_on),
+           recordings: [{session_id, started_at, duration_s, bytes,
+           published, sermon_id, keep_until, download_url}] (ended, not
+           removed, newest first, at most 50),
+           extra_offer: {gb, cents, every, blocks, can_buy, trial}}.
+           A recording's bytes are what
+           it counts against the room (church_storage.stored_bytes: the full
+           recording while it is there, then its smaller copy after day 14,
+           never both), which is what deleting it frees. download_url is a private https link
+           to its smaller copy (an MP4 that saves as "<church> <date>.mp4",
+           good for an hour) once that copy is made and while can_download
+           is true; null otherwise. extra_offer (2026-11-17): more room is
+           bought in blocks of `gb` (100) for `cents` each time the plan
+           bills, `every` month, quarter or year; `blocks` is what the church
+           bought, null when that can't be read; `can_buy` only for the
+           owner, with the price set, on a paid church plan. The purchase
+           itself is POST /billing/church/extra-storage.
   DELETE  /church/storage/recordings/{session_id}?business_id=
           404 while switched off or when the recording isn't this church's;
           409 while it is still being recorded, or when a published sermon
@@ -69,16 +77,20 @@ def storage_overview(business_id: str = Query(...), user: AuthedUser = Depends(r
     published = cs.published_sessions(biz) if shown else set()
     if published is None:
         raise _unavailable()
+    import recording_copy as rc
+    can_download = rc.downloads_on(biz)
+    label = rc.church_label(biz) if can_download and any(rc.copy_ready(s) for s in shown) else None
     out: Dict[str, Any] = {"enabled": True, **{k: meter[k] for k in _METER},
-                           "can_delete": cs.can_delete(), "can_download": False}
+                           "can_delete": cs.can_delete(), "can_download": can_download}
     out["recordings"] = [{
         "session_id": str(s["id"]),
         "started_at": s.get("started_at"),
         "duration_s": cs._int(s.get("duration_s")),
-        "bytes": cs._int(s.get("bytes")),
+        "bytes": cs.stored_bytes(s),
         "published": str(s["id"]).lower() in published,
         "sermon_id": s.get("sermon_id"),
         "keep_until": s.get("keep_until"),
+        "download_url": rc.download_link(biz, s, *label) if label else None,
     } for s in shown]
     out["extra_offer"] = cs.extra_offer(row, owner=role == "owner")
     return out
@@ -92,8 +104,9 @@ def storage_delete_recording(session_id: str, business_id: str = Query(...),
     require(biz, user, "manager")
     if not cs.switched_on(biz):
         raise HTTPException(404, "Not Found")
+    cols = cs.session_cols()
     rows = sb_clients.sb_get_as_service(
-        f"/stream_sessions?id=eq.{sid}&business_id=eq.{biz}&select={cs.SESSION_COLS}&limit=1")
+        f"/stream_sessions?id=eq.{sid}&business_id=eq.{biz}&select={cols}&limit=1") if cols else None
     if not isinstance(rows, list):
         raise _unavailable()
     if not rows:

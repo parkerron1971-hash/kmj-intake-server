@@ -39,6 +39,15 @@ everyone else sees a rental without its amounts, and a Manager that does the
 rooms reads the Rentals list that way too. Members can't book from their
 app in this version.
 
+A room request for an event (Kevin, 2026-11-17: "Laquesha couldn't make
+event volunteer list. can we make sure that she has access and ability"):
+a Manager that doesn't do the rooms but holds "events" or "outreach_nights"
+(each event's room request is part of those jobs) asks for a room as an
+office Member login does, whatever its areas: a request waits for whoever
+does the rooms to say yes. It never approves, keeps no spaces, sees no
+amounts, doesn't read the Rentals list, and doesn't see an outside renter's
+email or phone. The status says {book: true, approve: false}.
+
   GET   /church/spaces/status?business_id=          {enabled, book, approve, rentals}
   GET   /church/spaces?business_id=                 the spaces and what this login may do
   POST  /church/spaces                              {business_id, name, kind, capacity, notes, active}
@@ -86,6 +95,10 @@ APPROVERS = ("owner", "admin", "manager")           # book straight away, approv
 FINANCE = ("owner", "admin")                        # a rental's money, as ministry_finance_access
 KEEPS_ALL = ("owner", "admin")
 ROOMS = "rooms"             # the church duty a Manager books and approves by (church_duties)
+# The church duties whose job includes asking for a room (an event's, an
+# outreach night's): a Manager holding one asks, as an office Member does.
+ASKS_FOR_A_ROOM = ("events", "outreach_nights")
+RENTER_CONTACT = ("renter_email", "renter_phone")
 
 MAX_REPEATS = 53            # a weekly repeat runs at most a year
 MAX_DAYS = 14               # one booking runs at most two weeks
@@ -258,7 +271,9 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     A Manager books, approves and keeps the spaces by the rooms duty
     (church_duties: the Office & Leadership lane's by default, or whoever
     it was given to; a Manager no lane names, by the
-    areas it works, as before). A failed read of it is a 503."""
+    areas it works, as before). One that doesn't, but holds events or
+    outreach nights, asks for a room: `role` is then "member" here (what
+    it may do), `asks` is true. A failed read of a duty is a 503."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -268,17 +283,25 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     if not cfu.is_church(biz):
         raise HTTPException(404, "Rooms & spaces are for churches")
     rooms = role in KEEPS_ALL
+    asks = False
     if role == "manager":
-        if not holds(biz_id, user, ROOMS):
+        if holds(biz_id, user, ROOMS):
+            rooms = True
+        elif any(holds(biz_id, user, d) for d in ASKS_FOR_A_ROOM):
+            asks = True
+        else:
             raise HTTPException(403, refusal(biz_id, ROOMS))
-        rooms = True
     elif not _office(biz_id, str(user.id), role):
         raise HTTPException(403, "Rooms & spaces belong to the office. An admin can add the Office to your areas.")
-    return {"biz": biz, "role": role, "uid": str(user.id), "rooms": rooms}
+    return {"biz": biz, "role": "member" if asks else role, "uid": str(user.id), "rooms": rooms, "asks": asks}
 
 
 def _may(me: Dict[str, Any], roles: Sequence[str], why: str) -> None:
     if me["role"] not in roles:
+        # A Manager that asks for its events' rooms is told whose job the
+        # rooms are (approving, keeping the spaces), not "a manager does it".
+        if me.get("asks") and "manager" in roles:
+            raise HTTPException(403, refusal(str(me["biz"]["id"]), ROOMS))
         raise HTTPException(403, why)
 
 
@@ -413,6 +436,9 @@ def shown(me: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                            else None)
         else:
             for k in MONEY_FIELDS:
+                row.pop(k, None)
+        if me.get("asks") and not row["mine"]:
+            for k in RENTER_CONTACT:      # an outside renter's email and phone stay the office's
                 row.pop(k, None)
         out.append(row)
     return out

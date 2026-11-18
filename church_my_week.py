@@ -13,7 +13,11 @@ an area to a line; a login that works some areas sees only those.
                                               each on the day the login picked
                                               where church assignments are open
                                               (church_assignments), and what's
-                                              stuck and was sent up to them
+                                              stuck and was sent up to them; the
+                                              weekly text's job carries `fact`:
+                                              how many people get the church's
+                                              texts, and how many signed up this
+                                              week (texts_fact)
     GET /church/my-week/status?business_id=   whether this app shows it
     GET /church/my-week/people?business_id=   who a task can be handed to (and
                                               the church's leaders: church_leader_tasks)
@@ -31,7 +35,11 @@ empty week. Switched with the map: CHURCH_AREAS (off | owner | on).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
@@ -130,7 +138,14 @@ DOOR = {
     "books": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
     "pay": {"area": "operate", "id": "checks", "label": "Open Check requests"},
     "store": {"area": "operate", "id": "offerings-manager", "label": "Open the store"},
+    # Not a duty: Text, opened on New here (`view`; the app's door hand-off),
+    # for the first-time guests' Sunday cards line (SUNDAY_CARDS).
+    "new_here": {"area": "operate", "id": "sms", "label": "Open New here", "view": "new-here"},
 }
+# The first-time guests' Sunday line (new_here.sunday_cards, Kevin approved
+# 2026-11-17): not a duty of its own, so never judged, never moved, and not
+# in the count.
+SUNDAY_CARDS = "first_guests_cards"
 
 
 def _q(v: Any) -> str:
@@ -325,10 +340,16 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
     report = church_monthly_report.week_item(business, user_id, role, today)
     if report:
         needs.append(report)
+    # A New here guest slide waiting for whoever puts it on Sunday's screen
+    # (new_here.week_item). A read that fails leaves it out; the week stands.
+    import new_here
+    slide = new_here.week_item(business, user_id, role)
+    if slide:
+        needs.append(slide)
 
     handed = _handed(biz, now, whole, set(mine_areas))
     order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "raised_done": 3,
-             "gap": 4, "late": 5, "logins": 6}
+             "screen": 3, "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     out = {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
@@ -773,8 +794,26 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
             state = job_state(done[key], due_day(key, monday, pick, today), today) if assign else None
             if state:
                 item.update(state=state, state_text=STATE_TEXT[state], detail=judged[key]["text"])
+        if key == "weekly_text":
+            # Who gets the church's texts, and this week's sign-ups (texts_fact).
+            since = datetime.combine(monday, datetime.min.time(), tzinfo=tz) if clock_ok else None
+            fact = texts_fact(biz, since)
+            if fact:
+                item["fact"] = fact["text"]
+                if fact.get("note"):
+                    item["fact_note"] = fact["note"]
         for g in (days if group in WEEKDAYS else [group]):
             groups[g].append(item)
+    # The first-time guests' Sunday: the New here cards out (SUNDAY_CARDS).
+    if "first_guests" in held:
+        import new_here
+        cards = new_here.sunday_cards(business)
+        if cards:
+            item = {"key": SUNDAY_CARDS, **cards, "area": church_duties.CATALOG["first_guests"]["area"],
+                    "when": "Sundays", "days": ["Sun"], "door": DOOR["new_here"], "today": key_today == "Sun"}
+            if assign:
+                item["movable"] = False
+            groups["Sun"].append(item)
     out_days = [{"key": g, "label": GROUP_LABEL[g], "today": g == key_today or (g == MONTH and any(i["today"] for i in groups[g])),
                  "items": groups[g]} for g in GROUP_ORDER if groups[g]]
     out = {
@@ -787,6 +826,96 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     if not clock_ok:
         out["judged_text"] = "Done, not yet and late couldn't be checked just now."
     return out
+
+
+# ─── The weekly text's fact: who gets the church's texts ─────────────
+#
+# Kevin, 2026-11-17 (approving it for the Office & Leadership admin): "check
+# how many people have signed up for texts each week". The weekly text's job
+# on My week says how many of the church's people get its texts (the whole-
+# list announcement's own rule, sms_routing.said_yes_count) and how many
+# signed up this week. It costs a few reads a hundred numbers, so it's kept
+# TEXTS_KEPT a church on each replica, and read on a thread My week waits for
+# TEXTS_WAIT at most: a big church's first look may come without it, and the
+# next has it. A read that fails says nothing (kept TEXTS_MISSED_KEPT), never
+# a wrong number. MY_WEEK_TEXT_COUNT=off leaves it out.
+
+TEXTS_KEPT = 30 * 60
+TEXTS_MISSED_KEPT = 60
+TEXTS_WAIT = 2.5
+_texts: Dict[Tuple[str, str], Tuple[float, Optional[Dict[str, str]]]] = {}
+_texts_reading: Dict[Tuple[str, str], threading.Thread] = {}
+_texts_lock = threading.Lock()
+TEXTS_NOTE = ("Until the church's texting registration is sent, the texts sign-up page isn't open: people "
+              "join by texting the church's keyword or by saying yes in the member app. The owner sends "
+              "it from Text, the gear, Your name on texts.")
+
+
+def texts_count_on() -> bool:
+    return (os.environ.get("MY_WEEK_TEXT_COUNT") or "on").strip().lower() != "off"
+
+
+def texts_line(biz_id: str, since: Optional[datetime]) -> Optional[Dict[str, str]]:
+    """{text, note?}: "37 people get the church's texts (+2 this week)", the
+    week counted from `since` (Monday on the church's clock; None when the
+    clock wasn't the church's, and then no "this week"). `note` while the
+    church's own texting registration isn't sent (texting_registration.is_sent;
+    a registration that can't be read adds nothing). None when the count
+    can't be read."""
+    import sms_routing
+    iso = since.astimezone(timezone.utc).isoformat() if since else None
+    got = asyncio.run(sms_routing.said_yes_count(biz_id, iso))
+    if not got:
+        return None
+    n = int(got["said_yes"])
+    text = f"{n:,} {'person gets' if n == 1 else 'people get'} the church's texts"
+    new = got.get("new")
+    if since and new is not None:
+        text += f" (+{new:,} this week)" if new else " (no one new this week)"
+    out = {"text": text}
+    try:
+        import texting_registration as tr
+        if not tr.is_sent(tr.registration(biz_id)):
+            out["note"] = TEXTS_NOTE
+    except Exception:
+        pass
+    return out
+
+
+def _read_texts(key: Tuple[str, str], biz_id: str, since: Optional[datetime]) -> None:
+    try:
+        fact = texts_line(biz_id, since)
+    except Exception:
+        logger.warning("my week: the texts count wasn't read", exc_info=True)
+        fact = None
+    now = time.monotonic()
+    with _texts_lock:
+        _texts[key] = (now + (TEXTS_KEPT if fact else TEXTS_MISSED_KEPT), fact)
+        _texts_reading.pop(key, None)
+        if len(_texts) > 1000:
+            for k in [k for k, (until, _) in _texts.items() if until <= now]:
+                _texts.pop(k, None)
+
+
+def texts_fact(biz_id: str, since: Optional[datetime]) -> Optional[Dict[str, str]]:
+    """The weekly text's fact for this church this week, kept (see above);
+    None when it isn't known yet, can't be read, or is switched off."""
+    if not texts_count_on():
+        return None
+    key = (biz_id, since.date().isoformat() if since else "")
+    hit = _texts.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    with _texts_lock:
+        reading = _texts_reading.get(key)
+        if reading is None or not reading.is_alive():
+            reading = threading.Thread(target=_read_texts, args=(key, biz_id, since), daemon=True,
+                                       name="my-week-texts")
+            _texts_reading[key] = reading
+            reading.start()
+    reading.join(TEXTS_WAIT)
+    hit = _texts.get(key)
+    return hit[1] if hit and hit[0] > time.monotonic() else None
 
 
 def _with_rhythm(week: Dict[str, Any], business: Dict[str, Any], user_id: str, role: str) -> Dict[str, Any]:

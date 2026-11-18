@@ -263,6 +263,7 @@ from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
+import chief_office as _church_office  # the office team's week and the monthly report, read for the office
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_church_mail import (handle_church_email, handle_give_church_email,
                                handle_take_back_church_email, handle_switch_on_church_mail)
@@ -421,6 +422,7 @@ _ACTION_PHRASES = {
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_roles.PROGRESS,
+    **_church_office.PROGRESS,
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
     "list_map": "reading the leaders map",
@@ -6346,6 +6348,15 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
         return _fail("create_module_entry",
                      f"{module.get('name')} is access-restricted — manage it in its secure view, not here.")
 
+    # An events room (event_roster): the occasion's volunteer roles and the
+    # people on them, in the shape the room reads (chief_roster).
+    roster = None
+    if module.get("archetype") == "event_roster":
+        import chief_roster
+        data, roster = chief_roster.shape(module, data, roles=action.get("roles"),
+                                          volunteers=action.get("volunteers"))
+        await _known_contacts(biz["id"], roster["added"])
+
     from chief_code import entity_id
     inserted = await _sb(client, "POST", "/module_entries", {
         **({'id': entity_id.get()} if entity_id.get() else {}),
@@ -6356,12 +6367,93 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
     if not inserted:
         return _fail("create_module_entry", "insert failed")
 
+    if roster is not None:
+        made = inserted[0] if isinstance(inserted, list) and isinstance(inserted[0], dict) else {}
+        page = await asyncio.to_thread(_events_page_for, biz, module, data, made.get("id"), False)
+        return _roster_result("create_module_entry", "entry added", module, data, roster, made.get("id"), page)
     title = data.get("title") or data.get("deliverable_name") or "(new entry)"
     return {
         "type": "create_module_entry",
         "result": "entry added",
         "label": f"{module.get('name')}: {title}",
         "nav": _nav("build"),  # module is in build sidebar
+    }
+
+
+async def _known_contacts(biz_id: str, signups: List[Dict[str, Any]]) -> None:
+    """A volunteer Chief linked to a person keeps the link only when the
+    person is one of this business's (read as the server, pinned to it);
+    the name stays either way."""
+    ids = sorted({str(s["contact_id"]) for s in signups if s.get("contact_id")})
+    if not ids:
+        return
+    ok = [i for i in ids if re.fullmatch(r"[0-9a-fA-F-]{36}", i)]
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f"/contacts?business_id=eq.{biz_id}&id=in.({','.join(ok)})&select=id&limit=200") if ok else []
+    known = {str(r.get("id")) for r in rows or [] if isinstance(r, dict)}
+    for s in signups:
+        if s.get("contact_id") and str(s["contact_id"]) not in known:
+            s.pop("contact_id", None)
+
+
+def _events_page_for(biz: Dict[str, Any], module: Dict[str, Any], data: Dict[str, Any],
+                     entry_id: Optional[str], has_setup: bool) -> Optional[str]:
+    """The church's public events page, when this event is on it with a
+    role still open: the page's own rules (events_rsvp_router: switched on
+    with an events room; the event public, dated, within the page's
+    window), and no paid sign-up in the way of a free one. None otherwise,
+    or when anything can't be read: Chief then names no page."""
+    try:
+        import events_rsvp_router as er
+        settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else None
+        if settings is None:
+            rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz['id']}&select=id,settings&limit=1") or []
+            settings = (rows[0].get("settings") if rows and isinstance(rows[0], dict) else None) or {}
+        if module.get("is_active") is False or not er.events_public_is_active({"settings": settings}, [module]):
+            return None
+        shown = er.build_occasions([module], {str(module.get("id")): [{"id": entry_id, "data": data}]})
+        if not shown or not any(not r.get("full") for r in shown[0].get("roles") or []):
+            return None
+        if has_setup and entry_id:
+            import church_event_signups
+            if church_event_signups.blocks_free_rsvp(str(biz["id"]), str(entry_id)):
+                return None
+        from business_sites_helpers import get_business_site
+        site = get_business_site(str(biz["id"]))
+        return er.events_url_for_site(site) if site and site.get("slug") else None
+    except Exception as e:  # noqa: BLE001 — no page named rather than a wrong one
+        logger.info(f"events page for a roster entry skipped: {e}")
+        return None
+
+
+def _roster_result(verb: str, result: str, module: Dict[str, Any], data: Dict[str, Any],
+                   roster: Dict[str, Any], entry_id: Optional[str], events_page: Optional[str] = None) -> Dict[str, Any]:
+    """An events room's entry: the event, its roles and who was put on
+    them, and the room it's in, so Chief says where to find it; with the
+    church's events page when people can sign themselves up there."""
+    import chief_roster
+    from system_destinations import module_destination
+    p = chief_roster.params(module)
+    title = re.sub(r"\s+", " ", str(data.get(p["title_field"]) or data.get("title") or "")).strip()[:120] or "the event"
+    room = module.get("name") or "Events"
+    bits = [chief_roster.roles_words(roster["roles"])]
+    if roster["added"]:
+        n = len(roster["added"])
+        bits.append(f"{n} {'person' if n == 1 else 'people'} added")
+    said = "; ".join(b for b in bits if b)
+    where = f"In {room}, under {title}: each role shows who's on it and how many are still needed."
+    if events_page:
+        where += f" People can sign themselves up for the open spots on the church's events page, {events_page}."
+    return {
+        "type": verb, "result": result,
+        "label": f"{room}: {title}" + (f" ({said})" if said else ""),
+        "where": where,
+        **({"events_page": events_page} if events_page else {}),
+        "note_for_chief": ("Say where the list is: " + where + (
+            "" if events_page else " Don't send people to a public page to sign up for it: its open spots aren't on one.")),
+        **({"entry_id": entry_id} if entry_id else {}),
+        "nav": module_destination(module),
     }
 
 
@@ -6398,7 +6490,10 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     if not entry_id:
         return _fail("update_module_entry", "entry_id required")
     patch = action.get("data") or {}
-    if not isinstance(patch, dict) or not patch:
+    import chief_roster
+    # An event's volunteer roles or people may come beside an empty data.
+    roster_ask = isinstance(patch, dict) and chief_roster.asks_for_roster(action)
+    if not isinstance(patch, dict) or not (patch or roster_ask):
         return _fail("update_module_entry", "data must be a non-empty object")
 
     # Read existing entry so we can merge rather than replace.
@@ -6409,12 +6504,26 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
         return _fail("update_module_entry", "entry not found")
     existing = rows[0]
     merged = {**(existing.get("data") or {}), **patch}
+    module = roster = None
+    if roster_ask:
+        # An events room (event_roster): roles keep their ids, people go on
+        # their role (chief_roster), so nobody falls off the list.
+        module = await _validate_module(client, biz["id"], existing.get("module_id"))
+        if (module or {}).get("archetype") == "event_roster":
+            merged, roster = chief_roster.shape(module, patch, before=existing.get("data") or {},
+                                                roles=action.get("roles"), volunteers=action.get("volunteers"))
+            await _known_contacts(biz["id"], roster["added"])
+        elif not patch:
+            return _fail("update_module_entry", "data must be a non-empty object")
 
     updated = await _sb(client, "PATCH", f"/module_entries?id=eq.{entry_id}",
                        {"data": merged})
     if not updated:
         return _fail("update_module_entry", "update failed")
 
+    if roster is not None:
+        page = await asyncio.to_thread(_events_page_for, biz, module, merged, entry_id, True)
+        return _roster_result("update_module_entry", "updated", module, merged, roster, entry_id, page)
     return {
         "type": "update_module_entry",
         "result": "updated",
@@ -12315,6 +12424,7 @@ ACTION_HANDLERS = {
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_roles.HANDLERS,
+    **_church_office.HANDLERS,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
     "list_map":              handle_list_map,
@@ -13466,6 +13576,11 @@ async def _execute_actions(client, biz, actions: List[Dict],
         import chief_lean_brief
         chief_lean_brief.note_action(atype)
         why = chief_areas.refusal(atype or "", action, area_scope)
+        if why and atype in chief_areas.ROOM_BUILDERS:
+            # A new list for an event's volunteers: the church's events room
+            # already holds it, so the login is told where it goes.
+            why = await asyncio.to_thread(chief_areas.room_hint, (biz or {}).get("id"), atype, action,
+                                          area_scope) or why
         if why:
             results.append(_fail(atype or "unknown", why))
             continue
@@ -15254,6 +15369,7 @@ async def chief_chat(
     _area_token = chief_areas.TURN.set(_area_scope)
     _who_token = chief_areas.WHO.set(_who)
     _asks_read, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
+    _office_roster = None                  # THE OFFICE (chief_office): None until read
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15446,11 +15562,15 @@ async def chief_chat(
             view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
             # Is this right? (church_map_asks): this login's lines, read alongside the context and done with it,
             # so their time is the context stage's (a church's only).
+            # THE OFFICE (chief_office) is read beside them, and kept two minutes a replica, so most turns
+            # read nothing for it.
             import church_follow_up as _cfu
             if biz_lite and _cfu.is_church(biz_lite):
                 import church_map_asks
+                _office_task = preparation.start(asyncio.to_thread(_church_office.text_for, biz_lite))
                 ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
                     church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
+                _office_roster = await _office_task
             else:
                 ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
@@ -15753,6 +15873,13 @@ async def chief_chat(
                 _login_block += await asyncio.to_thread(_church_assign.turn_line, biz, str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
+            # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the
+            # admins and the Managers; it sits in the per-business segment (chief_prompt).
+            if _office_roster is None and _cfu.is_church(biz):
+                _office_roster = await asyncio.to_thread(_church_office.text_for, biz)
+            _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
+            if _office_shown:
+                chief_truth.record('context:office_roster', _office_shown, kind='context')
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -15775,6 +15902,7 @@ async def chief_chat(
                 first_run=first_run,
                 orientation_kind=orientation_kind,
                 week_day=week_day,
+                office_roster=_office_shown,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt

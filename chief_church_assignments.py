@@ -730,8 +730,10 @@ BLOCK = ("CHURCH ASSIGNMENTS — on at this church. Whoever is over someone hand
          "start_first_assignment, mark_assignment, mark_stuck, send_up_assignment, set_my_day; "
          "take_back_assignment removes one, only when they ask. Relay each "
          "receipt's whole line. Nobody but the owner, or the ministry chain on the leaders map, is over a pastor or "
-         "an elder: to get one of them something for their area, send_handover (never an assignment). New work and "
-         "nobody named: whose_job first; someone's job: job_of.")
+         "an elder: to get one of them something for their area, send_handover (never an assignment). Whose job: one "
+         "of the office's duties, THE OFFICE; other work and nobody named, whose_job first; someone's whole job, "
+         "job_of. A one-on-one or the huddle to get ready for: one_on_one for each person, then a short agenda "
+         "(wins, stuck and how long, late, next, this week's jobs not done), nothing recorded.")
 
 
 def turn_line(business: Dict[str, Any], user_id: Any) -> str:

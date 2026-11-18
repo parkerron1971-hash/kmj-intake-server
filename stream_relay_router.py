@@ -103,9 +103,16 @@ Env (all of them make the feature "ready"; without them it stays quiet):
 
 Optional, and not part of "ready": STREAM_R2_WRITE_ACCESS_KEY_ID and
 STREAM_R2_WRITE_SECRET_ACCESS_KEY, a token with Object Read & Write on the
-same bucket. Only church_storage uses it, to delete a recording a church
-removes (or one kept past its 14 days while the church was full). Without
-it nothing is ever deleted and the storage warnings stay quiet.
+same bucket. church_storage uses it to delete a recording a church removes
+(or one kept past its 14 days while the church was full); recording_copy
+uses it to sign the upload of a recording's smaller copy and to delete the
+full-quality segments 14 days after the service. Without it nothing is ever
+deleted or copied and the storage warnings stay quiet.
+
+The smaller copy (recording_copy.py): once a recording's copy.mp4 is the
+one that stays (14 days after the service, or once its full-quality
+segments are gone), the watch page plays that file through a signed link
+instead of the playlist, under the same rules of who may watch.
 """
 from __future__ import annotations
 
@@ -377,20 +384,25 @@ def sigv4_presign(scheme: str, host: str, path: str, *, key_id: str, secret: str
     return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
 
 
-def r2_link(object_key: str, expires: int = SEGMENT_LINK_S) -> str:
-    """A link to one private object, good for `expires` seconds."""
+def r2_link(object_key: str, expires: int = SEGMENT_LINK_S, *, method: str = "GET",
+            query: Optional[Dict[str, str]] = None, when: Optional[datetime] = None) -> str:
+    """A link to one private object, good for `expires` seconds, signed with
+    the read key. By default a GET, as the player's segments always were;
+    recording_copy also signs a HEAD (a copy's size) and a GET with
+    response-content-disposition (the download)."""
     r2 = r2_config()
     ep = urlparse(r2["endpoint"])
     path = "/" + quote(r2["bucket"], safe="") + "/" + quote(object_key, safe="/-_.~")
     return sigv4_presign(ep.scheme, ep.netloc, path, key_id=r2["key_id"], secret=r2["secret"],
-                         expires=expires, when=datetime.now(timezone.utc))
+                         expires=expires, when=when or datetime.now(timezone.utc), method=method, query=query)
 
 
 def r2_write_config() -> Optional[Dict[str, str]]:
     """The bucket with the key that may also delete (STREAM_R2_WRITE_*), or
     None when it isn't set. The player's key (STREAM_R2_ACCESS_KEY_ID) only
     reads; this one is used for nothing but a church removing a recording
-    (church_storage.py)."""
+    (church_storage.py) and a recording's smaller copy: its upload and the
+    full-quality segments' removal at day 14 (recording_copy.py)."""
     r2 = r2_config()
     key_id, secret = _env("STREAM_R2_WRITE_ACCESS_KEY_ID"), _env("STREAM_R2_WRITE_SECRET_ACCESS_KEY")
     if not (r2["endpoint"].startswith("https://") and r2["bucket"] and key_id and secret):
@@ -401,8 +413,9 @@ def r2_write_config() -> Optional[Dict[str, str]]:
 def r2_write_link(method: str, object_key: Optional[str] = None, query: Optional[Dict[str, str]] = None,
                   expires: int = 300, when: Optional[datetime] = None) -> Optional[str]:
     """A short-lived signed request with the write key: a LIST of the bucket
-    (no object_key, query list-type=2&prefix=...) or a DELETE of one object.
-    None when the write key isn't set."""
+    (no object_key, query list-type=2&prefix=...), a DELETE of one object,
+    or a PUT of one (the clip service uploads a smaller copy with it). None
+    when the write key isn't set."""
     cfg = r2_write_config()
     if cfg is None:
         return None
@@ -837,6 +850,12 @@ _PLAYER_JS = r"""(function () {
   var note = document.getElementById('note');
   function say(text) { note.textContent = text; note.hidden = false; video.hidden = true; }
   var src = video.getAttribute('data-src');
+  if (video.getAttribute('data-kind') === 'file') {
+    // The recording's smaller copy: one MP4 every browser plays itself.
+    video.addEventListener('error', function () { say("The video stopped. Please refresh to try again."); });
+    video.src = src;
+    return;
+  }
   if (window.Hls && Hls.isSupported()) {
     var hls = new Hls({ liveSyncDurationCount: 3, maxBufferLength: 30 });
     var tries = 0;
@@ -886,14 +905,38 @@ def watch_page(session_id: str, t: str = Query(default="", max_length=200)):
     nonce = secrets.token_urlsafe(12)
     sid = (session_id or "").lower()
     try:
-        media_access(sid, t)
+        s = media_access(sid, t)
     except HTTPException as e:
         text = "This video isn't available." if e.status_code == 404 else "This video couldn't load. Please try again."
         return _page(f'<p id="note">{text}</p>', nonce, e.status_code)
+    copy = _small_copy_link(s)
+    if copy:
+        # The same rules let this request watch; the file is signed for it.
+        body = (f'<video id="v" controls playsinline preload="metadata" data-kind="file" '
+                f'data-src="{_html.escape(copy)}"></video>'
+                f'<p id="note" hidden></p><script nonce="{nonce}">{_PLAYER_JS}</script>')
+        return _page(body, nonce, 200)
     src = f"/stream-relay/media/{sid}/index.m3u8" + (f"?t={quote(t, safe='.')}" if t else "")
     body = (f'<video id="v" controls playsinline preload="metadata" data-src="{_html.escape(src)}"></video>'
             f'<p id="note" hidden></p>{_HLS.format(n=nonce)}<script nonce="{nonce}">{_PLAYER_JS}</script>')
     return _page(body, nonce, 200)
+
+
+def _small_copy_link(s: Dict[str, Any]) -> Optional[str]:
+    """A signed link to the recording's smaller copy once that is the one
+    the watch page plays (recording_copy.play_link: 14 days after the
+    service, or once the full-quality segments are gone), else None and the
+    full recording plays. Read whatever the switch says, so a recording
+    whose segments were removed still plays after the switch is turned off.
+    Never raises."""
+    if s.get("status") != "ended":
+        return None
+    try:
+        import recording_copy
+        return recording_copy.play_link(str(s["business_id"]), s)
+    except Exception as e:  # noqa: BLE001
+        print(f"[stream_relay] smaller copy not read: {type(e).__name__}", flush=True)
+        return None
 
 
 @router.get("/stream-relay/media/{session_id}/index.m3u8")

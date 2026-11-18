@@ -55,6 +55,9 @@ os.environ.setdefault("MADE_UP_RECIPIENT_GUARD", "off")
 # when ensure() finds a sample due. Same rule as lead scoring: a detached
 # thread must never outlive a test's fakes. Its own tests call it directly.
 os.environ.setdefault("SAMPLE_CHURCH_SEED", "off")
+# My week's texts count (church_my_week.texts_fact) reads on a thread too:
+# off here, and its own tests turn it on with the count faked.
+os.environ.setdefault("MY_WEEK_TEXT_COUNT", "off")
 
 # Billing is enforced by the code's default since 2026-11-17 (it had been on
 # in production through Railway for months). Most tests were written while

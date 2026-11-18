@@ -608,10 +608,19 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                          "Staff names, read for the signed-in person, so never an outside agent's",
                          sensitive=True), "chief_only": True},
     "move_duty": {**_w("A", "names who does one church duty, or puts it back to the lanes, through the duties "
-                            "page's own move (owner or admin; money duties only to money logins); logged, and "
+                            "page's own move (owner or admin, or whoever is over the office's lanes for the "
+                            "Managers under them, never money; money duties only to money logins); logged, and "
                             "undo_duty puts it back"), "chief_only": True},
-    "undo_duty": {**_w("A", "puts the last change to one church duty back from its log (owner or admin); the "
-                            "put-back is logged too"), "chief_only": True},
+    "undo_duty": {**_w("A", "puts the last change to one church duty back from its log (the same people, the same "
+                            "rule); the put-back is logged too"), "chief_only": True},
+    # The office team's week and the monthly report's draft (chief_office): staff by name, read for the signed-in
+    # person behind the pages' own gates, so Chief's alone.
+    "team_week": {**_r("reads a church's office team this week as its Office team page does: each Manager login's "
+                       "late and open tasks and what's due from their duties; no money. Staff by name, for whoever "
+                       "is over the lanes, the owner and the admins", sensitive=True), "chief_only": True},
+    "monthly_report_draft": {**_r("reads a church's monthly report draft from the office's lanes (numbers the app "
+                                  "keeps, never money) and the notes written for each lane; for whoever gathers it, "
+                                  "the owner and the admins", sensitive=True), "chief_only": True},
     # Step 2, decision 1 (Kevin, 2026-11-03): Chief changes a church's leaders map in plain words, with Undo
     # (chief_map). Each needs the signed-in person (an owner or an admin changes it), so Chief's alone.
     "list_map": {**_r("reads a church's leaders map: its departments and who leads and oversees each, every role "

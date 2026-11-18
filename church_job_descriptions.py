@@ -908,8 +908,18 @@ def fresh(J: Jobs, e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def _written(J: Jobs) -> None:
+    """A description changed here: Chief's roster of the office (chief_office) reads it again."""
+    try:
+        import chief_office
+        chief_office.forget(J.ch.b)
+    except Exception:  # noqa: BLE001 — the roster's own two minutes still run out
+        pass
+
+
 def _log(J: Jobs, e: Dict[str, Any], before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]],
          by: str, at: str) -> Optional[str]:
+    _written(J)
     got = sb_clients.sb_post_as_service(f"/{LOG}", {
         "business_id": J.ch.b, "contact_id": e["contact_id"], "user_id": e["user_id"], "before": _image(before),
         "after": _image(after), "by": by, "at": at})
@@ -1120,6 +1130,7 @@ def undo(J: Jobs, uid: str, e: Dict[str, Any], change_id: Any = None) -> Dict[st
     except HTTPException:
         release()
         raise
+    _written(J)
     return {"restored": restored, "before": before, "after": last.get("after"), "undone": str(last["id"])}
 
 

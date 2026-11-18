@@ -25,10 +25,22 @@ the draft is assembled from rows, so it costs nothing.
 
 Who gets it: everyone in the church's "All group leaders" room
 (member_portal_messaging.leaders_room_people), at their own email as one
-of the church's people. The note says who has no email. It goes by email
-only, through the path the Board's "Send minutes" uses (email_layout +
+of the church's people. The note says who has no email. It goes by email,
+through the path the Board's "Send minutes" uses (email_layout +
 email_sender.send_via_resend, the church's identity, a key per send). The
 leaders' chat can't carry it: a chat message needs a member sender.
+
+Text it too (Kevin, 2026-11-17, approving it for the Office & Leadership
+admin: "make this happen please"): with also_text, the same leaders whose
+numbers said yes to the church's texts also get a short text of it
+(text_version: the subject and the note's first lines, at most TEXT_SHORT
+letters, only the note's own words), sent the way an announcement goes
+(sms_routing.text_people: one text a number, STOP always wins, the church's
+name first and the way out last, counted on the church's texts). A leader
+who hasn't said yes is never texted. The card and the church's quiet hours
+are checked before the week is taken: in quiet hours the send is refused,
+saying when texts can go, rather than held. The gate is the note's own: the
+same note to the same people, so it needs no weekly_text duty.
 
 Who sends it: the owner, admins, and a Manager seat that does the leaders
 note (church_duties "leaders_note": the Office & Leadership lane's by
@@ -41,8 +53,9 @@ settings and swapped only when nobody else changed it in between, so two
 people pressing Send at once send once. No table, no migration.
 
   GET  /church/leaders-note/status?business_id=   {enabled}
-  GET  /church/leaders-note?business_id=          the draft, who it goes to, the last send
-  POST /church/leaders-note/send                  {business_id, subject, text}
+  GET  /church/leaders-note?business_id=          the draft, who it goes to (`texts`: how many
+                                                  of the leaders get the church's texts), the last send
+  POST /church/leaders-note/send                  {business_id, subject, text, also_text?}
 
 Switched by CHURCH_LEADERS_NOTE: off | owner | on (on by default since 2026-11-17).
 A read that fails is a 503, never an empty note.
@@ -79,6 +92,9 @@ KEEPS_ALL = ("owner", "admin")
 LEADERS_NOTE = "leaders_note"        # the church duty that sends it (church_duties)
 NOT_CHURCH = "The leaders note is for churches"
 DAY_RE = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), [A-Z][a-z]+ \d{1,2}$")
+TEXT_SHORT = 300                     # the text version's letters at most, before the church's name and the way out
+CUT = "..."                          # plain dots: an ellipsis would bill the whole text at the UCS-2 rate
+TEXT_EVENT = "leaders_note_text"     # its events row: never an announcement (the weekly text's check reads those)
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -466,7 +482,8 @@ def _no_one(biz_id: str) -> int:
 def recipients(biz_id: str) -> Dict[str, Any]:
     """Everyone in the All group leaders room, as one of the church's
     people: who has an email (one email to an address, however many share
-    it) and who doesn't."""
+    it) and who doesn't, and each leader with a number (`phones`, for the
+    text: which of them said yes is the text's own check)."""
     import member_portal_messaging as mpm
     room = mpm.leaders_room_people(biz_id)
     if room is None:
@@ -474,14 +491,17 @@ def recipients(biz_id: str) -> Dict[str, Any]:
     ids = [str(p.get("contact_id")) for p in room if p.get("contact_id")]
     people: Dict[str, Dict[str, Any]] = {}
     for chunk in _chunks(ids):
-        for c in _need(f"/contacts?business_id=eq.{_q(biz_id)}&id=in.({','.join(chunk)})&select=id,name,email&limit=200"):
+        for c in _need(f"/contacts?business_id=eq.{_q(biz_id)}&id=in.({','.join(chunk)})&select=id,name,email,phone&limit=200"):
             people[str(c["id"])] = c
     to: List[Dict[str, str]] = []
     no_email: List[str] = []
+    phones: List[Dict[str, str]] = []
     seen = set()
     for cid in sorted(people, key=lambda i: (_plain(people[i].get("name")) or "~").lower()):
         c = people[cid]
         name = _plain(c.get("name")) or "Someone"
+        if str(c.get("phone") or "").strip():
+            phones.append({"id": cid, "name": name, "phone": str(c["phone"]).strip()})
         email = str(c.get("email") or "").strip()
         if "@" not in email or " " in email:
             no_email.append(name)
@@ -490,7 +510,113 @@ def recipients(biz_id: str) -> Dict[str, Any]:
             continue
         seen.add(email.lower())
         to.append({"contact_id": cid, "name": name, "email": email})
-    return {"to": to, "no_email": no_email, "leaders": len(people)}
+    return {"to": to, "no_email": no_email, "leaders": len(people), "phones": phones}
+
+
+# ─── The text version ─────────────────────────────────────────────────
+
+def text_version(subject: Any, text: Any) -> str:
+    """The note as one short text: the subject, then the note's own lines in
+    order with the headings left out, cut at a word to TEXT_SHORT letters
+    with plain dots. In plain letters, so no part of it bills as UCS-2: the
+    calendar's dot between words is a dash, and curly quotes and long dashes
+    are swapped as every text's are (twilio_sms.gsm_safe). Only the note's
+    own words: never who has no email, an address or a number. The app's
+    textVersion (leadersNoteCore) says it the same way, so the screen shows
+    exactly what goes; the church's name leads it and the way out ends it
+    when it's sent (sms_service.compose_outbound_body)."""
+    import twilio_sms
+    heads = {h.replace("’", "'").lower() for h in HEADINGS}
+    body = [ln for ln in (_plain(x) for x in str(text or "").replace("\r\n", "\n").split("\n"))
+            if ln and ln.replace("’", "'").lower() not in heads]
+    out = twilio_sms.gsm_safe("\n".join(ln for ln in [_plain(subject)] + body if ln).replace("·", "-"))
+    if len(out) <= TEXT_SHORT:
+        return out
+    room = TEXT_SHORT - len(CUT)
+    cut = out[:room]
+    if out[room] not in " \n":
+        at = max(cut.rfind(" "), cut.rfind("\n"))
+        if at >= room // 2:
+            cut = cut[:at]
+    return cut.rstrip(" \n-,;:.") + CUT
+
+
+def _said_yes(biz_id: str, phones: List[str]) -> Optional[set]:
+    """Which of these numbers get the church's texts: the announcement's own
+    rule (sms_alerts.said_yes_to_texts). None when it can't be told."""
+    import httpx
+    import sms_alerts
+
+    async def ask():
+        async with httpx.AsyncClient() as client:
+            return await sms_alerts.said_yes_to_texts(client, biz_id, phones)
+    try:
+        return asyncio.run(ask())
+    except Exception:
+        logger.warning("leaders note: who gets texts wasn't read", exc_info=True)
+        return None
+
+
+def quiet_now(biz: Dict[str, Any]) -> bool:
+    """Quiet hours at the church right now (member_push.quiet_hour: its own
+    hours, Text → Texting hours). False when it can't be told, as there."""
+    import member_push
+    try:
+        return bool(member_push.quiet_hour(biz, _now()))
+    except Exception:
+        return False
+
+
+def quiet_words(biz: Dict[str, Any]) -> str:
+    import texting_hours as th
+    h = th.of(biz)
+    church = _plain(biz.get("name")) or "the church"
+    return (f"It's quiet hours at {church} ({th.hour_words(h['quiet_from'])} to {th.hour_words(h['quiet_until'])}), "
+            f"so texts can't go now. Send it with the text after {th.hour_words(h['quiet_until'])}, "
+            "or send the email alone now.")
+
+
+def text_reach(biz: Dict[str, Any], people: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """For "Text it too (12 of 18 leaders get texts)": how many of the
+    leaders have a number that said yes (`reach`; two sharing a number are
+    both reached), how many texts that is (`numbers`), whether it's quiet
+    hours now and what that means, and the name the text leads with. None
+    when who said yes can't be read: the screen then offers no text."""
+    from sms_service import normalize_phone
+    phones = [normalize_phone(p.get("phone")) for p in people.get("phones") or []]
+    yes = _said_yes(str(biz["id"]), sorted({p for p in phones if p}))
+    if yes is None:
+        return None
+    quiet = quiet_now(biz)
+    return {"leaders": people["leaders"], "reach": sum(1 for p in phones if p and p in yes),
+            "numbers": len({p for p in phones if p} & yes), "quiet": quiet,
+            "quiet_words": quiet_words(biz) if quiet else "",
+            "name": biz.get("name") or "the business", "most": TEXT_SHORT}
+
+
+def text_leaders(biz_id: str, people: Dict[str, Any], short: str) -> Dict[str, Any]:
+    """The short text to the leaders whose numbers said yes
+    (sms_routing.text_people, the announcement's own send): how many leaders
+    it reached (`sent`; a shared number reaches each who shares it), how many
+    texts went (`texts`), how many leaders it skipped (no number, no yes, or
+    STOP), how many a failed text missed, and the text as it went. When none
+    could go it says why (`error`); the email has gone either way."""
+    import sms_routing
+    from sms_service import normalize_phone
+    phones = people.get("phones") or []
+    try:
+        out = asyncio.run(sms_routing.text_people(biz_id, phones, short, event=TEXT_EVENT))
+    except Exception:
+        logger.warning("leaders note: the text didn't go", exc_info=True)
+        out = {"error": "The text didn't go just now."}
+    if out.get("error"):
+        return {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": "", "error": str(out["error"])}
+    went = set(out.get("sent_to") or ())
+    missed = set(out.get("failed_to") or ())
+    reached = sum(1 for p in phones if normalize_phone(p.get("phone")) in went)
+    failed = sum(1 for p in phones if normalize_phone(p.get("phone")) in missed)
+    return {"sent": reached, "texts": int(out.get("sent") or 0), "skipped": max(0, people["leaders"] - reached - failed),
+            "failed": failed, "body": str(out.get("body") or "")}
 
 
 # ─── The last send, kept in the church's settings ─────────────────────
@@ -536,7 +662,14 @@ def last_view(rec: Optional[Dict[str, Any]], tz) -> Optional[Dict[str, Any]]:
             "by_name": rec.get("by_name") or "", "sent": int(rec.get("sent") or 0),
             "no_email": list(rec.get("no_email") or []), "failed": list(rec.get("failed") or []),
             "subject": rec.get("subject") or "", "text": rec.get("text") or "",
-            "sending": rec.get("state") == "sending"}
+            "sending": rec.get("state") == "sending", "texts": _texts_view(rec.get("texts"))}
+
+
+def _texts_view(t: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(t, dict):
+        return None
+    return {"sent": int(t.get("sent") or 0), "texts": int(t.get("texts") or 0), "skipped": int(t.get("skipped") or 0),
+            "failed": int(t.get("failed") or 0), "body": str(t.get("body") or ""), "error": str(t.get("error") or "")}
 
 
 def sender_name(biz: Dict[str, Any], user: AuthedUser) -> str:
@@ -585,6 +718,11 @@ def draft(me: Dict[str, Any]) -> Dict[str, Any]:
     sunday = _sunday_places(biz_id, plans)
     no_one = _no_one(biz_id)
     people = recipients(biz_id)
+    try:
+        texts = text_reach(biz, people)
+    except Exception:
+        logger.warning("leaders note: the text's reach wasn't read", exc_info=True)
+        texts = None
     church = _plain(biz.get("name")) or "Your church"
     monday = monday_of(today)
     parts = {"week": week_text(items, groups), "needed": needed_text(sunday, occasions, no_one), "win": ""}
@@ -601,6 +739,7 @@ def draft(me: Dict[str, Any]) -> Dict[str, Any]:
         "draft": {"subject": subject, **parts},
         "text": compose(parts),
         "recipients": {"leaders": people["leaders"], "reach": len(people["to"]), "no_email": people["no_email"]},
+        "texts": texts,
         "counts": {"calendar": len(items), "groups": len(groups),
                    "open_places": sum(s["open"] for s in sunday),
                    "roles": sum(1 for o in occasions if o.get("short")), "no_one": no_one},
@@ -666,7 +805,11 @@ def render(biz: Dict[str, Any], subject: str, text: str) -> str:
 def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     """Send this week's note to the leaders, once a week. The week is
     claimed first (so a second press, or a second person, is refused), then
-    each leader gets their own email; if none went, the claim is let go."""
+    each leader gets their own email; if none went, the claim is let go.
+    With also_text, the leaders whose numbers said yes get the short text
+    after the emails go (text_leaders); the card and the church's quiet
+    hours are checked before anything is taken or sent."""
+    also_text = body.get("also_text") is True
     subject = _plain(body.get("subject"))[:SUBJECT_MAX]
     text = str(body.get("text") or "").replace("\r\n", "\n").strip()
     if not subject:
@@ -677,6 +820,12 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(400, f"The note is long for an email: keep it under {TEXT_MAX:,} letters.")
     biz = me["biz"]
     biz_id = str(biz["id"])
+    short = text_version(subject, text) if also_text else ""
+    if also_text:
+        import billing_limits
+        billing_limits.require_card(biz_id, "texts")
+        if quiet_now(biz):
+            raise HTTPException(409, quiet_words(biz))
     import rate_limit
     if not rate_limit.allow("church_leaders_note_send", biz_id):
         raise HTTPException(429, "The note was tried several times this hour. Try again later.")
@@ -695,6 +844,8 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     claim = {"id": uuid.uuid4().hex, "week": monday.isoformat(), "state": "sending", "sent_at": _iso(_now()),
              "by": me["uid"], "by_name": sender_name(fresh, me["user"]), "sent": 0,
              "no_email": people["no_email"][:200], "failed": [], "subject": subject, "text": text}
+    if also_text:
+        claim["texts"] = {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": short}
     if not swap(biz_id, (last or {}).get("id"), claim):
         raise HTTPException(409, "Someone else is sending this week's note right now. Open the page again in a moment.")
     html = render(fresh, subject, text)
@@ -714,10 +865,13 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         # Nothing went: the week is free again.
         swap(biz_id, claim["id"], last)
         raise HTTPException(503, "The note didn't reach anyone just now, so nothing was sent. Try again in a moment.")
+    texts = text_leaders(biz_id, people, short) if also_text else None
     done = {**claim, "state": "sent", "sent": len(sent), "failed": failed[:200]}
+    if texts is not None:
+        done["texts"] = texts
     recorded = swap(biz_id, claim["id"], done)
     return {"sent": len(sent), "failed": failed, "no_email": people["no_email"], "recorded": recorded,
-            "last": last_view(done, tz), "sent_this_week": True,
+            "texts": _texts_view(texts), "last": last_view(done, tz), "sent_this_week": True,
             "next_send": {"day": (monday + timedelta(days=7)).isoformat(), "words": day_words(monday + timedelta(days=7))}}
 
 

@@ -104,7 +104,15 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "send_handover",
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
-        "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description")},
+        "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
+        # Moving a church's duty, and putting one back (chief_duties): the owner's and admins', and whoever is
+        # over the office's lanes for the Managers under them (Kevin, 2026-11-17: "make sure Jessica has ability
+        # to request things from chief in regards to admins etc like I would as well"). The handler decides who
+        # may (church_duties.overseer_refusal), never an area: everyone else hears it's the owner's or an admin's.
+        "move_duty", "undo_duty",
+        # The office team's week and the monthly report's draft (chief_office): the handlers keep them to whoever
+        # is over the lanes or gathers the report, the owner and the admins, as the pages do.
+        "team_week", "monthly_report_draft")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
@@ -167,10 +175,6 @@ VERBS: Dict[str, Tuple[str, ...]] = {
 # errands. Listed so that a new verb is placed on purpose: a test fails
 # until every verb Chief has is in VERBS or here.
 OWNERS = frozenset({
-    # Moving a church's duty, and putting one back: the owner's and admins'
-    # (chief_duties). Here rather than in the Office, so a lane's login is
-    # told it's the owner's or an admin's, never "ask whoever has the Office".
-    "move_duty", "undo_duty",
     # Switching a church's mail over (chief_church_mail): the owner's alone.
     "switch_on_church_mail",
     # Changing a church's leaders map, its waiting changes and its ready-mades (chief_map), the same.
@@ -338,6 +342,53 @@ def refusal(verb: str, action: Optional[Dict[str, Any]], scope: Optional[Dict[st
                 "and Chief doesn't read or change money for it.")
     return (f"That's {theirs}, outside this login's areas ({mine}). Ask whoever has {theirs}, the owner or "
             "an admin.")
+
+
+# ─── A list that already has a place ──────────────────────────────────
+# Kevin, 2026-11-17: "Laquesha couldn't make event volunteer list." Her
+# Chief tried to make a new list (a room: the owner's and admins'), when the
+# church's events room (an event_roster module) already holds each event's
+# volunteer roles and who's on them, and every office login adds to it
+# (create_module_entry is everyone's). When a lane's new list is refused
+# and it's an event's volunteers or sign-ups, the refusal says where it goes.
+
+ROOM_BUILDERS = frozenset({"propose_module_from_intake", "ensure_module", "add_module_field"})
+_EVENTISH = re.compile(r"\b(events?|volunteers?|volunteering|serv(?:e|es|ing|ers?)|sign[- ]?ups?|rosters?|"
+                       r"helpers?|ushers?|greeters?|outreach|festivals?|picnics?|retreats?|rsvps?)\b", re.I)
+
+
+def _asked(action: Optional[Dict[str, Any]]) -> str:
+    a = action or {}
+    return " ".join(str(a.get(k)) for k in ("intake_excerpt", "module_name", "module", "name", "label",
+                                            "description") if isinstance(a.get(k), str))
+
+
+def events_rooms(business_id: Any) -> List[Dict[str, Any]]:
+    """The church's active events rooms (event_roster), read as the server,
+    pinned to it. [] when there are none or the read fails."""
+    try:
+        import events_rsvp_router
+        return [m for m in events_rsvp_router.roster_modules_for(str(business_id)) if isinstance(m, dict)]
+    except Exception:  # noqa: BLE001 — no hint rather than no answer
+        logger.warning("chief areas: events rooms read failed (business %s)", str(business_id)[:8])
+        return []
+
+
+def room_hint(business_id: Any, verb: str, action: Optional[Dict[str, Any]],
+              scope: Optional[Dict[str, Any]]) -> Optional[str]:
+    """What a lane's login is told instead, when Chief's new list for an
+    event's volunteers or sign-ups was refused and the church already has
+    an events room: that the list goes on the event there, and that Chief
+    can put it there. None otherwise (the refusal stands as it is)."""
+    if scope is None or verb not in ROOM_BUILDERS or not business_id or not _EVENTISH.search(_asked(action)):
+        return None
+    rooms = events_rooms(business_id)
+    if not rooms:
+        return None
+    room = _plain(rooms[0].get("name")) or "Events"
+    return (f"A new list is for the church's owner or an admin to make, but this one has a place already: "
+            f"{room} holds each event with the volunteer roles it needs and who's serving. Chief can add the "
+            f"event there now, with its roles: say the event, its date and the roles. Or open {room} and add it.")
 
 
 def current() -> Optional[Dict[str, Any]]:

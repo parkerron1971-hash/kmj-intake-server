@@ -455,7 +455,8 @@ def test_the_page_contract(db, r2, on):
     assert got["can_delete"] is True and got["can_download"] is False
     assert [r["session_id"] for r in got["recordings"]] == [_sid(2), _sid(1)]     # ended, not removed, newest first
     assert list(got["recordings"][0]) == ["session_id", "started_at", "duration_s", "bytes", "published",
-                                          "sermon_id", "keep_until"]
+                                          "sermon_id", "keep_until", "download_url"]
+    assert got["recordings"][0]["download_url"] is None              # downloads are off here
     assert got["recordings"][0]["published"] is False and got["recordings"][0]["keep_until"]
     assert got["recordings"][1]["published"] is True and got["recordings"][1]["sermon_id"] == "s-1"
     # One read of the sermons for the whole list.

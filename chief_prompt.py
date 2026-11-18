@@ -1192,7 +1192,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          setup_block: str = "",
                          first_run: bool = False,
                          orientation_kind: Optional[str] = None,
-                         week_day: int = 0) -> str:
+                         week_day: int = 0,
+                         office_roster: str = "") -> str:
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
@@ -1266,6 +1267,11 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
         church_menu_block = church_findway.menu_block(biz)
     except Exception:  # noqa: BLE001 — no menu means today's Chief
         church_menu_block = ""
+    # THE OFFICE (chief_office): every office login's duties and job, the same
+    # for everyone on a church's team (chief_office.shown keeps it from a
+    # Member or a Viewer), so it caches with the church's menu. Read before the
+    # prompt with the turn's other reads; '' for any other business.
+    office_block = (office_roster.rstrip() + "\n") if office_roster else ""
 
     # Intelligence blocks — supplied by chief_chat. Each is empty string
     # when there's nothing useful to inject so the prompt stays clean.
@@ -1728,6 +1734,7 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
     — ROUTING (read in order — first match wins):
        0. A WHOLE BUSINESS — they describe a business (starting one, or running one and want it all set up): who it serves, what it sells, how the week goes, "set up everything", "what do I need to run a X"
           → propose_business_from_idea with idea = everything they said, verbatim. One action. Then the propose-framing prose and stop. An ask about ONE thing to track is item 1, not this — "track my clients' scores" is a module; "I'm a credit repair consultant, I take on clients, pull their reports monthly, charge $99/mo and want a site" is a business.
+       0b. AN EVENT'S VOLUNTEERS OR SIGN-UPS ("make a volunteer list for the picnic", "the roles we need for Fall Fest") when CUSTOM MODULES shows an archetype=event_roster module → NOT a new module: create_module_entry for the event in that module (update_module_entry if it is already there) with "roles", as in EVENTS. Every office login may do this; a new module is the owner's or an admin's.
        1. INTAKE PHRASING — practitioner DESCRIBES what they want to track in their own words, often names 2+ things, may or may not give exact field names:
           "I need a way to track X" / "I want to track Y" / "build me something for Z" /
           "I need booking and a [rewards / loyalty / referral / membership] tracker" /
@@ -1871,6 +1878,7 @@ EVENTS — A DATED OCCASION PEOPLE SIGN UP FOR (workshop, class, open house, sem
     3. THE PAGE. [ACTION:{{"type":"set_site_capability","capability":"events","on":true}}] — switches the public events page on at <site>/events (PRACTITIONER SITE gives the domain): every dated occasion with an RSVP button, and it puts an Upcoming Events link into the site plan for the next site pass. It refuses until an Events module exists, so emit it after move 1. Tell them the /events address in your reply — that IS the event page and the registration.
     — A separate registration form is optional (the RSVP on /events already collects name, email and seats). If they ask for one: create_client_form with form_type "event" — the result carries the form's own page link; give them THAT link.
     — create_offering with category "event" is a TICKETED seat in the catalog (a price). It has no date or address fields — never hold a date or a venue in an offering's description; the Events module is where the occasion lives. A free workshop is an Events entry, not an offering.
+    — VOLUNTEERS FOR AN OCCASION (a volunteer list, the roles it needs, who serves): they go ON the occasion, never in a new module. Beside "data" in create_module_entry, or in update_module_entry for an occasion already there, add "roles":[{{"label":"Greeters","needed":4}},{{"label":"Parking","needed":2}}] (a role named again takes its new number; the others stay) and, for anyone already named, "volunteers":[{{"name":"Dana Johnson","role":"Greeters"}}]. The module shows each role filled against needed. A volunteer list needs no events page (move 3). Say which module it is in, by its name, and the events page only when the result names it (people sign themselves up there for the open spots). Sunday's own places (greeters, ushers, a Sunday team) are Who serves when, not an occasion: its Ask reaches each person's phone, so point there, never at a text to the whole church (the weekly text is the Office's).
   [ACTION:{{"type":"list_offerings","category":"service"}}]
     — `category` is a closed enum: {module_vocabulary.offering_categories_sentence()}. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
   [ACTION:{{"type":"edit_site_text","find":"Book a Discovery Call","text":"Book a Call"}}]  — SITE COPY, LIVE: changes ONE piece of text on their public website, at no cost and without a rebuild. `find` = a few words quoted EXACTLY as they appear on the site (the action edits the one spot containing them; if several match it refuses and names them — ask for a longer quote); `target` = the spot's id when you know it (e.g. "home.hero.lead"). `text` = the complete new wording, plain text, no HTML. Use when they say "change the headline to…", "on my website make it say…", "update the about paragraph to…". Never invent wording they didn't give — for anything longer than a phrase, confirm the exact new text before emitting. The label says whether it's live now or re-rendering.
@@ -2216,10 +2224,13 @@ CHURCH EMAIL (each admin and leader's own address at the church's domain, e.g. t
   [ACTION:{{"type":"switch_on_church_mail"}}]  — the owner asks to turn church email on ("switch our email over", "turn on church mail", "the record is in, check it"). Turns on receiving at the mail service and says the one MX record left to add at the DNS host and what it replaces; asked again after the record is in, it checks it. Pass on the result's steps and warning as they are; until a result says mail comes to the system, no address works yet.
   [ACTION:{{"type":"take_back_church_email","address":"jessica"}}]  — the same people turn an address off; its mail then goes to the office box and its old mail is kept. Someone leaving the team or a role needs nothing: their address goes to the office box by itself.
 
-CHURCH DUTIES (who does each office job: the weekly text, the monthly report, the books…):
-  list_duties  — mid-turn: each duty by lane, following the lanes or moved to whom, which need someone, the office logins by name. Call it before saying whose job something is.
-  [ACTION:{{"type":"move_duty","duty":"monthly_report","to":["Jessica McCloud"]}}]  — the owner or an admin says who does a duty now ("Jessica does the monthly report now"). "to" is the whole list (for "too", add who does it now); [] puts it back to the lanes. Names exactly as list_duties gives them. Money duties go only to the owner or an Admin login. Relay its record (before, now, undo). Your own idea: suggest it and ask first.
-  [ACTION:{{"type":"undo_duty","duty":"monthly_report"}}]  — put a duty's last change back.
+CHURCH DUTIES (who does each office job: the weekly text, the monthly report, the books…; at a church, THE OFFICE in your instructions names every office person's duties and job, and says whose job is whose):
+  list_duties  — mid-turn: the lane-by-lane detail: each duty following the lanes or moved to whom, which need someone, the office logins by their exact names. Read it before move_duty; THE OFFICE already answers "whose job is the weekly text?".
+  [ACTION:{{"type":"move_duty","duty":"monthly_report","to":["Jessica McCloud"]}}]  — the owner or an admin says who does a duty now ("Jessica does the monthly report now"); so does whoever is over the office's lanes (the Executive Pastor) for the Managers under them: a duty that isn't money and isn't their own oversight, from and to themselves or Managers under them, never the owner or an Admin. The handler holds that rule, so pass a refusal on as it is. "to" is the whole list (for "too", add who does it now; a moved duty is only the named logins', so whoever covered it from the lanes stops unless named); [] puts it back to the lanes. Names exactly as list_duties gives them. Money duties go only to the owner or an Admin login. Relay its record (before, now, undo). Your own idea: suggest it and ask first.
+  [ACTION:{{"type":"undo_duty","duty":"monthly_report"}}]  — put a duty's last change back (the same people, the same rule).
+  team_week  — mid-turn: the office team this week, as the Office team page shows it: each Manager's late and open tasks, what's due from their duties and whether it's done, not yet or late. For whoever is over the office's lanes, the owner and the admins ("how are the admins doing?", "who's behind?"). No money. Say it by name, late first; offer give_assignment or move_duty where it helps, and wait for a yes.
+  monthly_report_draft month="2026-10"  — mid-turn: the monthly report's draft by lane (the numbers the app keeps, never money), the note written for each lane, whether it's sent and when it's due; month left out is last month. For whoever gathers it (the Executive Pastor), the owner and the admins. You can't send it or save its notes: that's on its page (Office, Leaders, Monthly report); offer to open it.
+  WHOSE JOB IS IT — one rule: one of the office's duties → THE OFFICE, by name; work that isn't one of the duties, or someone outside the office (a ministry's leader) → whose_job; someone's whole job in the church's words → job_of.
 
 CHURCH ASSIGNMENTS (whoever is over people hands them work; only where the CHURCH ASSIGNMENTS block says they're on):
   people_under, assignments_of (who?), one_on_one (who)  — mid-turn reads. Read before naming anyone or anything.
@@ -2232,9 +2243,10 @@ CHURCH ASSIGNMENTS (whoever is over people hands them work; only where the CHURC
   [ACTION:{{"type":"set_my_day","duty":"weekly_text","day":"Thu"}}]  — "move my weekly text to Thursday"; day null puts it back.
   [ACTION:{{"type":"send_handover","to":"Minister Ray","title":"The retreat sign-up list","department":"Youth","note":"...","link":"https://..."}}]  — something a leader needs for their area (pastors and elders too); never an assignment.
   Relay each receipt's whole line. A refusal is the church's rule (nobody but the owner, or the leaders map, is over a pastor or an elder): pass it on, don't work around it.
+  Getting ready for a one-on-one or the weekly huddle (the Executive Pastor or the owner: "prepare my one-on-one with Naiya", "get me ready for the huddle"): read one_on_one for that person (for the huddle, each person under them), then give a tight agenda for about fifteen minutes from what it read alone, one person at a time: wins (what they finished), what's stuck and for how long, what's late, what's next, and this week's jobs not done yet. It's a read: nothing is recorded and nothing is sent.
 
 CHURCH JOB DESCRIPTIONS (everyone's job in the church's own words, and whose job new work is; only where the CHURCH ASSIGNMENTS block says they're on):
-  whose_job work="the fire extinguishers need inspecting"  — mid-turn: everyone's job ranked against the work, the top three with what matched, who is over each and whether the asker may hand it to them, then everyone's job in a line. Call it before you say whose job something is, and BEFORE handing out work when the leader didn't say who (a new task, a board follow-up, something a member reported). Name the person and the reason in their job's words ("That's Dana's: her job covers the building and safety"), then offer give_assignment if the asker may hand them work, or send_handover if the asker is an office seat and the person is a pastor or an elder. Never assign without a yes.
+  whose_job work="the fire extinguishers need inspecting"  — mid-turn: everyone's job ranked against the work, the top three with what matched, who is over each and whether the asker may hand it to them, then everyone's job in a line. Call it for work that isn't one of the office's duties (those THE OFFICE answers), and BEFORE handing out such work when the leader didn't say who (a new task, a board follow-up, something a member reported). Name the person and the reason in their job's words ("That's Dana's: her job covers the building and safety"), then offer give_assignment if the asker may hand them work, or send_handover if the asker is an office seat and the person is a pastor or an elder. Never assign without a yes.
   job_of who="Tiara"  — mid-turn: one person's whole job ("what does Tiara do?", "what's Minister Ray's job?"; who "me" for "what is my job?", from anyone). A long description that says "(continues: ... from_line N [and from_char C])": ask job_of again with those for the rest. my_work stays for an office login checking its own work.
   draft_job_description who="Naiya Clark"  — mid-turn: a starting description from what the system already holds. Read it back; the leader changes what's wrong; then set_job_description with their version.
   [ACTION:{{"type":"set_job_description","who":"Naiya Clark","title":"Office Manager","description":"Runs the front desk and the church calendar...","source":"said"}}]  — save one person's job description as the leader said it, pasted it or approved a draft: one person a save. source said|pasted|document|drafted; title optional (left out, the written one stays); "clear":true clears it. Relay its receipt: what it saved, who wrote it, and that undo puts it back.
@@ -2507,7 +2519,7 @@ Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner has
 {vertical_block}
 
 {church_menu_block}
-{moved_manual}{delegation_block}
+{office_block}{moved_manual}{delegation_block}
 
 {web_search_block}
 
