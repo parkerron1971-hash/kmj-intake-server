@@ -256,11 +256,69 @@ def test_a_public_sites_products_are_read_as_the_server_never_with_the_anon_key(
     assert anon_reads, "the scan still finds the anon helper's calls"
     leaning = sorted(set(anon_reads) & set(TABLES))
     assert leaning == [], f"read with the anon key, which the migration closes: {leaning}"
+    # A page's products come through the one reader, which pins the business itself.
+    assert len(re.findall(r"await _site_products\(|\b_site_products\(client, biz_id,", src)) >= 6
+    reader = src[src.index("async def _site_products("):src.index("async def _sb_service_patch(")]
+    assert 'await _sb_service(client, f"/products?business_id=eq.{biz_id}{query}")' in reader
+    for call in re.findall(r"_site_products\(\s*client,\s*([^,]+),", src):
+        assert call.strip() == "biz_id", call          # the business the public slug resolved to
     served = re.findall(r"_sb_service\(\s*client,\s*f\"/products\?([^\"]*)\"", src)
-    assert len(served) >= 6
     for query in served:
-        # Bounded to the one business the public slug resolved to, or to ids the page already holds.
-        assert query.startswith(("business_id=eq.{biz_id}", "id=eq.{product_id}", "id=in.(")), query
+        # The reader's own read, or ids the page already holds.
+        assert query.startswith(("business_id=eq.{biz_id}{query}", "id=eq.{product_id}", "id=in.(")), query
+
+
+def test_a_public_page_still_serves_when_its_products_cannot_be_read(monkeypatch):
+    """A refused read, a network failure or a missing service key is a page
+    with no products on it. It is never a page that does not load."""
+    import httpx
+    import public_site as ps
+
+    async def no_rows(client, path):
+        return []
+    monkeypatch.setattr(ps, "_sb", no_rows)
+    monkeypatch.setattr(ps, "_inject_brand_meta", lambda html, biz_id: html)
+    monkeypatch.setattr(ps, "_optimize_images", lambda html: html, raising=False)
+    page = "<html><head></head><body><main><h1>Grace Chapel</h1></main></body></html>"
+    asked = []
+
+    def failing(answer):
+        async def read(client, path):
+            asked.append(path)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+        return read
+
+    for answer in (RuntimeError("sb_headers_service requires SUPABASE_SERVICE_ROLE_KEY env var"),
+                   httpx.ConnectError("no route"), httpx.ReadTimeout("slow"), AttributeError("no client"),
+                   None, {"message": "permission denied"}, "not json", [None, 7]):
+        monkeypatch.setattr(ps, "_sb_service", failing(answer))
+        assert asyncio.run(ps._site_products(None, "biz-1", ps._WEBSITE_PRODUCTS)) == [], answer
+        served = asyncio.run(ps._augment_html(None, "biz-1", "grace", page))
+        assert "Grace Chapel" in served, answer
+    assert asked and all(a.startswith("/products?business_id=eq.biz-1&status=eq.active") for a in asked)
+
+    # Rows that are rows come through; anything else in the list is left out.
+    monkeypatch.setattr(ps, "_sb_service", failing([{"id": "p1", "name": "Book"}, "junk", None]))
+    assert asyncio.run(ps._site_products(None, "biz-1", "&limit=1")) == [{"id": "p1", "name": "Book"}]
+
+    # The real helper with no service key and no connection: still a page.
+    monkeypatch.undo()
+    monkeypatch.setattr(ps, "_sb", no_rows)
+    monkeypatch.setattr(ps, "_inject_brand_meta", lambda html, biz_id: html)
+    monkeypatch.setattr(ps, "_optimize_images", lambda html: html, raising=False)
+    for name in ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    assert asyncio.run(ps._site_products(None, "biz-1", ps._WEBSITE_PRODUCTS)) == []
+    assert "Grace Chapel" in asyncio.run(ps._augment_html(None, "biz-1", "grace", page))
+
+    # Being cancelled is not a failed read: it is passed on.
+    async def cancelled(client, path):
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(ps, "_sb_service", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(ps._site_products(None, "biz-1", "&limit=1"))
 
 
 def test_no_server_module_sends_the_anon_key_to_one_of_the_twenty_tables():
@@ -348,6 +406,47 @@ def test_the_owners_profile_is_read_as_the_server_whoever_is_signed_in(monkeypat
     assert '_safe_get_one("practitioner_profiles"' not in src
 
 
+def test_a_profile_that_cannot_be_read_is_no_profile_never_a_refused_bundle(monkeypatch):
+    """The read goes through brand_engine's one read seam (`_sb_get`), so a
+    test or a caller that stands in for that seam stands in for this read
+    too, and a failure there (the service key missing, a refused read) is a
+    bundle without its practitioner."""
+    import brand_engine as be
+    import sb_clients
+    seen = []
+    monkeypatch.setattr(be, "_sb_get", lambda path: seen.append(path) or [{"owner_id": "o-1", "preferred_title": "Pastor"}])
+    assert be._owner_profile("o-1") == {"owner_id": "o-1", "preferred_title": "Pastor"}
+    assert seen == ["/practitioner_profiles?owner_id=eq.o-1&limit=1"]
+
+    def boom(path):
+        raise RuntimeError("sb_headers_service requires SUPABASE_SERVICE_ROLE_KEY env var")
+    monkeypatch.setattr(be, "_sb_get", boom)
+    assert be._owner_profile("o-1") is None
+    for answer in (None, [], {"message": "refused"}, ["junk"]):
+        monkeypatch.setattr(be, "_sb_get", lambda path, a=answer: a)
+        assert be._owner_profile("o-1") is None, answer
+
+    # The real seam, with no service key anywhere: nothing raised.
+    monkeypatch.undo()
+    for name in ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert be._owner_profile("0a1b2c3d-0000-4000-8000-00000000000a") is None
+
+    # The seam reads this one path as the server and writes nothing as the server.
+    served, as_user = [], []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: served.append(path) or [])
+    monkeypatch.setattr(sb_clients, "sb_get_current_context", lambda path, **kw: as_user.append(path) or [])
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: pytest.fail("never written as the server"))
+    monkeypatch.setattr(sb_clients, "sb_patch_current_context", lambda path, body, **kw: as_user.append(path) or [])
+    be._sb_get("/practitioner_profiles?owner_id=eq.o-1&limit=1")
+    be._sb_get("/practitioner_profiles?select=*")            # anything wider stays on the caller's login
+    be._sb_get("/products?business_id=eq.b-1")
+    be._sb_patch("/practitioner_profiles?owner_id=eq.o-1", {"timezone": "x"})
+    assert served == ["/practitioner_profiles?owner_id=eq.o-1&limit=1"]
+    assert as_user == ["/practitioner_profiles?select=*", "/products?business_id=eq.b-1",
+                       "/practitioner_profiles?owner_id=eq.o-1"]
+
+
 def test_the_owners_timezone_read_is_the_servers_and_only_that_read(monkeypatch):
     import booking_rehearsal as br
     import chief_availability as ca
@@ -370,6 +469,16 @@ def test_the_owners_timezone_read_is_the_servers_and_only_that_read(monkeypatch)
             asyncio.run(ca._owner_tz_get(None, method, path, body))
     assert len(seen) == 1
     assert br._owner_tz_get is ca._owner_tz_get
+
+    # A read the server cannot make is an unread timezone, said plainly: no guess, nothing raised raw.
+    async def no_key(client, method, path, body=None):
+        raise RuntimeError("sb_headers_service requires SUPABASE_SERVICE_ROLE_KEY env var")
+    monkeypatch.setattr(sb_clients, "sb_as_service", no_key)
+    assert asyncio.run(ca._owner_tz_get(None, "GET", good)) is None
+    with pytest.raises(ca.Unavailable):
+        asyncio.run(ca._rows(None, good, read=ca._owner_tz_get))
+    with pytest.raises(br.RehearsalUnavailable):
+        asyncio.run(br._rows(None, good, read=br._owner_tz_get))
     for mod in (ca, br):
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
         call = src[src.index("/practitioner_profiles?owner_id=eq.{owner}"):]

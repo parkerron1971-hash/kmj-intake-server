@@ -192,12 +192,18 @@ def _server_owned(path: str) -> bool:
     return path.startswith(_SERVER_OWNED_PATHS)
 
 
+# Read as the server, never written here. practitioner_profiles is keyed by
+# the business OWNER and its one policy is the owner's own row, so under an
+# office login's JWT the owner's profile reads back empty (_owner_profile).
+_SERVER_READ_PATHS = ("/practitioner_profiles?owner_id=eq.",)
+
+
 def _sb_get(path: str) -> Optional[Any]:
     """RLS-readiness migration — delegates to sb_clients.sb_get_current_context.
     User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded
     automatically. Falls back to service-role when no JWT is bound
     (server-initiated paths). Server-owned tables are read as the server."""
-    if _server_owned(path):
+    if _server_owned(path) or path.startswith(_SERVER_READ_PATHS):
         return sb_clients.sb_get_as_service(path)
     return sb_clients.sb_get_current_context(path, allow_service_fallback=True)
 
@@ -220,11 +226,20 @@ def _owner_profile(owner_id: Any) -> Optional[Dict[str, Any]]:
     the bundle of a business the caller may work would lose its
     practitioner's name, title and timezone for everyone but the owner. The
     caller has passed the access check for this business by the time it is
-    here, and the owner id comes from that business's own row."""
+    here, and the owner id comes from that business's own row.
+
+    It goes through `_sb_get`, the module's one read seam, which reads this
+    path as the server (_SERVER_READ_PATHS). A profile that cannot be read
+    (no row yet, a refused read, the service key missing) is no profile:
+    the bundle is built without the practitioner, never refused."""
     owner = str(owner_id or "")
     if not _ID_SHAPED.fullmatch(owner):     # it goes into a PostgREST path
         return None
-    rows = sb_clients.sb_get_as_service(f"/practitioner_profiles?owner_id=eq.{owner}&limit=1") or []
+    try:
+        rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner}&limit=1") or []
+    except Exception as e:
+        logger.warning("brand_engine: the owner's profile could not be read (%s)", type(e).__name__)
+        return None
     return rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
 
 

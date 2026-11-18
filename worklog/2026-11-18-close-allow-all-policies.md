@@ -111,3 +111,40 @@ against a new allow-all policy, and the four server paths). Four deliberate brea
 revoked on a table the app reads, an allow-all policy added, an extra drop) each made it fail. The 192 test files that
 touch the changed modules, the ledger, the worklog or the migration scans: 6,207 passed. Seven test fakes now also
 stand in for the server-key reads (`_owner_tz_get`, public_site's `_sb_service`).
+
+## After the first CI run: the reads fail soft, and go through seams the tests already hold
+
+The first push failed parts 1, 3 and 4 with one error everywhere:
+`sb_headers_service requires SUPABASE_SERVICE_ROLE_KEY`. CI's test parts set
+no Supabase key at all and run each test file in its own worker; the local
+run that had passed shares one process, where (most likely) an earlier file had left a key
+in the environment. `brand_engine._owner_profile` called
+`sb_clients.sb_get_as_service` directly, which raises when the key is
+missing, so every test that builds a brand bundle behind a stand-in for
+`brand_engine._sb_get` broke, and so would a real bundle on a server with no
+key.
+
+- `brand_engine._owner_profile` reads through `_sb_get`, the module's one
+  read seam, which reads `/practitioner_profiles?owner_id=eq.` as the server
+  (`_SERVER_READ_PATHS`: read only, `_sb_patch` is untouched). A profile that
+  cannot be read is no profile; the bundle is built without the practitioner.
+  No test needed editing: their stand-ins for `_sb_get` cover it.
+- `public_site._site_products(client, biz_id, query)` is the one reader for a
+  public page's products. It pins the business itself and never takes the
+  page down: a refused read, a network failure or a missing service key is a
+  page with no products and a line in the log. Before this, five of the six
+  reads (anon key or not) were not guarded where they were made.
+- `chief_availability._owner_tz_get` answers None when the server read cannot
+  be made, so the check says "unavailable" in its own words, never a raw
+  error and never a guessed timezone.
+- Nothing falls back to the anon key, and CI's environment is unchanged.
+
+The whole suite, the way CI runs it (four parts from
+`scripts/shard_tests.py`, one worker per file group, no Supabase key or URL
+in the environment): 24,658 passed. Five tests failed, all of them
+wall-clock assertions in Chief's timing files
+(`test_chief_turn_timing`, `test_chief_turn_latency`,
+`test_chief_quick_plan_integration`, `test_chief_invoice_early_read`); the
+same ones fail the same way on today's main when those files run side by side
+on this machine, and all pass on both when run one file at a time.
+

@@ -292,7 +292,14 @@ async def _owner_tz_get(client, method, path, body=None):
             or not path.startswith('/practitioner_profiles?owner_id=eq.')
             or not path.endswith('&select=timezone&limit=1')):
         raise ValueError('Invalid server-owned profile read')
-    return await sb_clients.sb_as_service(client, 'GET', path)
+    try:
+        return await sb_clients.sb_as_service(client, 'GET', path)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # No list comes back, so _rows says the records could not be read:
+        # the check is "unavailable", never a guess at the timezone.
+        return None
 
 
 async def load_offerings(client, business_id):
