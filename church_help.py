@@ -548,6 +548,8 @@ def shown(me: Dict[str, Any], rows: List[Dict[str, Any]], given: Dict[str, List[
             "anonymous": bool(r.get("anonymous")), "pastors_only": bool(r.get("pastors_only")),
             "wants_call": bool(r.get("wants_call")), "notes": r.get("notes") if care else None,
             "from_app": bool(r.get("care_request_id")),
+            # The Prayer & care ask it came from, so the care desk can open it here.
+            "care_id": str(r["care_request_id"]) if r.get("care_request_id") else None,
             "created_at": r.get("created_at"), "decided_at": r.get("decided_at"),
             "decided_by": by.get(str(r.get("decided_by") or "")) if r.get("decided_by") else None,
             # Sent to the treasurer to pay: who gets paid, a reference, the

@@ -136,7 +136,9 @@ def test_the_treasurer_pays_only_what_was_sent_and_never_more(db, told):
 def test_a_payment_goes_into_the_books_and_closes_the_loop(db, told):
     body = {"business_id": BIZ, "status": "approved", "amount": "120",
             "send_to_pay": {"payee": PAYEE, "reference": "acct ending 4421"}}
-    ref = client("carer").post(f"/church/help/requests/care-{ASK}/decide", json=body).json()["request"]["id"]
+    first = client("carer").post(f"/church/help/requests/care-{ASK}/decide", json=body).json()["request"]
+    ref = first["id"]
+    assert first["care_id"] == ASK and ref != f"care-{ASK}", "the desk finds the ask by its care id"
     told.clear()
     got = _pay("treasurer", ref)
     assert got.status_code == 200, got.text
