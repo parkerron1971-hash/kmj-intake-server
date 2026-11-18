@@ -14,13 +14,20 @@ A manager or the owner (the stream relay's check, kids_router.require):
            is on for this church, recording_copy.downloads_on),
            recordings: [{session_id, started_at, duration_s, bytes,
            published, sermon_id, keep_until, download_url}] (ended, not
-           removed, newest first, at most 50)}. A recording's bytes are what
+           removed, newest first, at most 50),
+           extra_offer: {gb, cents, every, blocks, can_buy, trial}}.
+           A recording's bytes are what
            it counts against the room (church_storage.stored_bytes: the full
            recording while it is there, then its smaller copy after day 14,
            never both), which is what deleting it frees. download_url is a private https link
            to its smaller copy (an MP4 that saves as "<church> <date>.mp4",
            good for an hour) once that copy is made and while can_download
-           is true; null otherwise.
+           is true; null otherwise. extra_offer (2026-11-17): more room is
+           bought in blocks of `gb` (100) for `cents` each time the plan
+           bills, `every` month, quarter or year; `blocks` is what the church
+           bought, null when that can't be read; `can_buy` only for the
+           owner, with the price set, on a paid church plan. The purchase
+           itself is POST /billing/church/extra-storage.
   DELETE  /church/storage/recordings/{session_id}?business_id=
           404 while switched off or when the recording isn't this church's;
           409 while it is still being recorded, or when a published sermon
@@ -57,7 +64,7 @@ def _unavailable() -> HTTPException:
 @router.get("/church/storage")
 def storage_overview(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business_id")
-    require(biz, user, "manager")
+    role = require(biz, user, "manager")
     if not cs.switched_on(biz):
         return {"enabled": False}
     row, sessions = cs.business_row(biz), cs.sessions_of(biz)
@@ -85,6 +92,7 @@ def storage_overview(business_id: str = Query(...), user: AuthedUser = Depends(r
         "keep_until": s.get("keep_until"),
         "download_url": rc.download_link(biz, s, *label) if label else None,
     } for s in shown]
+    out["extra_offer"] = cs.extra_offer(row, owner=role == "owner")
     return out
 
 

@@ -49,7 +49,7 @@ def _array(fn: str) -> list:
 
 def test_the_sql_list_is_the_python_list():
     assert sorted(_array("business_settings_server_keys")) == sorted(bs.SERVER_KEYS)
-    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 42
+    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 43
     assert set(_array("business_settings_birth_keys")) == set(bs.BIRTH_KEYS) == {"churchsavvy_only"}
     assert bs.BIRTH_KEYS <= set(bs.SERVER_KEYS)
 
@@ -68,7 +68,8 @@ def test_every_key_the_server_names_in_code_is_on_the_list():
     import sample_church
     import site_publish
     for key in (church_founding.FOUNDING, no_card_trial.MARKER, sample_church.SETTINGS_KEY,
-                church_billing.MOVE, church_billing.EXTRA_LOGINS, lifecycle_emails.SETTINGS_KEY,
+                church_billing.MOVE, church_billing.EXTRA_LOGINS, church_billing.EXTRA_STORAGE,
+                lifecycle_emails.SETTINGS_KEY,
                 church_texts.SETTINGS_KEY, church_leaders_note.KEY, church_team_week.KEY,
                 church_serving.SETTINGS_KEY, email_sender.EMAIL_DOMAIN_SETTINGS_KEY,
                 site_publish.SETTING_KEY, church_over.OWNER_PERSON_KEY,

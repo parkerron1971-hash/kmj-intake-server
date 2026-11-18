@@ -51,6 +51,18 @@ A business not on a church plan (church_texts.church_plan_of: the comp tier,
 or the Stripe PRICE id businesses.subscription_plan holds) has no allowance
 (allowance_bytes None) and nothing here touches it.
 
+MORE ROOM, BOUGHT (2026-11-17)
+------------------------------
+A church can buy blocks of 100 GB at $5 a month each (church_billing's
+extra storage, an item on its subscription, the count kept in
+businesses.settings.extra_storage as extra_logins is). extra_bytes adds
+them to the allowance here and nowhere else. A count that can't be read
+(church_billing.extra_storage_blocks None) is never 0: with a plan's
+allowance in play it makes the meter incomplete, like unread files. The
+page's extra_offer says what one block is and whether this login may buy
+it; the warnings say "Make room or add storage" once the price is set
+(add_storage_sold).
+
 THE SWITCH
 ----------
 CHURCH_STORAGE: off (the default) | owner (the platform owner's churches
@@ -111,10 +123,6 @@ COURSE_CHUNK = 50                      # course ids per in.() read: a short URL
 DELETE_WORKERS = 16                    # a 2-hour service is ~1,800 four-second segments
 LIST_PAGES_MAX = 100                   # 100,000 objects: far past any one service
 R2_TIMEOUT_S = 15
-# Nothing sells more storage yet (pricing_config.extra_storage_offer). When
-# the purchase ships, extra_bytes reads what a church bought and this turns
-# the warnings' "Make room" into "Make room or add storage".
-ADD_STORAGE_SOLD = False
 
 SESSION_COLS = ("id,business_id,status,bytes,duration_s,started_at,ended_at,sermon_id,playlist_path,"
                 "removed_at,keep_until,warnings_sent,last_warned_at")
@@ -182,13 +190,26 @@ def can_delete() -> bool:
     return sr.r2_write_config() is not None
 
 
+def add_storage_sold() -> bool:
+    """More storage can be bought (church_billing's price for it is set):
+    the warnings' "Make room" becomes "Make room or add storage"."""
+    import church_billing
+    return bool(church_billing.extra_storage_prices())
+
+
 # ─── The plan's allowance ────────────────────────────────────────────
 
+# The blocks bought, read out of settings by PostgREST (a JSON path, so the
+# whole settings object isn't sent for one number): "extra_storage" on the row.
+EXTRA_SELECT = "extra_storage:settings->extra_storage"
+
+
 def business_row(business_id: str) -> Optional[Dict[str, Any]]:
-    """The fields the plan is read from; {} when there is no such business,
-    None when the read failed."""
+    """The fields the plan and the storage bought are read from; {} when
+    there is no such business, None when the read failed."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{_q(business_id)}&select=id,comp_tier,subscription_plan,subscription_status&limit=1")
+        f"/businesses?id=eq.{_q(business_id)}&select=id,comp_tier,subscription_plan,subscription_status,"
+        f"stripe_subscription_id,{EXTRA_SELECT}&limit=1")
     if not isinstance(rows, list):
         return None
     return rows[0] if rows else {}
@@ -206,11 +227,45 @@ def allowance_bytes(row: Optional[Dict[str, Any]]) -> Optional[int]:
     return _int(gb) * GB if gb is not None else None
 
 
-def extra_bytes(business_id: str) -> int:
-    """Storage the church bought on top of its plan. Nothing sells it yet;
-    the purchase (a later PR, pricing_config.extra_storage_offer) joins the
-    allowance here and nowhere else."""
-    return 0
+def block_bytes() -> int:
+    """One block of storage bought (pricing_config.extra_storage_offer: 100 GB)."""
+    import pricing_config
+    return _int(pricing_config.extra_storage_offer()["gb"]) * GB
+
+
+def _blocks_on(row: Any) -> Tuple[bool, Optional[int]]:
+    """(the row carries the count, the count): settings.extra_storage from
+    a row read with its settings (church_texts._church_rows), or the
+    extra_storage column business_row asks for."""
+    import church_billing
+    if not isinstance(row, dict):
+        return False, None
+    if "settings" in row:
+        return True, church_billing.extra_storage_blocks(row)
+    if church_billing.EXTRA_STORAGE in row:
+        return True, church_billing.storage_blocks_value(row.get(church_billing.EXTRA_STORAGE))
+    return False, None
+
+
+def extra_blocks(business_id: str, row: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    """The blocks of storage the church bought, from `row` when it carries
+    them, else read. None when they can't be told: never 0 on a guess."""
+    carried, blocks = _blocks_on(row)
+    if carried:
+        return blocks
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select={EXTRA_SELECT}&limit=1")
+    if not isinstance(rows, list) or not rows:
+        return None
+    return _blocks_on(rows[0])[1]
+
+
+def extra_bytes(business_id: str, row: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    """Storage the church bought on top of its plan (church_billing's extra
+    storage: blocks times block_bytes). It joins the allowance here and
+    nowhere else. None when the count can't be read: the meter is then
+    incomplete, and nothing is held, released or removed from it."""
+    blocks = extra_blocks(business_id, row)
+    return None if blocks is None else blocks * block_bytes()
 
 
 def percent_of(used: int, total: int) -> int:
@@ -320,9 +375,11 @@ def sunday_bytes(sessions: List[Dict[str, Any]]) -> int:
 
 def measure(business_id: str, sessions: List[Dict[str, Any]], row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The meter, from a whole read of the church's sessions and its row.
-    `complete` (not on the page) is false when the files or the class
-    recordings couldn't be read: the meter then counts them as 0 for the
-    page, and nothing is held, released or removed from it."""
+    `complete` (not on the page) is false when the files, the class
+    recordings or the storage bought couldn't be read: the meter then counts
+    them as 0 for the page, and nothing is held, released or removed from
+    it. (The storage bought only matters with a plan's allowance: a church
+    that left its plan is let go of its dates whatever it bought.)"""
     allowance = allowance_bytes(row)
     recordings = sum(stored_bytes(s) for s in sessions if not s.get("removed_at"))
     classes = class_bytes(business_id)
@@ -337,11 +394,39 @@ def measure(business_id: str, sessions: List[Dict[str, Any]], row: Optional[Dict
         "complete": files is not None and classes is not None,
     }
     if allowance is not None:
-        extra = extra_bytes(business_id)
-        total = allowance + extra
-        out.update(extra_bytes=extra, percent=percent_of(used_now, total), state=state_of(used_now, total),
+        extra = extra_bytes(business_id, row)
+        if extra is None:
+            print(f"[church_storage] {str(business_id)[:8]}: the storage bought couldn't be read", flush=True)
+            out["complete"] = False
+        total = allowance + (extra or 0)
+        out.update(extra_bytes=extra or 0, percent=percent_of(used_now, total), state=state_of(used_now, total),
                    sundays_left=max(0, total - used_now) // per_sunday)
     return out
+
+
+def extra_offer(row: Optional[Dict[str, Any]], *, owner: bool) -> Dict[str, Any]:
+    """What the page needs to sell more room: {gb, cents, every, blocks,
+    can_buy, trial}. `cents` is one block's price each time the church's
+    plan bills (`every`: month, quarter or year, read from its plan's price,
+    no call to the payment side). `blocks` is what it bought, None when that
+    can't be read (then nothing can be bought from the page: a save sends
+    the whole count). `can_buy`: the owner (it spends money), a price for
+    the plan's term is set, and the church pays for a church plan. `trial`:
+    its card's trial is still running, so nothing is charged today (the
+    page says so before Save)."""
+    import church_billing
+    import feature_gates
+    import pricing_config
+    _carried, blocks = _blocks_on(row)
+    term = church_billing.row_term(row)
+    paid = (feature_gates.plan_of(row) in feature_gates.CHURCH_PLANS
+            and bool(str((row or {}).get("stripe_subscription_id") or "").strip()))
+    return {"gb": _int(pricing_config.extra_storage_offer()["gb"]),
+            "cents": church_billing.extra_storage_cents(term),
+            "every": church_billing.every_word(term),
+            "blocks": blocks,
+            "can_buy": bool(owner and paid and blocks is not None and church_billing.extra_storage_price(term)),
+            "trial": str((row or {}).get("subscription_status") or "") == "trialing"}
 
 
 def total_of(meter: Dict[str, Any]) -> Optional[int]:
@@ -574,7 +659,19 @@ def _date_words(dt: datetime) -> str:
 
 
 def _make_room() -> str:
-    return "Make room or add storage to keep it." if ADD_STORAGE_SOLD else "Make room to keep it."
+    return "Make room or add storage to keep it." if add_storage_sold() else "Make room to keep it."
+
+
+def fewer_blocks_words(over: Optional[bool]) -> Optional[str]:
+    """What the answer to taking storage off says: over (True), maybe over
+    (None: it couldn't be measured), or nothing to say (False)."""
+    rule = (f"kept {KEEP_DAYS} days, then deleted unless you make room or add storage again. "
+            "Published sermons are never deleted.")
+    if over is True:
+        return f"Your church now uses more storage than it has. Nothing is deleted now. A service recorded while it's over is {rule}"
+    if over is None:
+        return f"If your church now uses more storage than it has, a service recorded while it's over is {rule}"
+    return None
 
 
 def notice(kind: str, *, day: str = "", started: str = "", keep: str = "", percent: int = 0,

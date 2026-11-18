@@ -311,3 +311,37 @@ def test_extra_logins_follow_the_plan_to_three_months_or_it_is_refused(stripe, m
     _checkout(plan="church_growing_quarterly")
     assert _writes(stripe, "/subscriptions/sub_1")[0]["items"] == [
         {"id": "si_plan", "price": GROWING_Q}, {"id": "si_logins", "price": LOGINS_Q}]
+
+
+# ─── 7b. extra storage follows a change of term too (2026-11-17) ──────
+
+STORE, STORE_YEAR = "price_store", "price_store_year"
+ITEM_STORE = {"id": "si_store", "quantity": 1, "price": _a_price(STORE, 500)}
+
+
+def test_extra_storage_moves_to_the_yearly_price_with_the_logins(stripe, monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL", LOGINS_YEAR)
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", STORE)
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL", STORE_YEAR)
+    stripe["sub"] = _sub(items=[ITEM_STORE, ITEM_LOGINS, ITEM_SMALL])
+    _checkout(plan="church_growing_annual")
+    assert _writes(stripe, "/subscriptions/sub_1")[0]["items"] == [
+        {"id": "si_plan", "price": GROWING_YEAR}, {"id": "si_logins", "price": LOGINS_YEAR},
+        {"id": "si_store", "price": STORE_YEAR}]
+
+
+def test_storage_with_no_yearly_price_is_refused_before_stripe_is_asked(stripe, monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", STORE)
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL", raising=False)
+    stripe["sub"] = _sub(items=[ITEM_STORE, ITEM_SMALL])
+    with pytest.raises(HTTPException) as e:
+        _checkout(plan="church_growing_annual")
+    assert e.value.status_code == 409 and "extra storage" in e.value.detail and "Write to us" in e.value.detail
+    assert stripe["posted"] == []
+
+
+def test_extra_storage_stays_put_on_the_same_term(stripe, monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", STORE)
+    stripe["sub"] = _sub(items=[ITEM_STORE, ITEM_SMALL])
+    _checkout()
+    assert _writes(stripe, "/subscriptions/sub_1")[0]["items"] == [{"id": "si_plan", "price": GROWING}]

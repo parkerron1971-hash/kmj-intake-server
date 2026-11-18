@@ -59,7 +59,7 @@ language sql immutable parallel safe set search_path = public as $$
   select array[
     -- money, plans and offers
     'founding_church', 'no_card_trial', 'sample_church', 'church_move', 'extra_logins',
-    'church_texts_bill', 'stripe', 'churchsavvy_only', 'platform_books',
+    'extra_storage', 'church_texts_bill', 'stripe', 'churchsavvy_only', 'platform_books',
     -- gates the API holds behind the owner, a role or a step-up unlock
     'computer', 'email_domain', 'autonomy', 'content_autonomy', 'automations_paused',
     'church_owner_contact_id',
@@ -190,7 +190,7 @@ notify pgrst, 'reload schema';
 --   select tgname, tgenabled from pg_trigger
 --    where tgrelid = 'public.businesses'::regclass and tgname = 'businesses_guard_server_settings';
 --   -- 1 row, O
---   select cardinality(public.business_settings_server_keys());                -- 42
+--   select cardinality(public.business_settings_server_keys());                -- 43
 --   select proname, prosecdef from pg_proc where proname in
 --     ('merge_business_settings', 'business_settings_merge_at', 'businesses_guard_server_settings',
 --      'business_settings_server_keys', 'business_settings_birth_keys') order by 1;

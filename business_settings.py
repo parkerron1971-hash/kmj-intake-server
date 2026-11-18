@@ -57,6 +57,7 @@ SERVER_KEYS: Tuple[str, ...] = (
     "sample_church",        # sample_church: the sample's state (sample rows)
     "church_move",          # church_billing: the paid move and its founding share
     "extra_logins",         # church_billing: paid extra office logins (seats)
+    "extra_storage",        # church_billing: paid extra storage (100 GB blocks)
     "church_texts_bill",    # church_texts: the texting registration bill
     "stripe",               # stripe_connect_router: Connect account state
     "churchsavvy_only",     # set at birth; dropped, a ChurchSavvy-only church opens everything

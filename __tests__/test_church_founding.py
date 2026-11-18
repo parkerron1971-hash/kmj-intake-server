@@ -646,10 +646,12 @@ def test_the_catalog_prices_three_months_at_three_months_with_no_discount():
     for env, plan in (("STARTER", "starter"), ("PROFESSIONAL", "professional"), ("PRACTICE", "practice")):
         assert cat[f"STRIPE_PRICE_ID_{env}_QUARTERLY"] == (tiers[plan] * 3, "quarter")
     assert cat["STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY"] == (pricing_config.extra_login_cents() * 3, "quarter")
+    assert cat["STRIPE_PRICE_ID_EXTRA_STORAGE_QUARTERLY"] == (pricing_config.extra_storage_offer()["cents"] * 3,
+                                                              "quarter")
     # Only the plans sold today: no founder seat, barber plan or ChurchSavvy price.
     quarterly_envs = {e for e, (_c, i) in cat.items() if i == "quarter"}
     assert not [e for e in quarterly_envs if any(x in e for x in ("FOUNDER", "SOLO", "BOOKED", "BOSS", "_CS_"))]
-    assert len(quarterly_envs) == 12
+    assert len(quarterly_envs) == 13          # 11 plans, the extra login and extra storage (2026-11-17)
     assert sb._recurring("quarter") == {"interval": "month", "interval_count": 3}
     assert sb._recurring("year") == {"interval": "year"}
 

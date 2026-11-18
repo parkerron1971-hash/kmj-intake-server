@@ -287,10 +287,13 @@ def church_storage_gb() -> Dict[str, int]:
 
 
 def extra_storage_offer() -> Dict[str, int]:
-    """More storage past a church plan's: this many GB for this many cents a
-    month (EXTRA_STORAGE_GB, PRICE_EXTRA_STORAGE_CENTS). Nothing sells it yet;
-    a later PR adds the purchase, and church_storage.extra_bytes is where what
-    a church bought joins its allowance."""
+    """More storage past a church plan's: one block of this many GB for this
+    many cents a month (LIMIT_EXTRA_STORAGE_GB, PRICE_EXTRA_STORAGE_CENTS).
+    Sold through church_billing's extra storage (STRIPE_PRICE_ID_EXTRA_STORAGE
+    and its _ANNUAL / _QUARTERLY prices; quantity = blocks), and
+    church_storage.extra_bytes is where what a church bought joins its
+    allowance. Keep these equal to the Stripe prices: the page says these
+    numbers, Stripe charges its own."""
     return {"gb": _dial("EXTRA_STORAGE_GB", "LIMIT_", 100),
             "cents": _dial("EXTRA_STORAGE_CENTS", "PRICE_", 500)}
 
