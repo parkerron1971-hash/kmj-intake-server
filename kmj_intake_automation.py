@@ -454,6 +454,11 @@ from church_assignments import router as church_assignments_router
 app.include_router(church_assignments_router)
 from church_handovers import router as church_handovers_router
 app.include_router(church_handovers_router)
+# The leaders schedule (/church/schedule/*): who is on it, asking to be away,
+# and the yes (2026-11-18; CHURCH_SCHEDULE off | owner | on, owner when unset;
+# 404 until supabase/APPLY-2026-11-19-church-schedule.sql is applied).
+from church_schedule import router as church_schedule_router
+app.include_router(church_schedule_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what
