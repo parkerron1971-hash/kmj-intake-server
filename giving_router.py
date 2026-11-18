@@ -263,9 +263,8 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     ) or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(status_code=403, detail="not authorized")
-    return rows[0]
+    import church_money_gate
+    return church_money_gate.require_owner(business_id, user, rows[0])
 
 
 def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]:

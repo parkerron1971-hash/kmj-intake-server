@@ -699,10 +699,9 @@ def close_count(business_id: str, count_id: str, body: Dict[str, Any], user: Aut
 def reopen_count(business_id: str, count_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Owner or admin, with a reason that stays on the count. The counted
     totals and counters stay until it's closed again."""
-    from giving_records import require_finance
+    import church_money_gate
     _gate(business_id, user)
-    if require_finance(business_id, user) not in ("owner", "admin"):
-        raise HTTPException(403, "Only the owner or an admin can reopen a closed count.")
+    church_money_gate.require_money(business_id, user, "work", "count_reopen")
     reason = " ".join(str((body or {}).get("reason") or "").split())[:300]
     if not reason:
         raise HTTPException(400, "Say why the count is being reopened. The reason stays with it.")
