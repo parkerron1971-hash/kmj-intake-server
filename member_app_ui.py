@@ -33,6 +33,10 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
+import json
+import os
+import re
+from functools import lru_cache
 from html import escape
 from string import Template
 from typing import Any, Dict, Optional, Tuple
@@ -1374,10 +1378,9 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
   .mp-shell{max-width:none;padding:0;} .mp-card{background:#fff;} th,td{border-color:#999;} .mp-muted{color:#333;}}""")
 
 
-def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> str:
-    """The member app's stylesheet. The mp-* classes the older renderers
-    use keep working through the same tokens. Youth adds its loud type and
-    its pieces (member_spaces)."""
+def _tokens(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> "_Tokens":
+    """Every value the stylesheet's $tokens stand for, for one church in
+    one space."""
     import member_spaces
     p = palette(biz, theme, space)
     tokens = _Tokens({k: v for k, v in p.items() if isinstance(v, str)})
@@ -1387,6 +1390,16 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> st
     tokens["youth_dot"] = member_spaces.youth_colour(biz)
     tokens["hot"] = palette({**biz, "settings": {**(biz.get("settings") or {}), "member_portal": {"base": "black"}}},
                             theme)["accent"]
+    return tokens
+
+
+def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> str:
+    """The member app's stylesheet. The mp-* classes the older renderers
+    use keep working through the same tokens. Youth adds its loud type and
+    its pieces (member_spaces). Pages link the shared file and carry only
+    the colours (head(), below); this whole sheet inline is the way back
+    (MEMBER_APP_FAST=off) and the offline page's."""
+    tokens = _tokens(biz, theme, space)
     out = (_CSS.substitute(tokens) + _FAMILY_CSS.substitute(tokens) + _BIBLE_CSS.substitute(tokens)
            + _DEVOTIONAL_CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens))
     if space == "youth":
@@ -2047,3 +2060,186 @@ body.k-mode .mp-foot{display:none;}
 .k-hold.on::before{width:100%;transition:width 3s linear;}
 @media (prefers-reduced-motion:reduce){.k-wchip.no{animation:none;}}
 """)
+
+
+# ─── Faster tabs (Kevin, 2026-11-18: "the members app move slow when ...
+# switching from one tab to another... how can that be sped up?") ─────
+#
+# 1. The look as a file. Every page carried the whole sheet above inline
+#    (~97 KB, the same rules for every church; only the colours differ), so
+#    every tap sent it again. Now the rules are files every church shares
+#    (/my/app.<hash>.css, Youth's and Kids' and the sign-in pages' beside
+#    it), kept by the browser for a year and never asked for again: the
+#    hash is of what's in the file, so a change is a new address. A page
+#    carries only its church's colours, a small :root block of
+#    --mbt-<token> values. The templates above are unchanged: each $token
+#    reads var(--mbt-token) in the file, so a page looks exactly as it did.
+# 2. The next tab starts loading on a touch or a hover of the tab bar
+#    (EARLY_RULES for Chrome, EARLY_JS + the service worker for Safari).
+# 3. Tabs cross-fade with the tab bar and the top bar held still
+#    (MOTION_CSS).
+#
+# MEMBER_APP_FAST=off is the way back for all three: the whole sheet
+# inline, nothing loaded early, no cross-fade.
+
+SHEETS = ("app", "youth", "kids", "door")
+# What a sheet's address looks like (custom_domain_cache keeps the same
+# pattern, so Cloudflare may keep the file for every custom domain).
+SHEET_PATH_RE = re.compile(r"^/my/(app|youth|kids|door)\.([0-9a-f]{12})\.css$")
+_TOKEN_RE = re.compile(r"\$(?:(\$)|\{([_a-z][_a-z0-9]*)\}|([_a-z][_a-z0-9]*))", re.I | re.A)
+
+
+def fast() -> bool:
+    """MEMBER_APP_FAST (default on): the shared stylesheet file, loading
+    the next tab early and the cross-fade between tabs. =off puts the
+    whole sheet back inline on every page and turns the other two off."""
+    return (os.environ.get("MEMBER_APP_FAST") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+# Motion between pages, in one place (a later redesign restyles it here).
+# A plain, short cross-fade of the page, with the top bar cross-fading in
+# place. The tab bar never fades: the one you tapped stays, fully drawn, and
+# the new page's is laid over it the moment it's there, the way a phone's
+# own tab bar changes. (Faded with the page, Safari dimmed it mid-way, and on
+# a long page, Give, it went for a few frames: Safari takes the new page's
+# picture before the parser reaches the bar at the foot. 2026-11-18.) Both
+# are named only while a page change is under way (:active-view-transition),
+# so at rest every page draws exactly as it did. Browsers without
+# cross-document view transitions (before Safari 18.2 / Chrome 126) skip
+# the at-rule and change pages as they always have; reduced motion gets no
+# transition at all.
+MOTION_CSS = """
+/* motion between pages (member_app_ui.MOTION_CSS) */
+@media (prefers-reduced-motion:no-preference){
+  @view-transition{navigation:auto;}
+  html:active-view-transition .mb-nav{view-transition-name:mb-nav;}
+  html:active-view-transition .mb-top{view-transition-name:mb-top;}
+  ::view-transition-group(*){animation-duration:.18s;}
+  ::view-transition-old(mb-nav),::view-transition-new(mb-nav){animation:none;mix-blend-mode:normal;}
+}
+"""
+
+
+# The next tab, early. Only the tab bar's and the sidebar's links (.mb-nav),
+# only on a touch, a press or a hover (with a mouse, Chrome's "moderate": a
+# 200 ms hover or the press; on a touch screen, "conservative": the touch
+# itself, since Chrome's phone "moderate" also guesses at links on screen
+# with no touch at all, measured 2026-11-18), never the page you're on, and
+# never a page
+# whose GET changes something: News marks what it shows as seen
+# (member_portal_news.serve). A form (sign-out included) is never a link, so
+# it is never loaded early. Chrome (and Edge, Samsung Internet) get
+# speculation rules, its own prefetch, which it keeps in memory and drops if
+# the cookies change. Safari and Firefox get the same through the service
+# worker (member_app_install.SW_JS: in memory, one use, ten seconds at most,
+# dropped by any form or other page). A WebKit build answers
+# HTMLScriptElement.supports('speculationrules') yet loads nothing (Playwright
+# WebKit 26.5, 2026-11-18), so the rules go only to Chromium
+# (navigator.userAgentData), and each browser asks once.
+NO_EARLY = ("/my/news",)
+EARLY_RULES = {"prefetch": [{"where": {"and": [
+    {"selector_matches": ".mb-nav a[href]"},
+    {"not": {"selector_matches": "[aria-current]"}},
+    {"or": [{"href_matches": "/my"}, {"href_matches": "/my/*"}]},
+    {"not": {"or": [c for p in NO_EARLY for c in ({"href_matches": p}, {"href_matches": p + "/*"})]}},
+]}, "eagerness": "moderate"}]}
+_NO_EARLY_RE = "|".join(re.escape(p).replace("/", r"\/") for p in NO_EARLY)
+EARLY_JS = ("<script>(function(){"
+            "var R=" + json.dumps(EARLY_RULES, separators=(",", ":")) + ",N=/^(" + _NO_EARLY_RE + r")(\/|$)/;"
+            "if(navigator.userAgentData&&window.HTMLScriptElement&&HTMLScriptElement.supports"
+            "&&HTMLScriptElement.supports('speculationrules')){"
+            "if(!matchMedia('(hover: hover)').matches)R.prefetch[0].eagerness='conservative';"
+            "var s=document.createElement('script');"
+            "s.type='speculationrules';s.textContent=JSON.stringify(R);document.head.appendChild(s);return;}"
+            "if(!('serviceWorker' in navigator))return;"
+            "var asked={},t;"
+            "function go(a){if(!a||!a.closest('.mb-nav')||a.hasAttribute('aria-current'))return;var u;"
+            "try{u=new URL(a.href,location.href);}catch(e){return;}"
+            "var p=u.pathname,c=navigator.serviceWorker.controller;"
+            "if(!c||u.origin!==location.origin||u.search||u.hash||!(p==='/my'||p.indexOf('/my/')===0)||N.test(p)"
+            "||p===location.pathname||asked[u.href])return;"
+            "asked[u.href]=1;c.postMessage({t:'early',url:u.href});}"
+            "function at(e){return e.target&&e.target.closest?e.target.closest('a[href]'):null;}"
+            "document.addEventListener('touchstart',function(e){go(at(e));},{passive:true,capture:true});"
+            "document.addEventListener('mousedown',function(e){go(at(e));},true);"
+            "document.addEventListener('mouseover',function(e){var a=at(e);clearTimeout(t);"
+            "if(a)t=setTimeout(function(){go(a);},200);},{passive:true});"
+            "})();</script>")
+
+
+def early() -> str:
+    """What a page with the tab bar adds to load the next tab before it's
+    tapped (EARLY_JS); nothing with MEMBER_APP_FAST off."""
+    return EARLY_JS if fast() else ""
+
+
+def _templates(name: str) -> Tuple[Template, ...]:
+    if name == "app":
+        return (_CSS, _FAMILY_CSS, _BIBLE_CSS, _DEVOTIONAL_CSS, _SPACES_CSS)
+    if name == "youth":
+        return (_YOUTH_CSS,)
+    if name == "kids":
+        return (_KIDS_CSS,)
+    import member_app_signin as sg
+    return (sg._CSS,)
+
+
+def _static(tpl: Template) -> Tuple[str, Tuple[str, ...]]:
+    """A template with each $token as var(--mbt-token), and the tokens it
+    reads."""
+    used = []
+
+    def one(m):
+        if m.group(1):
+            return "$"
+        used.append(m.group(2) or m.group(3))
+        return f"var(--mbt-{used[-1]})"
+    return _TOKEN_RE.sub(one, tpl.template), tuple(dict.fromkeys(used))
+
+
+@lru_cache(maxsize=None)
+def sheet(name: str) -> Tuple[str, str, Tuple[str, ...]]:
+    """One shared sheet: (its text, the 12-hex hash in its address, the
+    tokens a page must set for it). `name` is one of SHEETS."""
+    if name not in SHEETS:
+        raise KeyError(name)
+    parts = [_static(t) for t in _templates(name)]
+    text = "".join(p[0] for p in parts) + (MOTION_CSS if name == "app" else "")
+    used = tuple(dict.fromkeys(n for p in parts for n in p[1]))
+    return text, hashlib.sha256(text.encode("utf-8")).hexdigest()[:12], used
+
+
+def sheet_url(name: str) -> str:
+    return f"/my/{name}.{sheet(name)[1]}.css"
+
+
+def _sheets_for(space: str, door: bool) -> Tuple[str, ...]:
+    return ("app",) + ((space,) if space in ("youth", "kids") else ()) + (("door",) if door else ())
+
+
+def colours(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, door: bool = False) -> str:
+    """The one church's part of the look: every --mbt-<token> the page's
+    sheets read, as a :root block (about 2 KB). A sign-in page (`door`) is
+    always the church's own space, the space member_app_signin's sheet
+    was written for."""
+    tokens = _tokens(biz, theme, space)
+    names = dict.fromkeys(n for s in _sheets_for(space, door) for n in sheet(s)[2])
+    return ":root{" + "".join(f"--mbt-{n}:{tokens[n]};" for n in names) + "}"
+
+
+def head(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, door: bool = False,
+         inline: Optional[bool] = None) -> str:
+    """The look, for one page's <head>: links to the shared sheets, then
+    the church's colours. `inline` (the offline page, which must draw with
+    no connection; MEMBER_APP_FAST=off) is the whole sheet in the page, as
+    it always was. Same rules, same order, either way."""
+    if inline is None:
+        inline = not fast()
+    if inline:
+        out = f"<style>{css(biz, theme, space)}</style>"
+        if door:
+            import member_app_signin as sg
+            out += f"<style>{sg.css(biz, theme)}</style>"
+        return out
+    links = "".join(f'<link rel="stylesheet" href="{sheet_url(n)}">' for n in _sheets_for(space, door))
+    return links + f"<style>{colours(biz, theme, space, door=door)}</style>"
