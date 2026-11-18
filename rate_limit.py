@@ -153,6 +153,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_code_email_minute": (1, 60),
     "member_code_email_day": (int(os.environ.get("RL_MEMBER_CODE_EMAIL_PER_DAY", "12")), 86400),
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
+    # A phone's page timing (member_stopwatch.py): one beacon a page, and a
+    # church's wifi is one network on a Sunday. Dropped ones are only fewer
+    # samples; this stops a loop or a script.
+    "member_timing": (int(os.environ.get("RL_MEMBER_TIMING_PER_MIN", "300")), 60),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
     # Draft with Chief in the Text room (text_room.draft_reply), per person
