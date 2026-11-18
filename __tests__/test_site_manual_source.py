@@ -174,6 +174,8 @@ def test_the_public_domain_path_fills_a_manual_page_too(monkeypatch):
             return [{"settings": VERIFIED}]
         return []
     monkeypatch.setattr(public_site, "_sb", fake_sb)
+    # A site's products are read as the server (the anon key reads none since 2026-11-18).
+    monkeypatch.setattr(public_site, "_sb_service", fake_sb)
     monkeypatch.setattr(
         "agents.override_system.override_resolver.resolve_html_overrides",
         lambda html, biz: html.replace(">old lead<", ">edited<"))
@@ -237,6 +239,8 @@ def custom_manual_site(monkeypatch):
         return []
 
     monkeypatch.setattr(public_site, "_sb", fake_sb)
+    # A site's products are read as the server (the anon key reads none since 2026-11-18).
+    monkeypatch.setattr(public_site, "_sb_service", fake_sb)
     monkeypatch.setattr(public_site, "_check_rate", lambda slug: True)
     monkeypatch.setattr(public_site, "_inject_brand_meta", lambda html, biz: html)
     monkeypatch.setattr("agents.override_system.override_resolver.resolve_html_overrides",

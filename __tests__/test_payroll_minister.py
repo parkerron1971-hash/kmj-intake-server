@@ -115,10 +115,10 @@ def test_the_minister_setting_is_the_owners_alone(church):
     body = dict(business_id="biz1", first_name="Sam", last_name="Lee", pay_type="salary",
                 pay_rate=40000.0, pay_frequency="monthly")
     with pytest.raises(HTTPException) as e:
-        pr.create_employee(pr.EmployeeBody(**body, minister=True), user=_Manager())
+        pr.create_employee(pr.EmployeeBody(**body, minister=True), user=_Admin())
     assert e.value.status_code == 403
-    # A manager still adds anyone else.
-    assert pr.create_employee(pr.EmployeeBody(**body), user=_Manager())["ok"]
+    # An Admin still adds anyone else.
+    assert pr.create_employee(pr.EmployeeBody(**body), user=_Admin())["ok"]
     with pytest.raises(HTTPException) as e:
         pr.create_employee(pr.EmployeeBody(**body, housing_allowance_per_period=500.0), user=_Owner())
     assert e.value.status_code == 400               # a housing allowance needs a minister
@@ -128,10 +128,10 @@ def test_the_minister_setting_is_the_owners_alone(church):
     assert out["employee"]["minister_credential"] == "licensed"
 
     with pytest.raises(HTTPException) as e:
-        pr.update_employee("emp9", pr.EmployeePatch(housing_allowance_per_period=10.0), user=_Manager())
+        pr.update_employee("emp9", pr.EmployeePatch(housing_allowance_per_period=10.0), user=_Admin())
     assert e.value.status_code == 403
-    # A manager's ordinary edit doesn't touch the setting.
-    assert pr.update_employee("emp9", pr.EmployeePatch(phone="555"), user=_Manager())["employee"]["minister"]
+    # An Admin's ordinary edit doesn't touch the setting.
+    assert pr.update_employee("emp9", pr.EmployeePatch(phone="555"), user=_Admin())["employee"]["minister"]
     off = pr.update_employee("emp9", pr.EmployeePatch(minister=False), user=_Owner())["employee"]
     assert off["minister"] is False and off["housing_allowance_per_period"] is None
     assert off["minister_credential"] is None
@@ -149,7 +149,7 @@ def test_a_draft_line_takes_the_housing_part_and_only_the_owner_changes_it(churc
 
     run_id = out["run"]["id"]
     with pytest.raises(HTTPException) as e:
-        pr.update_item(run_id, line["id"], pr.ItemPatch(housing_allowance=1500.0), user=_Manager())
+        pr.update_item(run_id, line["id"], pr.ItemPatch(housing_allowance=1500.0), user=_Admin())
     assert e.value.status_code == 403
     with pytest.raises(HTTPException) as e:
         pr.update_item(run_id, lay["id"], pr.ItemPatch(housing_allowance=100.0), user=_Owner())
@@ -159,8 +159,8 @@ def test_a_draft_line_takes_the_housing_part_and_only_the_owner_changes_it(churc
     assert e.value.status_code == 400
     upd = pr.update_item(run_id, line["id"], pr.ItemPatch(housing_allowance=1500.0), user=_Owner())
     assert upd["item"]["housing_allowance"] == 1500.0
-    # A manager's withholding edit keeps the owner's housing part.
-    upd = pr.update_item(run_id, line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Manager())
+    # An Admin's withholding edit keeps the owner's housing part.
+    upd = pr.update_item(run_id, line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Admin())
     assert upd["item"]["housing_allowance"] == 1500.0
     assert upd["totals"]["housing_allowance"] == 1500.0
 
@@ -262,7 +262,7 @@ def test_no_longer_a_minister_takes_the_housing_part_off_a_draft_line(church):
     line = out["items"][0]
     assert line["housing_allowance"] == 2000.0
     pr.update_employee("emp9", pr.EmployeePatch(minister=False), user=_Owner())
-    upd = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Manager())
+    upd = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Admin())
     assert upd["item"]["housing_allowance"] == 0.0
     assert upd["item"]["social_security_employee"] > 0                  # FICA again
     assert upd["totals"]["housing_allowance"] == 0.0
@@ -303,7 +303,7 @@ def test_a_minister_says_how_they_are_one(church):
         pr.update_employee("emp9", pr.EmployeePatch(minister_credential=""), user=_Owner())
     assert e.value.status_code == 400                   # a minister can't drop it
     with pytest.raises(HTTPException) as e:
-        pr.update_employee("emp9", pr.EmployeePatch(minister_credential="commissioned"), user=_Manager())
+        pr.update_employee("emp9", pr.EmployeePatch(minister_credential="commissioned"), user=_Admin())
     assert e.value.status_code == 403                   # the owner's alone
     upd = pr.update_employee("emp9", pr.EmployeePatch(minister_credential="commissioned"), user=_Owner())
     assert upd["employee"]["minister_credential"] == "commissioned"
@@ -337,7 +337,7 @@ def test_a_failed_church_read_changes_nothing_on_a_draft_line(church, monkeypatc
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda p: None if p.startswith("/businesses?id=eq.biz1&select=id,type") else real(p))
     with pytest.raises(HTTPException) as e:
-        pr.update_item(run_id, line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Manager())
+        pr.update_item(run_id, line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Admin())
     assert e.value.status_code == 503
     saved = next(i for i in church.rows("pay_run_items") if i["id"] == line["id"])
     assert saved["housing_allowance"] == 2000.0 and saved["social_security_employee"] == 0.0
@@ -353,3 +353,16 @@ def test_an_employee_save_that_fails_says_so(church, monkeypatch):
     with pytest.raises(HTTPException) as e:
         pr.create_employee(pr.EmployeeBody(business_id="biz1", first_name="Sam", last_name="Lee"), user=_Owner())
     assert e.value.status_code == 503
+
+
+def test_a_churchs_payroll_refuses_a_manager_before_anything_else(church):
+    """A church's payroll is its books: only the owner, an Admin or the
+    accountant passes the money wall, so a Manager is refused outright."""
+    body = dict(business_id="biz1", first_name="Sam", last_name="Lee", pay_type="salary",
+                pay_rate=40000.0, pay_frequency="monthly")
+    with pytest.raises(HTTPException) as e:
+        pr.create_employee(pr.EmployeeBody(**body), user=_Manager())
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        pr.update_employee("emp9", pr.EmployeePatch(phone="555"), user=_Manager())
+    assert e.value.status_code == 403

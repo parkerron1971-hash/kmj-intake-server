@@ -96,7 +96,7 @@ def _require_order_keeper(business_id: str, session: UserSession) -> None:
     active Admin seat (church_money_gate). Anyone else, and any seat
     outside a church, the same 403 as before."""
     import church_money_gate
-    church_money_gate.require_money_writer(business_id, session.user,
+    church_money_gate.require_money_writer(business_id, session.user, part="store",
                                            detail="not authorized for this business")
 
 

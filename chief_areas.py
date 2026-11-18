@@ -110,6 +110,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # owner gave "Sets up jobs and people's sheets") is the handlers', through church_sheet's and
         # church_job_defs' own checks: never an area's, and never the owner's alone, so they aren't in OWNERS.
         "sheet_of", "list_church_jobs", "draft_church_job", "save_church_job", "remove_church_job",
+        # The standard start (chief_church_structure): the office team drafted for review, and the standing
+        # check. The same people as the jobs, by the handlers' own check (church_job_defs.editor): never an
+        # area's, and never the owner's alone, so they aren't in OWNERS either.
+        "draft_church_structure", "church_structure_status",
         # Moving a church's duty, and putting one back (chief_duties): the owner's and admins', and whoever is
         # over the office's lanes for the Managers under them (Kevin, 2026-11-17: "make sure Jessica has ability
         # to request things from chief in regards to admins etc like I would as well"). The handler decides who

@@ -245,11 +245,8 @@ def _may_give(biz_id: str, user: Any, role: str) -> bool:
     """Giving shows for the owner, admins and accountants, while Giving &
     money is open to them (church_keys). Any failure is a no."""
     try:
-        ok = role in ("owner", "admin")
-        if not ok:
-            from business_collaborators_router import is_active_accountant
-            ok = bool(is_active_accountant(biz_id, str(user.id)))
-        if not ok:
+        import church_money_gate
+        if not church_money_gate.may_money(biz_id, user, "see", "giving", role=role):
             return False
         import church_keys
         return church_keys.is_open(biz_id, user, "giving_money")

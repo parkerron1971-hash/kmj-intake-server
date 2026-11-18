@@ -64,15 +64,13 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
         f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
+    return church_money_gate.require_owner(biz, user, rows[0])
 
 
 def _writer(biz: str, user: AuthedUser) -> Dict[str, Any]:
     """Every bill write: the owner, or a church's Admin seat (the
     treasurer). Anyone else, and any seat outside a church, the same 403."""
-    return church_money_gate.require_money_writer(biz, user)
+    return church_money_gate.require_money_writer(biz, user, part="bills")
 
 
 def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -86,16 +84,8 @@ def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
         f"/businesses?id=eq.{biz}&select=id,owner_id,type&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    row = rows[0]
-    if str(row.get("owner_id")) == str(user.id):
-        return row
-    from business_collaborators_router import is_active_accountant
-    if is_active_accountant(biz, str(user.id)):
-        return row
-    import church_follow_up
-    from business_users_router import require_role
-    require_role(biz, str(user.id), "admin" if church_follow_up.is_church(row) else "viewer")
-    return row
+    church_money_gate.require_money(biz, user, "see", "bills", business=rows[0])
+    return rows[0]
 
 
 def _saved_category(biz: str, category: Optional[str], subcategory: Optional[str]):

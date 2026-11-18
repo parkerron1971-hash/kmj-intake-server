@@ -127,9 +127,9 @@ def _is_church(biz: Dict[str, Any]) -> bool:
     return cfu.is_church(biz)
 
 
-def _finance(business_id: str, user: AuthedUser) -> None:
+def _finance(business_id: str, user: AuthedUser, need: str = "see") -> None:
     from giving_records import require_finance
-    require_finance(business_id, user)
+    require_finance(business_id, user, need=need)
 
 
 def tables_ready() -> bool:
@@ -140,12 +140,12 @@ def tables_ready() -> bool:
                for t in ("church_campaigns", "church_pledges"))
 
 
-def _guard(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
+def _guard(business_id: Any, user: AuthedUser, need: str = "see") -> Dict[str, Any]:
     """The switch, then finance, then a church. Returns the business."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     bid = _uuid(business_id, "church")
-    _finance(bid, user)
+    _finance(bid, user, need)
     biz = _business(bid)
     if not biz:
         raise HTTPException(404, "business not found")
@@ -432,7 +432,7 @@ def list_campaigns(business_id: str, user: AuthedUser = Depends(require_user)) -
 
 @router.post("/campaigns")
 def create_campaign(body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    biz = _guard(body.get("business_id"), user)
+    biz = _guard(body.get("business_id"), user, need="work")
     _ready()
     fields = _campaign_fields(body, biz, partial=False)
     saved = sb_clients.sb_post_as_service("/church_campaigns", {
@@ -444,7 +444,7 @@ def create_campaign(body: Dict[str, Any], user: AuthedUser = Depends(require_use
 
 @router.patch("/campaigns/{campaign_id}")
 def edit_campaign(campaign_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    biz = _guard(body.get("business_id"), user)
+    biz = _guard(body.get("business_id"), user, need="work")
     _ready()
     bid = str(biz["id"])
     current = _campaign(bid, campaign_id)
@@ -515,7 +515,7 @@ def list_pledges(business_id: str, campaign_id: Optional[str] = None,
 
 @router.post("/pledges")
 def record_pledge(body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    biz = _guard(body.get("business_id"), user)
+    biz = _guard(body.get("business_id"), user, need="work")
     _ready()
     bid = str(biz["id"])
     campaign = _campaign(bid, body.get("campaign_id"))
@@ -547,7 +547,7 @@ def record_pledge(body: Dict[str, Any], user: AuthedUser = Depends(require_user)
 
 @router.delete("/pledges/{pledge_id}")
 def remove_pledge(pledge_id: str, business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    biz = _guard(business_id, user)
+    biz = _guard(business_id, user, need="work")
     _ready()
     bid = str(biz["id"])
     pid = _uuid(pledge_id, "pledge")

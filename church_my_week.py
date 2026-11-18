@@ -56,7 +56,7 @@ router = APIRouter(prefix="/church", tags=["church"])
 
 HANDED_DAYS = 7
 SHOWN = 6
-FINANCE_ROLES = ("owner", "admin")
+KEEPS_ALL = ("owner", "admin")       # who may see My week as someone else (not a money question)
 
 # Where each kind of thing opens in the app (churchStructure's leaf ids).
 DOOR = {
@@ -245,7 +245,9 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
     if view is None:
         raise HTTPException(503, "Your week couldn't be read just now. Try again.")
     whole = view["areas"] is None
-    finance = role in FINANCE_ROLES
+    import church_money_gate
+    from types import SimpleNamespace
+    finance = church_money_gate.may_money(biz, SimpleNamespace(id=user_id), "see", "my_week", role=role)
     mine_areas = [a for a in church_areas.AREA_ORDER if (whole or a in view["areas"]) and (finance or a != "giving_money")]
     the_map = church_areas.build(business)
     by_key = {a["key"]: a for a in the_map["areas"]}
@@ -1047,7 +1049,7 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
     role = _role(biz, str(session.user.id))
     if as_user and as_user != str(session.user.id):
         overseer = False
-        if role not in FINANCE_ROLES:
+        if role not in KEEPS_ALL:
             import church_team_week
             if not (church_team_week.overseer(bid, session.user, role) and church_team_week.church_open(bid)):
                 raise HTTPException(403, "Only the owner, an admin or whoever is over the lanes can see as someone else")

@@ -101,12 +101,18 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "sample_church_questions": "the questions a person asked Chief about the made-up sample church before starting their own (sample_church.py): about Grace Street Fellowship, not their church, and counted per person so a restore must not hand back the ten; keyed by user_id, deleted with the person (USER_CHILD_TABLES), its business links set null when a business goes",
     "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
     "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
+    "church_money_holders": "who the owner let into giving, and how far (church_money_holders.py): a sign-in user id tied to one seat row, neither of which can mean anything in another business; a restored church's owner ticks giving again, and until then only the owner, Admins and the accountant open it; cascade on business and seat deletion",
+    "church_money_asks": "requests for giving access and the owner's answers (church_money_holders.py): who asked, for whom and who answered are sign-in user ids that can't mean anything in another business, and an open ask a restore must not offer the owner again; nothing to restore; cascade on business deletion",
     "church_duty_holders": "who a church moved each office duty to (church_duties.py): sign-in user ids that can't mean anything in another business; a restored church follows its lanes' defaults until it moves its duties again; cascade on business and login deletion",
     "church_duty_changes": "the log of those moves, from and to as sign-in user ids (church_duties.py): meaningless in another business, and nothing to restore once the moves are gone; cascade on business deletion",
     "church_duty_days": "the day each office login picked for one of its duties (church_assignments.py): keyed by sign-in user ids that can't mean anything in another business; a restored church's logins pick their days again, and until they do each duty falls on its catalog day; cascade on business and login deletion",
     "church_job_description_changes": "the log of changes to a church's job descriptions (church_job_descriptions.py): who changed each as a sign-in user id that can't mean anything in another business, and an undo a restore must not offer; the descriptions themselves are exported; cascade on business and person deletion",
     "church_sheet_changes": "the record of who changed whose sheet, or which of the church's own jobs (church_job_defs.py): the changer and the login changed are sign-in user ids that can't mean anything in another business, and a restored church's logins and sheets are set up again, so there is nothing to restore; the jobs themselves are exported; cascade on business deletion",
     "church_handovers": "what the office sent a leader for their area (church_handovers.py): the sender a sign-in user id that can't mean anything in another business, and seen and told marks a restore must not claim; never a task, nothing to restore; cascade on business and person deletion",
+    "church_away_asks": "a leader's asks to be away and their answers, the leaders schedule (docs/CHURCH_SCHEDULE.md): who each went to and who answered are sign-in user ids that can't mean anything in another business, and a private reason and told marks a restore must not carry; the away dates a yes made are in serve_away, which is exported; cascade on business and person deletion",
+    "church_away_commitments": "what repeats in a leader's week, the leaders schedule (docs/CHURCH_SCHEDULE.md): each cites a person by an id an import mints anew, with a told mark a restore must not claim; a restored church's leaders add theirs again; cascade on business and person deletion",
+    "church_schedule_people": "a church's add list and remove list for its leaders schedule (docs/CHURCH_SCHEDULE.md): people by an id an import mints anew, set by a sign-in user id that can't mean anything in another business; a restored church's schedule follows its own roles and seats until it lists them again; cascade on business and person deletion",
+    "church_schedule_settings": "the days of notice a church asks of its leaders (docs/CHURCH_SCHEDULE.md): one number and the sign-in user id that set it; a restored church starts at the default of 14 until it sets its own; cascade on business deletion",
     "church_mailboxes": "a church's own email addresses (church_mail.py): the login each names is a sign-in user id that can't mean anything in another business, and an address only works at a domain whose mail reaches this system; a restored church gives its addresses out again; cascade on business deletion",
     "church_mail": "mail that came in to a church address (church_mail.py): kept for the address's history, its rows tied to boxes that aren't restored; never Chief's; cascade on business deletion",
     "church_mail_people": "each login's own church mail setting, copies to their own email on or off (church_mail_room.py): keyed by a sign-in user id that can't mean anything in another business; cascade on business deletion",
@@ -311,6 +317,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # does, its areas and duties. They cite no row; who made and last
     # changed each is a sign-in user id.
     "church_jobs",
+    # A church's structure draft (church_structure.py): the one proposal of
+    # its office team waiting for review. It cites no row by a key another
+    # table holds; the people in it are named in words.
+    "church_structure_drafts",
     # The map (church_areas): which area the church put a role or a team in.
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
@@ -745,6 +755,7 @@ async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
 _DELETE_SELECT = {
     "marketing_desks": "business_id",       # keyed by the business
     "church_move_items": "business_id",     # keyed by (business_id, item)
+    "church_structure_drafts": "business_id",   # keyed by the business: one draft a church
     "marketing_link_clicks": "post_id",     # keyed by (post_id, day)
     "marketing_link_hits": "link_id",       # keyed by (link_id, day)
 }
@@ -948,6 +959,11 @@ _IMPORT_SKIP = {
     # export keeps each job's words, areas and duties; a restored church
     # sets its jobs up again (Chief drafts them).
     "church_jobs",
+    # A structure draft ties each person to a login by sign-in user id and
+    # to a member by contact id, and proposes jobs by title for logins that
+    # aren't restored; same reason. The export keeps what was proposed; a
+    # restored church drafts its team again (Chief asks the five questions).
+    "church_structure_drafts",
     # The leaders map's departments cite their leader and overseer by
     # contact id, and their units cite groups, roles, boards and ministries
     # by id; same reason. A restored church draws its map again.

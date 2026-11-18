@@ -96,6 +96,8 @@ TICKS = {
     "church_team_rollup": "church_team_week:rollup_tick",
     "church_assignments_sweep": "church_assignments:sweep_tick",
     "church_handovers_sweep": "church_handovers:sweep_tick",
+    # The leaders schedule's notices: its churches go through drop_samples, and each notice asks skip() first.
+    "church_schedule_sweep": "church_schedule_tell:sweep_tick",
     "church_mail_alert_sweep": "church_mail_alerts:sweep",
     "church_mail_trash_sweep": "church_mail_alerts:trash_sweep",
     # ChurchSavvy's countdown that starts by itself: a sample's screens show nothing, so it skips the sample (skip_id).
@@ -165,6 +167,9 @@ TICKS = {
     "devotional_daily_texts": "devotional_daily:sweep_tick",
     "devotional_daily_morning": "devotional_daily:morning_tick",
     "sample_church_cleanup": "sample_church:cleanup_tick",
+    # Not business-scoped: the platform's own database readings and weekly
+    # verdict; its church count already leaves samples out (is_sample).
+    "db_health": "db_health:tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {

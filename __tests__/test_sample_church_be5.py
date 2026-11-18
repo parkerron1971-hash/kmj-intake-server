@@ -200,9 +200,9 @@ def reports(world, monkeypatch):
     import giving_reports
     import reports_router as rr
     world.rows("businesses").extend([_sample(), _plain()])
-    monkeypatch.setattr(giving_records, "require_finance", lambda biz, user: None)
+    monkeypatch.setattr(giving_records, "require_finance", lambda biz, user, need="see": None)
     monkeypatch.setattr(rr, "_owner_or_reader", lambda biz, user: {"id": biz, "settings": {}})
-    monkeypatch.setattr(rr, "_giving_wall", lambda biz, user: None)
+    monkeypatch.setattr(rr, "_giving_wall", lambda biz, user, need="see": None)
     monkeypatch.setattr(rr, "_fiscal_period", lambda row, p, f, t: (p, f, t))
     monkeypatch.setattr(giving_reports, "funds_report", lambda *a: {"ok": True, "report": "funds"})
     monkeypatch.setattr(giving_reports, "givers", lambda *a: {"ok": True, "givers": []})

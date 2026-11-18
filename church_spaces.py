@@ -92,7 +92,6 @@ STATUSES = ("requested", "booked", "declined", "cancelled")
 # What each role may do here (business_users_router._ROLE_RANK names).
 WRITERS = ("owner", "admin", "manager", "member")   # book, or ask
 APPROVERS = ("owner", "admin", "manager")           # book straight away, approve, keep the spaces
-FINANCE = ("owner", "admin")                        # a rental's money, as ministry_finance_access
 KEEPS_ALL = ("owner", "admin")
 ROOMS = "rooms"             # the church duty a Manager books and approves by (church_duties)
 # The church duties whose job includes asking for a room (an event's, an
@@ -296,6 +295,15 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     return {"biz": biz, "role": "member" if asks else role, "uid": str(user.id), "rooms": rooms, "asks": asks}
 
 
+def _money(me: Dict[str, Any]) -> bool:
+    """A rental's money (its fee, deposit and bill): the owner and admins,
+    by church_money_gate's "rentals" rule."""
+    import church_money_gate
+    from types import SimpleNamespace
+    return church_money_gate.may_money(me["biz"].get("id"), SimpleNamespace(id=me.get("uid")), "work", "rentals",
+                                       role=me["role"])
+
+
 def _may(me: Dict[str, Any], roles: Sequence[str], why: str) -> None:
     if me["role"] not in roles:
         # A Manager that asks for its events' rooms is told whose job the
@@ -309,8 +317,8 @@ def _can(me: Dict[str, Any]) -> Dict[str, bool]:
     """What this login may do here. `rentals` is the Rentals page with its
     money (the owner and admins); `rental_list` is the list itself, which
     whoever does the rooms reads without the amounts."""
-    return {"book": me["role"] in WRITERS, "approve": me["role"] in APPROVERS, "rentals": me["role"] in FINANCE,
-            "rental_list": me["role"] in FINANCE or bool(me.get("rooms"))}
+    return {"book": me["role"] in WRITERS, "approve": me["role"] in APPROVERS, "rentals": _money(me),
+            "rental_list": _money(me) or bool(me.get("rooms"))}
 
 
 def _ready(biz_id: str) -> bool:
@@ -415,7 +423,7 @@ def shown(me: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
     biz = str(me["biz"]["id"])
     owner = str(me["biz"].get("owner_id") or "")
     people, by = _names(biz, rows)
-    money = me["role"] in FINANCE
+    money = _money(me)
     try:
         bills: Optional[Dict[str, Dict[str, Any]]] = _bills(biz, (r.get("invoice_id") for r in rows)) if money else {}
     except HTTPException:
@@ -586,7 +594,7 @@ def booking_fields(me: Dict[str, Any], body: Dict[str, Any], *, partial: bool,
     for k, what in (("fee", "fee"), ("deposit", "deposit")):
         if k in body:
             cents = _cents(body.get(k), what)
-            if me["role"] not in FINANCE:
+            if not _money(me):
                 if cents:
                     raise HTTPException(403, "Only the owner or an admin sets a rental's fee and deposit.")
                 continue
@@ -778,7 +786,8 @@ def bill(me: Dict[str, Any], booking_id: str, tz_name: Any = None) -> Dict[str, 
     Its id is fixed by the booking (and the bill it replaces, if that one was
     voided), so two presses, or a press after a failed link, make one bill.
     The app sends it the way it sends every bill."""
-    _may(me, FINANCE, "Only the owner or an admin bills a rental.")
+    if not _money(me):
+        raise HTTPException(403, "Only the owner or an admin bills a rental.")
     biz_row = me["biz"]
     biz = str(biz_row["id"])
     b = _booking(biz, booking_id)
@@ -984,7 +993,7 @@ def rentals_read(business_id: str, when: str = "upcoming", user: AuthedUser = De
     rooms reads them without it (shown() leaves out the fee, the deposit and
     the bill for anyone else)."""
     me = _access(business_id, user)
-    if me["role"] not in FINANCE and not me["rooms"]:
+    if not _money(me) and not me["rooms"]:
         raise HTTPException(403, "Rentals carry money: the owner and admins keep them.")
     biz = str(me["biz"]["id"])
     now = _q(_iso(_now()))

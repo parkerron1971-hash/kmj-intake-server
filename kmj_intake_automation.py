@@ -454,6 +454,11 @@ from church_assignments import router as church_assignments_router
 app.include_router(church_assignments_router)
 from church_handovers import router as church_handovers_router
 app.include_router(church_handovers_router)
+# The leaders schedule (/church/schedule/*): who is on it, asking to be away,
+# and the yes (2026-11-18; CHURCH_SCHEDULE off | owner | on, owner when unset;
+# 404 until supabase/APPLY-2026-11-19-church-schedule.sql is applied).
+from church_schedule import router as church_schedule_router
+app.include_router(church_schedule_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what
@@ -462,6 +467,11 @@ app.include_router(church_job_descriptions_router)
 # must match before this one's /church/jobs/{key}.
 from church_sheet import router as church_sheet_router
 app.include_router(church_sheet_router)
+# The standard start (church_structure.py): a church's structure draft, from
+# Chief's five questions or the planning course. A proposal to review; it
+# grants nothing.
+from church_structure import router as church_structure_router
+app.include_router(church_structure_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -603,6 +613,11 @@ app.include_router(member_portal_leading_router)
 # stuck, send up, give, start, and Got it on what the office sent.
 from member_portal_assign import router as member_portal_assign_router
 app.include_router(member_portal_assign_router)
+# Dates on the Lead tab (member_portal_dates.py): someone on the leaders
+# schedule asks for time off, says "I can't make it", takes one back, and
+# says yes or not this one to what went to them. BEFORE public_site_router.
+from member_portal_dates import router as member_portal_dates_router
+app.include_router(member_portal_dates_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router
@@ -996,6 +1011,10 @@ app.include_router(platform_today_router)
 # income and the tax / reserve / pay split. Owner-only.
 from platform_money import router as platform_money_router
 app.include_router(platform_money_router)
+# Mission Control → Systems → Database (2026-11-18): the weekly database
+# health check and when to move the database up a size. Owner-only.
+from db_health import router as db_health_router
+app.include_router(db_health_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
@@ -1888,6 +1907,19 @@ async def startup():
                               hours=1, id="email_domain_monitor")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
+    # The weekly database health check (db_health.py, Mission Control →
+    # Systems → Database): Sunday-morning readings every 15 minutes, a
+    # Wednesday baseline, and Monday 8 AM Eastern's verdict. The job runs
+    # every 5 minutes and decides in code whether a reading or the report
+    # is due, so a deploy at the wrong moment loses at most 5 minutes; each
+    # 15-minute slot is claimed by its row, so it is read once.
+    # DB_HEALTH_CHECK=off stops it.
+    try:
+        import db_health as _db_health
+        scheduler.add_job(g("db_health", _db_health.tick), "cron", minute="*/5",
+                          id="db_health", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] database health check not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in
@@ -2031,6 +2063,19 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # The leaders schedule (2026-11-18): an ask to be away, and its answer,
+    # are told once; one nudge after three days; a waiting ask follows whoever
+    # is over the asker now; a private reason is cleared 90 days after the
+    # last day (church_schedule_tell.sweep_tick; CHURCH_SCHEDULE, read here on
+    # the worker too). Nothing is read while the switch is off, and before
+    # supabase/APPLY-2026-11-19-church-schedule.sql only whether its tables
+    # are there.
+    try:
+        import church_schedule_tell as _cst
+        scheduler.add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1,
+                          id="church_schedule_sweep")
+    except Exception as e:
+        print(f"   [warn] leaders schedule sweep not scheduled: {e}")
     # ChurchSavvy's countdown that starts by itself (2026-11-14, Kevin: "a pre
     # service clock starts it that a person can set"): every minute, each
     # church's countdown times that have come go up on its screens, once a day,

@@ -1,3 +1,10 @@
+-- WARNING, 2026-11-18. After APPLY-2026-11-18-church-money-holders.sql this
+-- rollback also shuts "who gave" for every holder of the giving tick: the
+-- gift rows go back to ministry_finance_access (owner, admin, accountant),
+-- which the tick never widens. The books and the bank ticks keep working. To
+-- bring "who gave" back, run APPLY-2026-10-27-church-keys-gift-rows.sql and
+-- then run that file again.
+--
 -- Undoes APPLY-2026-10-27-church-keys-gift-rows.sql: the gift rows, the
 -- giving events, the gift alerts and the bank go back to the 2026-09-29
 -- rule (owner, admin, the outside accountant), with no keeper in it. The

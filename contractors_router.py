@@ -68,10 +68,15 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     create/onboard/refresh escalate to manager; PAY is admin (it moves
     real money via Stripe transfer)."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,type,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
+    # A church's or nonprofit's payroll, contractors and period closes are its
+    # books: the money wall is asked first, as the ledger asks it (gl_router).
+    # Any other business isn't asked here.
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
     from business_users_router import require_role

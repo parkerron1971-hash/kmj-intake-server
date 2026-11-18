@@ -110,7 +110,7 @@ def church_business(monkeypatch, type_='church'):
 
 
 def finance_only(monkeypatch):
-    def require(business_id, user):
+    def require(business_id, user, need="see"):
         if user.id not in ('admin-seat', 'accountant'):
             raise HTTPException(403, 'Giving records require owner, admin, or accountant access.')
         return 'admin'

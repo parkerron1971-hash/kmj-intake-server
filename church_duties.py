@@ -463,13 +463,26 @@ def _moved(biz: str) -> Dict[str, List[str]]:
     return {k: sorted(set(v)) for k, v in out.items()}
 
 
+def own_job_seat(seat: Optional[Dict[str, Any]]) -> bool:
+    """Whether a login's stored job is one of the church's own
+    (church_job_defs): a key that isn't a starting job's. Such a job brings
+    only the duties given on the person's sheet (the moves): never a
+    starting job's duties because its areas happen to be that job's, and
+    never every duty in its areas (Kevin, 2026-11-18)."""
+    stored = (seat or {}).get("lane")
+    return bool(stored) and stored not in LANES
+
+
 def _seat_lane(seat: Dict[str, Any]) -> Optional[str]:
     """The lane a login was given (stored), else the lane its picked areas
     are exactly. Chief's guess at a login's areas never makes a lane: a
-    duty is something the church said, not something Chief guessed."""
+    duty is something the church said, not something Chief guessed. A login
+    on one of the church's own jobs has no lane, whatever its areas spell."""
     stored = seat.get("lane")
     if stored in LANES:
         return stored
+    if stored:
+        return None
     areas = seat.get("areas")
     return lane_of(seat.get("role"), areas if isinstance(areas, list) else None)
 
@@ -629,7 +642,7 @@ def standing(business_id: str, user_id: str) -> Dict[str, Any]:
         if uid in _exec_users(biz, [seat]):
             lanes.add(EXEC)
         # No lane at all: the areas it works decide, as before duties.
-        by_area = None if lanes else _area_duties(biz, uid, role)
+        by_area = None if lanes else (frozenset() if own_job_seat(seat) else _area_duties(biz, uid, role))
         duties = _manager_duties(lanes, uid, moved, by_area)
     else:
         duties = frozenset()
@@ -845,6 +858,7 @@ def _build(business: Dict[str, Any]) -> Dict[str, Any]:
     for uid in _exec_users(biz, [s for s in seats if s.get("role") == "manager"]):
         lanes_of[uid].add(EXEC)
     role_of = {str(s["user_id"]): s.get("role") for s in seats}
+    own_job = {str(s["user_id"]) for s in seats if own_job_seat(s)}      # only the duties given on their sheet
     # What each login does until a duty moves: its lanes' starter duties (the
     # Executive Pastor's are every non-money one), else, for a Manager no lane
     # names, the duties in the areas it works. The same defaults holds() uses.
@@ -852,7 +866,7 @@ def _build(business: Dict[str, Any]) -> Dict[str, Any]:
     for uid, ln in lanes_of.items():
         if ln:
             default_of[uid] = {k for one in ln for k in STARTER.get(one, ())}
-        elif role_of.get(uid) == "manager":
+        elif role_of.get(uid) == "manager" and uid not in own_job:
             default_of[uid] = set(_area_duties(biz, uid, "manager"))
         else:
             default_of[uid] = set()
@@ -984,7 +998,8 @@ def _lane_holders(ch: Any, duty: str) -> List[str]:
             if any(duty in STARTER.get(ln, ()) for ln in lanes):
                 out.append(uid)
         elif role == "manager" and not CATALOG[duty]["money"]:
-            by_area = None if lanes else _area_duties(ch.b, uid, role)
+            by_area = None if lanes else (frozenset() if own_job_seat(ch.seats.get(uid))
+                                          else _area_duties(ch.b, uid, role))
             if duty in _manager_duties(lanes, uid, moved, by_area):
                 out.append(uid)
     return out
@@ -1076,7 +1091,7 @@ def gives_more(business: Dict[str, Any], duty: str, user_ids: List[Any]) -> bool
             lanes.add(ln)
         if uid in _exec_users(biz, [seat]):
             lanes.add(EXEC)
-        by_area = None if lanes else _area_duties(biz, uid, "manager")
+        by_area = None if lanes else (frozenset() if own_job_seat(seat) else _area_duties(biz, uid, "manager"))
         if duty in _manager_duties(lanes, uid, moved, by_area):
             return True
     return False
