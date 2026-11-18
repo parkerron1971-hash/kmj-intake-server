@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
@@ -448,6 +448,13 @@ def stop_sub(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
     return _patch(str(biz["id"]), aid, f"contact_id=eq.{_q(cid)}&status=eq.yes", {"swap_to": None, "swap_asked_at": None, "swap_told_at": None})
 
 
+def _opened(why: str = "") -> Dict[str, Any]:
+    """What a place that opens is saved as: a no, with "Can't make it" (and
+    why, if they said), and any cover request dropped."""
+    return {"status": "no", "answered_at": sp._now().isoformat(), "note": ("Can't make it" + (f" · {why}" if why else ""))[:300],
+            "swap_to": None, "swap_asked_at": None, "swap_told_at": None}
+
+
 def cant_make_it(biz: Dict[str, Any], cid: str, aid: str, why: str = "") -> Dict[str, Any]:
     """Just tell the leader: the place opens and the office sees why."""
     biz_id = str(biz["id"])
@@ -456,15 +463,86 @@ def cant_make_it(biz: Dict[str, Any], cid: str, aid: str, why: str = "") -> Dict
     why = why if why in WHY else ""
     if str(row.get("contact_id")) != cid or row["status"] not in ("asked", "yes"):
         raise HTTPException(404, "That isn't on the schedule anymore.")
-    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
-                  {"status": "no", "answered_at": sp._now().isoformat(), "note": ("Can't make it" + (f" · {why}" if why else ""))[:300],
-                   "swap_to": None, "swap_asked_at": None, "swap_told_at": None})
+    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}", _opened(why))
+
+
+def yes_places(biz_id: str, cid: str, starts_on: Any, ends_on: Any, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """The places this member has said yes to on a day inside these days
+    that is still to come: [{id, service_id}]. A service's day is read on
+    the church's clock, as the board reads it (sunday_planning._Board), so
+    these are exactly the days an away date for them would cover. None
+    where Who serves when is off. Read a page at a time, and by a hundred
+    services at a time: a year of days is never the first 1,000 rows taken
+    for all of them. A read that fails raises (a 503)."""
+    if not on():
+        return []
+    biz_id, cid = str(biz_id), str(cid)
+    a, b = date.fromisoformat(str(starts_on)[:10]), date.fromisoformat(str(ends_on)[:10])
+    zone = sp._zone(biz_id)
+    now = (now or sp._now()).astimezone(zone)
+    lo = max(datetime.combine(a, time(0), tzinfo=zone), now)
+    hi = datetime.combine(b, time(0), tzinfo=zone) + timedelta(days=1)
+    if hi <= lo:
+        return []
+    try:
+        services = sb_clients.sb_get_all_as_service(
+            f"/worship_services?business_id=eq.{_q(biz_id)}&archived_at=is.null&is_template=eq.false"
+            f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lt.{_q(_iso(hi))}&select=id,starts_at", strict=True)
+    except sb_clients.PartialRead:
+        services = None
+    if not isinstance(services, list):
+        raise HTTPException(503, "The schedule couldn't be read just now. Try again.")
+    sids = []
+    for s in services:
+        at = _when(s, zone)
+        if at and at > now and a <= at.date() <= b:
+            sids.append(str(s["id"]))
+    out: List[Dict[str, Any]] = []
+    for i in range(0, len(sids), 100):
+        out += [{"id": str(r["id"]), "service_id": str(r["service_id"])} for r in _read(
+            f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&status=eq.yes"
+            f"&service_id=in.({_ids(sids[i:i + 100])})&select=id,service_id,contact_id,status")
+            if str(r.get("contact_id")) == cid and r.get("status") == "yes"]
+    return out
+
+
+def open_places(biz_id: str, cid: str, starts_on: Any, ends_on: Any, now: Optional[datetime] = None) -> int:
+    """They are away these days now (a yes on the leaders schedule,
+    church_schedule): every place they had already said yes to inside them
+    (yes_places) opens the way cant_make_it opens one, so whoever schedules
+    the team sees the gap. The note is the board's own "Can't make it ·
+    Away" and nothing else: the team never reads why, or that it was asked
+    for. A place they were only asked for, and never answered, is left for
+    them to answer. Only a place that is still theirs and still a yes is
+    changed, so running it twice changes nothing. Answers with how many
+    opened; a read or a write that fails raises (a 503)."""
+    biz_id, cid = str(biz_id), str(cid)
+    ids = [p["id"] for p in yes_places(biz_id, cid, starts_on, ends_on, now=now)]
+    opened = 0
+    fields = _opened("Away")
+    for i in range(0, len(ids), 100):
+        saved = sb_clients.sb_patch_as_service(
+            f"/serve_assignments?business_id=eq.{_q(biz_id)}&id=in.({_ids(ids[i:i + 100])})&contact_id=eq.{_q(cid)}"
+            f"&status=eq.yes&select=id", fields)
+        if saved is None:
+            raise HTTPException(503, "That didn't save. Try again.")
+        opened += len(saved)
+    return opened
 
 
 # ─── away days and how often ─────────────────────────────────────────
 
 
 def add_away(biz: Dict[str, Any], cid: str, start: str, end: str, note: str = "") -> Dict[str, Any]:
+    """Away days: saved at once, and nobody asks them on those days. Someone
+    on the church's leaders schedule (church_schedule.takes) asks for them
+    instead, through the leaders schedule and all its rules: {"asked": True,
+    ...} and nothing is saved here."""
+    import church_schedule
+    if church_schedule.takes(biz, cid):
+        asked = _ask_away(biz, cid, start, end)
+        if asked is not None:
+            return asked
     biz_id = str(biz["id"])
     try:
         a, b = date.fromisoformat(str(start)[:10]), date.fromisoformat(str(end or start)[:10])
@@ -484,7 +562,35 @@ def add_away(biz: Dict[str, Any], cid: str, start: str, end: str, note: str = ""
     return saved[0]
 
 
+def _ask_away(biz: Dict[str, Any], cid: str, start: str, end: str) -> Optional[Dict[str, Any]]:
+    """Away, for someone on the leaders schedule: an ask for time off, made
+    as that person through church_schedule.ask, so every rule of the
+    leaders schedule holds (who it goes to, short notice, what already
+    waits) and nothing is written to their away days until there is a yes.
+    {asked, state, to, short}: `state` is "yes" when it needed nobody's (the
+    one person the church's owner is). None when the engine says they aren't
+    on the schedule after all (taken off it within the minute the roster is
+    kept): then it is saved as anyone's is."""
+    import church_schedule as cs
+    import member_portal_dates as mpd
+    ch, me = mpd._ch_me(biz, {"id": cid})       # always as a person: the member app carries no login's standing
+    try:
+        got = cs.ask(ch, me, {"starts_on": start, "ends_on": end or start, "kind": "time_off"})
+    except HTTPException as e:
+        if e.status_code == 403 and e.detail == cs.NOT_ON:
+            return None
+        raise
+    return {"asked": True, "state": got.get("state"), "to": (got.get("to") or {}).get("name") or "",
+            "short": "short_notice" in (got.get("flags") or [])}
+
+
 def drop_away(biz: Dict[str, Any], cid: str, away_id: str) -> None:
+    """Take an away date off. One that came from an ask on the leaders
+    schedule takes the ask back with it (church_schedule.withdraw_fact),
+    never the date alone; any other is removed as it always was."""
+    import church_schedule
+    if church_schedule.withdraw_fact(biz, cid, away_id):
+        return
     if not sb_clients.sb_delete_as_service(
             f"/serve_away?id=eq.{_q(away_id)}&business_id=eq.{_q(str(biz['id']))}&contact_id=eq.{_q(cid)}"):
         raise HTTPException(503, "That didn't save. Try again.")

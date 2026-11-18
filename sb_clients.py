@@ -732,9 +732,11 @@ def sb_get_all_as_service(path: str, *, key: str = "id", strict: bool = False,
             raise PartialRead(f"stopped at the {ALL_ROWS_CEILING}-row ceiling")
 
 
-def sb_patch_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    """RLS-bypassing sync PATCH. Server-initiated paths only."""
-    return _sync_request("PATCH", path, sb_headers_service(), body)
+def sb_patch_as_service(path: str, body: Dict[str, Any], *, redact: bool = False) -> Optional[Any]:
+    """RLS-bypassing sync PATCH. Server-initiated paths only. `redact` keeps
+    filter values and error bodies out of the failure log (a refused write's
+    body can echo the whole row)."""
+    return _sync_request("PATCH", path, sb_headers_service(), body, redact=redact)
 
 
 def sb_post_as_service(

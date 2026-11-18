@@ -496,8 +496,10 @@ def require_owner(business_id: str, user_id: Optional[str]) -> None:
         raise HTTPException(503, "The housing allowance records can't be read just now.")
     if not owner:
         raise HTTPException(404, "business not found")
-    if not user_id or str(user_id) != owner:
-        raise HTTPException(403, "The housing allowance is the owner's alone.")
+    import church_money_gate
+    from types import SimpleNamespace
+    church_money_gate.require_owner(business_id, SimpleNamespace(id=user_id), {"id": business_id, "owner_id": owner},
+                                    detail="The housing allowance is the owner's alone.")
 
 
 def _belongs(table: str, business_id: str, row_id: Optional[str], col: str = "id") -> bool:

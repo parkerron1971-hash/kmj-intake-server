@@ -56,7 +56,7 @@ router = APIRouter(prefix="/church", tags=["church"])
 
 HANDED_DAYS = 7
 SHOWN = 6
-FINANCE_ROLES = ("owner", "admin")
+KEEPS_ALL = ("owner", "admin")       # who may see My week as someone else (not a money question)
 
 # Where each kind of thing opens in the app (churchStructure's leaf ids).
 DOOR = {
@@ -245,7 +245,9 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
     if view is None:
         raise HTTPException(503, "Your week couldn't be read just now. Try again.")
     whole = view["areas"] is None
-    finance = role in FINANCE_ROLES
+    import church_money_gate
+    from types import SimpleNamespace
+    finance = church_money_gate.may_money(biz, SimpleNamespace(id=user_id), "see", "my_week", role=role)
     mine_areas = [a for a in church_areas.AREA_ORDER if (whole or a in view["areas"]) and (finance or a != "giving_money")]
     the_map = church_areas.build(business)
     by_key = {a["key"]: a for a in the_map["areas"]}
@@ -278,15 +280,35 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
                           "detail": f"{r.get('card_name') or 'A card'} · " + (
                               f"due {_when(r.get('due_at'), now)}" if late else f"handed {_when(r.get('created_at'), now)}"),
                           "door": DOOR["follow_up"]})
-    # Prayer & care handed to their login: one line, nothing of what was asked.
-    care = _need(f"/ministry_care_requests?business_id=eq.{_q(biz)}&assigned_to=eq.{_q(user_id)}"
-                 "&status=in.(new,reviewed)&select=id&limit=50")
+    # Prayer & care handed to their login: one line, nothing of what was
+    # asked. Late when a first step is past due (care_handoff); the due
+    # columns arrive with APPLY-2026-11-18-care-login-due.sql, and until
+    # then the line reads as before.
+    where = (f"/ministry_care_requests?business_id=eq.{_q(biz)}&assigned_to=eq.{_q(user_id)}"
+             "&status=in.(new,reviewed)&prayed_at=is.null&limit=50")
+    care = sb_clients.sb_get_as_service(f"{where}&select=id,assigned_due_at,assigned_acted_at")
+    if not isinstance(care, list):
+        care = _need(f"/ministry_care_requests?business_id=eq.{_q(biz)}&assigned_to=eq.{_q(user_id)}"
+                     "&status=in.(new,reviewed)&select=id&limit=50")
     if care:
         n = len(care)
-        needs.append({"kind": "care", "late": False, "area": "people_care",
-                      "title": "A prayer or care request was handed to you." if n == 1
-                      else f"{n} prayer or care requests were handed to you.",
-                      "detail": "Private to you and the pastors.", "door": DOOR["care"]})
+        waiting = sorted(str(r["assigned_due_at"]) for r in care
+                         if r.get("assigned_due_at") and not r.get("assigned_acted_at"))
+        late_n = sum(1 for d in waiting if (_parse(d) or now) < now)
+        if late_n:
+            title = ("A prayer or care request handed to you is past due." if late_n == 1
+                     else f"{late_n} prayer or care requests handed to you are past due.")
+        else:
+            title = ("A prayer or care request was handed to you." if n == 1
+                     else f"{n} prayer or care requests were handed to you.")
+        detail = "Private to you and the pastors."
+        if waiting and not late_n:
+            import care_handoff
+            detail = f"A first step is due {care_handoff.at_words(waiting[0], business, now)} · private to you and the pastors."
+        elif late_n:
+            detail = "A note or “I’m on it” answers it · private to you and the pastors."
+        needs.append({"kind": "care", "late": bool(late_n), "area": "people_care",
+                      "title": title, "detail": detail, "door": DOOR["care"]})
     # Tasks handed to their login, late first. A due date is the church's
     # own day: in a US evening, UTC is already tomorrow.
     today = _today(business, now)
@@ -1047,7 +1069,7 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
     role = _role(biz, str(session.user.id))
     if as_user and as_user != str(session.user.id):
         overseer = False
-        if role not in FINANCE_ROLES:
+        if role not in KEEPS_ALL:
             import church_team_week
             if not (church_team_week.overseer(bid, session.user, role) and church_team_week.church_open(bid)):
                 raise HTTPException(403, "Only the owner, an admin or whoever is over the lanes can see as someone else")

@@ -1,0 +1,743 @@
+"""member_portal_dates.py — Dates on the member app's Lead tab: a leader's time
+away (docs/CHURCH_SCHEDULE.md, PR S1-5; church_schedule.py is the engine).
+
+Kevin, 2026-11-18: "I want to be able to build Leaders schedule. this is for
+when leaders are planning time off and have certain obiligations so that we
+as a church can plan around meeting". Leaders don't get office logins; they
+use the member app. So this is where one of the church's people asks to be
+away, says "I can't make it", sees who else is away, and says yes or not this
+one to what went to them.
+
+    Waiting for your yes ... the asks that went to this person (only when
+                             there are any): who, the days, what kind, their
+                             reason, who covers; Yes, or Not this one with a
+                             short note
+    Ask for time off ....... first day, last day, time off or another
+                             commitment, a private reason, who covers (one of
+                             the people on the schedule, or a typed name)
+    I can't make it ........ the day or days and a private note: for the days
+                             just ahead, on the calendar at once, no yes
+    My dates ............... their own asks and where each stands; Take it back
+    Who else is away ....... name, days, who covers. Never a reason, never a
+                             note, never what kind
+
+    GET  /my/lead/dates                      the page (member_portal_lead.serve
+                                             hands it over while
+                                             church_schedule.section says this
+                                             person has one)
+    POST /my/lead/dates/ask                  {start, end, kind, reason, cover,
+                                             cover_name}
+    POST /my/lead/dates/cant                 {start, end, reason}
+    POST /my/lead/dates/<id>/answer          {ans: yes | no, note}
+    POST /my/lead/dates/<id>/withdraw        take it back
+
+A MEMBER-APP SESSION IS A PERSON, NEVER A LOGIN. Every call into the engine
+is made as church_over.who(PERSON, this person), whoever they are: the
+owner's own person and the person of whoever oversees the office get no
+across-the-board view here (docs/CHURCH_SCHEDULE.md section 7, item 6). They
+read a reason, and answer, only for an ask that went to them (or to the
+office login tied to exactly them), and their own. `_ch_me` is the one place
+that says who `me` is.
+
+A reason, and the note that came with an answer, appear only where
+church_schedule.shape() gave them. "Who else is away" is built from name,
+days and who covers alone (view's `away`), so nothing else can be printed
+there. No id is on the screen: ids ride in form addresses and option values.
+
+Every write is church_schedule's own (it checks the church, the person and
+who may); here: a live session at this church (member_portal_church.
+_signed_in, which refuses a cross-site POST and reads Origin: null by the
+browser's Sec-Fetch-Site), never the owner's preview, the church's switch and
+its tables (church_schedule.on: a 404 without them), the per-person rate
+limit, and a redirect back with a short code. A refusal comes back as plain
+words on the page, never as a raw error.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, Iterable, List, Optional, Set
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import RedirectResponse
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+HERE = "/my/lead/dates"
+_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
+WINDOW_DAYS = 62            # who else is away: the next two months (church_schedule.WINDOW_DEFAULT)
+PICK_MAX = 200              # who covers: at most this many names in the list; anyone else is typed
+PLANNED = ("time_off", "commitment")
+KIND_WORDS = {"time_off": "Time off", "commitment": "Another commitment", "cant": "Can’t make it"}
+NOT_OFFERED = "That isn’t one of the names on the list"
+
+# {to}: who this person's asks go to, by the name the church knows them by.
+DONE = {
+    "dt_asked": "Asked. It’s waiting for {to}’s yes.",
+    "dt_asked_short": "Asked. It’s short notice, so {to} may need a little time with it.",
+    "dt_set": "It’s on the calendar.",
+    "dt_cant": "Got it. It’s on the calendar.",
+    "dt_yes": "You said yes. It’s on the calendar now.",
+    "dt_no": "You said not this one.",
+    "dt_back": "Taken back.",
+}
+DONE_ALONE = {"dt_asked": "Asked. It’s waiting for a yes.",
+              "dt_asked_short": "Asked. It’s short notice, so the answer may take a little time."}
+# {n}: the days "can't make it" reaches (the church's notice days, two at least).
+ERRORS = {
+    "error": "That didn’t save. Please try again.",
+    "slow": "That was a lot at once. Wait a moment, then try again.",
+    "preview": "This is a preview. Nothing is saved.",
+    "dt_days": "Pick the days: a year at most, and not in the past.",
+    "dt_far": "Can’t make it is for the next {n} days. For days farther out, ask for time off instead, so everyone can "
+              "plan for it.",
+    "dt_many": "That’s a lot of asks still waiting. Take one back first.",
+    "dt_waiting": "Those days are already waiting for an answer.",
+    "dt_cover": "Someone else covers, not the one who is away.",
+    "dt_cover_who": "Pick who covers from the list, or type their name.",
+    "dt_long": "That was a little long. Keep a reason to 500 letters, a note to 300 and a name to 80.",
+    "dt_said": "That didn’t come through. Check it and try again.",
+    "dt_not_on": "You aren’t on the leaders schedule here, so there’s nothing to ask for. The church office can add you.",
+    "dt_not_yours": "That one isn’t yours to answer.",
+    "dt_not_asker": "Only the one who asked takes it back here.",
+    "dt_gone": "That isn’t one of yours.",
+    "dt_already": "That one was already answered.",
+    "dt_no_yes": "That one needs no yes.",
+    "dt_closed": "That one can’t be taken back anymore.",
+    "dt_changed": "That changed just now. Here it is as it stands.",
+}
+
+DATES_CSS = """
+.ld-tks.dt-page{max-width:none;}
+.dt-sec{display:flex;flex-direction:column;gap:12px;min-width:0;}
+.dt-sec + .dt-sec{margin-top:22px;}
+.dt-card{gap:10px;min-width:0;}
+.dt-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.dt-top b{font-size:17px;font-weight:650;line-height:1.3;min-width:0;overflow-wrap:anywhere;}
+.dt-state{flex:none;display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;
+  background:var(--s3);color:var(--fg);font-size:12px;font-weight:700;white-space:nowrap;}
+.dt-state.wait{background:var(--mb-soft);box-shadow:inset 0 0 0 .5px var(--mb-soft-line);}
+.dt-state.yes{background:rgba(95,208,138,.24);}
+.dt-state.no,.dt-state.short{background:rgba(255,138,92,.22);}
+.dt-state.back{color:var(--fg2);}
+.dt-state.short{align-self:flex-start;}
+.dt-when{margin:0;font-size:15px;line-height:1.4;overflow-wrap:anywhere;}
+.dt-meta{margin:0;font-size:13.5px;color:var(--fg2);line-height:1.45;overflow-wrap:anywhere;}
+.dt-meta b{color:var(--fg);font-weight:600;}
+.dt-it{background:var(--s2);border-radius:var(--r-sm);padding:10px 12px;display:flex;flex-direction:column;gap:4px;
+  font-size:14.5px;line-height:1.4;}
+.dt-it b{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fg2);}
+.dt-it p{margin:0;overflow-wrap:anywhere;white-space:pre-line;}
+.dt-acts{display:flex;flex-direction:column;gap:8px;}
+.dt-acts form,.dt-card > form{margin:0;}
+.dt-more summary{list-style:none;cursor:pointer;}
+.dt-more summary::-webkit-details-marker{display:none;}
+.dt-more[open] summary{margin-bottom:10px;}
+.dt-form{display:flex;flex-direction:column;gap:12px;margin:0;min-width:0;}
+.dt-f{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600;color:var(--fg2);min-width:0;}
+.dt-f input,.dt-f select{min-height:48px;border-radius:12px;border:.5px solid var(--line);background:var(--s2);
+  color:var(--fg);padding:0 12px;font:inherit;font-size:16px;font-weight:400;box-sizing:border-box;
+  width:100%;min-width:0;}
+.dt-f .ld-ta{min-height:84px;font-weight:400;}
+.dt-f input:focus-visible,.dt-f select:focus-visible,.dt-f .ld-ta:focus-visible,.dt-page .ld-btn:focus-visible,
+.dt-page .ld-ghost:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.dt-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:end;}
+.dt-hint{margin:0;font-size:13px;line-height:1.45;color:var(--fg2);overflow-wrap:anywhere;}
+.dt-lede{margin:0;font-size:14.5px;line-height:1.45;color:var(--fg2);}
+.dt-list{display:flex;flex-direction:column;gap:8px;}
+.dt-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--r-md);background:var(--s1);
+  min-height:56px;box-sizing:border-box;}
+.dt-row .t{display:flex;flex-direction:column;min-width:0;flex:1;}
+.dt-row .t b{font-size:15.5px;font-weight:650;overflow-wrap:anywhere;}
+.dt-row .t small{font-size:13px;color:var(--fg2);}
+.dt-cov{font-size:12.5px;color:var(--fg2);text-align:right;max-width:46%;overflow-wrap:anywhere;}
+.dt-old summary{list-style:none;cursor:pointer;}
+.dt-old summary::-webkit-details-marker{display:none;}
+.dt-old[open] summary{margin-bottom:12px;}
+.dt-old .dt-list{gap:12px;}
+"""
+
+
+def _e(s: Any) -> str:
+    import html
+    return html.escape(str(s if s is not None else ""), quote=True)
+
+
+def _first(name: Any) -> str:
+    return (str(name or "").strip().split(" ") or [""])[0] or "someone"
+
+
+# ─── Days, in plain words ─────────────────────────────────────────────
+
+def _day(v: Any, today: date) -> str:
+    """'Sun, Dec 20'; the year only when it isn't this one."""
+    import church_schedule as cs
+    d = cs._day(v)
+    if not d:
+        return "a day"
+    said = f"{d:%a}, {d:%b} {d.day}"
+    return said if d.year == today.year else f"{said}, {d.year}"
+
+
+def _days(a: Any, b: Any, today: date) -> str:
+    return _day(a, today) if str(a)[:10] == str(b)[:10] else f"{_day(a, today)} to {_day(b, today)}"
+
+
+def _on_day(ts: Any, tz, today: date) -> str:
+    """The church's own day a moment fell on: '' when it can't be read."""
+    try:
+        at = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    if at.tzinfo is None:
+        return _day(at.date().isoformat(), today)
+    return _day(at.astimezone(tz).date().isoformat(), today)
+
+
+def _span(n: int) -> str:
+    """How far "can't make it" reaches, said the way people say it."""
+    return {7: "week", 14: "two weeks", 21: "three weeks", 28: "four weeks"}.get(n, f"{n} days")
+
+
+# ─── What the page shows ──────────────────────────────────────────────
+
+def _ch_me(biz: Dict[str, Any], me: Dict[str, Any]):
+    """The church, and `me` as the engine takes it. ALWAYS A PERSON: this is
+    the member app, and nobody here carries a login's standing, whoever
+    they are (the owner's own person, the person of whoever oversees the
+    office). Everything on this page and every write goes through here."""
+    import church_over as co
+    return co.Church(biz), co.who(co.PERSON, str(me["id"]))
+
+
+def _pick(ch, roster, cid: str) -> List[Dict[str, str]]:
+    """Who can be picked to cover: the people on the leaders schedule, by
+    name, never the one asking. Only this church's (Church.names reads by
+    business and by id, a hundred at a time), and PICK_MAX at most: anyone
+    else, a volunteer say, is typed as a name."""
+    ids = sorted(roster.people() - {cid})
+    names = ch.names(ids)
+    rows = [{"id": i, "name": names[i]} for i in ids if names.get(i) and names[i] != "Someone"]
+    return sorted(rows, key=lambda r: (r["name"].casefold(), r["id"]))[:PICK_MAX]
+
+
+def _on_calendar(ch, cid: str, ask_ids: Iterable[str]) -> Set[str]:
+    """Which of these asks still have their away date. A yes is only on the
+    calendar while its fact is in serve_away. Taking the date off under
+    Serving, Away takes the ask back with it (church_schedule.withdraw_fact,
+    S1-6); one taken off while the switch was closed for the church leaves
+    the ask a yes with nothing behind it, and this page never calls that
+    away (docs/CHURCH_SCHEDULE.md section 2.1)."""
+    import church_over as co
+    import church_schedule as cs
+    out: Set[str] = set()
+    for part in co._chunks(ask_ids, co.IDS_PER_READ):
+        for f in cs._need(f"/serve_away?business_id=eq.{cs._q(ch.b)}&contact_id=eq.{cs._q(cid)}"
+                          f"&ask_id=in.({cs._in(part)})&select=ask_id&limit={co.IDS_PER_READ}"):
+            out.add(str(f.get("ask_id")))
+    return out
+
+
+def view(biz: Dict[str, Any], contact_id: Any, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Everything the page shows, for one of the church's people. Every ask
+    comes through church_schedule.shape() as that person. A read that fails
+    raises a 503 for the whole page: a list that couldn't be read is never
+    shown as empty.
+
+    `away` (who else is away) holds a name, the days, who covers and whether
+    it still waits for this person's yes, and nothing else, so the page has
+    no reason, note or kind to show there even for an ask this person may
+    read. It is read from the facts (church_schedule.calendar), and a
+    waiting ask is in it only when this person may read it."""
+    import church_map
+    import church_schedule as cs
+    ch, me = _ch_me(biz, {"id": contact_id})
+    cid = me["id"]
+    now = now or cs._now()
+    with church_map.once():
+        today = cs._today(ch, now)
+        roster = cs.roster(ch)
+        on_it = cid in roster.people()
+        notice = cs.settings(ch)["notice_days"]
+        mine = cs.mine(ch, me, now)
+        waiting = cs.waiting(ch, me)
+        top = bool(ch.owner_person) and cid == ch.owner_person      # nobody is over them: needs no yes
+        to = cs.goes_to(ch, cid) if on_it and not top else None
+        away: List[Dict[str, Any]] = []
+        if on_it:
+            cal = cs.calendar(ch, me, today, today + timedelta(days=WINDOW_DAYS))
+            for g in cal["groups"]:
+                for a, held in [(a, False) for a in g["away"]] + [(a, True) for a in g["waiting"]]:
+                    if a["contact_id"] == cid:
+                        continue                                    # their own are under My dates
+                    away.append({"name": a["name"], "starts_on": a["starts_on"], "ends_on": a["ends_on"],
+                                 "cover": (a.get("cover") or {}).get("name") or "", "waiting": held})
+            away.sort(key=lambda a: (a["starts_on"], a["name"].casefold(), a["ends_on"]))
+        people = _pick(ch, roster, cid) if on_it else []
+        kept = _on_calendar(ch, cid, [a["id"] for a in mine if a["state"] == "yes" and a.get("id")])
+        tz = ch.tz
+    for a in mine:
+        a["on_calendar"] = a["id"] in kept
+    return {"mine": mine, "waiting": waiting, "away": away, "people": people, "on_it": on_it, "top": top,
+            "to": to["name"] if to else "", "notice_days": notice, "near": max(notice, cs.CANT_FLOOR),
+            "today": today, "tz": tz}
+
+
+def chief_line(v: Dict[str, Any]) -> str:
+    """Chief's one line at the top: what waits for their yes first, then
+    their own ask that waits, then what the page is for."""
+    today = v["today"]
+    if v["waiting"]:
+        a, n = v["waiting"][0], len(v["waiting"])
+        more = f" {n - 1} more below." if n > 1 else ""
+        return (f"{_first(a['name'])} asked to be away {_days(a['starts_on'], a['ends_on'], today)}. "
+                f"It’s waiting for your yes, or not this one.{more}")
+    asked = [a for a in v["mine"] if a["state"] == "asked"]
+    if asked:
+        a = asked[0]
+        who = f" for {(a.get('to') or {}).get('name')}" if (a.get("to") or {}).get("name") else ""
+        return f"Your ask for {_days(a['starts_on'], a['ends_on'], today)} is waiting{who}. You can take it back below."
+    if not v["on_it"]:
+        return "Nothing is waiting for your yes right now."
+    return "Nothing is waiting. Planning to be away? Ask early, so everyone can plan around it."
+
+
+def _cover_line(a: Dict[str, Any]) -> str:
+    name = (a.get("cover") or {}).get("name") or ""
+    return f'<p class="dt-meta"><b>Covering</b> {_e(name)}</p>' if name else ""
+
+
+def _short(a: Dict[str, Any]) -> str:
+    """Short notice, said on a planned ask only: "can't make it" is always
+    short, and saying so would only sound like a complaint."""
+    short = "short_notice" in (a.get("flags") or []) and a.get("kind") != "cant"
+    return '<span class="dt-state short">Short notice</span>' if short else ""
+
+
+def _serving_line(a: Dict[str, Any], theirs: bool) -> str:
+    """Said while an ask waits, when they had already said yes to serve on
+    one of its days: a yes opens that place again (church_schedule.
+    _open_places), and whoever says yes, and the one who asked, should know
+    it before it happens."""
+    if a.get("state") != "asked" or a.get("kind") == "cant" or "serving" not in (a.get("flags") or []):
+        return ""
+    if theirs:
+        return ('<p class="dt-meta">You said yes to serve on one of these days. With a yes here, that place opens '
+                'again for your team.</p>')
+    return (f'<p class="dt-meta">{_e(_first(a.get("name")))} said yes to serve on one of these days. With your yes, '
+            f'that place opens again for their team.</p>')
+
+
+def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
+    """One ask waiting for this person's yes. shape() gave them its reason
+    (it went to them): it shows here, to them, and nowhere else."""
+    act = f"/my/lead/dates/{_e(a['id'])}/answer"
+    reason = (f'<div class="dt-it"><b>Their reason · private</b><p>{_e(a["reason"])}</p></div>'
+              if a.get("reason") else "")
+    asked = _on_day(a.get("created_at"), tz, today)
+    return (f'<section class="ld-pr dt-card" aria-label="{_e(a["name"])}">'
+            f'<div class="dt-top"><b>{_e(a["name"])}</b>'
+            f'<span class="dt-state wait">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</span></div>'
+            f'<p class="dt-when">{_e(_days(a["starts_on"], a["ends_on"], today))}</p>{_short(a)}{reason}'
+            f'{_cover_line(a) or "<p class=dt-meta>Nobody is covering yet.</p>"}{_serving_line(a, False)}'
+            + (f'<p class="dt-meta">Asked {_e(asked)}</p>' if asked else "")
+            + f'<div class="dt-acts"><form method="post" action="{act}"><input type="hidden" name="ans" value="yes">'
+            f'<button class="ld-btn" type="submit">Yes</button></form>'
+            f'<details class="dt-more"><summary class="ld-ghost">Not this one</summary>'
+            f'<form class="dt-form" method="post" action="{act}"><input type="hidden" name="ans" value="no">'
+            f'<label class="dt-f">A short note, if you like (private)'
+            f'<textarea class="ld-ta" name="note" maxlength="300"></textarea></label>'
+            f'<button class="ld-btn" type="submit">Say not this one</button></form></details></div></section>')
+
+
+def _state(a: Dict[str, Any], today: date, tz) -> Dict[str, str]:
+    """Where one of their own asks stands: the chip, and one plain line."""
+    decided = a.get("decided") or {}
+    by, when = decided.get("by") or "", _on_day(decided.get("at"), tz, today)
+    on = f" on {when}" if when else ""
+    state = a.get("state")
+    if state == "asked":
+        import church_schedule as cs
+        to = a.get("to") or {}
+        if a.get("kind") == "cant" or not to:
+            return {"chip": "Not finished", "cls": "no",
+                    "line": "This one didn’t finish saving. Send it again for the same days, or take it back."}
+        if not to.get("name") or to["name"] == cs.LEFT:
+            return {"chip": "Waiting", "cls": "wait", "line": "Waiting for a yes."}
+        return {"chip": "Waiting", "cls": "wait", "line": f"Waiting for {to['name']}’s yes."}
+    if state == "yes":
+        if not a.get("on_calendar"):
+            return {"chip": "Off the calendar", "cls": "back",
+                    "line": (f"{by} said yes{on}" if by else "It was on the calendar")
+                    + ", but these days were taken off your away dates since."}
+        if by:
+            return {"chip": "Yes", "cls": "yes", "line": f"{by} said yes{on}. It’s on the calendar."}
+        return {"chip": "On the calendar", "cls": "yes", "line": "On the calendar. It needed no yes."}
+    if state == "no":
+        return {"chip": "Not this one", "cls": "no", "line": f"{by or 'They'} said not this one{on}."}
+    return {"chip": "Taken back", "cls": "back", "line": "Taken back. It’s off the calendar."}
+
+
+def _mine_card(a: Dict[str, Any], today: date, tz) -> str:
+    """One of their own asks. Their reason is their own; the note that came
+    with the answer is there only when shape() gave it."""
+    st = _state(a, today, tz)
+    note = (a.get("decided") or {}).get("note")
+    by = (a.get("decided") or {}).get("by") or ""
+    note_html = (f'<div class="dt-it"><b>{_e(_first(by) + "’s note" if by else "Their note")} · private</b>'
+                 f'<p>{_e(note)}</p></div>' if note else "")
+    reason = (f'<div class="dt-it"><b>Your reason · private</b><p>{_e(a["reason"])}</p></div>'
+              if a.get("reason") else "")
+    back = ""
+    if a.get("can_withdraw") and (a.get("state") == "asked" or a.get("on_calendar")):
+        back = (f'<form method="post" action="/my/lead/dates/{_e(a["id"])}/withdraw">'
+                f'<button class="ld-ghost" type="submit">Take it back</button></form>')
+    days = _days(a["starts_on"], a["ends_on"], today)
+    return (f'<section class="ld-pr dt-card" aria-label="{_e(days)}">'
+            f'<div class="dt-top"><b>{_e(days)}</b><span class="dt-state {st["cls"]}">{_e(st["chip"])}</span></div>'
+            f'<p class="dt-meta">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</p>{_short(a)}'
+            f'<p class="dt-when">{_e(st["line"])}</p>{_serving_line(a, True)}{note_html}{reason}{_cover_line(a)}{back}'
+            f'</section>')
+
+
+def _away_row(a: Dict[str, Any], today: date) -> str:
+    """Someone else who is away: a name, the days, who covers. `a` has
+    nothing else in it (view)."""
+    held = " · waiting for your yes" if a.get("waiting") else ""
+    cover = f'<span class="dt-cov">Covering: {_e(a["cover"])}</span>' if a.get("cover") else ""
+    return (f'<div class="dt-row"><span class="t"><b>{_e(a["name"])}</b>'
+            f'<small>{_e(_days(a["starts_on"], a["ends_on"], today))}{held}</small></span>{cover}</div>')
+
+
+def _ask_form(v: Dict[str, Any]) -> str:
+    from member_app_ui import icon
+    today, to, n = v["today"].isoformat(), v.get("to") or "", int(v["notice_days"])
+    if v["top"]:
+        lede = "Nobody is over you here, so your time away goes straight on the calendar."
+        send = "Put it on the calendar"
+        reads = ("Private. Only those who look after the whole church with you can read this. Nobody else who sees "
+                 "your dates can.")
+    else:
+        lede = (f"It goes to {to}, who says yes or not this one." if to
+                else "It goes to whoever is over you, who says yes or not this one.")
+        send = "Ask for these days"
+        reads = (f"Private. {to or 'Whoever it goes to'} can read this, and so can those who look after the whole "
+                 f"church. Nobody else who sees your dates can.")
+    notice = (f'<p class="dt-hint">Planned time away works best with {n} days’ notice. Sooner is fine: it just says '
+              f'short notice.</p>' if n > 0 and not v["top"] else "")
+    opts = "".join(f'<option value="{_e(p["id"])}">{_e(p["name"])}</option>' for p in v["people"])
+    return (f'<section class="ld-pr dt-card" aria-label="Ask for time off"><p class="dt-lede">{_e(lede)}</p>'
+            f'<form class="dt-form" method="post" action="/my/lead/dates/ask"><div class="dt-two">'
+            f'<label class="dt-f">First day<input type="date" name="start" required></label>'
+            f'<label class="dt-f">Last day<input type="date" name="end" min="{today}"></label></div>'
+            f'<fieldset class="ld-chips"><legend>What kind</legend>'
+            f'<label><input type="radio" name="kind" value="time_off" checked><span>Time off</span></label>'
+            f'<label><input type="radio" name="kind" value="commitment"><span>Another commitment</span></label>'
+            f'</fieldset>'
+            f'<label class="dt-f">Why, if you’d like to say<textarea class="ld-ta" name="reason" maxlength="500">'
+            f'</textarea></label><p class="dt-hint">{icon("lock", 13)} {_e(reads)}</p>'
+            f'<label class="dt-f">Who covers for you<select name="cover"><option value="">Nobody yet</option>{opts}'
+            f'</select></label>'
+            f'<label class="dt-f">Or type their name<input name="cover_name" maxlength="80" autocomplete="off"></label>'
+            f'{notice}<button class="ld-btn" type="submit">{send}</button></form></section>')
+
+
+def _cant_form(v: Dict[str, Any]) -> str:
+    today, near = v["today"], int(v["near"])
+    last = (today + timedelta(days=near - 1)).isoformat()
+    told = f" {v['to']} is let know." if v.get("to") else ""
+    return (f'<section class="ld-pr dt-card" aria-label="I can’t make it">'
+            f'<p class="dt-lede">For the next {_e(_span(near))}: sick, or something came up. It goes straight on the '
+            f'calendar and needs no yes.{_e(told)}</p>'
+            f'<form class="dt-form" method="post" action="/my/lead/dates/cant"><div class="dt-two">'
+            f'<label class="dt-f">The day<input type="date" name="start" value="{today.isoformat()}" '
+            f'min="{today.isoformat()}" max="{last}" required></label>'
+            f'<label class="dt-f">Last day, if more<input type="date" name="end" min="{today.isoformat()}">'
+            f'</label></div>'
+            f'<label class="dt-f">A private note, if you like<input name="reason" maxlength="500" autocomplete="off">'
+            f'</label><button class="ld-ghost" type="submit">I can’t make it</button></form></section>')
+
+
+def body(v: Optional[Dict[str, Any]]) -> str:
+    """The page's own part (inside the header and the switcher), in the
+    order a phone reads it: Waiting for your yes, Ask for time off, I can't
+    make it, My dates, Who else is away."""
+    from member_app_ui import icon
+    from member_portal import band
+    if v is None:
+        return '<p class="mp-err" role="alert">Your dates couldn’t load just now. Please try again in a moment.</p>'
+    today, tz = v["today"], v["tz"]
+    chief = f'<div class="ld-chief"><small>{icon("star", 12)}From Chief</small><p>{_e(chief_line(v))}</p></div>'
+    left = right = ""
+    if v["waiting"]:
+        left += ('<div class="dt-sec"><div class="mb-sh"><h2>Waiting for your yes</h2>'
+                 f'<span>{len(v["waiting"])} waiting</span></div>'
+                 + "".join(_wait_card(a, today, tz) for a in v["waiting"]) + '</div>')
+    if v["on_it"]:
+        left += ('<div class="dt-sec"><div class="mb-sh"><h2>Ask for time off</h2></div>' + _ask_form(v) + '</div>'
+                 '<div class="dt-sec"><div class="mb-sh"><h2>I can’t make it</h2></div>' + _cant_form(v) + '</div>')
+    mine = v["mine"]
+    if v["on_it"] or mine:
+        # Up top: what still waits, and every answer whose days haven't passed (a "not this one" too: they
+        # were told to look here). Soonest first. The rest folds away under Earlier.
+        now_ = sorted((a for a in mine if a["state"] == "asked"
+                       or (a["state"] in ("yes", "no") and a["ends_on"] >= today.isoformat())),
+                      key=lambda a: (a["state"] != "asked", a["starts_on"]))
+        old = [a for a in mine if a not in now_]
+        html_ = ('<div class="dt-sec"><div class="mb-sh"><h2>My dates</h2>'
+                 f'<span>{sum(1 for a in mine if a["state"] == "asked")} waiting</span></div>')
+        html_ += "".join(_mine_card(a, today, tz) for a in now_) if now_ else (
+            '<p class="ld-quiet">Nothing coming up. When you ask to be away, it shows here.</p>')
+        if old:
+            html_ += (f'<details class="dt-old"><summary class="ld-ghost">Earlier · {len(old)}</summary>'
+                      f'<div class="dt-list">{"".join(_mine_card(a, today, tz) for a in old)}</div></details>')
+        right += html_ + '</div>'
+    if v["on_it"]:
+        rows = "".join(_away_row(a, today) for a in v["away"])
+        right += ('<div class="dt-sec"><div class="mb-sh"><h2>Who else is away</h2><span>Next two months</span></div>'
+                  + (f'<div class="dt-list">{rows}</div>' if rows else
+                     '<p class="ld-quiet">Nobody else is away in the next two months.</p>') + '</div>')
+        quiet = ("Everyone on the leaders schedule sees your days and who covers. Why you’re away stays between you, "
+                 "whoever your ask goes to and those who look after the whole church.")
+    else:
+        quiet = ("You see only the asks that came to you. You aren’t on the leaders schedule yourself, so there’s "
+                 "nothing to ask for here.")
+    return (f'<div class="ld-tks dt-page">{chief}{band(left, right)}'
+            f'<p class="ld-quiet">{icon("lock", 14)}<span>{_e(quiet)}</span></p></div>')
+
+
+def _head(me: Dict[str, Any]) -> str:
+    """The Lead tab's hello. No role names here: this page says nothing by
+    title."""
+    import member_portal_lead as mpl
+    first = (me.get("name") or "").strip().split(" ")[0] or "friend"
+    return f'<header class="ld-head"><h1 class="ld-hello">{mpl._word()}, <em>{_e(first)}</em></h1></header>'
+
+
+def _flash(request: Request, v: Optional[Dict[str, Any]], err: str = "") -> str:
+    """What the last press did, in plain words, from its short code. The
+    name and the number are worked out here: nothing but the code rides in
+    the address."""
+    import member_portal_lead as mpl
+    code = err or request.query_params.get("err") or ""
+    bad = ERRORS.get(code) or mpl.ERRORS.get(code)
+    if bad:
+        bad = bad.replace("{n}", str(int((v or {}).get("near") or 14)))
+        return f'<p class="mp-err mp-flash" role="alert">{_e(bad)}</p>'
+    code = request.query_params.get("done") or ""
+    done = DONE.get(code)
+    if not done:
+        return ""
+    to = (v or {}).get("to") or ""
+    done = done.replace("{to}", to) if to or "{to}" not in done else DONE_ALONE.get(code, "Done.")
+    return f'<p class="mp-ok mp-flash" role="status">{_e(done)}</p>'
+
+
+def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], v: Optional[Dict[str, Any]], seg: str,
+           *, err: str = "") -> str:
+    """/my/lead/dates."""
+    import member_portal_lead as mpl
+    from member_portal import _shell
+    return _shell(biz, site, "Dates",
+                  f'<style>{mpl.LEAD_CSS}{mpl.TASK_CSS}{DATES_CSS}</style><div class="ld-wide">'
+                  f'{_flash(request, v, err)}{_head(me)}{seg}{body(v)}</div>', tab="lead", who=me, wide=True)
+
+
+def render_not_here(biz: Dict[str, Any], site, me: Dict[str, Any]) -> str:
+    """For someone who followed a link here and has no Dates page: they are
+    not on the leaders schedule and nothing waits for their yes."""
+    import member_portal_lead as mpl
+    from member_portal import _shell
+    return _shell(biz, site, "Dates",
+                  f'<style>{mpl.LEAD_CSS}</style><div class="ld-wide">{_head(me)}<section class="ld-card">'
+                  f'<p>Dates is for the people on the leaders schedule, and nothing is waiting for your yes right '
+                  f'now.</p><p><a href="/my">Back to Home</a></p></section></div>', tab="lead", who=me)
+
+
+async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], *, err: str = ""):
+    """GET /my/lead/dates: (html, status), or None when it is not a page at
+    all (the switch is closed for the church, or its tables aren't there:
+    the Lead tab answers as it does for any address it doesn't know).
+    member_portal_lead.serve has already read church_schedule.section into
+    DATES for this request. That answer is kept a minute, so it decides the
+    switcher and never the page: the page reads fresh, and someone with
+    nothing of theirs here (not on the schedule, nothing waiting for their
+    yes, no asks of their own) gets a few plain words and a 404."""
+    import church_follow_up as cfu
+    import church_schedule as cs
+    import church_shepherding as shep
+    import group_lead
+    import member_portal_lead as mpl
+    entry = mpl.DATES.get() is not None
+    if not entry and (not cfu.is_church(biz) or not await asyncio.to_thread(cs.on, biz)):
+        return None
+    cid = str(me["id"])
+    my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], cid) or []
+    active = [r for r in my_roles if r.get("status") == "active"]
+    led = await asyncio.to_thread(group_lead.led_groups, biz["id"], cid) or []
+    fams = 0
+    if active:
+        fv = await asyncio.to_thread(shep.my_families, biz["id"], cid)
+        fams = len((fv or {}).get("families") or [])
+    try:
+        v: Optional[Dict[str, Any]] = await asyncio.to_thread(view, biz, cid)
+    except HTTPException as e:
+        logger.warning("lead dates read failed: %s", e.status_code)
+        v = None
+    if v is not None and not (v["on_it"] or v["waiting"] or v["mine"]):
+        # Read fresh, there is nothing of theirs here: they followed a link (a notice, say).
+        return render_not_here(biz, site, me), 404
+    if v is not None:
+        mpl.DATES.set({"waiting": len(v["waiting"])})       # on the page itself the count is what it just read
+    seg = mpl._seg("dates", any(not mpl._is_prayer(r) for r in active), any(mpl._is_prayer(r) for r in active),
+                   0, fams, len(led))
+    return render(biz, site, request, me, v, seg, err=err), 200 if v is not None else 503
+
+
+# ─── POST ─────────────────────────────────────────────────────────────
+
+def _go(**q: str) -> RedirectResponse:
+    from member_portal import _SECURE_HEADERS
+    qs = "&".join(f"{k}={v}" for k, v in q.items())
+    return RedirectResponse(f"{HERE}?{qs}" if qs else HERE, status_code=303, headers=_SECURE_HEADERS)
+
+
+def _code(e: HTTPException) -> str:
+    """A refusal as a short code for the page (never its words in the
+    address): the engine's 400, 403, 404, 409 and 503 each come back as
+    plain words (ERRORS), never as a raw error."""
+    import church_schedule as cs
+    said, status = str(e.detail or ""), e.status_code
+    if status == 400:
+        if said == cs.BAD_DAYS:
+            return "dt_days"
+        if said.startswith(cs.CANT_FAR.split("{")[0]):
+            return "dt_far"
+        if said == cs.TOO_MANY:
+            return "dt_many"
+        if said.startswith("Someone else covers"):
+            return "dt_cover"
+        if said in (cs.NOT_PERSON, NOT_OFFERED):
+            return "dt_cover_who"
+        if said.startswith("Keep "):
+            return "dt_long"
+        return "dt_said"
+    if status == 403:
+        return {cs.NOT_ON: "dt_not_on", cs.NOT_TO_YOU: "dt_not_yours",
+                cs.NOT_ASKER: "dt_not_asker"}.get(said, "dt_gone")
+    if status == 404:
+        return "dt_gone"
+    if status == 409:
+        return {cs.WAITING: "dt_waiting", cs.ALREADY: "dt_already", cs.NO_YES: "dt_no_yes",
+                cs.NOT_OPEN: "dt_closed"}.get(said, "dt_changed")
+    return "error"
+
+
+async def _act(request: Request, fn, ok: str):
+    """A live session at this church, never the preview, the switch open
+    and its tables there (a 404 otherwise), not too fast; then fn(biz, me,
+    form) in a thread (it may answer with its own code); back to the page."""
+    import church_follow_up as cfu
+    import church_schedule as cs
+    import rate_limit
+    from member_portal_church import _signed_in
+    church, me, unavailable = await _signed_in(request)
+    if unavailable:
+        return _go(err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return RedirectResponse("/my", status_code=303)
+    biz = church["business"]
+    if not cfu.is_church(biz) or not await asyncio.to_thread(cs.on, biz):
+        raise HTTPException(404, "Not found")
+    if not rate_limit.allow_strict("member_action", f"{biz['id']}|{me['id']}"):
+        return _go(err="slow")
+    form = await request.form()
+    try:
+        code = await asyncio.to_thread(fn, biz, me, form)
+    except HTTPException as e:
+        if e.status_code >= 500:
+            logger.warning("lead dates write failed: %s", e.status_code)
+        return _go(err=_code(e))
+    return _go(done=code or ok)
+
+
+def _ask_id(ask_id: str) -> str:
+    if not _ID.match(ask_id or ""):
+        raise HTTPException(404, "Not found")
+    return ask_id.lower()
+
+
+def _cover(ch, me: Dict[str, str], form) -> Optional[str]:
+    """Who covers, from the list: one of the people the page offered (on
+    the leaders schedule at this church), never the one asking. Anyone else
+    is typed as a name."""
+    import church_schedule as cs
+    raw = str(form.get("cover") or "").strip().lower()
+    if not raw:
+        return None
+    if not _ID.match(raw):
+        raise HTTPException(400, NOT_OFFERED)
+    if raw == me["id"]:
+        raise HTTPException(400, "Someone else covers, not the one who is away")
+    if raw not in cs.roster(ch).people():
+        raise HTTPException(400, NOT_OFFERED)
+    return raw
+
+
+def _send(biz: Dict[str, Any], me: Dict[str, Any], form, kind: str) -> Dict[str, Any]:
+    import church_schedule as cs
+    ch, who = _ch_me(biz, me)
+    if who["id"] not in cs.roster(ch).people():
+        raise HTTPException(403, cs.NOT_ON)
+    planned = kind in PLANNED
+    # "Can't make it" with no day named is today, on the church's own clock.
+    start = form.get("start") or (None if planned else cs._today(ch).isoformat())
+    return cs.ask(ch, who, {
+        "starts_on": start, "ends_on": form.get("end") or start, "kind": kind,
+        "reason": form.get("reason"), "cover_contact_id": _cover(ch, who, form) if planned else None,
+        "cover_name": form.get("cover_name") if planned else None})
+
+
+@router.post("/my/lead/dates/ask", include_in_schema=False)
+async def ask(request: Request):
+    def go(biz, me, form):
+        kind = str(form.get("kind") or "time_off")
+        if kind not in PLANNED:
+            raise HTTPException(400, "Say what it is: time off, or another commitment")
+        got = _send(biz, me, form, kind)
+        if got["state"] == "yes":
+            return "dt_set"                     # nobody is over them: it needed no yes
+        return "dt_asked_short" if "short_notice" in (got.get("flags") or []) else "dt_asked"
+    return await _act(request, go, "dt_asked")
+
+
+@router.post("/my/lead/dates/cant", include_in_schema=False)
+async def cant(request: Request):
+    def go(biz, me, form):
+        _send(biz, me, form, "cant")
+    return await _act(request, go, "dt_cant")
+
+
+@router.post("/my/lead/dates/{ask_id}/answer", include_in_schema=False)
+async def answer(ask_id: str, request: Request):
+    def go(biz, me, form):
+        import church_schedule as cs
+        ch, who = _ch_me(biz, me)
+        ans = str(form.get("ans") or "")
+        if ans not in ("yes", "no"):
+            raise HTTPException(400, "Say yes, or not this one")
+        cs.answer(ch, who, _ask_id(ask_id), ans == "yes", form.get("note") if ans == "no" else None)
+        return "dt_yes" if ans == "yes" else "dt_no"
+    return await _act(request, go, "dt_yes")
+
+
+@router.post("/my/lead/dates/{ask_id}/withdraw", include_in_schema=False)
+async def withdraw(ask_id: str, request: Request):
+    def go(biz, me, form):
+        import church_schedule as cs
+        ch, who = _ch_me(biz, me)
+        cs.withdraw(ch, who, _ask_id(ask_id))
+    return await _act(request, go, "dt_back")

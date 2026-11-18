@@ -263,6 +263,7 @@ from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
+import chief_church_structure as _church_structure  # the standard start: a church's office team, drafted for review
 import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
 import chief_office as _church_office  # the office team's week and the monthly report, read for the office
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
@@ -423,6 +424,7 @@ _ACTION_PHRASES = {
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
+    **_church_structure.PROGRESS,
     **_church_roles.PROGRESS,
     **_church_office.PROGRESS,
     "move_duty": "moving the duty",
@@ -6704,6 +6706,10 @@ async def handle_navigate(client, biz, action) -> Dict:
             nav["sheet"] = str(_uuid_mod.UUID(sheet))
         except (ValueError, TypeError):
             pass
+    # The review of a church's structure draft (church_structure), on the same
+    # page and no other: a flag, never free text.
+    if action.get("setup") in (1, True, "1", "true") and tab == "operate" and (page or sub) == "areas":
+        nav["setup"] = 1
 
     # Build a human label
     label_parts = [tab.upper()]
@@ -12446,6 +12452,7 @@ ACTION_HANDLERS = {
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
+    **_church_structure.HANDLERS,
     **_church_roles.HANDLERS,
     **_church_office.HANDLERS,
     "move_duty":             handle_move_duty,
@@ -13969,7 +13976,10 @@ async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
                           value: Dict[str, Any], increment: bool = False) -> None:
     """Insert or merge a chief_patterns row. Confidence ramps with occurrences."""
     try:
-        existing = await _sb(
+        # Read as the server too, so the read and the write that follows see
+        # the same row whoever is signed in (a read the login could not make
+        # would add the pattern again every time).
+        existing = await _sb_service(
             client, "GET",
             f"/chief_patterns?business_id=eq.{biz_id}"
             f"&pattern_type=eq.{pattern_type}&pattern_key=eq.{pattern_key}"
@@ -13981,14 +13991,21 @@ async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
             merged = {**(row.get("pattern_value") or {}), **(value or {})}
             occ = (row.get("occurrences") or 1) + (1 if increment else 0)
             conf = min(0.95, 0.5 + (occ * 0.05))
-            await _sb(client, "PATCH", f"/chief_patterns?id=eq.{row['id']}", {
+            # Written as the server: chief_patterns is Chief's own record of
+            # what it has learned about this business. Its policies give the
+            # owner everything and an office login a read, so under an office
+            # login's JWT these two writes landed only through an allow-all
+            # policy (APPLY-2026-11-18-close-allow-all-policies.sql drops it)
+            # and would be refused and swallowed. biz_id is the chat's own
+            # authenticated business; the row is pinned to it.
+            await _sb_service(client, "PATCH", f"/chief_patterns?id=eq.{row['id']}&business_id=eq.{biz_id}", {
                 "pattern_value": merged,
                 "occurrences": occ,
                 "confidence": conf,
                 "last_seen": now_iso,
             })
         else:
-            await _sb(client, "POST", "/chief_patterns", {
+            await _sb_service(client, "POST", "/chief_patterns", {
                 "business_id": biz_id,
                 "pattern_type": pattern_type,
                 "pattern_key": pattern_key,
@@ -15907,6 +15924,15 @@ async def chief_chat(
             _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
             if _office_shown:
                 chief_truth.record('context:office_roster', _office_shown, kind='context')
+            # The planning coach at a church: who already does what in the office (church_structure), so
+            # the pastor isn't asked twice. For the owner or an Admin only, and the block itself reads
+            # this signed-in person's role on this church and answers '' when it is anyone else's turn or
+            # the role can't be read. (chief_areas.WHO is None for the owner AND when its read failed, so
+            # it is not asked here: a gate on it failed open.)
+            if req.mode == "strategy_coach" and _cfu.is_church(biz):
+                import church_structure as _structure_engine
+                ctx["church_structure_block"] = await asyncio.to_thread(
+                    _structure_engine.coach_block, ctx.get("business") or biz, str(user_session.user.id))
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,

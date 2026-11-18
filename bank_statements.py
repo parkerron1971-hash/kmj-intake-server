@@ -928,7 +928,9 @@ def get_statements(business_id: str = Query(...), year: Optional[int] = Query(No
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     row = _gate(business_id, user, write=False)
     data = _guard(coverage, business_id, year)
-    return {"ok": True, "can_change": str(row.get("owner_id")) == str(user.id), **data}
+    import church_money_gate
+    can_change = "owner_id" in row and church_money_gate.may_money(business_id, user, "work", "setup", business=row)
+    return {"ok": True, "can_change": can_change, **data}
 
 
 @router.post("/read")

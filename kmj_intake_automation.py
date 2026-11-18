@@ -454,6 +454,11 @@ from church_assignments import router as church_assignments_router
 app.include_router(church_assignments_router)
 from church_handovers import router as church_handovers_router
 app.include_router(church_handovers_router)
+# The leaders schedule (/church/schedule/*): who is on it, asking to be away,
+# and the yes (2026-11-18; CHURCH_SCHEDULE off | owner | on, owner when unset;
+# 404 until supabase/APPLY-2026-11-19-church-schedule.sql is applied).
+from church_schedule import router as church_schedule_router
+app.include_router(church_schedule_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what
@@ -462,6 +467,16 @@ app.include_router(church_job_descriptions_router)
 # must match before this one's /church/jobs/{key}.
 from church_sheet import router as church_sheet_router
 app.include_router(church_sheet_router)
+# The standard start (church_structure.py): a church's structure draft, from
+# Chief's five questions or the planning course. A proposal to review; it
+# grants nothing.
+from church_structure import router as church_structure_router
+app.include_router(church_structure_router)
+# Giving as its own tick (church_money_ticks.py): the requests waiting for
+# the owner, and marking alerts read. CHURCH_MONEY_TICKS=off (the default)
+# answers 404 on the requests and changes nothing anywhere.
+from church_money_ticks import router as church_money_ticks_router
+app.include_router(church_money_ticks_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -603,6 +618,11 @@ app.include_router(member_portal_leading_router)
 # stuck, send up, give, start, and Got it on what the office sent.
 from member_portal_assign import router as member_portal_assign_router
 app.include_router(member_portal_assign_router)
+# Dates on the Lead tab (member_portal_dates.py): someone on the leaders
+# schedule asks for time off, says "I can't make it", takes one back, and
+# says yes or not this one to what went to them. BEFORE public_site_router.
+from member_portal_dates import router as member_portal_dates_router
+app.include_router(member_portal_dates_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router
@@ -1905,6 +1925,15 @@ async def startup():
                           id="db_health", max_instances=1)
     except Exception as e:
         print(f"   [warn] database health check not scheduled: {e}")
+    # Requests for giving access (church_money_ticks.py): hourly, mark the
+    # ones that ran out (seven days) and remind each owner once, 48 hours
+    # in. CHURCH_MONEY_TICKS=off: the job reads nothing.
+    try:
+        import church_money_ticks as _money_ticks
+        scheduler.add_job(g("church_money_asks", _money_ticks.tick), "interval", hours=1,
+                          id="church_money_asks", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] giving requests sweep not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in
@@ -1979,6 +2008,19 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # Prayer & care handed to an office login (2026-11-18, Kevin: "build the
+    # heads-up and due time for logins"): the login hears once, two minutes
+    # after the hand-off; when it's due they're reminded, a day late whoever
+    # handed it hears, three days late the office is asked to hand it on.
+    # Never the request's words (care_handoff.sweep_tick; CARE_HEADS_UP=off
+    # sends nothing). Before APPLY-2026-11-18-care-login-due.sql it reads
+    # nothing it can use and does nothing.
+    try:
+        import care_handoff as _care_handoff
+        scheduler.add_job(g("care_handoff_sweep", _care_handoff.sweep_tick), "interval", minutes=5,
+                          id="care_handoff_sweep")
+    except Exception as e:
+        print(f"   [warn] care hand-off sweep not scheduled: {e}")
     # Sunday check-in (2026-10-17): from two days before, each church's
     # coming service has its occasion in Services & Events, so the Kids
     # kiosk and Attendance find it on Sunday morning (church_checkin.sweep).
@@ -2048,6 +2090,19 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # The leaders schedule (2026-11-18): an ask to be away, and its answer,
+    # are told once; one nudge after three days; a waiting ask follows whoever
+    # is over the asker now; a private reason is cleared 90 days after the
+    # last day (church_schedule_tell.sweep_tick; CHURCH_SCHEDULE, read here on
+    # the worker too). Nothing is read while the switch is off, and before
+    # supabase/APPLY-2026-11-19-church-schedule.sql only whether its tables
+    # are there.
+    try:
+        import church_schedule_tell as _cst
+        scheduler.add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1,
+                          id="church_schedule_sweep")
+    except Exception as e:
+        print(f"   [warn] leaders schedule sweep not scheduled: {e}")
     # ChurchSavvy's countdown that starts by itself (2026-11-14, Kevin: "a pre
     # service clock starts it that a person can set"): every minute, each
     # church's countdown times that have come go up on its screens, once a day,

@@ -177,6 +177,8 @@ def test_a_visitor_gets_the_doors_on_a_builder_page_and_not_on_a_hand_built_one(
     async def _no_rows(client, path):
         return []
     monkeypatch.setattr(ps, "_sb", _no_rows)
+    # A site's products are read as the server (the anon key reads none since 2026-11-18).
+    monkeypatch.setattr(ps, "_sb_service", _no_rows)
     monkeypatch.setattr(ps, "_inject_brand_meta", lambda html, biz_id: html)
     monkeypatch.setattr(ps, "_optimize_images", lambda html: html)
     monkeypatch.setattr(sd, "live_doors_cached", lambda b: [EVENTS])

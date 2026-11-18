@@ -180,3 +180,24 @@ def _event_dates_columns_pinned():
     except Exception:  # pragma: no cover
         pass
     yield
+
+
+# church_schedule asks once whether the leaders schedule's tables are there
+# and keeps the answer for minutes. Every test starts with them "not there
+# yet", so no other suite gains a read (the default `owner` mode would add a
+# platform-church lookup wherever a reader asks church_schedule.on): the
+# routes answer 404 and every reader outside them reads as before the
+# migration. The schedule's own tests set _FORCE = True.
+@pytest.fixture(autouse=True)
+def _leaders_schedule_tables_pinned():
+    try:
+        import church_schedule as _cs
+        _cs._FORCE = False
+        _cs._STATE.update(yes=None, at=0.0)
+        _cs._KEPT.clear()
+        _cs._WAITING.clear()
+        _cs._OPEN.clear()
+        _cs._LAST.clear()
+    except Exception:  # pragma: no cover
+        pass
+    yield

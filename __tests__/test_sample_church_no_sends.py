@@ -89,6 +89,7 @@ TICKS = {
     "notif_evening_summary": "notification_engine:generate_evening_summary_for_all",
     "notif_unanswered_leads": "notification_engine:unanswered_lead_sweep",
     "church_follow_up_sweep": "church_follow_up:sweep",
+    "care_handoff_sweep": "care_handoff:sweep_tick",
     "church_checkin_sweep": "church_checkin:sweep",
     "church_shepherd_sweep": "church_shepherd_signals:sweep",
     "church_leader_tasks_sweep": "church_leader_tasks:sweep_tick",
@@ -96,6 +97,8 @@ TICKS = {
     "church_team_rollup": "church_team_week:rollup_tick",
     "church_assignments_sweep": "church_assignments:sweep_tick",
     "church_handovers_sweep": "church_handovers:sweep_tick",
+    # The leaders schedule's notices: its churches go through drop_samples, and each notice asks skip() first.
+    "church_schedule_sweep": "church_schedule_tell:sweep_tick",
     "church_mail_alert_sweep": "church_mail_alerts:sweep",
     "church_mail_trash_sweep": "church_mail_alerts:trash_sweep",
     # ChurchSavvy's countdown that starts by itself: a sample's screens show nothing, so it skips the sample (skip_id).
@@ -168,6 +171,9 @@ TICKS = {
     # Not business-scoped: the platform's own database readings and weekly
     # verdict; its church count already leaves samples out (is_sample).
     "db_health": "db_health:tick",
+    # Requests for giving access: off by default; switched on, it reminds a
+    # church's owner once and skips a sample church (church_money_ticks._sample).
+    "church_money_asks": "church_money_ticks:tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {

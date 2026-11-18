@@ -194,6 +194,7 @@ def fake_reads(monkeypatch, *, rows=None, override=None):
         return override(parsed.path, result) if override else result
     monkeypatch.setattr(br, "_sb", read)
     monkeypatch.setattr(br, "_busy_get", read)
+    monkeypatch.setattr(br, "_owner_tz_get", read)
     return calls
 
 

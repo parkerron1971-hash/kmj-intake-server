@@ -117,7 +117,7 @@ def db(monkeypatch):
     monkeypatch.setattr(giving_router, "sb_clients", fake)
     monkeypatch.setattr(giving_ways, "switched_on", lambda b: True)
     import giving_records, church_keys, vertical_family
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     monkeypatch.setattr(church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(gs.church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(vertical_family, "is_nonprofit_like", lambda t: True)
@@ -347,7 +347,7 @@ def test_a_church_ahead_of_utc_records_sunday_on_sunday_morning(db, monkeypatch)
 def test_someone_without_giving_access_is_refused(db, monkeypatch):
     import giving_records
 
-    def refuse(b, u):
+    def refuse(b, u, need="see"):
         raise HTTPException(403, "Giving records require owner, admin, or accountant access.")
     monkeypatch.setattr(giving_records, "require_finance", refuse)
     for call in (lambda: gs.list_counts(BIZ, USER), lambda: gs.list_services(BIZ, USER),

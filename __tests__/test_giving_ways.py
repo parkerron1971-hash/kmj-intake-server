@@ -148,7 +148,7 @@ def test_the_ways_menu_follows_the_switch(monkeypatch):
     fake = FakeSB(business=_church(settings={"giving": {"ways": [{"app": "zelle"}]}}))
     monkeypatch.setattr(giving_router, "sb_clients", fake)
     import giving_records
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     user = SimpleNamespace(id="u1")
     monkeypatch.setattr(giving_ways, "switched_on", lambda bid: False)
     off = giving_router.giving_ways_menu(BIZ, user)
@@ -165,7 +165,7 @@ def test_the_ways_menu_says_so_when_the_church_cant_be_read(monkeypatch, on):
             return None if path.startswith("/businesses?") else super().sb_get_as_service(path)
     monkeypatch.setattr(giving_router, "sb_clients", Down(business=_church()))
     import giving_records
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     with pytest.raises(HTTPException) as e:
         giving_router.giving_ways_menu(BIZ, SimpleNamespace(id="u1"))
     assert e.value.status_code == 503
@@ -175,7 +175,7 @@ def test_a_recorded_gift_takes_the_way_and_names_an_other_app(monkeypatch, on):
     fake = FakeSB(business=_church())
     monkeypatch.setattr(giving_router, "sb_clients", fake)
     import giving_records, vertical_family, church_keys
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     monkeypatch.setattr(church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(vertical_family, "is_nonprofit_like", lambda t: True)
     user = SimpleNamespace(id="u1")
@@ -419,7 +419,7 @@ def test_the_treasurer_gets_every_fund_the_church_set(monkeypatch):
     fake = FakeSB(business=_church(settings={"giving": {"funds": ["Tithes", "Outreach", "Youth Department", "Offering"]}}))
     monkeypatch.setattr(giving_router, "sb_clients", fake)
     import giving_records
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     for on_ in (True, False):
         monkeypatch.setattr(giving_ways, "switched_on", lambda bid, v=on_: v)
         got = giving_router.giving_ways_menu(BIZ, SimpleNamespace(id="u1"))

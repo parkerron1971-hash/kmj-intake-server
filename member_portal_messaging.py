@@ -183,6 +183,22 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     on an open map, each active department's leader and overseer while they
     hold an active role. [{'contact_id', 'role': 'leader'}], or None on a
     failed read."""
+    ids = leading_people(business_id)
+    if ids is None:
+        return None
+    # The office: it runs the leaders' meetings and sends their Monday note
+    # (Kevin, 2026-11-01). A failed read of the logins leaves the room as
+    # the leaders alone, never empty.
+    ids |= office_contacts(business_id) or set()
+    return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
+
+
+def leading_people(business_id: str) -> Optional[Set[str]]:
+    """The room without the office: everyone who leads something here by the
+    church's own data (leaders_room_people's rule, above), as contact ids.
+    The leaders schedule reads it to tell a leader who also has an office
+    login from an office login who leads nothing (church_schedule.roster).
+    None on a failed read."""
     import church_map
     import church_roles as cr
     leads = sb_clients.sb_get_as_service(
@@ -210,11 +226,7 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     if mp:
         held = {str(r["contact_id"]) for r in roles}
         ids |= {p for d in mp.active() for p in (d["leader_contact_id"], d["overseer_contact_id"]) if p in held}
-    # The office: it runs the leaders' meetings and sends their Monday note
-    # (Kevin, 2026-11-01). A failed read of the logins leaves the room as
-    # the leaders alone, never empty.
-    ids |= office_contacts(business_id) or set()
-    return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
+    return ids
 
 
 def office_contacts(business_id: str) -> Optional[Set[str]]:

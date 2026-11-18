@@ -653,7 +653,7 @@ def test_every_verb_is_a_handler_placed_by_its_own_checks_and_never_the_owners_a
         assert cos.ACTION_HANDLERS[verb] is ccs.HANDLERS[verb]
         assert chief_areas.VERBS[verb] == (chief_areas.ALL,) and verb not in chief_areas.OWNERS
         assert not action_registry.may_expose_to_agent(verb)
-    assert {t["name"] for t in ccs.TOOLS} == {"sheet_of", "list_church_jobs", "draft_church_job"}
+    assert {t["name"] for t in ccs.TOOLS} == {"sheet_of", "list_church_jobs", "draft_church_job", "list_money_asks"}
     assert ccs.WRITES == {"save_church_job", "remove_church_job"}
 
 
@@ -886,7 +886,11 @@ def test_a_job_alone_is_a_label_and_asks_for_no_password(db):
     cj.create(_biz(db), {**JOB, "areas": ["kids_youth"], "duties": []}, OWNER, "owner")
     asked = []
     got = cs.change(_biz(db), OWNER, SARAH, {"job": "kids_director"}, widening=lambda: asked.append(1))
-    assert asked == [] and not got["widens"] and got["summary"].endswith("job: Kids Director")
+    assert asked == [] and not got["widens"]
+    # A church job brings only the duties given on the sheet (2026-11-18), so the three she did by her
+    # area are kept for her by name, and the record says so.
+    assert got["summary"] == ("changed Sarah Okafor's sheet: job: Kids Director; kept “Kids”, “Youth and Teen "
+                              "Bible Study” and “Background checks” by name")
 
 
 def test_changing_only_the_areas_keeps_a_churchs_own_job_on_the_login(db):
@@ -1324,7 +1328,7 @@ def test_chief_reads_the_level_and_still_has_no_verb_that_changes_a_sheet(db):
     got = chief(db, OWNER, "sheet_of", who="Mark")
     assert not got.get("failed"), got["result"]
     assert got["result"].startswith("Mark Diaz's sheet: Manager login.")
-    assert set(ccs.HANDLERS) == {"sheet_of", "list_church_jobs", "draft_church_job", "save_church_job",
+    assert set(ccs.HANDLERS) == {"sheet_of", "list_church_jobs", "list_money_asks", "draft_church_job", "save_church_job",
                                  "remove_church_job"}
 
 

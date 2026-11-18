@@ -124,7 +124,14 @@ def _gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
 
 
 def is_owner(biz_row: Dict[str, Any], user_id: Any) -> bool:
-    return bool(user_id) and str(biz_row.get("owner_id")) == str(user_id)
+    """Whether this person may change the funds: the owner alone
+    (church_money_gate's "setup" rule, on the row the gate already read)."""
+    if not user_id or "owner_id" not in biz_row:
+        return False
+    import church_money_gate
+    from types import SimpleNamespace
+    return church_money_gate.may_money(biz_row.get("id"), SimpleNamespace(id=user_id), "work", "setup",
+                                       business=biz_row)
 
 
 def list_funds(business_id: str, year: Optional[int] = None) -> List[Dict[str, Any]]:

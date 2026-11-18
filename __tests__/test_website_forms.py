@@ -367,6 +367,10 @@ def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
         return [copy.deepcopy(row)]
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    # The website form's way into the inbox, not the care desk's lock
+    # (test_care_desk.py): a church that doesn't ask for the password.
+    monkeypatch.setattr(private_care, "lock_settings",
+                        lambda b: {"lock_minutes": 10, "require_password": False, "saved": True, "ready": True})
     owner_inbox = intake_endpoint.private_care_requests(biz, SimpleNamespace(id=owner))
     assert owner_inbox["actions"] and owner_inbox["scope"] == "all"
     request = owner_inbox["requests"][0]

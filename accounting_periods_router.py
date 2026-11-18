@@ -31,10 +31,17 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     """Seat-access arc (7/31): periods are readable by any active seat or
     accountant collaborator; generate/close/reopen escalate to manager."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
+    # A church's or nonprofit's payroll, contractors and period closes are its
+    # books: the money wall is asked first, as the ledger asks it (gl_router).
+    # Any other business isn't asked here.
+    from giving_records import require_ministry_finance
+    # A door asked for more than reading (min_role above "viewer") is about
+    # to change something: a login let in only by a giving tick must hold Work.
+    require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")
     if str(row.get("owner_id")) == str(user.id):
         return row
     if min_role == "viewer":

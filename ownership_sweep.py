@@ -67,6 +67,13 @@ HINTS = (
     "_access(", "require_role", "role_of", "require_business_admin",
     "owner_id", "_assert_owner", "_require_business", "_require_membership",
     "owner_business",
+    # The one money gate (church_money_gate.require_money): who owns the
+    # business, the caller's seat and whether they are its accountant are
+    # read inside it, in a class this sweep doesn't follow, and it refuses
+    # (its own raise). Named by its call so the gate is seen for what its
+    # code is, not for words in its docstring. may_money is NOT here: it
+    # answers yes or no and refuses nothing.
+    "require_money(",
     "authed_request",  # binds the JWT so RLS scopes the query itself
     "set_user_jwt",    # the same thing, called directly (chief_of_staff)
     # A paired check-in station (kids_station.py): its device token names

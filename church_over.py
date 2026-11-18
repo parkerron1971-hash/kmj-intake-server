@@ -269,7 +269,8 @@ class Church:
         if role != "manager":
             return frozenset()
         lanes = set(self.lanes(uid))
-        by_area = None if lanes else cd._area_duties(self.b, uid, role)
+        by_area = None if lanes else (frozenset() if cd.own_job_seat(self.seats.get(uid))
+                                      else cd._area_duties(self.b, uid, role))
         return cd._manager_duties(lanes, uid, self.moved, by_area)
 
     def over_lanes(self, uid: str) -> bool:

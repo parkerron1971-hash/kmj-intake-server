@@ -61,8 +61,7 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     ) or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
+    church_money_gate.require_owner(business_id, user, rows[0])
     # The bank is behind a church's Giving keeper, the owner included.
     church_keys.wall(business_id, user, "giving_money")
     return rows[0]
@@ -74,7 +73,7 @@ def _require_money_writer(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     (church_money_gate). Behind the same Giving wall as _require_owner, so a
     church that names a Giving keeper holds its Admins at the door until
     they get a key. Linking and unlinking a bank stay on _require_owner."""
-    row = church_money_gate.require_money_writer(business_id, user)
+    row = church_money_gate.require_money_writer(business_id, user, part="bank")
     church_keys.wall(business_id, user, "giving_money")
     return row
 
@@ -92,7 +91,7 @@ def _require_reader(business_id: str, user: AuthedUser) -> Dict[str, Any]:
         raise HTTPException(404, "business not found")
     row = rows[0]
     from giving_records import require_ministry_finance
-    require_ministry_finance(business_id, user, row)
+    require_ministry_finance(business_id, user, row, part="bank")
     if str(row.get("owner_id")) != str(user.id):
         from business_collaborators_router import is_active_accountant
         if not is_active_accountant(business_id, str(user.id)):

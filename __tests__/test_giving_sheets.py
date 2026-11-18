@@ -37,7 +37,7 @@ def db(monkeypatch):
         monkeypatch.setattr(mod, "sb_clients", fake)
     monkeypatch.setattr(giving_ways, "switched_on", lambda b: True)
     import giving_records, church_keys
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     monkeypatch.setattr(gs.church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(sh, "_store", lambda path, raw, mt: True)
     return fake

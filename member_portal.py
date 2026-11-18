@@ -1200,7 +1200,10 @@ async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = N
     (church_follow_up), or a group they lead (group_lead: their group lives
     on the Lead tab). Both read at once. With Who sees what on, it's the
     Serve tab, for every part: a place on a Sunday team too, or a kids room.
-    A task the office handed them (church_leader_tasks) gives it too."""
+    A task the office handed them (church_leader_tasks) gives it too, and so
+    does a place on the leaders schedule (church_schedule.section: someone in
+    the office who leads nothing else still reaches Dates). That one costs no
+    read here: it answers from what church_schedule keeps a minute."""
     import church_follow_up as cfu
     import group_lead
     roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
@@ -1210,6 +1213,9 @@ async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = N
     if biz is not None:
         import church_leader_tasks
         if await asyncio.to_thread(church_leader_tasks.section, biz, me_id) is not None:
+            return True
+        import church_schedule
+        if await asyncio.to_thread(church_schedule.section, biz, me_id) is not None:
             return True
     import member_app_ui
     if biz is None or not member_app_ui.serve_mode():

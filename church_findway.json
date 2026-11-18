@@ -4951,6 +4951,32 @@
          ]
         },
         {
+         "id": "set-up-your-team-with-chief",
+         "q": "Set up your team with Chief",
+         "a": "Open the Office logins tab and press Set it up with Chief. Chief asks who leads, who handles the offering and who does what, then drafts each person’s sheet. Nothing changes until you review it.",
+         "words": [
+          "set up my team",
+          "set up my staff",
+          "who does what",
+          "first logins",
+          "new church setup",
+          "add my leaders",
+          "church structure"
+         ]
+        },
+        {
+         "id": "review-the-team-chief-drafted",
+         "q": "Review the team Chief drafted",
+         "a": "On the Office logins tab press Review it. Each person has a card: invite them with Invite with this sheet, or open their sheet with it filled in and press Save. Take them one at a time and skip anyone you are not ready for.",
+         "words": [
+          "drafted team",
+          "review the draft",
+          "apply the team",
+          "your team drafted",
+          "discard the draft"
+         ]
+        },
+        {
          "id": "open-a-persons-sheet",
          "q": "Open a person’s sheet",
          "a": "On the Office logins tab press Open sheet beside the person. Their level, job, areas, duties and what Chief knows about them are all on that one page.",
@@ -5371,6 +5397,17 @@
           "action plan",
           "mark a step done",
           "what is next in the plan"
+         ]
+        },
+        {
+         "id": "set-up-the-team-from-the-planning-course",
+         "q": "Set up the office team from the planning course",
+         "a": "Go to Leaders in the list of parts and press Set up the office team from this page. It drafts the team from what you wrote and opens the review. You review each person before anything changes.",
+         "words": [
+          "leaders page",
+          "planning course team",
+          "use the plan",
+          "office team from the plan"
          ]
         },
         {
