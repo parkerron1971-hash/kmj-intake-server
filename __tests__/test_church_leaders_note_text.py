@@ -178,7 +178,10 @@ def test_text_it_too_texts_only_the_leaders_who_said_yes(db, texts):
     assert all(b == body for _, b in texts["sent"])
     assert r["texts"] == {"sent": 3, "texts": 2, "skipped": 3, "failed": 0, "body": body, "error": ""}
     kept = note(db)["texts"]
-    assert kept == {"sent": 3, "texts": 2, "skipped": 3, "failed": 0, "body": body}
+    # And, for Text them again, the words it sent and who a failed text
+    # missed (no one here).
+    assert kept == {"sent": 3, "texts": 2, "skipped": 3, "failed": 0, "body": body,
+                    "short": cln.text_version(SUBJECT, TEXT), "failed_ids": []}
     assert r["last"]["texts"]["sent"] == 3
     # Logged as the note's text, never as an announcement (My week's weekly
     # text check reads sms_broadcast), and counted on the church's texts.
