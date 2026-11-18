@@ -84,7 +84,7 @@ HOPE = c3.NEW_HOPE                       # a made-up church of 500: every name i
 GRACE = c3.GRACE
 NY = ZoneInfo("America/New_York")
 # origin/main when S1-6 was cut: what "exactly as before" is measured against.
-BASE = "b9c94fb7c12fe10eb581491392304ea74fe4b2b7"
+BASE = "4ee7e90a4e91630a54f725dd73689d58b63bfa5e"
 TEAM = "5d000000-0000-4000-8000-000000000001"
 DOOR = "5d000000-0000-4000-8000-000000000002"
 LOBBY = "5d000000-0000-4000-8000-000000000003"

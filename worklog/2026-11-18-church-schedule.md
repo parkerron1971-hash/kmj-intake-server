@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-18: "I want to be able to build Leaders schedule. this is for when leaders are planning time off and have certain obiligations so that we as a church can plan around meeting ... making sure that everyone is not gone at the same time on our services. allowing only so many people off at the same time. ... there should volunteers one and one for leadership ... divided amongs the department to manage there department as well." Then, on the five calls the plan rests on: "Yes build to all five"'
 status: in progress
-prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936]
+prs: [kmj-intake-server#1929, kmj-intake-server#1930, kmj-intake-server#1934, kmj-intake-server#1936, kmj-intake-server#1938]
 migrations: [supabase/APPLY-2026-11-19-church-schedule.sql (applied)]
 left_undone:
   - "The migration is applied (2026-11-18, run by the owner, checked by the lead session with the file's Check block), and CHURCH_SCHEDULE is unset, which means owner: the schedule is open at the platform owner's own church and closed everywhere else. Everything built here is live there. Opening it for other churches means setting CHURCH_SCHEDULE=on on both services."
@@ -28,7 +28,7 @@ decisions:
   - "Decided while building S1-6 (docs/CHURCH_SCHEDULE.md section 7.7 lists every one): the hold reads who and which days and nothing else, fails open, and asks the switch, then the tables, then the church, so nothing is read where it isn't open; everyone with an ask still waiting is held, and everything that asks the board gets the hold (the office, a team's own leader, a teammate finding a sub, an event date, the worker's No answer yet note); a held person reads as away in the board's own words and is never in its list of who is away; when the roster can't be read again the last one read answers, so a blip never stands between a volunteer and their Away, and a replica that never read one saves nothing rather than guess; under owner, whose church it is is kept a minute even when it couldn't be read; a date whose ask is gone or already settled comes off as a plain date; a yes opens only places that are a yes, on days still to come, saved exactly as Can't make it saves one with Away for why, in the request straight after the write and never able to fail it; the serving flag is set when asked; Dates says before the yes that a place will open."
 related: [2026-10-23-sunday-planning-serving.md, 2026-11-04-church-map-chain.md, 2026-11-12-church-assignments.md, 2026-11-12-church-handovers.md, 2026-11-17-event-volunteer-dates.md]
 ---
-**S1-6 (#NNNN): the leaders schedule meets Who serves when.** `church_schedule.holds`
+**S1-6 (#1938): the leaders schedule meets Who serves when.** `church_schedule.holds`
 is the scheduler's hook: `sunday_planning._Board` reads it once into `held`, and
 someone whose ask still waits reads as away for those days (`candidates`, a 409
 from an ask, skipped by a fill), in the board's own words, for the office, a

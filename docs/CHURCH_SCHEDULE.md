@@ -52,7 +52,7 @@ production that time has passed.
   who leads nothing else. A person's notice now opens this page. Owner-only by default. It
   wasn't there at all until the migration was applied; now it is there for the people on the
   schedule at the platform owner's church. No migration of its own.
-- **S1-6** ties it to Who serves when, the volunteer schedule. `church_schedule.holds` is the
+- **S1-6 (#1938)** ties it to Who serves when, the volunteer schedule. `church_schedule.holds` is the
   scheduler's hook: someone whose ask still waits reads as away for those days on
   `sunday_planning._Board`, in the board's own words and nothing more. The Away form on the
   Serve page asks instead of saving for someone on the leaders schedule (`takes`), and says so
@@ -1563,7 +1563,7 @@ one that changes the least for volunteers was taken.
   volunteer's My serving with the schedule open, off, and before its tables, and holds the
   three equal (and a leader's equal to it but for the one line). The other reads
   `member_portal_serving.py` and `sunday_serving.py` out of git at the commit S1-6 was cut
-  from (`b9c94fb7`), renders main's page and this one, and holds them equal. CI checks out a
+  from (`4ee7e90a`), renders main's page and this one, and holds them equal. CI checks out a
   single commit, so that one is **skipped in CI** and runs on a full clone. It should be
   deleted the first time My serving is changed on purpose for everyone.
 - **Tests run at New Hope**, as S1-5's do.
