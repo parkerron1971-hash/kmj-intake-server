@@ -100,14 +100,15 @@ def _business(business_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
-def _gate(business_id: str, user: AuthedUser) -> Dict[str, Any]:
-    """Finance people, behind the giving keeper, where it's switched on."""
+def _gate(business_id: str, user: AuthedUser, need: str = "see") -> Dict[str, Any]:
+    """Finance people, behind the giving keeper, where it's switched on.
+    `need`: "work" from a door that writes (church_money_gate, "giving")."""
     import giving_ways
     from giving_records import require_finance
     biz = _business(business_id)
     if not giving_ways.switched_on(business_id):
         raise HTTPException(404, "Giving by service isn't switched on here yet")
-    require_finance(business_id, user)
+    require_finance(business_id, user, need=need)
     church_keys.wall(business_id, user, "giving_money")
     return biz
 
@@ -374,7 +375,7 @@ def list_services(business_id: str, user: AuthedUser = Depends(require_user)):
 
 @router.post("/giving/{business_id}/services")
 def add_service(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    biz = _gate(business_id, user)
+    biz = _gate(business_id, user, need="work")
     tz = zone_of(biz)
     if len(_services(business_id)) >= MAX_SERVICES:
         raise HTTPException(409, f"Keep up to {MAX_SERVICES} services. Remove one first.")
@@ -390,7 +391,7 @@ def change_service(business_id: str, service_id: str, body: Dict[str, Any],
                    user: AuthedUser = Depends(require_user)):
     """A change applies to service days from now on: counts already made
     keep their name and time."""
-    biz = _gate(business_id, user)
+    biz = _gate(business_id, user, need="work")
     tz = zone_of(biz)
     if not UUID_RE.match(service_id):
         raise HTTPException(404, "Service not found")
@@ -408,7 +409,7 @@ def change_service(business_id: str, service_id: str, body: Dict[str, Any],
 @router.delete("/giving/{business_id}/services/{service_id}")
 def remove_service(business_id: str, service_id: str, user: AuthedUser = Depends(require_user)):
     """Takes the service off the schedule. Its counts and their gifts stay."""
-    _gate(business_id, user)
+    _gate(business_id, user, need="work")
     if not UUID_RE.match(service_id):
         raise HTTPException(404, "Service not found")
     saved = sb_clients.sb_patch_as_service(
@@ -526,7 +527,7 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
     service's day. Every row has its own request_id, so pressing again after
     a dropped connection never records one twice. Each row answers for
     itself: {results: [{request_id, ok, id?, already?, error?}]}."""
-    biz = _gate(business_id, user)
+    biz = _gate(business_id, user, need="work")
     from vertical_family import is_nonprofit_like
     if not is_nonprofit_like(biz.get("type")):
         raise HTTPException(409, "Giving is available to ministries and nonprofits")
@@ -579,7 +580,7 @@ def move_gift(business_id: str, gift_id: str, body: Dict[str, Any], user: Authed
     and a gift in a closed count stays there. There is no "in no count": an
     online gift taken out of every count would be placed again by its
     window on the next read."""
-    _gate(business_id, user)
+    _gate(business_id, user, need="work")
     if not UUID_RE.match(gift_id):
         raise HTTPException(404, "Gift not found")
     rows = _need(f"/invoices?id=eq.{_q(gift_id)}&business_id=eq.{_q(business_id)}&is_gift=eq.true"
@@ -646,7 +647,7 @@ def close_count(business_id: str, count_id: str, body: Dict[str, Any], user: Aut
     """{counted_cash_cents, counted_checks_cents, counters: [names], note?}.
     Refused (409, with the differences) when the cash or checks recorded
     don't equal what was counted."""
-    _gate(business_id, user)
+    _gate(business_id, user, need="work")
     body = body or {}
     count = _count(business_id, count_id)
     if count.get("status") != "open":
@@ -700,7 +701,7 @@ def reopen_count(business_id: str, count_id: str, body: Dict[str, Any], user: Au
     """Owner or admin, with a reason that stays on the count. The counted
     totals and counters stay until it's closed again."""
     import church_money_gate
-    _gate(business_id, user)
+    _gate(business_id, user, need="work")
     church_money_gate.require_money(business_id, user, "work", "count_reopen")
     reason = " ".join(str((body or {}).get("reason") or "").split())[:300]
     if not reason:

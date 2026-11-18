@@ -1669,7 +1669,7 @@ def _manual_gift_fields(business_id, body, latest=None):
 @router.post("/giving/{business_id}/records")
 def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
-    require_finance(business_id, user)
+    require_finance(business_id, user, need="work")
     church_keys.wall(business_id, user, "giving_money")
     return record_manual_gift(business_id, body, user)
 
@@ -1709,7 +1709,7 @@ def record_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser,
 @router.patch("/giving/{business_id}/records/{gift_id}")
 def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
-    require_finance(business_id, user)
+    require_finance(business_id, user, need="work")
     church_keys.wall(business_id, user, "giving_money")
     try: gift_id = str(uuid.UUID(gift_id))
     except ValueError: raise HTTPException(400, "Invalid gift")

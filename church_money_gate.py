@@ -28,7 +28,15 @@ people, the same status code, the same words.
     THE TICK ....... not here yet. When giving is its own tick it becomes
                      one more standing in _Facts.has() and one more name in
                      the rows that take it; no door changes again
-    THE WALL ....... not here, and not moved: the doors behind a church's
+    THE CHURCH WALL  "books" and "bank" at "see" are NOT a full answer. They
+                     are only the wall a church or nonprofit puts in front
+                     of its ledger, reports and bank; every other business
+                     is "not asked" (NOT_ASKED), and the door's own ladder
+                     (owner, accountant, any seat) decides after it. So
+                     require_money passes a shop with by == NOT_ASKED,
+                     may_money refuses to answer for those rows at all, and
+                     money_standing() says which it was
+    THE KEEPER ..... not here, and not moved: the doors behind a church's
                      Giving keeper still call church_keys.wall(..,
                      "giving_money") after this gate, so a church that names
                      a Giving keeper locks its Admins out, the owner too,
@@ -54,6 +62,10 @@ import sb_clients
 OWNER = "owner"              # businesses.owner_id is this person
 ADMIN = "admin"              # an active Admin seat (business_users)
 ACCOUNTANT = "accountant"    # an active accountant collaborator (business_collaborators)
+# The accountant, but only one who holds no seat here: a login with a seat
+# is its seat (church check requests resolved it so: a seat, else the
+# accountant).
+ACCOUNTANT_NO_SEAT = "accountant_no_seat"
 SEAT = "seat"                # any active seat, Viewer and up
 # LEGACY, a church's check requests and help requests only: an office login
 # that isn't an Admin but whose areas, as Who sees what works them out,
@@ -71,7 +83,8 @@ PARTS = ("giving", "books", "bank", "bills", "store", "checks", "help", "rentals
          "setup")
 
 PASS = ("*",)                # `elsewhere`: the question isn't asked of that kind of business
-PASSED = "pass"
+NOT_ASKED = "not_asked"      # what "passed", when it was that: nobody was checked
+PASSED = NOT_ASKED
 
 GIVING_403 = "Giving records require owner, admin, or accountant access."
 CHECKS_403 = ("Check requests are kept with the treasurer: the owner, admins, the accountant, or a login that works "
@@ -90,14 +103,19 @@ class Rule(NamedTuple):
     elsewhere: Optional[Tuple[str, ...]] = None   # ... and this is for every other (PASS: not asked there)
     detail_elsewhere: Optional[str] = None
     missing: str = "business not found"       # the 404 when the business row isn't there
+    no_login: Optional[Tuple[int, str]] = None   # the refusal for someone with no seat here who passed nothing
 
 
 _FINANCE = Rule(who=(OWNER, ADMIN, ACCOUNTANT), detail=GIVING_403)
-_WALL = Rule(who=(OWNER, ADMIN, ACCOUNTANT), detail=GIVING_403, split="nonprofit", elsewhere=PASS,
-             missing="Business not found")
+# THE CHURCH WALL ONLY, not a full answer: outside a church or nonprofit
+# nobody is checked (see the module's note). Never read it as "may read the
+# books".
+_CHURCH_WALL_ONLY = Rule(who=(OWNER, ADMIN, ACCOUNTANT), detail=GIVING_403, split="nonprofit", elsewhere=PASS,
+                         missing="Business not found")
 _WRITER = Rule(who=(OWNER, ADMIN), owner_by="row", split="church", elsewhere=(OWNER,))
 _TOP = Rule(who=(OWNER, ADMIN))
-_TREASURER = Rule(who=(OWNER, ADMIN, ACCOUNTANT, MONEY_AREA), detail=CHECKS_403)
+_TREASURER = Rule(who=(OWNER, ADMIN, ACCOUNTANT_NO_SEAT, MONEY_AREA), detail=CHECKS_403,
+                  no_login=(404, "business not found"))
 _OWNER_ONLY = Rule(who=(OWNER,), owner_by="row")
 
 # (part, need) → the rule. Each row says which old gate it reproduces.
@@ -112,17 +130,21 @@ RULES: Dict[Tuple[str, str], Rule] = {
     # .require_ministry_finance (gl_router._access, reports_router
     # ._owner_or_reader): in a church or nonprofit, the giving rule; in any
     # other business this gate isn't asked, and the door's own ladder
-    # (owner, accountant, any seat) decides alone.
-    ("books", "see"): _WALL,
-    # Changing the books: the expense categories. Was church_money_gate
-    # .require_money_writer: the owner; in a church an active Admin seat
-    # too; no accountant.
+    # (owner, accountant, any seat) decides alone. THE CHURCH WALL ONLY.
+    ("books", "see"): _CHURCH_WALL_ONLY,
+    # Changing the books. Was church_money_gate.require_money_writer as a
+    # door calls it with no part named: the owner; in a church an active
+    # Admin seat too; no accountant. (standing() and can_write() ask this
+    # row. The expense categories' own writes go through the bank's row
+    # below, by plaid_router._require_money_writer.)
     ("books", "work"): _WRITER,
     # Reading the bank. Was plaid_router._require_reader's call of
-    # require_ministry_finance: the same wall as the books.
-    ("bank", "see"): _WALL,
-    # Changing the bank's records (categorize, match, sync, rules, Sunday's
-    # deposit). Was plaid_router._require_money_writer → require_money_writer.
+    # require_ministry_finance: the same wall as the books. THE CHURCH
+    # WALL ONLY.
+    ("bank", "see"): _CHURCH_WALL_ONLY,
+    # Changing the bank's records (categorize, match, sync, rules, the
+    # expense categories, Sunday's deposit). Was plaid_router
+    # ._require_money_writer → require_money_writer.
     ("bank", "work"): _WRITER,
     # The bills list. Was bills_router._reader: the owner, the accountant,
     # then in a church an Admin seat ("requires admin access or above"), in
@@ -137,9 +159,10 @@ RULES: Dict[Tuple[str, str], Rule] = {
     ("store", "see"): _WRITER,
     ("store", "work"): _WRITER,
     # Check requests, the treasurer's desk. Was church_checks.treasurer():
-    # the owner, an Admin, the accountant, or the LEGACY area row above. The
-    # caller resolves the role itself (a seat, or "accountant" for an
-    # accountant with no seat) and passes it in.
+    # the owner, an Admin, the accountant when they hold no seat (a login
+    # with a seat is its seat, as church_checks._role resolved it), or the
+    # LEGACY area row above. Someone with no seat who is not the accountant
+    # gets the door's own 404, as church_checks._role gave it.
     ("checks", "see"): _TREASURER,
     ("checks", "work"): _TREASURER,
     # The treasurer's side of help requests: the amounts only, and paying
@@ -241,7 +264,8 @@ class _Facts:
 
     def has(self, standing: str, rule: Rule) -> bool:
         if standing == OWNER:
-            if rule.owner_by == "row" and self._role is _UNREAD:
+            if rule.owner_by == "row":
+                # Never a role someone passed in: the business row says who owns it.
                 return str(self.row(rule, "owner_id").get("owner_id")) == self.uid
             return self.role == OWNER
         if standing == ADMIN:
@@ -251,6 +275,12 @@ class _Facts:
                 from business_collaborators_router import is_active_accountant
                 self._accountant = bool(is_active_accountant(self.business_id, self.uid))
             return self._accountant
+        if standing == ACCOUNTANT_NO_SEAT:
+            if self.role == ACCOUNTANT:
+                return True                 # the door resolved it: no seat, and the accountant
+            if self.role is not None:
+                return False                # a seat is a seat
+            return self.has(ACCOUNTANT, rule)
         if standing == SEAT:
             from business_users_router import _ROLE_RANK
             return _ROLE_RANK.get(self.role or "", 0) >= _ROLE_RANK["viewer"]
@@ -263,6 +293,8 @@ class _Facts:
         read, isn't one. A view that couldn't be read is a 503, never a yes."""
         if self._areas is not _UNREAD:
             return isinstance(self._areas, list) and MONEY_AREA_KEY in self._areas
+        if not self.role or self.role == ACCOUNTANT:
+            return False                    # no seat, no areas: a refusal, not "couldn't be read"
         import church_areas
         if church_areas.mode() != "on":
             return False
@@ -286,7 +318,7 @@ def _decide(business_id: Any, user: Any, need: str, part: str, role: Any, accoun
     business is outside the rule's `split`)."""
     rule = _rule(need, part)
     f = _Facts(business_id, user, role, accountant, business, areas)
-    if rule.owner_by == "row" and role is _UNREAD:
+    if rule.owner_by == "row":
         f.row(rule, "owner_id")                 # no such business is a 404 before anything else
     if rule.split is None:
         for s in rule.who:
@@ -321,9 +353,12 @@ def require_money(business_id: Any, user: Any, need: str, part: str, *, role: An
                   accountant: Optional[bool] = None, business: Optional[Dict[str, Any]] = None,
                   areas: Any = _UNREAD, detail: Optional[str] = None) -> Pass:
     """This person passes the money gate for `part` at `need`, or the row's
-    own HTTPException. Who they are to the business is read in _Facts: the
-    business row's owner_id, their seat (business_users_router.role_of) and
-    whether they are its accountant.
+    own HTTPException. Who they are to the business is read in _Facts: who
+    owns it, the seat they hold, and whether they are its accountant.
+
+    For the church-wall rows ("books" and "bank" at "see") a pass with
+    `by == NOT_ASKED` means nobody was checked: the business is not a church
+    or nonprofit, and the door's own ladder still has to decide.
 
     `role`: the caller already resolved this person's role on the business
     (a door that reads it for other reasons), so the owner and Admin
@@ -334,8 +369,19 @@ def require_money(business_id: Any, user: Any, need: str, part: str, *, role: An
     refusal, where it had them."""
     by, rule, f, outside = _decide(business_id, user, need, part, role, accountant, business, areas)
     if by is None:
+        if rule.no_login and f.role is None:
+            raise HTTPException(*rule.no_login)
         raise HTTPException(rule.status, detail or (rule.detail_elsewhere if outside else None) or rule.detail)
     return Pass(by, f.known_role, f.business)
+
+
+def money_standing(business_id: Any, user: Any, need: str, part: str, *, role: Any = _UNREAD,
+                   accountant: Optional[bool] = None, business: Optional[Dict[str, Any]] = None,
+                   areas: Any = _UNREAD) -> Optional[str]:
+    """What let this person through: a standing ("owner", "admin", ...),
+    NOT_ASKED when the row is a church wall and this business isn't one
+    (nobody was checked), or None for a refusal."""
+    return _decide(business_id, user, need, part, role, accountant, business, areas)[0]
 
 
 def may_money(business_id: Any, user: Any, need: str, part: str, *, role: Any = _UNREAD,
@@ -344,7 +390,15 @@ def may_money(business_id: Any, user: Any, need: str, part: str, *, role: Any = 
     """require_money as a yes or no. A refusal is a no. A read that could
     not be made raises as it does in require_money (the 404 for no business,
     the 503 of the areas read), so a caller that wants "any failure is a no"
-    says so itself."""
+    says so itself.
+
+    Not for the church-wall rows ("books" and "bank" at "see"): a yes there
+    could only mean "not asked", which is not a yes. Asking is a ValueError;
+    use require_money (the wall, before the door's own ladder) or
+    money_standing()."""
+    if _rule(need, part).elsewhere is PASS:
+        raise ValueError(f"church_money_gate: {part!r} / {need!r} is the church wall only, not a full answer; "
+                         "may_money can't say yes or no for it. Use require_money or money_standing.")
     return _decide(business_id, user, need, part, role, accountant, business, areas)[0] is not None
 
 

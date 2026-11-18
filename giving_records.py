@@ -37,12 +37,15 @@ def read_gifts(business_id, start, end_exclusive, contact_id=None):
         cursor = next_cursor
     raise HTTPException(503, "Giving report is too large. Choose a shorter date range.")
 
-def require_finance(business_id, user):
+def require_finance(business_id, user, need="see"):
     """Giving access: owner, admin, or explicitly invited active accountant.
     The rule is church_money_gate's ("giving"); this name is kept for the
-    doors that already call it. Returns the role, or "accountant"."""
+    doors that already call it. `need` is "see" for a door that reads and
+    "work" for one that writes (a gift entered or corrected, a pledge, a
+    count, statements mailed): the same people today, and the place the
+    giving tick will tell them apart. Returns the role, or "accountant"."""
     import church_money_gate
-    return church_money_gate.require_money(business_id, user, "see", "giving").role or "accountant"
+    return church_money_gate.require_money(business_id, user, need, "giving").role or "accountant"
 
 def require_ministry_finance(business_id, user, business=None, part="books"):
     """Reading the books or the bank of a church or nonprofit takes the

@@ -135,7 +135,7 @@ def test_manual_gift_validation_and_contact_scope(monkeypatch):
 
 def test_manual_gift_retry_does_not_duplicate(monkeypatch):
     writes=[];saved=[]
-    monkeypatch.setattr(gr,"require_finance",lambda *a:None)
+    monkeypatch.setattr(gr,"require_finance",lambda *a,**k:None)
     monkeypatch.setattr(sb_clients,"sb_get_as_service",lambda p:[{"type":"ministry"}] if p.startswith("/businesses") else saved)
     def post(p,b):writes.append(b);saved.append({"id":"gift"});return saved
     monkeypatch.setattr(sb_clients,"sb_post_as_service",post)
@@ -163,7 +163,7 @@ def test_donor_routes_stay_private_after_vertical_change(monkeypatch,route):
 def test_manual_correction_requires_reason_version_and_auditable_actor(monkeypatch):
     gid="00000000-0000-4000-8000-000000000005"
     original={"id":gid,"invoice_number":"GIVE-manual-request","updated_at":"2026-01-01T00:00:00Z","total":20}
-    monkeypatch.setattr(gr,"require_finance",lambda *a:None)
+    monkeypatch.setattr(gr,"require_finance",lambda *a,**k:None)
     monkeypatch.setattr(sb_clients,"sb_get_as_service",lambda p:[original])
     writes=[]
     monkeypatch.setattr(sb_clients,"sb_patch_as_service",lambda p,b:(writes.append((p,b)) or [{"id":gid}]))

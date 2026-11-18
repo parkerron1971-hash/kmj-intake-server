@@ -149,7 +149,7 @@ import sb_clients
 @pytest.fixture
 def gates(monkeypatch):
     calls = []
-    monkeypatch.setattr(giving_records, "require_finance", lambda biz, user: calls.append("finance"))
+    monkeypatch.setattr(giving_records, "require_finance", lambda biz, user, need="see": calls.append("finance"))
     monkeypatch.setattr(reports_router, "_owner_or_reader",
                         lambda biz, user: (calls.append("owner"), {"type": "church", "settings": {}})[1])
     monkeypatch.setattr(reports_router, "_giving_wall", lambda biz, user: calls.append("keeper"))

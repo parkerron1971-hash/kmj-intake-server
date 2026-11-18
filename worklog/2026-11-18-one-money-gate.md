@@ -18,7 +18,8 @@ decisions:
   - "The old names stay (giving_records.require_finance, require_ministry_finance, church_money_gate.require_money_writer) and ask the gate, so about 40 routes did not change."
   - "A door that already resolved the person's role, the business row or their areas passes it in, so no door reads more than it did. church_checks passes the role it resolved itself, so a Manager who is also the accountant is still not the treasurer by that, as before."
   - "Reopening a closed count now asks the gate by the seat instead of reading require_finance's answer; test_giving_counts_close sets the seat."
-  - "The gate's docstring names what it reads (owner_id, role_of) so ownership_sweep still sees it as the gate it is."
+  - "ownership_sweep sees the gate by a code anchor (the hint require_money( ), not by words in its docstring; may_money is not a hint because it refuses nothing."
+  - "The church-wall rows (books and bank at see) are not a full answer: a business that is not a church or nonprofit comes back NOT_ASKED, and may_money refuses to answer for those rows."
 related: [2026-11-18-sheet-login-level.md, 2026-11-18-help-treasurer-pays.md]
 ---
 Until this change the answer to "may this login see or work the church's
@@ -111,3 +112,36 @@ select business_id,
 ```
 
 No rows back means the legacy row admits nobody today.
+
+**Run on production, 2026-11-18** (by the parent session, read-only): 0
+churches, 0 logins by saved areas, 0 by guess. The legacy area row admits
+nobody today, so the tick can replace it without taking anything from anyone.
+
+**After the independent review** (no access change found; five hardening
+changes, still no change in anyone's answer):
+
+1. The ownership sweep sees the gate by its code. `ownership_sweep.HINTS`
+   gains `"require_money("`; the gate's docstring no longer carries any hint
+   word. `may_money` is deliberately not a hint: it refuses nothing. Measured
+   on main (f859d05a) and here: 1148 handlers, 47 unguarded, 0 outside the
+   public-by-design list; without the anchor it would be 68.
+2. Check requests' whole rule is in the gate: the accountant counts only with
+   no seat (`ACCOUNTANT_NO_SEAT`), and someone with no login gets the door's
+   404, never the 503 of an unread areas view. `church_checks.treasurer` no
+   longer passes an override.
+3. Who owns a business is read from its row for every row-based rule (setup,
+   the writers, the bills list). A `role="owner"` passed in is ignored there.
+4. `giving_records.require_finance(business_id, user, need="see")`. The giving
+   doors that write now ask at "work": `giving_router.create_manual_gift`,
+   `.correct_manual_gift`; `giving_statement_mail.statements_mail_send`;
+   `church_pledges.create_campaign`, `.edit_campaign`, `.record_pledge`,
+   `.remove_pledge`; `giving_services.add_service`, `.change_service`,
+   `.remove_service`, `.record_gifts`, `.move_gift`, `.close_count`,
+   `.reopen_count`; `giving_sheets.upload_photo`, `.photo_used`. Same people at
+   both needs today. Left at "see" because one gate serves reads and writes
+   alike: Chief's count verbs (`chief_giving_counts._chief`) and Chief's
+   statement verbs (`chief_giving_actions._authorize`).
+5. "books" and "bank" at "see" are named THE CHURCH WALL ONLY in the table and
+   the module's note. A business that isn't a church or nonprofit comes back
+   `NOT_ASKED`, `may_money` raises for those two rows instead of answering,
+   and `money_standing()` says which it was.

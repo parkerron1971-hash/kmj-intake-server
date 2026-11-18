@@ -36,10 +36,10 @@ def db(monkeypatch):
         monkeypatch.setattr(mod, "sb_clients", fake)
     monkeypatch.setattr(giving_ways, "switched_on", lambda b: True)
     import giving_records, church_keys, vertical_family
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
     # Reopening a count asks the money gate itself (church_money_gate, "count_reopen"), by the seat.
     import business_users_router
-    monkeypatch.setattr(business_users_router, "role_of", lambda b, u: "owner")
+    monkeypatch.setattr(business_users_router, "role_of", lambda b, u, need="see": "owner")
     monkeypatch.setattr(church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(gs.church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(vertical_family, "is_nonprofit_like", lambda t: True)
@@ -114,13 +114,13 @@ def test_a_closed_count_is_locked_and_reopens_only_with_a_reason(db, monkeypatch
         gs.reopen_count(BIZ, COUNT, {"reason": ""}, USER)
     assert e.value.status_code == 400
     import business_users_router, giving_records
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "accountant")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "accountant")
     monkeypatch.setattr(business_users_router, "role_of", lambda b, u: None)     # the accountant holds no seat
     with pytest.raises(HTTPException) as e:
         gs.reopen_count(BIZ, COUNT, {"reason": "a check was missed"}, USER)
     assert e.value.status_code == 403 and e.value.detail == "Only the owner or an admin can reopen a closed count."
-    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
-    monkeypatch.setattr(business_users_router, "role_of", lambda b, u: "owner")
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
+    monkeypatch.setattr(business_users_router, "role_of", lambda b, u, need="see": "owner")
     assert gs.reopen_count(BIZ, COUNT, {"reason": "a check was missed"}, USER)["ok"]
     c = db.t["giving_counts"][0]
     assert c["status"] == "open" and "Reopened" in c["note"] and "a check was missed" in c["note"]

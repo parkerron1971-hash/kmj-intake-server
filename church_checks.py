@@ -295,13 +295,12 @@ def treasurer(biz_id: str, uid: str, role: str) -> bool:
     owner, admins and the accountant unless a church says otherwise. A view
     that couldn't be read is a 503, never a yes.
 
-    The rule is church_money_gate's ("checks"). `role` is the one _role
-    resolved: a seat's, or "accountant" for an accountant with no seat, so
-    nothing here reads who the accountant is again."""
+    The rule is church_money_gate's ("checks"), which holds the whole of
+    it. `role` is the one _role resolved (a seat's, or "accountant" for an
+    accountant with no seat), passed so nothing is read twice."""
     import church_money_gate
     from types import SimpleNamespace
-    return church_money_gate.may_money(biz_id, SimpleNamespace(id=uid), "work", "checks", role=role,
-                                       accountant=role == "accountant")
+    return church_money_gate.may_money(biz_id, SimpleNamespace(id=uid), "work", "checks", role=role)
 
 
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:

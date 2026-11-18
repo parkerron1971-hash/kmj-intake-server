@@ -158,7 +158,7 @@ def client(monkeypatch, env):
     import giving_records
     who = {"finance": True}
 
-    def require_finance(biz, user):
+    def require_finance(biz, user, need="see"):
         if not who["finance"]:
             raise HTTPException(403, "Giving records require owner, admin, or accountant access.")
         return "owner"

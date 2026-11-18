@@ -17,6 +17,12 @@ Pins:
   * a source scan: a money module decides money access through the gate,
     never by reading a role, the accountant or the owner itself; every
     other role line in those modules is on a list with its reason
+  * after the independent review: the ownership sweep sees the gate by its
+    code, not its docstring; check requests' whole rule is in the gate (an
+    accountant only with no seat; no seat at all is the door's 404); who
+    owns a business is read from its row, never from a role passed in;
+    require_finance takes the need and the giving doors that write say
+    "work"; the church-wall rows can't be read as a yes
 
 People and businesses here are made up."""
 from __future__ import annotations
@@ -309,7 +315,7 @@ def test_every_part_has_its_rows_and_each_admits_exactly_who_it_did():
     wall = (("owner", "admin", "accountant"), "nonprofit", gate.PASS)
     writer = (("owner", "admin"), "church", ("owner",))
     top = (("owner", "admin"), None, None)
-    treasurer = (("owner", "admin", "accountant", "money_area"), None, None)
+    treasurer = (("owner", "admin", "accountant_no_seat", "money_area"), None, None)
     assert who == {
         ("giving", "see"): finance, ("giving", "work"): finance,
         ("books", "see"): wall, ("books", "work"): writer,
@@ -327,6 +333,11 @@ def test_every_part_has_its_rows_and_each_admits_exactly_who_it_did():
     # The legacy area row opens the treasurer's desk and nothing else.
     assert {p for (p, _), r in gate.RULES.items() if gate.MONEY_AREA in r.who + (r.elsewhere or ())} == {"checks", "help"}
     assert all(r.status == 403 for r in gate.RULES.values())
+    # Only check requests name a refusal for someone with no login: the door's own 404.
+    assert {k[0]: r.no_login for k, r in gate.RULES.items() if r.no_login} == {"checks": (404, "business not found")}
+    # The church-wall rows, and only they, are "not asked" outside a church or nonprofit.
+    assert {k for k, r in gate.RULES.items() if r.elsewhere is gate.PASS} == {("books", "see"), ("bank", "see")}
+    assert gate.RULES[("books", "see")] is gate._CHURCH_WALL_ONLY is gate.RULES[("bank", "see")]
 
 
 def test_a_part_or_need_nobody_wrote_a_rule_for_is_an_error_not_a_yes(db):
@@ -481,11 +492,142 @@ def test_the_treasurers_desk_answers_as_treasurer_did_the_legacy_area_row_includ
 
 
 def test_a_manager_who_is_also_the_accountant_is_not_the_treasurer_by_that_as_before(db):
-    """church_checks resolves the role itself; a seat is a seat, and the
-    accountant is asked about only when there is no seat."""
+    """A seat is a seat, and the accountant is asked about only when there
+    is no seat: the gate's own rule, with or without the role passed in."""
     import church_checks
     assert church_checks.treasurer(CHURCH, BOTH, "manager") is False is old_treasurer(CHURCH, BOTH, "manager")
+    assert gate.may_money(CHURCH, _user(BOTH), "work", "checks") is False
     assert not any("business_collaborators" in p for p in db.reads)
+    with pytest.raises(HTTPException) as e:
+        gate.require_money(CHURCH, _user(BOTH), "work", "checks")
+    assert (e.value.status_code, e.value.detail) == (403, gate.CHECKS_403)
+
+
+def old_checks_door(biz_id, user):
+    """church_checks._role then treasurer(), as _access ran them on main: the
+    role is the seat's, else "accountant" for the accountant, else the 404
+    business_access gives someone with no login here."""
+    role = _role(biz_id, str(user.id))
+    if role is None:
+        from business_collaborators_router import is_active_accountant
+        if not is_active_accountant(biz_id, str(user.id)):
+            raise HTTPException(404, "business not found")
+        role = "accountant"
+    return old_treasurer(biz_id, str(user.id), role)
+
+
+@pytest.mark.parametrize("who", list(PEOPLE))
+def test_the_gate_alone_gives_check_requests_old_answer_with_nothing_passed_in(db, who, monkeypatch):
+    import church_areas
+    u = _user(PEOPLE[who])
+    old = _answer(old_checks_door, CHURCH, u)
+    for need in gate.NEEDS:
+        got = _answer(lambda: gate.require_money(CHURCH, u, need, "checks") and True)
+        if old == ("ok", True):
+            assert got == ("ok", True), who
+            assert gate.may_money(CHURCH, u, need, "checks") is True
+        elif old == ("ok", False):                       # a login, not the treasurer: the page's own 403
+            assert got == ("no", 403, gate.CHECKS_403), who
+            assert gate.may_money(CHURCH, u, need, "checks") is False
+        else:                                            # no login here: the door's 404, never a 503
+            assert old == ("no", 404, "business not found") == got, who
+            assert gate.may_money(CHURCH, u, need, "checks") is False
+    assert (old == ("ok", True)) is (who in ("owner", "admin", "accountant", "guessed"))
+    # With the areas unreadable, someone with no login is still refused plainly.
+    monkeypatch.setattr(church_areas, "my_areas", lambda *a: None)
+    if who in ("stranger", "gone"):
+        assert _answer(lambda: gate.require_money(CHURCH, u, "work", "checks")) == ("no", 404, "business not found")
+        assert gate.may_money(CHURCH, u, "work", "checks") is False
+    elif who == "accountant":
+        assert gate.may_money(CHURCH, u, "work", "checks") is True
+
+
+@pytest.mark.parametrize("part, need", [("setup", "work"), ("setup", "see"), ("books", "work"), ("bank", "work"),
+                                        ("bills", "work"), ("bills", "see"), ("store", "work")])
+def test_who_owns_the_business_comes_from_its_row_never_from_a_role_passed_in(db, part, need):
+    for who in ("manager", "member", "viewer", "stranger"):
+        u = _user(PEOPLE[who])
+        assert gate.may_money(CHURCH, u, need, part, role="owner") is False, (who, part, need)
+        with pytest.raises(HTTPException) as e:
+            gate.require_money(CHURCH, u, need, part, role="owner")
+        assert e.value.status_code == 403
+        assert gate.money_standing(CHURCH, u, need, part, role="owner") is None
+    # The real owner is the owner whatever was passed, and the row was read to say so.
+    db.reads.clear()
+    assert gate.money_standing(CHURCH, _user(OWNER), need, part, role="viewer") == "owner"
+    assert [p.split("?")[0] for p in db.reads] == ["/businesses"]
+    with pytest.raises(HTTPException) as e:
+        gate.require_money(MISSING, _user(OWNER), need, part, role="owner")
+    assert e.value.status_code == 404
+
+
+@pytest.mark.parametrize("who, biz", EVERYONE)
+def test_require_finance_takes_the_need_and_both_needs_answer_alike_today(db, who, biz):
+    import giving_records
+    u = _user(PEOPLE[who])
+    old = _answer(old_require_finance, biz, u)
+    assert _answer(giving_records.require_finance, biz, u) == old
+    assert _answer(giving_records.require_finance, biz, u, "see") == old
+    assert _answer(giving_records.require_finance, biz, u, need="work") == old
+    with pytest.raises(ValueError):
+        giving_records.require_finance(biz, u, need="lead")
+
+
+# The giving doors that write. Each asks at "work"; every other giving door asks at "see".
+WRITES = {
+    "giving_router": ("create_manual_gift", "correct_manual_gift"),
+    "giving_statement_mail": ("statements_mail_send",),
+    "church_pledges": ("create_campaign", "edit_campaign", "record_pledge", "remove_pledge"),
+    "giving_services": ("add_service", "change_service", "remove_service", "record_gifts", "move_gift", "close_count",
+                        "reopen_count"),
+    "giving_sheets": ("upload_photo", "photo_used"),
+}
+
+
+def test_the_giving_doors_that_write_ask_at_work_and_the_ones_that_read_at_see():
+    for module, writers in WRITES.items():
+        src = (pathlib.Path(ROOT) / f"{module}.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        asked: Dict[str, bool] = {}
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            is_route = any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                           and d.func.attr in ("get", "post", "put", "patch", "delete") for d in fn.decorator_list)
+            if not is_route:
+                continue
+            for call in ast.walk(fn):
+                if isinstance(call, ast.Call) and getattr(call.func, "id", "") in ("require_finance", "_gate", "_guard"):
+                    work = any(k.arg == "need" and getattr(k.value, "value", None) == "work" for k in call.keywords)
+                    asked[fn.name] = asked.get(fn.name, False) or work
+        assert sorted(n for n, w in asked.items() if w) == sorted(writers), module
+        # Nothing that changes a record was left at "see": every non-GET giving route here asks at "work".
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name in asked:
+                methods = {d.func.attr for d in fn.decorator_list
+                           if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)}
+                assert asked[fn.name] is bool(methods & {"post", "put", "patch", "delete"}), (module, fn.name)
+
+
+def test_the_church_wall_rows_cannot_be_read_as_a_yes(db):
+    shop_owner, shop_viewer = _user(OWNER), _user(VIEWER)
+    for part in ("books", "bank"):
+        # A shop is not asked: nobody was checked, and the gate says so rather than "yes".
+        for u in (shop_owner, shop_viewer, _user(STRANGER)):
+            assert gate.money_standing(SHOP, u, "see", part) == gate.NOT_ASKED
+            assert gate.require_money(SHOP, u, "see", part).by == gate.NOT_ASKED
+            with pytest.raises(ValueError, match="church wall only"):
+                gate.may_money(SHOP, u, "see", part)
+        # In a church it is a real answer.
+        assert gate.money_standing(CHURCH, _user(ADMIN), "see", part) == "admin"
+        assert gate.money_standing(CHURCH, _user(MANAGER), "see", part) is None
+        with pytest.raises(ValueError):
+            gate.may_money(CHURCH, _user(ADMIN), "see", part)
+    assert gate.NOT_ASKED not in (gate.OWNER, gate.ADMIN, gate.ACCOUNTANT, gate.SEAT, gate.MONEY_AREA)
+    # Every other row answers yes or no.
+    for (part, need), rule in gate.RULES.items():
+        if rule.elsewhere is not gate.PASS:
+            assert gate.may_money(SHOP, _user(STRANGER), need, part, areas=[]) in (True, False)
 
 
 @pytest.mark.parametrize("who", list(PEOPLE))
@@ -662,6 +804,40 @@ def test_the_scan_would_catch_each_old_copy():
                  '    if not user_id or str(user_id) != owner:',
                  '    return bool(user_id) and str(biz_row.get("owner_id")) == str(user_id)'):
         assert any(re.search(p, line) for p in DECIDES), line
+
+
+# The handlers in the modules this change touched that the ownership sweep
+# reports as taking a business id unchecked: the same six on main (f859d05a)
+# and here, each anonymous on purpose (the giving form and the storefront).
+# Measured on both: 1148 handlers, 47 unguarded, 0 outside the public-by-design list.
+TOUCHED = ("bank_statements", "bills_router", "church_checks", "church_help", "church_money_gate", "church_my_week",
+           "church_pledges", "church_reports", "church_roll", "church_spaces", "expense_categories", "funds",
+           "giving_deposits", "giving_records", "giving_router", "giving_services", "giving_sheets",
+           "giving_statement_mail", "gl_router", "housing_allowance", "plaid_router", "reports_router", "store_router",
+           "stripe_connect_router")
+UNGUARDED_ON_MAIN = [("giving_router", "public_giving_checkout"), ("store_router", "hosted_store_page"),
+                     ("store_router", "hosted_store_thanks"), ("store_router", "shipping_quote"),
+                     ("store_router", "store_checkout"), ("store_router", "store_data")]
+
+
+def test_the_ownership_sweep_sees_the_gate_by_its_code_and_guards_what_it_guarded(monkeypatch):
+    import inspect
+    import ownership_sweep
+    assert "require_money(" in ownership_sweep.HINTS and "may_money(" not in ownership_sweep.HINTS
+    # The gate's own source carries no other hint: not in its docstring, not anywhere.
+    body = inspect.getsource(gate.require_money)
+    assert [h for h in ownership_sweep.HINTS if h in body] == ["require_money("]
+    assert re.search(r"raise\s+[\w.]*HTTPException", body)
+    got = ownership_sweep.sweep()
+    here = sorted((h["module"], h["fn"]) for h in got["unguarded"] if h["module"] in TOUCHED)
+    assert here == UNGUARDED_ON_MAIN
+    assert all(h["public_by_design"] for h in got["unguarded"] if h["module"] in TOUCHED)
+    # And it is that anchor doing it: without it the doors behind the gate read as unguarded.
+    monkeypatch.setattr(ownership_sweep, "HINTS", tuple(h for h in ownership_sweep.HINTS if h != "require_money("))
+    blind = {(h["module"], h["fn"]) for h in ownership_sweep.sweep()["unguarded"]}
+    for door in (("plaid_router", "sync_business"), ("giving_router", "create_manual_gift"),
+                 ("giving_statement_mail", "statements_mail_send"), ("bills_router", "create_bill")):
+        assert door in blind and door not in {(h["module"], h["fn"]) for h in got["unguarded"]}, door
 
 
 def test_the_gates_that_kept_their_names_only_ask_the_one_gate():
