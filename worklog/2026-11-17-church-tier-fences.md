@@ -8,7 +8,6 @@ prs: [kmj-intake-server#1900, kmj-intake-server#1903, kmj-intake-server#1910, km
 migrations: [supabase/APPLY-2026-11-17-church-storage.sql (not applied), supabase/APPLY-2026-11-17-recording-small-copy.sql (not applied)]
 left_undone:
   - "Kevin: apply APPLY-2026-11-17-church-storage.sql, then APPLY-2026-11-17-recording-small-copy.sql (the first was staged in the SQL editor on 11-17; the Run click is his)"
-  - "Kevin: an R2 token with Object Read & Write on solutionist-media; STREAM_R2_WRITE_ACCESS_KEY_ID and STREAM_R2_WRITE_SECRET_ACCESS_KEY on kmj-intake-server and kmj-intake-worker. Without it nothing is deleted and no church is warned"
   - "Kevin: CLIPPER_COPY_HOSTS on solutionist-clipper = the R2 endpoint's hostname (the clipper's /health says copies:false until then)"
   - "Kevin: create the three extra-storage Stripe prices (stripe_billing.bootstrap_prices narrowed to STRIPE_PRICE_ID_EXTRA_STORAGE*, via railway run; the run was refused to the agent) and set the three STRIPE_PRICE_ID_EXTRA_STORAGE* ids on kmj-intake-server and kmj-intake-worker"
   - "Thursday 2026-11-19: CHURCH_STORAGE=owner then on, CHURCH_STORAGE_SMALL_COPY=owner then on (both services); a What's New entry for the storage card and extra storage the same day"
@@ -44,3 +43,5 @@ day 14, never counted twice against a church (CHURCH_STORAGE_SMALL_COPY
 off); #1909 + FE #1618 more room at $5 per 100 GB a month on the
 church's subscription, like extra logins; FE #1614 Small's clip wording,
 FE #1615 the storage card on the Live page. Each has its own worklog.
+
+2026-11-18, later: the R2 write key is set on kmj-intake-server and kmj-intake-worker (a Cloudflare account token, Object Read & Write on solutionist-media only); a read-only listing signed with it answered 200 on both services.
