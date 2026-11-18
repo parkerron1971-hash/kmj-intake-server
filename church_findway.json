@@ -4962,6 +4962,18 @@
          ]
         },
         {
+         "id": "change-someones-login-level",
+         "q": "Change someone’s login level",
+         "a": "Open their sheet and pick Viewer, Member, Manager or Admin under Login level, then press Save. A level you cannot set is shown locked with the reason.",
+         "words": [
+          "make someone an admin",
+          "promote",
+          "demote",
+          "manager login",
+          "change role"
+         ]
+        },
+        {
          "id": "start-someone-from-a-job",
          "q": "Start someone from a job",
          "a": "Open their sheet and pick a job under Start from a job. It fills in the areas and duties. Change what is different, then press Save.",
