@@ -226,9 +226,11 @@ def _pick(ch, roster, cid: str) -> List[Dict[str, str]]:
 
 def _on_calendar(ch, cid: str, ask_ids: Iterable[str]) -> Set[str]:
     """Which of these asks still have their away date. A yes is only on the
-    calendar while its fact is in serve_away: one taken off since (Serving,
-    Away) leaves the ask a yes with nothing behind it, and this page never
-    calls that away (docs/CHURCH_SCHEDULE.md section 2.1)."""
+    calendar while its fact is in serve_away. Taking the date off under
+    Serving, Away takes the ask back with it (church_schedule.withdraw_fact,
+    S1-6); one taken off while the switch was closed for the church leaves
+    the ask a yes with nothing behind it, and this page never calls that
+    away (docs/CHURCH_SCHEDULE.md section 2.1)."""
     import church_over as co
     import church_schedule as cs
     out: Set[str] = set()
@@ -315,6 +317,20 @@ def _short(a: Dict[str, Any]) -> str:
     return '<span class="dt-state short">Short notice</span>' if short else ""
 
 
+def _serving_line(a: Dict[str, Any], theirs: bool) -> str:
+    """Said while an ask waits, when they had already said yes to serve on
+    one of its days: a yes opens that place again (church_schedule.
+    _open_places), and whoever says yes, and the one who asked, should know
+    it before it happens."""
+    if a.get("state") != "asked" or a.get("kind") == "cant" or "serving" not in (a.get("flags") or []):
+        return ""
+    if theirs:
+        return ('<p class="dt-meta">You said yes to serve on one of these days. With a yes here, that place opens '
+                'again for your team.</p>')
+    return (f'<p class="dt-meta">{_e(_first(a.get("name")))} said yes to serve on one of these days. With your yes, '
+            f'that place opens again for their team.</p>')
+
+
 def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
     """One ask waiting for this person's yes. shape() gave them its reason
     (it went to them): it shows here, to them, and nowhere else."""
@@ -326,7 +342,7 @@ def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
             f'<div class="dt-top"><b>{_e(a["name"])}</b>'
             f'<span class="dt-state wait">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</span></div>'
             f'<p class="dt-when">{_e(_days(a["starts_on"], a["ends_on"], today))}</p>{_short(a)}{reason}'
-            f'{_cover_line(a) or "<p class=dt-meta>Nobody is covering yet.</p>"}'
+            f'{_cover_line(a) or "<p class=dt-meta>Nobody is covering yet.</p>"}{_serving_line(a, False)}'
             + (f'<p class="dt-meta">Asked {_e(asked)}</p>' if asked else "")
             + f'<div class="dt-acts"><form method="post" action="{act}"><input type="hidden" name="ans" value="yes">'
             f'<button class="ld-btn" type="submit">Yes</button></form>'
@@ -383,7 +399,8 @@ def _mine_card(a: Dict[str, Any], today: date, tz) -> str:
     return (f'<section class="ld-pr dt-card" aria-label="{_e(days)}">'
             f'<div class="dt-top"><b>{_e(days)}</b><span class="dt-state {st["cls"]}">{_e(st["chip"])}</span></div>'
             f'<p class="dt-meta">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</p>{_short(a)}'
-            f'<p class="dt-when">{_e(st["line"])}</p>{note_html}{reason}{_cover_line(a)}{back}</section>')
+            f'<p class="dt-when">{_e(st["line"])}</p>{_serving_line(a, True)}{note_html}{reason}{_cover_line(a)}{back}'
+            f'</section>')
 
 
 def _away_row(a: Dict[str, Any], today: date) -> str:

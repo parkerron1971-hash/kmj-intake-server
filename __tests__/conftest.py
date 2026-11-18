@@ -196,6 +196,8 @@ def _leaders_schedule_tables_pinned():
         _cs._STATE.update(yes=None, at=0.0)
         _cs._KEPT.clear()
         _cs._WAITING.clear()
+        _cs._OPEN.clear()
+        _cs._LAST.clear()
     except Exception:  # pragma: no cover
         pass
     yield

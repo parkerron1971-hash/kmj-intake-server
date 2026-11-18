@@ -84,8 +84,24 @@ where `me` is always a person. section() is what its switcher and
 member_portal._leads ask: the kept roster and a kept count, never a fresh
 read on every page.
 
-Not here yet (their own PRs): the Serving Away form and the scheduler's hold,
-things that repeat.
+Where it meets Who serves when (S1-6; the volunteer schedule is never made to
+wait on any of it):
+
+  holds() ........... the scheduler's hook (sunday_planning._Board): the days
+                      someone has asked for and still waits on, so nobody
+                      asks them to serve then. Who and which days, nothing
+                      else. It fails open, on purpose
+  takes() ........... whether the Serving Away form asks instead of saving:
+                      the church's switch is open and they are on the kept
+                      roster. Everyone else's Away is as it always was
+  withdraw_fact() ... taking off an away date that came from an ask takes
+                      the ask back too (church_away_settle), so no ask is
+                      left a yes with nothing behind it
+  a yes opens ....... the places they had already agreed to serve inside
+                      those days (sunday_serving.open_places), after the
+                      write, never inside it, never able to fail it
+
+Not here yet (its own PR): things that repeat.
 """
 from __future__ import annotations
 
@@ -121,6 +137,8 @@ REASON_MAX, NOTE_MAX, COVER_MAX = 500, 300, 80
 MINE_DAYS = 90             # my asks: every one still waiting, and the last three months
 WINDOW_DAYS = 93           # the calendar shows three months at most
 WINDOW_DEFAULT = 62
+HOLD_PAGE = 1000           # the scheduler's hold is read a page at a time (never above the project's max-rows)
+HOLD_PAGES = 5             # and five pages at most: what the scheduler waits on is bounded, whatever is waiting
 READY_SECONDS = 600.0      # the tables, once there, are asked about again in ten minutes
 MISSING_SECONDS = 60.0     # not there (or couldn't tell): asked again a minute later
 _STATE: Dict[str, Any] = {"yes": None, "at": 0.0}
@@ -129,6 +147,8 @@ _STATE: Dict[str, Any] = {"yes": None, "at": 0.0}
 _FORCE: Optional[bool] = None
 _KEPT: Dict[str, Tuple[float, "Roster"]] = {}
 _WAITING: Dict[str, Tuple[float, Dict[str, int]]] = {}      # church -> (when, {person: asks waiting for their yes})
+_OPEN: Dict[str, Tuple[float, bool]] = {}                   # church -> (when, open for it?): _here, under `owner`
+_LAST: Dict[str, "Roster"] = {}                             # church -> the last roster this replica read (on_schedule)
 
 FIELDS = ("id,business_id,contact_id,made_by,grp,department_id,kind,starts_on,ends_on,reason,cover_contact_id,"
           "cover_name,to_user_id,to_contact_id,state,flags,decided_by_user_id,decided_by_contact_id,decided_at,"
@@ -571,12 +591,15 @@ def roster_kept(biz: Any) -> Optional[Roster]:
     except HTTPException:
         return None
     _KEPT[b] = (now, got)
+    _LAST[b] = got
     return got
 
 
 def forget(biz: Any) -> None:
     """A roster that changed is read again at once on this replica."""
-    _KEPT.pop(str(biz.get("id") if isinstance(biz, dict) else biz), None)
+    b = str(biz.get("id") if isinstance(biz, dict) else biz)
+    _KEPT.pop(b, None)
+    _LAST.pop(b, None)
 
 
 def waiting_kept(biz: Any) -> Optional[Dict[str, int]]:
@@ -654,6 +677,157 @@ def section(biz: Any, cid: Any) -> Optional[Dict[str, int]]:
         b = str(biz.get("id") if isinstance(biz, dict) else biz)
         print(f"[church_schedule] {b[:8]}: the Dates entry couldn't be worked out ({type(e).__name__})", flush=True)
         return None
+
+
+# ─── Where it meets Who serves when ───────────────────────────────────
+
+def _here(biz: Any) -> bool:
+    """Whether the leaders schedule reaches Who serves when and the Serve
+    page at this church, asked the cheap way and in this order: the switch
+    (no read), then the tables (kept ten minutes), then the church. Off, or
+    before the migration, nothing is read at all, not even whose church it
+    is.
+
+    Under `owner` the church's answer is kept a minute a replica WHATEVER IT
+    WAS, a lookup that failed included. member_asks.platform_church keeps
+    only an answer it could read, and each time it couldn't it asks the
+    sign-in service again (which can take ten seconds to say no): the
+    volunteer schedule waits on that once a minute a church at most, never
+    on every board. A lookup that failed reads as closed, as it always
+    has. NEVER RAISES."""
+    m = mode()
+    if m == "off" or not ready():
+        return False
+    if m == "on":
+        return True
+    b = str(biz.get("id") if isinstance(biz, dict) else biz)
+    now = clock.monotonic()
+    # list(): boards are built on many threads at once.
+    for k in [k for k, (at, _yes) in list(_OPEN.items()) if now - at >= ROSTER_SECONDS]:
+        _OPEN.pop(k, None)
+    hit = _OPEN.get(b)
+    if hit:
+        return hit[1]
+    try:
+        yes = bool(church_open(b))
+    except Exception:  # noqa: BLE001 - closed, as far as can be told; never an error for whoever asked
+        yes = False
+    _OPEN[b] = (now, yes)
+    return yes
+
+
+def holds(biz_id: Any, lo: Any, hi: Any) -> List[Dict[str, str]]:
+    """The scheduler's hook (sunday_planning._Board): the days someone has
+    asked to be away and is still waiting on, so Who serves when doesn't ask
+    them to serve on a day they have asked for. [{contact_id, starts_on,
+    ends_on}] for every ask still `asked` that touches `lo`..`hi` (days).
+
+    Only who and which days. The read never selects the reason, the kind,
+    who it went to or anything else of the ask's, so the board has nothing
+    to say but "away", in the words it already uses.
+
+    FAILS OPEN, ON PURPOSE (decision 12), AND NEVER RAISES: [] when the
+    switch is off, the tables aren't there, the switch is closed for this
+    church, or the read failed for any reason at all. The other choice is
+    Who serves when failing, for every church and every volunteer, whenever
+    this one table blips. The worst that failing open does is that someone
+    whose ask still waits is asked to serve that day, which is what happens
+    today; they say no, and their ask is still answered.
+
+    It costs nothing where there is nothing to hold: the switch (no read),
+    then the tables (kept ten minutes), then the church (kept) are asked
+    first (_here), so off, before the migration, or closed for the church no
+    read is made here. Open, it is one read, a page at a time (HOLD_PAGE
+    rows, HOLD_PAGES pages at most: what the scheduler waits on is bounded,
+    and past that it holds the ones it read)."""
+    try:
+        if not _here(biz_id):
+            return []
+        b = str(biz_id.get("id") if isinstance(biz_id, dict) else biz_id)
+        a, z = _day(lo), _day(hi)
+        if not b or not a or not z or z < a:
+            return []
+        path = (f"/church_away_asks?business_id=eq.{_q(b)}&state=eq.asked&starts_on=lte.{z.isoformat()}"
+                f"&ends_on=gte.{a.isoformat()}&select=id,business_id,contact_id,starts_on,ends_on,state"
+                f"&order=id.asc&limit={HOLD_PAGE}")
+        rows: List[Dict[str, Any]] = []
+        after: Optional[str] = None
+        for _page in range(HOLD_PAGES):
+            page = sb_clients.sb_get_as_service(path + (f"&id=gt.{_q(after)}" if after else ""))
+            if not isinstance(page, list):
+                return []                       # a page that failed: nobody is held, and nothing is half-read
+            rows += page
+            if len(page) < HOLD_PAGE:
+                break
+            after = str(page[-1].get("id") or "")
+            if not after:
+                break
+        out = []
+        for r in rows:
+            s, e = str(r.get("starts_on") or "")[:10], str(r.get("ends_on") or "")[:10]
+            if (str(r.get("business_id")) == b and r.get("state") == "asked" and r.get("contact_id")
+                    and s <= z.isoformat() and e >= a.isoformat()):
+                out.append({"contact_id": str(r["contact_id"]), "starts_on": s, "ends_on": e})
+        return out
+    except Exception as e:  # noqa: BLE001 — the volunteer schedule is never worth failing for this
+        print(f"[church_schedule] the scheduler's hold couldn't be read ({type(e).__name__}); nobody is held",
+              flush=True)
+        return []
+
+
+def on_schedule(biz: Any, cid: Any) -> Optional[bool]:
+    """Whether one of the church's people is on its leaders schedule, as the
+    member app asks it: from the roster kept a minute a replica (decision
+    17), never a fresh read on a page. False: the switch is off or closed
+    for the church, its tables aren't there (asked first, so nothing else is
+    read before the migration), or they aren't on it. None: the switch is
+    open and the roster couldn't be read, so it can't be told. NEVER RAISES.
+    A page shows its leaders' part only on True; a write asks takes(), which
+    reads "couldn't tell" as "not on it" (a volunteer comes first).
+
+    When the minute is up and the roster can't be read again, the last one
+    this replica read answers (_LAST), however old: a blip never stands
+    between a volunteer and their Away. "Couldn't tell" is left for a
+    replica that has never once read this church's roster."""
+    try:
+        if not _here(biz):
+            return False
+    except Exception:  # noqa: BLE001 — closed, as far as can be told
+        return False
+    cid = str(cid or "")
+    if not cid:
+        return False
+    try:
+        r = roster_kept(biz)
+    except Exception:  # noqa: BLE001
+        r = None
+    if r is None:
+        r = _LAST.get(str(biz.get("id") if isinstance(biz, dict) else biz))
+    return None if r is None else cid in r.people()
+
+
+def takes(biz: Any, cid: Any) -> bool:
+    """Whether this person's Away on the Serve page is asked for (through
+    ask(), with all its rules) instead of saved at once: the church's switch
+    is open and they are on its leaders schedule (on_schedule). False for
+    everyone else, with no read where the switch is closed or before the
+    migration: a volunteer's Away is exactly what it always was.
+
+    A VOLUNTEER'S AWAY NEVER FAILS BECAUSE OF THIS. Where it can't be told
+    (the switch is open, and this replica has never read the church's roster
+    and can't read it now) the answer is "not on the leaders schedule", and
+    the Away is saved at once, exactly as it always was: no 503, no "try
+    again". The cost is that in that one corner a leader's Away from the
+    Serve page is saved at once too, which is what happened before the
+    leaders schedule and harms nothing. One line is logged when it happens
+    (the church, never a name). NEVER RAISES."""
+    got = on_schedule(biz, cid)
+    if got is None:
+        b = str(biz.get("id") if isinstance(biz, dict) else biz)
+        print(f"[church_schedule] {b[:8]}: who is on the leaders schedule couldn't be read, so an Away is saved at "
+              f"once, as anyone's is", flush=True)
+        return False
+    return got
 
 
 def department_of(ch: co.Church, cid: Any) -> Optional[Dict[str, Any]]:
@@ -922,6 +1096,44 @@ def _after(what: str, ch: co.Church, row: Dict[str, Any], **kw: Any) -> None:
         print(f"[church_schedule] {ch.b[:8]}: a notice wasn't handed on ({what})", flush=True)
 
 
+def _serving(ch: co.Church, cid: str, a: date, b: date, now: Optional[datetime]) -> bool:
+    """Whether they have already said yes to serve on a day inside these
+    (the ask's `serving` flag): a yes will open those places. A flag and
+    nothing more, so a read that fails here says no and is logged, and
+    never costs anyone their ask (sickness is never blocked by a blip in
+    Who serves when). _open_places reads for itself when the yes comes."""
+    try:
+        import sunday_serving
+        return bool(sunday_serving.yes_places(ch.b, cid, a, b, now=now or _now()))
+    except Exception as e:  # noqa: BLE001
+        print(f"[church_schedule] {ch.b[:8]}: couldn't tell whether they serve on those days ({type(e).__name__})",
+              flush=True)
+        return False
+
+
+def _open_places(ch: co.Church, row: Dict[str, Any], now: Optional[datetime] = None) -> int:
+    """A yes to someone who had already said yes to serve inside those days
+    (decision 10): each of those places is opened again, the way
+    sunday_serving.cant_make_it opens one, so whoever schedules that team
+    sees the gap instead of a yes from someone who is away. What the team
+    sees is the board's own words for it ("Can't make it · Away"): never
+    that there was an ask, its kind, its reason or who said yes.
+
+    AFTER THE WRITE, NEVER INSIDE IT, and never able to fail it: the yes and
+    its away date are already saved (church_away_settle), so whatever goes
+    wrong here is one logged line and the yes stands. Only a place still a
+    yes, on a day still to come, is touched, so doing it twice changes
+    nothing. Answers with how many were opened."""
+    try:
+        import sunday_serving
+        return sunday_serving.open_places(ch.b, str(row.get("contact_id") or ""), row.get("starts_on"),
+                                          row.get("ends_on"), now=now or _now())
+    except Exception as e:  # noqa: BLE001 — the yes is saved; this never takes it back
+        print(f"[church_schedule] {ch.b[:8]}: a yes was saved, but the places they had agreed to serve "
+              f"weren't opened ({type(e).__name__})", flush=True)
+        return 0
+
+
 def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """The one write of an ask. Everything is read before it: who it is for
     and their group, the days against the church's clock and its notice
@@ -996,6 +1208,8 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
         done = _settled(ch, cid, kind, a, b) if instant else None
         to = None if top else goes_to(ch, cid)
         flags = ["short_notice"] if not top and is_short(ch, a, today, notice) else []
+        if _serving(ch, cid, a, b, now):
+            flags.append("serving")             # they already said yes to serve one of the days: a yes opens it
         dept = department_of(ch, cid)
         row = {"business_id": ch.b, "contact_id": cid, "made_by": str(me["id"]) if me["kind"] == co.LOGIN else None,
                "grp": grp, "department_id": str(dept["id"]) if dept else None, "kind": kind,
@@ -1008,6 +1222,7 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
     if done:
         if left:
             _take_back(ch, left)                # a leftover beside the one that settled
+        _open_places(ch, done, now)             # and so may this have been (a place already opened is left alone)
         _after("tell_new", ch, done)            # its own answer was lost, so its notice may have been too (told once)
         return shape(ch, me, done, names)
     if left:
@@ -1043,6 +1258,7 @@ def ask(ch: co.Church, me: Dict[str, Any], body: Dict[str, Any], *, now: Optiona
         return shape(ch, me, twin, names)
     if not got.get("changed"):
         raise HTTPException(409, MOVED)         # it moved under us (taken back, say): never "saved" as it stands
+    _open_places(ch, got["ask"], now)           # it is a yes now: the places they had agreed to serve are open again
     _after("tell_new", ch, got["ask"])          # "can't make it": whoever is over them hears at once
     return shape(ch, me, got["ask"], names)
 
@@ -1083,6 +1299,8 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
     got = _settle(ch, row["id"], "yes" if yes else "no", note=note, **by)
     if not got.get("changed"):
         raise HTTPException(409, ALREADY)
+    if yes:
+        _open_places(ch, got["ask"])            # after the write, never inside it, never able to fail it
     _after("tell_answer", ch, got["ask"])       # the one who asked hears the answer
     return shape(ch, me, got["ask"], names)
 
@@ -1106,6 +1324,43 @@ def withdraw(ch: co.Church, me: Dict[str, Any], ask_id: Any) -> Dict[str, Any]:
         raise HTTPException(409, NOT_OPEN)
     _after("tell_withdrawn", ch, got["ask"], by=dict(me))
     return shape(ch, me, got["ask"], names)
+
+
+def withdraw_fact(biz: Any, cid: Any, away_id: Any) -> bool:
+    """Taking an away date off on the Serve page (sunday_serving.drop_away),
+    when that date came from an ask: the ask is taken back through
+    church_away_settle, which removes the date in the same transaction, so
+    no ask is left a yes with nothing behind it and no date is left without
+    its ask being settled. It goes through withdraw() as the person
+    themself, so its rules hold (only the one who asked) and whoever it went
+    to is told as for any take-back (church_schedule_tell).
+
+    True: it was one of ours and it is done; the caller deletes nothing.
+    False: not ours to do, and the caller removes the date exactly as it
+    always did: the switch is off or closed for the church or its tables
+    aren't there (no read is made then), there is no such date of theirs, it
+    is a plain away date (no ask), or its ask is gone or already settled (a
+    date left behind by one is a plain date now). A read or a write that
+    fails is a 503 with nothing removed: never the date without its ask."""
+    if not _here(biz):
+        return False
+    b = str(biz.get("id") if isinstance(biz, dict) else biz)
+    cid = str(cid or "")
+    rows = _need(f"/serve_away?id=eq.{_q(away_id)}&business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}"
+                 f"&select=id,ask_id&limit=1")
+    ask_id = rows[0].get("ask_id") if rows else None
+    if not ask_id:
+        return False
+    row = _own_row(biz)
+    if row is None:
+        raise HTTPException(503, UNREAD)
+    try:
+        withdraw(co.Church(row), co.who(co.PERSON, cid), ask_id)
+    except HTTPException as e:
+        if e.status_code in (404, 409):
+            return False                        # no such ask anymore, or it was already settled: a plain date now
+        raise
+    return True
 
 
 # ─── Lists ────────────────────────────────────────────────────────────
