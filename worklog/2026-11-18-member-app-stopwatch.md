@@ -3,8 +3,8 @@ title: Member app stopwatch — how long member pages take, on the server and on
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: '"the members app move slow when send messages in chat, switching from one tab to another… what is the problem and how can that be sped up?" … "yes build all four" (Kevin, 2026-11-18). This is fix one of four: the stopwatch, so the other three can be measured.'
-status: in review
-prs: [kmj-intake-server (this PR), "solutionist-studio (the Member app section on the Database page; merge after this one deploys)"]
+status: shipped (fixes after review in review)
+prs: [kmj-intake-server#1944, solutionist-studio#1638, "kmj-intake-server (the two fixes after review)"]
 migrations: []
 left_undone:
   - "No signed-in page was timed live yet: nothing timed member pages before this, and a member session can't be made for a real member. The first real numbers come from Railway's [member] lines and the Database card's next reading (Check now any time, Sunday from 7:45 AM)."
@@ -36,6 +36,12 @@ all of it (read its docstring first):
   minutes, Wednesday, Check now) saves them in `metrics.member_app`; the card says
   "Tabs open in 0.9 s typical, 1.8 s for the slowest 1 in 10 (last Sunday)", page by page,
   and a later Check now beside it ("Since then: …") for before and after.
+
+**After review (second PR):** a reading's mark now moves only once the reading is saved
+(`member_stopwatch.saved`, called by `db_health.take_reading` when the PATCH comes back),
+so a failed save on a Sunday hands its quarter hour to the next reading; and the beacon
+checks the session cookie's signature, for the church the cookie names, before it reads
+anything, so a made-up cookie never costs a database read.
 
 Tests: `__tests__/test_member_stopwatch.py` and the member-app cases in
 `__tests__/test_db_health.py`, each rehearsed red (the wiring removed, and 21 one-line

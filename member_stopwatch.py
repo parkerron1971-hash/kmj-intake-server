@@ -32,9 +32,10 @@ POST /my/timing takes it only:
     Origin or Referer names this host; Origin: null only with the browser's
     Sec-Fetch-Site: same-origin, as in member_portal._same_origin; a request
     with none of the three is refused);
-  - from a signed-in member of that church (the session cookie's signature,
-    checked with no database read; the church comes from what this process
-    saw serve a member page in the last 10 minutes, else one lookup);
+  - from a signed-in member of that church (the session cookie's signature
+    is checked first, with no database read, so a made-up cookie costs
+    nothing; then the address must be that church's: what this process saw
+    serve a member page in the last 10 minutes, else one lookup);
   - never from the owner's preview, at most RL_MEMBER_TIMING_PER_MIN a minute
     from one network (a church's wifi is one network), with plausible numbers
     (0-60 s, first byte before ready). Anything else is dropped.
@@ -47,9 +48,10 @@ time, in memory. Each server copy (Railway runs several) keeps only its own.
 WHERE KEVIN SEES THEM. db_health.take_reading saves for_reading() into the
 reading's metrics jsonb as metrics.member_app (no new table, no migration):
 Sunday every 15 minutes, Wednesday, and Check now. A scheduled reading takes
-what this process timed since its last scheduled reading (at most an hour);
-Check now takes the last hour without moving that mark, so it never steals
-Sunday's numbers. The reading is taken by the scheduler's leader, so each
+what this process timed since its last saved scheduled reading (at most an
+hour; the mark moves only once the reading is saved, so a failed save leaves
+its numbers for the next); Check now takes the last hour without moving that
+mark, so it never steals Sunday's numbers. The reading is taken by the scheduler's leader, so each
 reading holds the numbers of the one server copy that took it: a sample,
 fair while visits are shared out evenly between copies. card() turns the
 week's readings into the words on Mission Control → Systems → Database.
@@ -287,8 +289,10 @@ def _z(ts: float) -> str:
 def for_reading(kind: str, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """This process's numbers for a db_health reading, or None when it has
     none (or the stopwatch is off). A scheduled reading takes what was timed
-    since this process's last scheduled one (at most an hour) and moves the
-    mark; Check now ('manual') takes the last hour and leaves the mark."""
+    since this process's last saved one (at most an hour); Check now
+    ('manual') takes the last hour. Neither moves the mark: saved() does,
+    once the reading is in the database, so a reading that fails to save
+    leaves its numbers for the next one."""
     if not enabled():
         return None
     try:
@@ -297,7 +301,6 @@ def for_reading(kind: str, now: Optional[float] = None) -> Optional[Dict[str, An
             since = now - WINDOW_SECONDS
             if kind != "manual":
                 since = max(since, _state["mark"])
-                _state["mark"] = now
         vals = _values(since, now)
         if not vals:
             return None
@@ -309,6 +312,18 @@ def for_reading(kind: str, now: Optional[float] = None) -> Optional[Dict[str, An
     except Exception as e:  # noqa: BLE001 — a reading never fails for the stopwatch
         print(f"[member] reading numbers failed: {type(e).__name__}", flush=True)
         return None
+
+
+def saved(reading: Optional[Dict[str, Any]], kind: str) -> None:
+    """A scheduled reading made it into the database: the next one starts
+    where it ended. Check now never moves the mark."""
+    if not reading or kind == "manual":
+        return
+    until = _parse(reading.get("until"))
+    if until is None:
+        return
+    with _lock:
+        _state["mark"] = max(_state["mark"], until.timestamp())
 
 
 # ─── The card (pure): the week's readings in plain words ────────────────
@@ -618,6 +633,21 @@ async def _church_for(request: Request, host: str) -> Optional[Tuple[str, int]]:
     return str(biz["id"]), member_portal._epoch(biz)
 
 
+def _signed_session(cookie: str) -> Optional[Dict[str, Any]]:
+    """A member session cookie whose signature holds, for the church it
+    names, checked before anything is read: a made-up cookie never costs a
+    database read. The address is matched to that church after."""
+    import member_portal
+    try:
+        payload = cookie.split(".", 1)[0]
+        biz = str(json.loads(member_portal._unb64(payload)).get("biz") or "")
+    except Exception:  # noqa: BLE001
+        return None
+    if not biz:
+        return None
+    return member_portal.read_session(cookie, biz)
+
+
 def _clean(body: bytes) -> Optional[Tuple[str, float, float]]:
     """(kind, first byte ms, ready ms) from the beacon, or None."""
     if not body or len(body) > 512:
@@ -662,8 +692,8 @@ async def phone_timing(request: Request):
         return Response(status_code=429)
     if request.cookies.get(pv.PREVIEW_COOKIE):
         return done
-    cookie = request.cookies.get(member_portal.SESSION_COOKIE) or ""
-    if not cookie:
+    claims = _signed_session(request.cookies.get(member_portal.SESSION_COOKIE) or "")
+    if not claims:
         return done
     got = _clean(await request.body())
     if not got:
@@ -671,7 +701,7 @@ async def phone_timing(request: Request):
     church = await _church_for(request, host)
     if not church:
         return Response(status_code=404)
-    if not member_portal.read_session(cookie, church[0], epoch=church[1]):
+    if church[0] != str(claims["biz"]) or int(claims.get("iat") or 0) < int(church[1] or 0):
         return done
     kind, first, ready = got
     record("first_byte", kind, first)
