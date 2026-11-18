@@ -3,11 +3,10 @@ title: Who serves when schedules the volunteer teams for an event that isn't on 
 date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, about Laquesha scheduling greeters, ushers, parking, kids workers and hospitality for a Thursday outreach night, a Saturday event or a Wednesday Bible study: "build that"'
-status: in review
+status: shipped
 prs: [kmj-intake-server (this PR), solutionist-studio (the Add an event date PR)]
-migrations: [supabase/APPLY-2026-11-17-event-volunteer-dates.sql (NOT APPLIED: Kevin applies it)]
+migrations: [supabase/APPLY-2026-11-17-event-volunteer-dates.sql (APPLIED 2026-11-18 by Kevin; read back)]
 left_undone:
-  - "Apply supabase/APPLY-2026-11-17-event-volunteer-dates.sql. Until then the feature hides itself (no button, the routes 404) and everything else reads as before"
   - "CHURCH_EVENT_VOLUNTEERS is owner by default (Love City only): switch it on for every church on a Thursday"
   - "An event moved or renamed in Services & Events doesn't move its event date: the date keeps the day, time, name and place it was added with (take it off and add it again while nobody was asked)"
   - "A typed event date isn't added to Services & Events or the church calendar (one picked from there is that entry already)"
