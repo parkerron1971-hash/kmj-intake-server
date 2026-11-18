@@ -465,6 +465,21 @@ def _up_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
     return f'<div class="dt-it dt-full"><b>Why it came to you</b>{body}</div>'
 
 
+def _shown(a: Dict[str, Any]) -> str:
+    """What this card shows as being in the way, for its Yes to carry: the
+    flags the "Why it came to you" box spells out (the days as they stand,
+    `why`), or, when the box could only say that it needs an exception, the
+    ask's own. '' for an ask that didn't go up, or whose days have cleared:
+    that Yes is shown as a plain yes. The engine gives an exception only
+    over what was shown (church_schedule.answer)."""
+    import church_schedule as cs
+    if a.get("state") != "asked" or not cs.flagged(a) or "why" not in a:
+        return ""
+    why = a.get("why")
+    said = {w.get("flag") for w in why} if why is not None else set(a.get("flags") or [])
+    return ",".join(f for f in cs.UP_FLAGS if f in said)
+
+
 def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
     """One ask waiting for this person's yes. shape() gave them its reason
     (it went to them): it shows here, to them, and nowhere else."""
@@ -480,6 +495,7 @@ def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
             f'{_cover_line(a) or "<p class=dt-meta>Nobody is covering yet.</p>"}{_serving_line(a, False)}'
             + (f'<p class="dt-meta">Asked {_e(asked)}</p>' if asked else "")
             + f'<div class="dt-acts"><form method="post" action="{act}"><input type="hidden" name="ans" value="yes">'
+            + (f'<input type="hidden" name="shown" value="{_e(_shown(a))}">' if _shown(a) else "") +
             f'<button class="ld-btn" type="submit">Yes</button></form>'
             f'<details class="dt-more"><summary class="ld-ghost">Not this one</summary>'
             f'<form class="dt-form" method="post" action="{act}"><input type="hidden" name="ans" value="no">'
@@ -979,7 +995,10 @@ async def answer(ask_id: str, request: Request):
         ans = str(form.get("ans") or "")
         if ans not in ("yes", "no"):
             raise HTTPException(400, "Say yes, or not this one")
-        got = cs.answer(ch, who, _ask_id(ask_id), ans == "yes", form.get("note") if ans == "no" else None)
+        # The Yes carries what its card showed as being in the way: no exception is given unseen.
+        shown = [f for f in str(form.get("shown") or "").split(",") if f]
+        got = cs.answer(ch, who, _ask_id(ask_id), ans == "yes", form.get("note") if ans == "no" else None,
+                        shown=shown)
         if ans == "yes" and got.get("excepted"):
             return "dt_yes_x"                   # a yes over a flag: an exception
         return "dt_yes" if ans == "yes" else "dt_no"

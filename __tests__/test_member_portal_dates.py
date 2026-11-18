@@ -906,6 +906,16 @@ def away(db, handle, on=SUNDAY):
                                "created_at": fake.NOW.isoformat()})
 
 
+def shown_on(db, who, ask_id):
+    """What the Yes on this person's card for that ask carries: the flags
+    the card showed as being in the way ('' when it carries none)."""
+    html = page(db, who)[0]
+    form = html.split(f'action="/my/lead/dates/{ask_id}/answer"><input type="hidden" name="ans" value="yes">')[1]
+    form = form.split("</form>")[0]
+    m = re.search(r'<input type="hidden" name="shown" value="([^"]*)">', form)
+    return m.group(1) if m else ""
+
+
 def full(db, on=SUNDAY):
     """The leaders number at two, and two leaders away that Sunday."""
     db.t["church_schedule_settings"].append({"business_id": HOPE, "notice_days": 14, "leaders_limit": 2,
@@ -985,8 +995,10 @@ def test_whoever_it_went_up_to_sees_why_it_came_to_them_and_their_yes_is_an_exce
     seen = words.replace(SECRET, "")
     assert not UUID.search(seen) and not OFFICE_WORDS.search(seen) and not KEYS.search(seen)
     assert not TITLE_WORDS.search(seen.replace(OWNER_CALLED, ""))
+    assert shown_on(db, "owen", row["id"]) == "over_limit", "his Yes carries what the box showed him"
     as_(app, "owen")
-    assert went(post(app, f"/my/lead/dates/{row['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes_x"
+    assert went(post(app, f"/my/lead/dates/{row['id']}/answer", ans="yes", shown="over_limit")) == \
+        "/my/lead/dates?done=dt_yes_x"
     assert (row["state"], row["excepted"], row["decided_by_contact_id"]) == ("yes", ["over_limit"],
                                                                              db.who[HOPE]["owen"])
     assert "You said yes, as an exception. It’s on the calendar now." in text(page(db, "owen", done="dt_yes_x")[0])
@@ -1094,7 +1106,13 @@ def test_a_yes_from_the_page_that_no_longer_lands_says_so_in_plain_words(app, db
     assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_yours"
     words = text(page(db, "nathan", err="dt_yours")[0])
     assert "It’s marked below. Say yes again to make an exception." in words and "Why it came to you" in words
-    assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes_x"
+    # The second press of the same Yes (a double tap) carried nothing, and lands nothing.
+    assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes")) == "/my/lead/dates?err=dt_yours"
+    assert (mine["state"], mine["excepted"]) == ("asked", []) and db.rpcs == []
+    # The page he came back to shows why, and its Yes carries it.
+    assert shown_on(db, "nathan", mine["id"]) == "over_limit"
+    assert went(post(app, f"/my/lead/dates/{mine['id']}/answer", ans="yes", shown="over_limit")) == \
+        "/my/lead/dates?done=dt_yes_x"
     assert mine["excepted"] == ["over_limit"]
 
 
@@ -1128,7 +1146,14 @@ def test_a_flagged_card_whose_days_have_cleared_says_there_is_room_now(app, db, 
             "Owen Diaz can make an exception.") in text(page(db, "yusuf")[0])
     assert ("Why it came to you These days were full or protected when it was asked. There’s room now, so your yes "
             "is a plain yes.") in text(page(db, "owen")[0])
+    assert shown_on(db, "owen", asks(db)[0]["id"]) == "", "shown as a plain yes: the Yes carries no flag"
+    away(db, "wren")
+    away(db, "kara")                                    # it fills again before he presses
     as_(app, "owen")
+    assert went(post(app, f"/my/lead/dates/{asks(db)[0]['id']}/answer", ans="yes")).endswith("err=dt_yours"), \
+        "he was shown room: no exception lands unseen"
+    assert asks(db)[0]["state"] == "asked"
+    db.t["serve_away"].clear()
     assert went(post(app, f"/my/lead/dates/{asks(db)[0]['id']}/answer", ans="yes")) == "/my/lead/dates?done=dt_yes"
 
 

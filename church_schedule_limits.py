@@ -391,16 +391,25 @@ def picture(ch: co.Church, lo: date, hi: date, *, now: Optional[datetime] = None
         everyone = set(p.roster.people())
         for d in p.departments.values():
             everyone |= d["people"]
-        p.away = {}
-        window = f"&ends_on=gte.{lo.isoformat()}&starts_on=lte.{hi.isoformat()}"
-        for part in co._chunks(sorted(everyone), co.IDS_PER_READ):
-            for f in cs._every(f"/serve_away?business_id=eq.{cs._q(ch.b)}&contact_id=in.({cs._in(part)}){window}"
-                               f"&select=id,contact_id,starts_on,ends_on"):
-                first, last = cs._day(f.get("starts_on")), cs._day(f.get("ends_on"))
-                cid = str(f.get("contact_id") or "")
-                if first and last and cid in everyone:
-                    p.away.setdefault(cid, []).append((first, last))
+        p.away = _facts(ch, everyone, lo, hi)
         return p
+
+
+def _facts(ch: co.Church, people: Iterable[str], lo: date, hi: date) -> Dict[str, List[Tuple[date, date]]]:
+    """THE FACTS for these people from `lo` to `hi`: {person: [(first day,
+    last day)]}, from serve_away and nothing else (never an ask). A hundred
+    people a read, each read a page at a time."""
+    people = set(people)
+    out: Dict[str, List[Tuple[date, date]]] = {}
+    window = f"&ends_on=gte.{lo.isoformat()}&starts_on=lte.{hi.isoformat()}"
+    for part in co._chunks(sorted(people), co.IDS_PER_READ):
+        for f in cs._every(f"/serve_away?business_id=eq.{cs._q(ch.b)}&contact_id=in.({cs._in(part)}){window}"
+                           f"&select=id,contact_id,starts_on,ends_on"):
+            first, last = cs._day(f.get("starts_on")), cs._day(f.get("ends_on"))
+            cid = str(f.get("contact_id") or "")
+            if first and last and cid in people:
+                out.setdefault(cid, []).append((first, last))
+    return out
 
 
 def service_days(ch: co.Church, lo: date, hi: date) -> List[Dict[str, Any]]:
@@ -420,11 +429,15 @@ def limit_for(ch: co.Church, grp: str, department_id: Any = None) -> Optional[in
 
 
 def away_on(ch: co.Church, day: date, grp: str, department_id: Any = None) -> Set[str]:
-    """Who of a group (or of a department's people) has an away date on
-    `day`: the facts only, each person once."""
-    p = picture(ch, day, day)
+    """Who of a group (or, with `department_id`, of that department's
+    people, whether or not it has a number) has an away date on `day`: the
+    facts only, each person once. A department's people are read for
+    themselves: a picture holds the away dates of a department only when
+    it has a number."""
     if department_id:
-        return p.away_on(day, department_people(ch, department_id))
+        gone = _facts(ch, department_people(ch, department_id), day, day)
+        return {c for c, spans in gone.items() if any(a <= day <= z for a, z in spans)}
+    p = picture(ch, day, day)
     return p.away_on(day, p.people.get(grp, set()))
 
 

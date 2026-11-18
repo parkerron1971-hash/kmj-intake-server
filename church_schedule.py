@@ -209,6 +209,10 @@ FULL_NOW = ("Those days have changed since this was asked: one of them is full n
             "Your yes didn't go through.")
 WENT_UP = FULL_NOW + " It has gone to {name}, who can make an exception."
 YOURS_NOW = FULL_NOW + " It's marked now. Say yes again to make an exception."
+# A yes to an ask that went up, on a server that can't tell just now whether
+# the limit's tables are there: nothing is saved, and they try again.
+CANT_EXCEPT = ("That one needs an exception, and the schedule couldn't be read just now to make one. Nothing was "
+               "saved. Try again in a minute.")
 WAITING = "Those days are already waiting for an answer."
 TOO_MANY = "That's a lot of asks still waiting. Take one back first."
 BAD_DAYS = "Pick the days: a year at most, and not in the past."
@@ -1429,9 +1433,15 @@ def _recheck(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any]) -> Tuple[Li
 
     Something new since it was asked (a day has filled, or was made a
     protected day): `moved` says what the ask must become before anyone
-    says yes to it: its flags with the new ones, who it goes up to (None
-    when it already sits with someone who may give the exception), and
-    whether that is `me`. The yes must not land."""
+    says yes to it: its flags with the new ones, who it goes up to, and
+    whether `me` may then answer it. The yes must not land.
+
+    WHO IT GOES UP TO IS NOBODY NEW (`to` None) when the ask already sits
+    with someone who may give the exception (held_right), flagged before or
+    not: an Admin's ask sits with the owner from the start, and stays his
+    when the day fills. It is marked where it is, nobody is told (the one
+    who holds it is the one who just pressed yes, or will find it marked),
+    and their next yes is the exception."""
     import church_schedule_limits
     cid = str(row.get("contact_id") or "")
     a, b = _day(row.get("starts_on")), _day(row.get("ends_on"))
@@ -1442,7 +1452,9 @@ def _recheck(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any]) -> Tuple[Li
     new = [f for f in now if f not in have]
     if not new:
         return [f for f in now if f in have], None
-    up = None if (flagged(row) and held_right(ch, row)) else goes_up(ch, cid, entered=row.get("made_by"))
+    up = None if held_right(ch, row) else goes_up(ch, cid, entered=row.get("made_by"))
+    if up and up["kind"] == co.LOGIN and str(up["id"]) == str(row.get("to_user_id") or ""):
+        up = None                                   # the login it already names: nothing moves, nobody is told again
     after = dict(row, flags=have + new)
     if up:
         after.update(to_user_id=up["id"], to_contact_id=None)
@@ -1474,7 +1486,14 @@ def _send_up(ch: co.Church, row: Dict[str, Any], moved: Dict[str, Any]) -> None:
         WENT_UP.format(name=moved["name"]) if moved.get("name") else FULL_NOW))
 
 
-def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any = None) -> Dict[str, Any]:
+def _shown(v: Any) -> Set[str]:
+    """The flags the one saying yes was shown (a list; anything else, or
+    nothing, is none): only the ones that send an ask up count."""
+    return {f for f in v if f in UP_FLAGS} if isinstance(v, (list, tuple, set, frozenset)) else set()
+
+
+def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any = None, *,
+           shown: Any = None) -> Dict[str, Any]:
     """Yes, or not this one (with a note, 300 letters at most): whoever it
     went to; in the office app also the owner and whoever oversees the
     office (403 for anyone else, for your own ask, and for one you entered
@@ -1488,7 +1507,22 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
     one that has run into something new since it was asked does not land
     (_send_up: a 409, the ask flagged and sent up); otherwise the flags
     still true are saved as the exception, with the yes, in one transaction
-    (church_away_settle_excepted)."""
+    (church_away_settle_excepted).
+
+    NOBODY GIVES AN EXCEPTION THEY WERE NOT SHOWN. `shown` is the flags the
+    one saying yes was shown as being in the way (the Dates page posts them
+    with its Yes; the office route takes them in the body; nothing said is
+    none shown). A yes lands as an exception only when every flag it would
+    be given over is among them. Otherwise it is the same 409, with nothing
+    written: so a second press of Yes that was already on its way when the
+    first one marked the ask does not land an exception nobody saw. A yes
+    with nothing to except, "not this one" and a take-back never ask.
+
+    A yes to a flagged ask while this server can't tell whether step 2's
+    tables are there (step2() says no) is a 503 with nothing saved: it
+    would otherwise land as a plain yes, over a full day, with no exception
+    on record. Flagged asks exist only where step 2 is applied, so a
+    database with step 1's file alone never meets this."""
     if not isinstance(yes, bool):
         raise HTTPException(400, "Say yes, or not this one")
     note = _note(note)
@@ -1505,6 +1539,10 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
         moved: Optional[Dict[str, Any]] = None
         if yes and step2():
             excepted, moved = _recheck(ch, me, row)
+            if not moved and set(excepted) - _shown(shown):
+                raise HTTPException(409, YOURS_NOW)     # an exception they were not shown: nothing is written
+        elif yes and flagged(row):
+            raise HTTPException(503, CANT_EXCEPT)       # can't tell just now: never a plain yes over a flag
         by = {"by_user": str(me["id"])} if me["kind"] == co.LOGIN else {"by_contact": str(me["id"])}
         names = _names(ch, [dict(row, decided_by_user_id=by.get("by_user"),
                                  decided_by_contact_id=by.get("by_contact"))])
@@ -1774,7 +1812,7 @@ def schedule_answer(ask_id: str, body: Dict[str, Any], session: UserSession = De
     """Yes, or not this one. A 409 when it had already moved."""
     ch = _church_from_body(session, body or {})
     body = body or {}
-    return {"saved": answer(ch, _me(session), ask_id, body.get("yes"), body.get("note"))}
+    return {"saved": answer(ch, _me(session), ask_id, body.get("yes"), body.get("note"), shown=body.get("shown"))}
 
 
 @router.post("/schedule/asks/{ask_id}/withdraw")

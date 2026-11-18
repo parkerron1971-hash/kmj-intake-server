@@ -1120,3 +1120,26 @@ def test_the_sweep_sends_a_flagged_ask_on_only_when_it_no_longer_sits_with_someo
     seat["role"] = "member"
     assert tell.sweep_tick(NOW + 3 * HOUR)["moved"] == 2
     assert down["to_user_id"] == owner(db) and admin["to_user_id"] == owner(db)
+
+
+def test_the_sweep_never_sends_a_flagged_ask_to_the_login_that_entered_it(app, db):
+    """Two oversee the office. One entered the ask for someone (and so can't
+    answer it); it went up to the other, who then leaves. The sweep sends
+    it to the owner: never to the one who entered it."""
+    w = db.who[HOPE]
+    lead = next(h for h in db.t["church_leader_roles"] if h["business_id"] == HOPE and h["contact_id"] == w["owen"])
+    db.t["church_leader_roles"].append(dict(lead, id=str(uuid.uuid4()), contact_id=w["olive"]))
+    assert cs.office_overseers(church(db)) == sorted([w["owen@"], w["olive@"]]), "two of them now"
+    his = raw(db, "yusuf", flags=["over_limit"], made_by=w["olive@"], to_user_id=w["owen@"], told_at=NOW.isoformat())
+    sat = raw(db, "kara", flags=["over_limit"], made_by=w["olive@"], to_user_id=w["olive@"], told_at=NOW.isoformat(),
+              starts_on=day(40), ends_on=day(41))
+    assert "made_by" in tell.FIELDS.split(",") and tell._bare(his)["made_by"] == w["olive@"]
+    desk(db, w["owen@"])
+    got = tell.sweep_tick(NOW + HOUR)
+    assert got["moved"] == 1 and his["to_user_id"] == w["owen@"], "the first is with someone who may give it: it stays"
+    assert sat["to_user_id"] == w["owen@"], "one that sat with the login that entered it goes to the other"
+    seat = next(s for s in db.t["business_users"] if s["user_id"] == w["owen@"])
+    seat["role"] = "member"                               # he leaves the office
+    assert tell.sweep_tick(NOW + 2 * HOUR)["moved"] == 2
+    assert (his["to_user_id"], sat["to_user_id"]) == (owner(db), owner(db)), "the owner, never the one who entered them"
+    assert w["olive@"] not in said(db) and "made_by" not in said(db), "who entered it is in no notice"

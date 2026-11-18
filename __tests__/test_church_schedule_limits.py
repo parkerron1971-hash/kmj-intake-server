@@ -176,8 +176,16 @@ def ask(app, who, biz=HOPE, status=200, **kw):
     return r.json().get("saved") if status == 200 else r.json()
 
 
-def answer(app, who, ask_id, yes=True, biz=HOPE, status=200, **kw):
+def answer(app, who, ask_id, yes=True, biz=HOPE, status=200, shown="what the ask shows", **kw):
+    """An answer through the office route. A screen that shows the ask posts,
+    with its yes, the flags it showed as being in the way: by default the
+    ask's own, as they stand when the button is drawn. `shown=None` says
+    nothing (none shown), as a caller that never looked does."""
     as_(app, biz, who)
+    if shown == "what the ask shows":
+        shown = [f for f in row(app.db, ask_id).get("flags") or [] if f in cs.UP_FLAGS]
+    if shown is not None:
+        kw["shown"] = shown
     r = app.post(f"/church/schedule/asks/{ask_id}/answer", json={"business_id": biz, "yes": yes, **kw})
     assert r.status_code == status, r.text
     return r.json().get("saved") if status == 200 else r.json()["detail"]
@@ -935,6 +943,125 @@ def test_an_ask_entered_for_someone_never_goes_up_to_the_one_who_entered_it(app,
     assert answer(app, "owner", mine["id"])["excepted"] == ["over_limit"], "the owner aside"
 
 
+def test_an_ask_that_already_sits_with_someone_who_may_give_the_exception_stays_with_them(app, db):
+    """An Admin's ask goes to the owner from the start (step 1). The office
+    day fills. The owner says yes: it is marked where it is, and it is
+    still his. It is never sent to whoever oversees the office, which would
+    lock the owner out of an exception that is his to give."""
+    got = ask(app, "tessa")
+    r = row(db, got["id"])
+    assert (r["to_user_id"], r["flags"]) == (c3.NH_OWNER, []), "to the owner, with room"
+    r["told_at"] = NOW.isoformat()                       # he had been told of it
+    away(db, "paige")                                    # one of six in the office: full
+    db.later.clear()
+    nathan = person(db, "nathan")
+    with pytest.raises(HTTPException) as e:
+        cs.answer(church(db), nathan, got["id"], True)   # in the member app, as the person he is
+    assert e.value.status_code == 409 and e.value.detail == cs.YOURS_NOW
+    assert (r["state"], r["flags"], r["to_user_id"], r["to_contact_id"]) == ("asked", ["over_limit"], c3.NH_OWNER, None)
+    assert r["told_at"] == NOW.isoformat() and db.later == [], "nothing moved: no 'it came to you' for his own press"
+    assert [a["id"] for a in cs.waiting(church(db), nathan)] == [got["id"]], "still his"
+    assert cs.waiting(church(db), person(db, "owen")) == []
+    said = cs.answer(church(db), nathan, got["id"], True, shown=["over_limit"])
+    assert said["state"] == "yes" and said["excepted"] == ["over_limit"], "his second yes is the exception"
+    # The same from the office app, and for one that sits with whoever oversees the office.
+    db.t["church_away_asks"].clear()
+    db.t["serve_away"].clear()
+    got = ask(app, "olive")                              # a Manager's: to whoever oversees the office
+    assert row(db, got["id"])["to_user_id"] == fake.uid(db, HOPE, "owen")
+    away(db, "paige")
+    assert answer(app, "owner", got["id"], status=409) == cs.YOURS_NOW
+    assert (row(db, got["id"])["to_user_id"], row(db, got["id"])["flags"]) == (fake.uid(db, HOPE, "owen"),
+                                                                              ["over_limit"]), "it stays with him"
+    assert answer(app, "owen", got["id"])["excepted"] == ["over_limit"]
+
+
+# ─── Nobody gives an exception they were not shown ────────────────────
+
+def test_a_second_press_of_yes_never_lands_an_exception_nobody_saw(app, db):
+    """A double tap. The first request marks the ask and answers 409; the
+    second was already on its way, with nothing shown, and must not land."""
+    two(app)
+    got = ask(app, "yusuf")
+    away(db, "wren")
+    away(db, "kara")                                     # the Sunday filled after he asked
+    assert answer(app, "owen", got["id"], status=409, shown=None) == cs.YOURS_NOW
+    marked = dict(row(db, got["id"]))
+    assert marked["flags"] == ["over_limit"] and marked["state"] == "asked"
+    for none in (None, [], ["short_notice"], ["protected_day"], "over_limit", {"over_limit": True}):
+        assert answer(app, "owen", got["id"], status=409, shown=none) == cs.YOURS_NOW, none
+        assert row(db, got["id"]) == marked and db.rpcs == [], "nothing written, nothing decided"
+    assert not [f for f in facts(db) if f.get("ask_id")]
+    said = answer(app, "owen", got["id"], shown=["over_limit"])      # the page he came back to showed it
+    assert said["state"] == "yes" and said["excepted"] == ["over_limit"]
+
+
+def test_a_yes_shown_one_flag_does_not_except_another(app, db):
+    full(app, db)
+    got = ask(app, "yusuf")                              # shown as past the number
+    protect(app)                                         # then the day was made protected too
+    assert answer(app, "owen", got["id"], status=409, shown=["over_limit"]) == cs.YOURS_NOW      # marked
+    assert row(db, got["id"])["flags"] == ["over_limit", "protected_day"]
+    assert answer(app, "owen", got["id"], status=409, shown=["over_limit"]) == cs.YOURS_NOW, "the same press again"
+    assert db.rpcs == []
+    assert answer(app, "owen", got["id"], shown=["over_limit", "protected_day"])["excepted"] == [
+        "over_limit", "protected_day"]
+
+
+def test_a_yes_with_nothing_to_except_and_not_this_one_never_ask_what_was_shown(app, db):
+    full(app, db)
+    plain = ask(app, "celia", starts_on=day(40), ends_on=day(44))        # days with room
+    assert answer(app, "owner", plain["id"], shown=None)["state"] == "yes"
+    flagged = ask(app, "yusuf")
+    assert answer(app, "owen", flagged["id"], yes=False, shown=None)["state"] == "no", "not this one"
+    cleared = ask(app, "esther", starts_on=day(31), ends_on=day(33))
+    assert cleared["flags"] == ["over_limit"]
+    db.t["serve_away"][:] = [f for f in db.t["serve_away"] if f.get("ask_id")]      # the Sunday cleared
+    said = answer(app, "owner", cleared["id"], shown=None)            # hers is guarded: the owner's alone
+    assert said["state"] == "yes" and said["excepted"] == [], "a plain yes: nothing to be shown"
+    back = ask(app, "abel")
+    assert cs.withdraw(church(db), person(db, "abel"), back["id"])["state"] == "withdrawn", "a take-back never asks"
+
+
+def test_a_yes_to_a_flagged_ask_while_step_two_cant_be_told_is_a_503_with_nothing_saved(app, db, monkeypatch):
+    """This server's check for step 2's tables couldn't tell (a blip, with
+    no answer kept yet). A yes to an ask that went up must not land as a
+    plain yes over a full day with no exception on record."""
+    full(app, db)
+    got = ask(app, "yusuf")
+    other = ask(app, "celia", starts_on=day(31), ends_on=day(33))
+    assert got["flags"] == other["flags"] == ["over_limit"]
+    before = dict(row(db, got["id"]))
+    monkeypatch.setattr(csl, "_FORCE", False)
+    assert cs.step2() is False
+    assert answer(app, "owen", got["id"], status=503) == cs.CANT_EXCEPT
+    assert "Nothing was saved" in cs.CANT_EXCEPT and "Try again" in cs.CANT_EXCEPT, "plain words"
+    with pytest.raises(HTTPException) as e:
+        cs.answer(church(db), person(db, "owen"), got["id"], True, shown=["over_limit"])
+    assert e.value.status_code == 503
+    assert row(db, got["id"]) == before and db.rpcs == [] and not [f for f in facts(db) if f.get("ask_id")]
+    assert answer(app, "amara", got["id"], status=403) == cs.NOT_TO_YOU, "who may answer is told first"
+    assert answer(app, "owen", other["id"], yes=False)["state"] == "no", "not this one needs no exception"
+    monkeypatch.setattr(csl, "_FORCE", True)
+    assert answer(app, "owen", got["id"])["excepted"] == ["over_limit"], "a minute later"
+
+
+def test_away_on_for_a_department_reads_its_own_people_number_or_not(app, db):
+    """A picture holds a department's away dates only when it has a number;
+    asked about a department, away_on reads that department's people."""
+    worship = team(db, TEAM, "Worship Team", "Worship", "wren", "n030", "n031")
+    away(db, "n030")
+    away(db, "n031", day(33))                            # another day
+    away(db, "hugo")                                     # not Worship's
+    sun = date.fromisoformat(SUN)
+    assert csl.limit_for(church(db), "leaders", worship) is None, "no number"
+    assert csl.away_on(church(db), sun, "leaders", worship) == {cid(db, "n030")}
+    assert put(app, "owner", department_id=worship, at_most=1).status_code == 200
+    assert csl.away_on(church(db), sun, "leaders", worship) == {cid(db, "n030")}, "the same with one"
+    assert csl.away_on(church(db), sun, "leaders") == set(), "the leaders are their own count"
+    assert csl.away_on(church(db), sun, "leaders", dept(db, "Kids")) == set()
+
+
 # ─── Never flagged, never blocked ─────────────────────────────────────
 
 def test_cant_make_it_is_never_flagged_never_blocked_and_still_counts(app, db):
@@ -991,8 +1118,8 @@ def test_a_member_app_session_gives_an_exception_only_on_an_ask_that_went_up_to_
     # In the office app the owner's login could answer Yusuf's; as a person in the member app he can't.
     assert cs.may_decide(ch, login(db, "owner"), row(db, his["id"])) is True
     assert cs.may_decide(ch, nathan, row(db, his["id"])) is False
-    assert cs.answer(church(db), owen, his["id"], True)["excepted"] == ["over_limit"]
-    said = cs.answer(church(db), nathan, hers["id"], True)
+    assert cs.answer(church(db), owen, his["id"], True, shown=["over_limit"])["excepted"] == ["over_limit"]
+    said = cs.answer(church(db), nathan, hers["id"], True, shown=["over_limit"])
     assert said["excepted"] == ["over_limit"]
     r = row(db, hers["id"])
     assert (r["decided_by_contact_id"], r["decided_by_user_id"]) == (cid(db, "nathan"), None), "as a person"

@@ -93,7 +93,10 @@ MEMBER_LINK = "Open your dates"     # the email's button
 OFFICE = "The church office"
 _NO_NAME = {"", "Someone", "The owner", "An office login"}      # the stand-ins a notice never says
 # What a notice may know of an ask. Never `reason`, never `decided_note`.
-FIELDS = ("id,business_id,contact_id,kind,starts_on,ends_on,state,flags,to_user_id,to_contact_id,"
+# `made_by` (the login that entered an ask for someone) is for the sweep
+# alone: whoever entered an ask can't answer it, so a flagged one is never
+# sent to them. It is in no notice's words.
+FIELDS = ("id,business_id,contact_id,made_by,kind,starts_on,ends_on,state,flags,to_user_id,to_contact_id,"
           "decided_by_user_id,decided_by_contact_id,decided_at,told_at,answer_told_at,nudged_at,created_at")
 _KEEP = frozenset(FIELDS.split(","))
 
@@ -646,9 +649,11 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
                 # It went up for an exception (step 2): it stays with whoever
                 # may give one, and is NEVER sent back down to the nearest
                 # step. Only when it no longer sits with such a person (they
-                # left the office, or no longer oversee it) is it sent on,
-                # to whoever church_schedule.goes_up gives now.
-                if not cs.held_right(ch, a) and _move(ch, a, cs.goes_up(ch, cid), now):
+                # left the office, no longer oversee it, or are the login
+                # that entered it) is it sent on, to whoever
+                # church_schedule.goes_up gives now: never to the login that
+                # entered it, who can't answer it.
+                if not cs.held_right(ch, a) and _move(ch, a, cs.goes_up(ch, cid, entered=a.get("made_by")), now):
                     stats["moved"] += 1
                 continue
             if cid not in near:

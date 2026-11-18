@@ -973,7 +973,7 @@ team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_memb
 What changes on step 1's routes once step 2 is there (**built**, S2-3):
 
 - `POST /church/schedule/asks`: a planned ask past the number, or on a protected day, is saved as any other with `over_limit` and/or `protected_day` in `flags` and `to` the login `goes_up` gives. Never a refusal.
-- `POST /church/schedule/asks/{id}/answer`: 403 on a flagged ask for anyone who may not give its exception (the one it first went to, an Admin, and for a guarded asker the office overseer). A yes that runs into something new answers **409** with one of `church_schedule.WENT_UP` ("… It has gone to {name}, who can make an exception.") or `YOURS_NOW` ("… It's marked now. Say yes again to make an exception."), both starting with `FULL_NOW`; nothing is decided and the ask now carries the new flags. A yes over a flag answers with `excepted` filled.
+- `POST /church/schedule/asks/{id}/answer`: 403 on a flagged ask for anyone who may not give its exception (the one it first went to, an Admin, and for a guarded asker the office overseer). A yes that runs into something new answers **409** with one of `church_schedule.WENT_UP` ("… It has gone to {name}, who can make an exception.") or `YOURS_NOW` ("… It's marked now. Say yes again to make an exception."), both starting with `FULL_NOW`; nothing is decided and the ask now carries the new flags. A yes over a flag answers with `excepted` filled. The body takes `shown: [flag]`, the flags the screen showed as being in the way; a yes lands as an exception only when every flag it would be given over is in `shown` (absent = none shown), else the same 409 with nothing written. A yes to a flagged ask while the server can't tell whether step 2's tables are there is a **503**, nothing saved.
 
 ### 4.2 Member app
 
@@ -987,7 +987,7 @@ The first five rows are **built** (S1-5); the two commitments rows are S1-7.
 | `POST /my/lead/dates/ask` | `start, end, kind (time_off\|commitment), reason, cover (the id of someone on the schedule, or ''), cover_name`, and (step 2) `sure=yes` | on the leaders schedule. With step 2 there and no `sure`: when the days are full or protected **nothing is sent**, and the answer is the Dates page itself (200, never kept by a browser) with what they typed still in the form, what is in the way, the nearest open service days and who can make an exception. "Ask anyway" posts the same form with `sure=yes`; the other button posts it without, so changed days are looked at again. Goes back with `done=dt_asked_up` when it went up |
 | `POST /my/lead/dates/cant` | `start (today on the church's clock by default), end, reason` | on the leaders schedule |
 | `POST /my/lead/dates/{id}/withdraw` | | the asker |
-| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only) | it went to this person (or to the login this person is). A flagged ask: only the very person it went up to. Goes back with `done=dt_yes_x` for a yes over a flag, `err=dt_up` or `err=dt_yours` for a yes that didn't land |
+| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only), `shown` (with a Yes: the flags its card showed, comma-separated) | it went to this person (or to the login this person is). A flagged ask: only the very person it went up to. Goes back with `done=dt_yes_x` for a yes over a flag, `err=dt_up` or `err=dt_yours` for a yes that didn't land |
 | `POST /my/lead/dates/commitments` | `label, weekday, pattern, nth, start, until` | on the leaders schedule (S1-7) |
 | `POST /my/lead/dates/commitments/{id}/remove` | | theirs |
 
@@ -1703,8 +1703,12 @@ choice was taken, and the one that blocks nobody.
   those are `GET /church/schedule/days`, so step 1's route answers exactly what it did.
 - **Step 2's check is `church_protected_days`** (the file is one transaction, so one table says
   all of it), asked only where the switch is open and step 1 is there. On a replica's first
-  minute after a read that couldn't tell, everything is step 1: an ask on a full day goes to the
-  one over the asker unflagged, and the recheck at the yes catches it.
+  minute after a read that couldn't tell, an ask is made as in step 1: one on a full day goes to
+  the one over the asker unflagged, and the recheck catches it at a yes made on a replica that
+  can tell. A yes to an ask that is already flagged, on a replica that can't tell, is a 503 with
+  nothing saved (from the review of #1943): it would otherwise land as a plain yes over a full
+  day with no exception on record. Flagged asks exist only where step 2 is applied, so a
+  database with step 1's file alone never meets it.
 
 **Which days count, and who is counted**
 
@@ -1771,7 +1775,34 @@ choice was taken, and the one that blocks nobody.
   that was already flagged meets a second flag.
 - **The recheck is not a lock.** Two yeses in the same moment for two different people can
   both land and put a Sunday one over. The database decides one ask at a time; nothing counts
-  across asks inside a transaction.
+  across asks inside a transaction. Accepted for now by the lead session (one church; `GET
+  days` shows the day over its number when it happens). The later fix is a recount under an
+  advisory lock (per church and day) inside `church_away_settle_excepted` and `church_away_settle`.
+
+**From the review of #1943** (the lead session; each pinned by a test that went red with the
+fix taken out)
+
+- **An ask that already sits with someone who may give the exception stays with them,
+  flagged before or not.** The recheck used to keep only an already-flagged ask in place, so
+  an Admin's ask sitting with the owner was sent to the office overseer the moment its day
+  filled, and the owner's next yes was a 403: he was locked out of an exception that was his.
+  Now `held_right` alone decides: it is marked where it is, nobody is told, and the holder's
+  next yes is the exception. (A second line, "the login `goes_up` gives is the one it already
+  names: nothing moves, nobody is told again", is kept as a guard; with `held_right` before it
+  no case reaches it today, so no test can make it matter.)
+- **The hourly sweep knows who entered an ask.** `made_by` is in `church_schedule_tell.FIELDS`
+  for the sweep's own use (it is in no notice's words) and is passed to `goes_up`, so a flagged
+  ask is never sent on to the login that entered it.
+- **Nobody gives an exception they were not shown.** A yes carries the flags the screen showed
+  as being in the way (the Dates page posts them with its Yes as `shown`; the office route takes
+  `shown` in its body; nothing said is none shown). A yes lands as an exception only when every
+  flag it would be given over is among them; otherwise it is the same 409 with nothing written.
+  So a double tap of Yes, whose second press was on its way when the first marked the ask, does
+  not land an exception nobody saw. A yes with nothing to except, "not this one" and a take-back
+  never ask what was shown. The office frontend must post `shown` with every Yes it draws.
+- **`away_on(..., department_id)` reads that department's own people**, number or not. It used
+  to read from a picture that holds a department's away dates only when it has a number, and so
+  answered "nobody" for one without.
 - **"Not this one" is never rechecked**, and a yes taken back keeps the exception it was given
   (the table's own rule).
 - **The Serving Away form** (S1-6) asks through the same engine, so a leader's Away there on a
