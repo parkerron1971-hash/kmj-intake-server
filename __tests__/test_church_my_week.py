@@ -122,6 +122,24 @@ def test_care_handed_to_your_login_is_one_line_with_nothing_of_what_was_asked(cl
     assert "My mother" not in str(w) and "mother" not in str(w).lower()
 
 
+def test_care_handed_to_your_login_says_when_its_first_step_is_due_or_late(client, week):
+    """care_handoff (2026-11-18): a hand-off to a login is due in a day; My
+    week says when, then that it's past due, until their first step."""
+    c1 = week.t["ministry_care_requests"][0]
+    c1.update(assigned_due_at=iso(NOW + timedelta(hours=5)), assigned_acted_at=None)
+    care = next(n for n in [_get(client)["next"]] + _get(client)["needs"] if n["kind"] == "care")
+    assert care["late"] is False and care["detail"].startswith("A first step is due ")
+    c1["assigned_due_at"] = iso(NOW - timedelta(hours=2))
+    w = _get(client)
+    care = next(n for n in [w["next"]] + w["needs"] if n["kind"] == "care")
+    assert care["late"] is True and care["title"] == "A prayer or care request handed to you is past due."
+    assert "mother" not in str(w).lower()
+    c1["assigned_acted_at"] = iso(NOW - timedelta(hours=1))
+    w = _get(client)
+    care = next(n for n in [w["next"]] + w["needs"] if n["kind"] == "care")
+    assert care["late"] is False and care["title"] == "A prayer or care request was handed to you."
+
+
 def test_what_was_handed_across_this_week_says_where_it_went_and_where_it_is(client):
     w = _get(client)
     first = next(h for h in w["handed"] if h["id"] == "f-first")

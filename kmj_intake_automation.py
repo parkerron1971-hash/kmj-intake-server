@@ -1994,6 +1994,19 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # Prayer & care handed to an office login (2026-11-18, Kevin: "build the
+    # heads-up and due time for logins"): the login hears once, two minutes
+    # after the hand-off; when it's due they're reminded, a day late whoever
+    # handed it hears, three days late the office is asked to hand it on.
+    # Never the request's words (care_handoff.sweep_tick; CARE_HEADS_UP=off
+    # sends nothing). Before APPLY-2026-11-18-care-login-due.sql it reads
+    # nothing it can use and does nothing.
+    try:
+        import care_handoff as _care_handoff
+        scheduler.add_job(g("care_handoff_sweep", _care_handoff.sweep_tick), "interval", minutes=5,
+                          id="care_handoff_sweep")
+    except Exception as e:
+        print(f"   [warn] care hand-off sweep not scheduled: {e}")
     # Sunday check-in (2026-10-17): from two days before, each church's
     # coming service has its occasion in Services & Events, so the Kids
     # kiosk and Attendance find it on Sunday morning (church_checkin.sweep).

@@ -89,6 +89,7 @@ TICKS = {
     "notif_evening_summary": "notification_engine:generate_evening_summary_for_all",
     "notif_unanswered_leads": "notification_engine:unanswered_lead_sweep",
     "church_follow_up_sweep": "church_follow_up:sweep",
+    "care_handoff_sweep": "care_handoff:sweep_tick",
     "church_checkin_sweep": "church_checkin:sweep",
     "church_shepherd_sweep": "church_shepherd_signals:sweep",
     "church_leader_tasks_sweep": "church_leader_tasks:sweep_tick",
