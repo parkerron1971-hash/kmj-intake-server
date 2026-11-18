@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-18: "the members app move slow when send messages in chat, switching from one tab to another… what is the problem and how can that be sped up?", then "yes build all four". This is fix 1 of 4 (instant send); the stopwatch + server caching and faster tab switching are other sessions.'
 status: in review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1945]
 migrations: []
 left_undone:
   - "The leader's desk on a computer (group_desk.script) injects the chat's script with x.textContent = '<script>…</script>', a syntax error that predates this; the desk's chat stays a plain post that reloads. Fix: run each <script>'s text, then check it in a browser."
