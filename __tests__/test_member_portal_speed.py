@@ -187,6 +187,10 @@ def test_in_the_kids_space_there_is_no_lead_tab(app, monkeypatch):
     monkeypatch.setattr(msp, "resolve_async", spy)
     _serve("/my/prayer", cookies=f"{msp.COOKIE}=kids")
     assert seen["ctx"]["space"] == "kids"
+    # The Lead tab's answer is kept a minute (member_cache): forget it, so
+    # this page reads all four at once again.
+    import member_cache
+    member_cache.forget_all()
     assert 'href="/my/lead"' not in _serve("/my/prayer", cookies=f"{msp.COOKIE}=kids").body.decode()
 
 

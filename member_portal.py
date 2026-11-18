@@ -30,9 +30,11 @@ Domain, Path=/, httponly, SameSite=Lax), 180 days: {biz, em, cid, iat,
 exp}. Signed with a second derived key (purpose "member-session"), so a
 session for one church can never open another's. Re-checked on every
 request against the contact rows: change or remove the email on the
-person's record and it stops working. The owner can also sign everyone
-out (settings.member_portal.epoch), and switching the page back on does
-the same.
+person's record and it stops working within 30 s (member_cache keeps the
+rows that long, 2026-11-18). The owner can also sign everyone out
+(settings.member_portal.epoch), and switching the page back on does the
+same: within a minute on every server copy (the church's settings are kept
+a minute), at once on the copy that saved it.
 
 SHARED EMAILS (Kevin, 2026-09-29: "1 person per email is right"). An
 address on more than MAX_HOUSEHOLD (= 1) record never signs in, and the
@@ -444,6 +446,29 @@ def gifts_for(business_id: str, contact_id: str, year: int) -> List[Dict[str, An
 # ─── Host → church ───────────────────────────────────────────────────
 
 
+def _site_row(q: str) -> Optional[Dict[str, Any]]:
+    """The site and its church in one read (every member page, its icons and
+    its service worker start here; two reads in a row were two waits), kept
+    a minute per address (member_cache.py: about 140 ms a page on
+    lovecityc.com before). Only a row that was found is kept: a failed read
+    and "no such site" are read again next time."""
+    import member_cache
+    hit, row = member_cache.churches.get(q)
+    if hit:
+        return row
+    sites = sb_clients.sb_get_as_service(
+        f"/business_sites?{q}&order=updated_at.desc&limit=1"
+        f"&select=slug,business_id,site_config,"
+        f"business:businesses(id,name,type,settings,stripe_account_id,is_sample)")
+    if not isinstance(sites, list) or not sites or not isinstance(sites[0], dict):
+        return None
+    row = sites[0]
+    biz = row.get("business")
+    if isinstance(biz, dict) and biz.get("id"):
+        member_cache.churches.put(q, row, tag=str(biz["id"]))
+    return row
+
+
 @_timed("church")      # member_stopwatch: the Server-Timing header's "church"
 def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
     """The church whose address this request arrived on, or None (the API
@@ -462,15 +487,10 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
         if "." not in domain:
             return None
         q = f"site_config->>custom_domain=eq.{quote(domain, safe='')}"
-    # The site and its church in one read (every member page, its icons and
-    # its service worker start here; two reads in a row were two waits).
-    sites = sb_clients.sb_get_as_service(
-        f"/business_sites?{q}&order=updated_at.desc&limit=1"
-        f"&select=slug,business_id,site_config,"
-        f"business:businesses(id,name,type,settings,stripe_account_id,is_sample)") or []
-    if not sites or (sites[0].get("site_config") or {}).get("offline"):
+    row = _site_row(q)
+    if not row or (row.get("site_config") or {}).get("offline"):
         return None
-    site = dict(sites[0])
+    site = dict(row)
     biz = site.pop("business", None)
     if not isinstance(biz, dict) or not biz.get("id"):
         return None
@@ -518,6 +538,22 @@ def _epoch(biz: Dict[str, Any]) -> int:
         return 0
 
 
+def _people_for(business_id: str, ident: str) -> Optional[List[Dict[str, Any]]]:
+    """contacts_for_ident for a signed-in session, kept 30 s per church and
+    address (member_cache.PEOPLE_SECONDS): a member tapping through tabs
+    isn't read again on every tap. A removed member, or one whose email
+    changed, keeps their session at most that long; a failed read (None) is
+    never kept, so "try again" is never remembered."""
+    import member_cache
+    key = (str(business_id), norm_ident(ident))
+    hit, people = member_cache.people.get(key)
+    if hit:
+        return people
+    people = contacts_for_ident(business_id, ident)
+    member_cache.people.put(key, people, tag=str(business_id))
+    return people
+
+
 @_timed("session")     # member_stopwatch: the Server-Timing header's "session"
 def _session_for(request: Request, church: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The signed-in member, re-checked against today's records.
@@ -536,7 +572,7 @@ def _session_for(request: Request, church: Dict[str, Any]) -> Optional[Dict[str,
                           epoch=_epoch(biz))
     if not claims:
         return None
-    people = contacts_for_ident(biz["id"], claims["em"])
+    people = _people_for(biz["id"], claims["em"])
     if people is None:
         return {"unavailable": True}
     if not people or len(people) > MAX_HOUSEHOLD:
@@ -1186,8 +1222,8 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         counted = "/feed" not in sub and not sub.startswith("/my/photo/")
         ctx, lead, board, unread = await asyncio.gather(
             msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
-            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing(),
-            mpb.on_board(biz, sess["me"]) if may_lead else _nothing(),
+            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"], kept=True) if may_lead else _nothing(),
+            mpb.on_board(biz, sess["me"], kept=True) if may_lead else _nothing(),
             mpt.counts(biz, sess["me"]) if counted else _nothing())
         if may_lead and ctx.get("space", "church") == "church":
             ctx = dict(ctx, lead=lead, board=board)
@@ -1205,8 +1241,29 @@ async def _nothing():
 
 
 async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = None,
-                 me: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether this member gets the Lead tab: a church role, held or asked
+                 me: Optional[Dict[str, Any]] = None, *, kept: bool = False) -> bool:
+    """Whether this member gets the Lead tab (_read_leads). kept=True (every
+    page's tab bar, serve()) keeps the answer a minute per member
+    (member_cache.TAB_SECONDS): the longest chain of reads on every page, for
+    an answer that only draws the tab bar (the Lead pages read who may see
+    what on their own). A "no" is kept only when the role and group reads
+    both answered: a failed read is asked again on the next page."""
+    import member_cache
+    key = (str(business_id), str(me_id), "lead")
+    if kept:
+        hit, got = member_cache.tabs.get(key)
+        if hit:
+            return got
+    got, known = await _read_leads(business_id, me_id, biz, me)
+    if kept and (got or known):
+        member_cache.tabs.put(key, got, tag=str(business_id))
+    return got
+
+
+async def _read_leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = None,
+                      me: Optional[Dict[str, Any]] = None) -> Tuple[bool, bool]:
+    """(whether this member gets the Lead tab, whether the role and group
+    reads both answered). The Lead tab: a church role, held or asked
     (church_follow_up), or a group they lead (group_lead: their group lives
     on the Lead tab). Both read at once. With Who sees what on, it's the
     Serve tab, for every part: a place on a Sunday team too, or a kids room.
@@ -1218,21 +1275,22 @@ async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = N
     import group_lead
     roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
                                       asyncio.to_thread(group_lead.led_groups, business_id, me_id))
+    known = roles is not None and led is not None
     if roles or led:
-        return True
+        return True, known
     if biz is not None:
         import church_leader_tasks
         if await asyncio.to_thread(church_leader_tasks.section, biz, me_id) is not None:
-            return True
+            return True, known
         import church_schedule
         if await asyncio.to_thread(church_schedule.section, biz, me_id) is not None:
-            return True
+            return True, known
     import member_app_ui
     if biz is None or not member_app_ui.serve_mode():
-        return False
+        return False, known
     import member_portal_lead
     parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id, (me or {}).get("email"))
-    return bool(parts["serving"] or parts["kids"] or parts["team"])
+    return bool(parts["serving"] or parts["kids"] or parts["team"]), known
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
@@ -2150,5 +2208,9 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
         if not saved:
             raise HTTPException(503, "That change didn't save. Please try again.")
+        # The member app reads its church from member_cache for a minute:
+        # this copy forgets it now (the others within the minute).
+        import member_cache
+        member_cache.forget_church(business_id)
         biz = {**biz, "settings": settings}
     return _config_payload(biz, site, user)

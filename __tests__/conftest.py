@@ -218,3 +218,16 @@ def _leaders_schedule_limits_tables_pinned():
     except Exception:  # pragma: no cover
         pass
     yield
+
+
+# member_cache keeps a church's site row a minute per address, a member's
+# record 30 s and their Lead and Board tabs a minute. Test files share hosts,
+# churches and members, so one file's fake church would answer the next's:
+# every test starts with nothing kept.
+@pytest.fixture(autouse=True)
+def _fresh_member_cache():
+    import sys as _sys
+    _mc = _sys.modules.get("member_cache")
+    if _mc is not None:
+        _mc.forget_all()
+    yield
