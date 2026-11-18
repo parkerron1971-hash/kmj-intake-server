@@ -37,6 +37,8 @@ VERBS = (
     "church:prayer_handed",    # a shared prayer request given to a prayer leader
     "church:prayer_late",      # a prayer leader nudged, or the chain above told
     "church:shepherd_email",   # a shepherd or pastor emailed about the families they care for
+    "church:care_told",        # an office login told a Prayer & care request is theirs (care_handoff)
+    "church:care_late",        # one handed to a login waited: reminded, whoever handed it told, the office asked
 )
 
 

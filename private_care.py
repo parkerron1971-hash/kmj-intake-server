@@ -24,6 +24,10 @@ _FIELDS = ("id,created_at,status,submission,contact_id,prayed_at,status_changed_
 _PRAYER_FIELDS = (",prayer_team,wants_call,needs_pastor,leader_contact_id,leader_role,leader_prayed_at,leader_noted_at,"
                   "leader_assigned_at,leader_due_at,leader_late_level")
 _LEGACY_FIELDS = "id,created_at,status,submission"
+# A hand-off to an office login: its heads-up and due time (care_handoff,
+# APPLY-2026-11-18-care-login-due.sql). Read first when they're there; the
+# reads fall back to the ones above when they aren't.
+_LOGIN_FIELDS = ",assigned_by,assigned_due_at,assigned_told_at,assigned_acted_at,assigned_late_level"
 
 def needs_private_care(form, data):
     settings = form.get("settings") or {}
@@ -263,13 +267,16 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
         # The prayer-team columns say what was shared. If they can't be
         # read, nothing counts as shared: the login sees what was handed
         # to it, as before, never more.
-        rows = sb_clients.sb_get_as_service(
-            f"{root}&or=(assigned_to.eq.{_uuid(caller.user_id, 'user')},{SHARED})"
-            f"&select={_FIELDS}{_PRAYER_FIELDS}")
+        shared = f"{root}&or=(assigned_to.eq.{_uuid(caller.user_id, 'user')},{SHARED})"
+        rows = sb_clients.sb_get_as_service(f"{shared}&select={_FIELDS}{_PRAYER_FIELDS}{_LOGIN_FIELDS}")
+        if not isinstance(rows, list):
+            rows = sb_clients.sb_get_as_service(f"{shared}&select={_FIELDS}{_PRAYER_FIELDS}")
         if not isinstance(rows, list):
             scope = "assigned"
     if scope != "shared":
-        rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}")
+        rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}{_LOGIN_FIELDS}")
+        if not isinstance(rows, list):
+            rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}")
     prayer = isinstance(rows, list)
     if not prayer:
         rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}")
@@ -353,8 +360,10 @@ def _request(biz: str, request_id: str, caller: Optional[CareCaller] = None) -> 
            "&select=id,status,prayed_at,status_changed_at,assigned_to,contact_id")
     # The prayer columns for every caller: a hand-off reads needs_pastor
     # (the pastors' alone) and leader_prayed_at. Without them, the old read.
-    rows = sb_clients.sb_get_as_service(
-        one + ",prayer_team,needs_pastor,leader_contact_id,leader_prayed_at&limit=1")
+    prayer = ",prayer_team,needs_pastor,leader_contact_id,leader_prayed_at"
+    rows = sb_clients.sb_get_as_service(one + prayer + _LOGIN_FIELDS + "&limit=1")
+    if rows is None:
+        rows = sb_clients.sb_get_as_service(one + prayer + "&limit=1")
     if rows is None:
         rows = sb_clients.sb_get_as_service(one + "&limit=1")
     if rows is None:
@@ -367,6 +376,9 @@ def _request(biz: str, request_id: str, caller: Optional[CareCaller] = None) -> 
 
 
 _UNSET = object()
+# A hand-off's timing, cleared: taken back, given back, or handed afresh.
+_UNTIMED = {"assigned_due_at": None, "assigned_told_at": None, "assigned_acted_at": None,
+            "assigned_late_level": 0}
 
 
 def update_request(business_id: str, request_id: str, *, status: Optional[str] = None,
@@ -384,6 +396,13 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
         raise HTTPException(400, "A request is new, reviewed or closed")
     current = _request(biz, rid, caller)
     patch: Dict[str, Any] = {}
+    timed = "assigned_late_level" in current      # APPLY-2026-11-18-care-login-due.sql is in
+    holds = caller is not None and str(current.get("assigned_to") or "") == caller.user_id
+    if (timed and holds and not current.get("assigned_acted_at") and assigned_to is _UNSET
+            and (status in ("reviewed", "closed") or prayed is True)):
+        # The login it was handed to took a first step ("I'm on it",
+        # prayed, done): nothing is late after it (care_handoff).
+        patch["assigned_acted_at"] = _now()
     if status is not None and status != current.get("status"):
         patch["status"] = status
         patch["status_changed_at"] = _now()
@@ -398,6 +417,8 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
             if current.get("assigned_to"):
                 patch.update(assigned_to=None, assigned_at=None,
                              assigned_by=caller.user_id if caller else None)
+                if timed:
+                    patch.update(_UNTIMED)
         else:
             who = _uuid(assigned_to, "teammate")
             if "needs_pastor" not in current:
@@ -415,8 +436,17 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
                 raise HTTPException(400, "This request needs a pastor. Hand it to a login whose person holds "
                                          "a pastor role (Follow-up, Leaders), or keep it.")
             if who != str(current.get("assigned_to") or ""):
-                patch.update(assigned_to=who, assigned_at=_now(),
+                now = _now()
+                patch.update(assigned_to=who, assigned_at=now,
                              assigned_by=caller.user_id if caller else None)
+                if timed:
+                    # A first step is due in a day; the login hears once,
+                    # two minutes from now (care_handoff.sweep_tick). Handed
+                    # to yourself: nobody to tell.
+                    import care_handoff
+                    patch.update(_UNTIMED, assigned_due_at=care_handoff.due_from(datetime.fromisoformat(now)))
+                    if caller is not None and who == caller.user_id:
+                        patch["assigned_told_at"] = now
     if leader_contact_id is not _UNSET:
         if caller is not None and not caller.owner:
             raise HTTPException(403, "Only the church's owner hands a request to someone")
@@ -437,6 +467,8 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
         member_push.tell_prayed(biz, current.get("contact_id"), rid)
     out = {k: row.get(k) for k in ("id", "status", "prayed_at", "status_changed_at", "assigned_to",
                                     "assigned_at")}
+    if timed:
+        out.update({k: row.get(k) for k in _LOGIN_FIELDS.strip(",").split(",")})
     if "leader_contact_id" in patch:
         out.update({k: row.get(k) for k in ("leader_contact_id", "leader_role", "leader_assigned_at",
                                             "leader_due_at", "leader_late_level")})
@@ -456,13 +488,25 @@ def add_note(business_id: str, request_id: str, body: str, author_id: str,
         raise HTTPException(400, "Write the note first")
     if len(text) > NOTE_MAX:
         raise HTTPException(400, f"A note can be up to {NOTE_MAX} characters")
-    _request(biz, rid, caller)
+    current = _request(biz, rid, caller)
     rows = sb_clients.sb_post_as_service("/ministry_care_notes", {
         "business_id": biz, "request_id": rid, "author_id": str(author_id), "body": text})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That note didn't save. Nothing was changed — try again.")
     n = rows[0]
-    return {"ok": True, "note": {k: n.get(k) for k in ("id", "body", "created_at", "author_id")}}
+    out: Dict[str, Any] = {"ok": True, "note": {k: n.get(k) for k in ("id", "body", "created_at", "author_id")}}
+    if ("assigned_late_level" in current and not current.get("assigned_acted_at")
+            and current.get("assigned_to") and str(current["assigned_to"]) == str(author_id)):
+        # A note from the login it was handed to is their first step
+        # (care_handoff): nothing is late after it. The note stands
+        # whether or not this lands.
+        now = _now()
+        got = sb_clients.sb_patch_as_service(
+            f"/ministry_care_requests?id=eq.{rid}&business_id=eq.{biz}&assigned_to=eq.{_uuid(author_id, 'user')}"
+            "&assigned_acted_at=is.null&select=assigned_acted_at", {"assigned_acted_at": now})
+        if isinstance(got, list) and got:
+            out["assigned_acted_at"] = got[0].get("assigned_acted_at") or now
+    return out
 
 
 def delete_note(business_id: str, note_id: str,
