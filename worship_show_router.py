@@ -52,6 +52,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import sb_clients
+import serve_dates as sd
 import worship_show as wsh
 from auth_supabase import AuthedUser, require_user
 from worship_team import can, can_all, require, roles_of
@@ -173,7 +174,8 @@ def _look(biz: str) -> Dict[str, Any]:
 
 
 def _service(biz: str, sid: str) -> Dict[str, Any]:
-    rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&archived_at=is.null"
+    # An event date (serve_dates: the volunteer teams' only) is never a plan here.
+    rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&archived_at=is.null{sd.plans_only()}"
                  f"&select=id,title,starts_at,items,notes,is_template,updated_at", "The service")
     if not rows:
         raise HTTPException(404, "service not found")
@@ -358,7 +360,7 @@ def _clean_service(body: Dict[str, Any], partial: bool) -> Dict[str, Any]:
 def list_services(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     roles = _seat(biz, user)
-    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&select={_SERVICE_LIST}"
+    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null{sd.plans_only()}&select={_SERVICE_LIST}"
                  f"&order=starts_at.desc.nullslast&limit=200", "Your services")
     # can_write: the plan; `can`: each part of ChurchSavvy the caller's team parts allow.
     return {"services": [_service_out(r) for r in rows], "can_write": can(roles, "plan"), "can": can_all(roles)}
@@ -846,7 +848,7 @@ def screen_lobby(token: str):
         board = []
     now = datetime.now(timezone.utc)
     since = (now - timedelta(hours=3)).isoformat()
-    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false{sd.plans_only()}"
                  f"&starts_at=gte.{_q(since)}&select=id,title,starts_at&order=starts_at.asc&limit=1", "The next service")
     nxt = {"id": rows[0]["id"], "title": rows[0].get("title") or "", "starts_at": rows[0].get("starts_at")} if rows else None
     return {"lobby": _screen_out(screen, False)["lobby"], "slides": board, "verse": wsh.lobby_verse(today),

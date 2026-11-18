@@ -69,7 +69,17 @@ def _at(v: Any) -> Optional[datetime]:
 
 
 def _day(at: datetime) -> str:
-    return f"{at.strftime('%b')} {at.day}"
+    """"Nov 22" for a Sunday; "Thursday, Nov 19" for any other day (an
+    event date, serve_dates), so a note never leaves the day to guess."""
+    short = f"{at.strftime('%b')} {at.day}"
+    return short if at.weekday() == 6 else f"{at.strftime('%A')}, {short}"
+
+
+def _for(title: str, at: datetime) -> str:
+    """" for Outreach night": what a note on another day than Sunday is for."""
+    if at.weekday() == 6 or title in ("", "Sunday service", "An event"):
+        return ""
+    return f" for {title}"
 
 
 def _clock(hhmm: Optional[str]) -> str:
@@ -133,17 +143,19 @@ def words(step: str, ctx: Dict[str, Any]) -> Dict[str, str]:
     nothing private (why someone can't) ever goes on a lock screen."""
     place, day, call = ctx["place"], ctx["day"], ctx["call"]
     be_there = f"Be there by {call}. " if call else ""
+    for_ = ctx.get("for") or ""
     if step == "ask":
         return {"title": f"Can you serve on {place}, {day}?",
-                "body": f"{ctx['asker']} asked. {be_there}Tap Yes or Can't."}
+                "body": f"{ctx['asker']} asked{for_}. {be_there}Tap Yes or Can't."}
     if step == "nudge":
         return {"title": f"Can you serve on {place}, {day}?",
-                "body": f"{ctx['asker']} is still hoping to hear. {be_there}Tap Yes or Can't."}
+                "body": f"{ctx['asker']} is still hoping to hear{for_}. {be_there}Tap Yes or Can't."}
     if step == "cover":
         return {"title": f"Can you cover {place}, {day}?",
-                "body": f"{ctx['from']} asked you to cover for them. {be_there}Tap Yes or Can't."}
+                "body": f"{ctx['from']} asked you to cover for them{for_}. {be_there}Tap Yes or Can't."}
     if step == "week":
-        return {"title": f"Next Sunday you're on {place}", "body": f"{day}{f' · be there by {call}' if call else ''}."}
+        return {"title": f"Next {ctx.get('weekday') or 'Sunday'} you're on {place}",
+                "body": f"{day}{f' · be there by {call}' if call else ''}."}
     if step == "day":
         on_with = ctx.get("with") or []
         body = (f"{sp_and(on_with)} {'is' if len(on_with) == 1 else 'are'} on with you." if on_with
@@ -237,7 +249,7 @@ def email_parts(biz: Dict[str, Any], person: Dict[str, Any], step: str, w: Dict[
         after = (_ghost("Can't this time", serve_links.page_url(t, ans="no"))
                  + _text_link("Can't that day, but I could do another", serve_links.page_url(t, ans="other")))
     else:
-        cta = ("See your Sunday", serve_links.page_url(t))
+        cta = (f"See your {ctx.get('weekday') or 'Sunday'}", serve_links.page_url(t))
         after = ""
     if app_link:
         after += _text_link(f"Or open it in {church}'s app", app_link)
@@ -346,6 +358,7 @@ def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str
             asker = _first(leaders[0]) if leaders else ((biz.get("name") or "").strip() or "The church")
         ctx = {"id": str(r["id"]), "at": s["at"], "place": p["name"], "team": t["name"], "title": s["title"],
                "day": _day(s["at"]), "call": _clock(hhmm), "time": _clock(hhmm or s["at"].strftime("%H:%M")),
+               "weekday": s["at"].strftime("%A"), "for": _for(s["title"], s["at"]),
                "asker": asker,
                "from": _first((people.get(str(r["contact_id"])) or {}).get("name"))}
         if "day" in steps:

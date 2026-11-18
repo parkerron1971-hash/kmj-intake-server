@@ -164,3 +164,19 @@ def _fresh_sample_church():
     except Exception:  # pragma: no cover
         pass
     yield
+
+
+# serve_dates asks once whether worship_services has its event-date columns
+# (kind, place, event_entry_id) and keeps the answer for minutes. Every test
+# starts with them "not there yet", so the many suites that fake
+# worship_services read exactly as before the migration (no kind filter, no
+# extra columns, no probe read). The event-date tests set _FORCE = True.
+@pytest.fixture(autouse=True)
+def _event_dates_columns_pinned():
+    try:
+        import serve_dates as _sd
+        _sd._FORCE = False
+        _sd._STATE.update(yes=None, at=0.0)
+    except Exception:  # pragma: no cover
+        pass
+    yield

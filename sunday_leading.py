@@ -70,13 +70,15 @@ def team_view(biz: Dict[str, Any], cid: str, gid: str, start: Optional[str] = No
     if not t:
         raise HTTPException(404, "You don't lead that team.")
     place_ids = {p["id"] for p in t["places"]}
+    # An event date (serve_dates) is the volunteer teams' only: a worship or production team's leader never sees it.
+    services = [s for s in board.services if sp.serves(s, t)]
     rows = [r for r in board.rows if str(r["position_id"]) in place_ids and str(r["service_id"]) in
-            {s["id"] for s in board.services}]
+            {s["id"] for s in services}]
     who = sp._people(biz_id, [r.get("contact_id") for r in rows])
     return {
         "team": {**team, "call_time": t.get("call_time"), "max_month": t.get("max_month"), "places": t["places"],
                  "people": t["people"]},
-        "services": board.services,
+        "services": services,
         "assignments": [sp._assignment_out(r, who) for r in rows],
         "board": board,
     }

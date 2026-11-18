@@ -788,6 +788,9 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
         "year": year,
         "minutes": sum(x["minutes"] for x in sundays) + sum(x["minutes"] for x in groups) + sum(x["minutes"] for x in extra),
         "sundays": len({x["day"] for x in sundays}),
+        # Days served that weren't a Sunday (an outreach night: serve_dates), so
+        # My serving never calls them Sundays.
+        "other_days": len({x["day"] for x in sundays if date.fromisoformat(x["day"]).weekday() != 6}),
         "teams": [team_names.get(g, "your team") for g, _ in sorted(by_team.items(), key=lambda kv: -kv[1])],
         "gatherings": len(groups),
         "extra": len(extra),

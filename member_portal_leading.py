@@ -128,7 +128,7 @@ def _candidates(team: str, day: str, place: Dict[str, Any], slot: int, cands: Li
     from member_portal_serving import _form
     rows = []
     for c in cands:
-        why = ("away that Sunday" if c["away"] else f'on {c["clash"]} that hour' if c["clash"]
+        why = ("away that day" if c["away"] else f'on {c["clash"]} that hour' if c["clash"]
                else f'at {c["at_most"]} Sundays this month' if c["at_most"] and c["load"] >= c["at_most"]
                else "learning it" if c["trained"] == "learning" else "not trained on it" if not c["trained"] else "")
         load = f'{c["load"]} Sunday{"" if c["load"] == 1 else "s"} this month'

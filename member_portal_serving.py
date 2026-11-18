@@ -209,7 +209,7 @@ SERVING_CSS = """
 DONE = {
     "yes": "", "no": "", "other": "", "why": "Thanks. Only the people who schedule see it.",
     "took": "It's yours. Thank you for serving.", "sub": "Asked. You stay on until they say yes.",
-    "stopped": "You're still on for that Sunday.", "told": "Thanks for saying so. The spot is open for someone else.",
+    "stopped": "You're still on for that day.", "told": "Thanks for saying so. The spot is open for someone else.",
     "away": "Saved. Nobody asks you on those days.", "unaway": "Taken off.", "often": "Saved.", "hear": "Saved.", "here": "",
 }
 ERRS = {"preview": "This is a preview, so nothing was saved.", "slow": "One moment, then try that again.",
@@ -232,6 +232,30 @@ def _date(at: datetime, soft: bool = False) -> str:
 
 def _day(at: datetime) -> str:
     return f"{at.strftime('%b')} {at.day}"
+
+
+def _wd(at: datetime) -> str:
+    """The day's own name: "Sunday", or "Thursday" for an outreach night
+    (an event date, serve_dates). The member app never calls a Thursday a
+    Sunday."""
+    return at.strftime("%A")
+
+
+def _starts(at: datetime, first: bool = False) -> str:
+    """"service at 10:30 AM" on a Sunday, "starts at 7:00 PM" on any other
+    day; `first` begins a sentence ("Service at", "Starts at")."""
+    word = "service" if at.weekday() == 6 else "starts"
+    return f'{word.capitalize() if first else word} at {_at_clock(at)}'
+
+
+def _occasion(at: datetime, title: str) -> str:
+    """What an ask is for: "Easter Sunday", "Nov 22" for a plain Sunday;
+    "Outreach night, Thursday" (or "Thursday, Nov 19") on another day."""
+    if at.weekday() == 6:
+        return (title + ("" if "sunday" in title.lower() else " Sunday")) if title != "Sunday service" else _day(at)
+    if title in ("", "Sunday service", "An event"):
+        return f"{_wd(at)}, {_day(at)}"
+    return title if _wd(at).lower() in title.lower() else f"{title}, {_wd(at)}"
 
 
 def _clock(hhmm: Optional[str]) -> str:
@@ -266,7 +290,7 @@ def _ask_row(a: Dict[str, Any]) -> str:
     import member_app_ui as ui
     at = a["service"]["at"]
     t = a["service"]["title"]
-    what = f'{_e(a["place"])}, {_e(t + ("" if "sunday" in t.lower() else " Sunday")) if t != "Sunday service" else _day(at)}'
+    what = f'{_e(a["place"])}, {_e(_occasion(at, t))}'
     when = _weekday(a.get("asked_at"), at.tzinfo)
     who = (f'{_e(_first(a["from"]))} asked you to cover · tap to answer' if a.get("from")
            else f'{_e(a["asked_by"] or a["team"])} asked{" " + when if when else ""} · tap to answer')
@@ -286,11 +310,16 @@ def _names(names: List[str]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1] if names else ""
 
 
-def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str) -> str:
+def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str, soon: Optional[List[str]] = None) -> str:
+    """`first_day`: the church's next Sunday service ("this Sunday" and its
+    pack); `soon`: the event dates in the coming week ("this Thursday")."""
     at = c["service"]["at"]
-    label = "this Sunday" if c["service"]["day"] == first_day else (
-        c["service"]["title"] if c["service"]["title"] != "Sunday service" else at.strftime("%A"))
-    be = f'Be there {_clock(c["call_time"])}' if c["call_time"] else f'Service at {_at_clock(at)}'
+    this = c["service"]["day"] == first_day or c["service"]["day"] in (soon or [])
+    title = c["service"]["title"]
+    label = f"this {_wd(at)}" if this else (title if title not in ("Sunday service", "An event") else _wd(at))
+    if this and c["service"].get("event") and title not in ("", "An event"):
+        label = f"{title} {label}"
+    be = f'Be there {_clock(c["call_time"])}' if c["call_time"] else _starts(at, True)
     if c.get("with"):
         be += f' · with {_names(c["with"])}'
     if c.get("swap_name"):
@@ -298,7 +327,7 @@ def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str) -> 
         act = _form("/my/serving/sub/stop", {"id": c["id"]}, "Stop asking")
     else:
         sub = _e(be)
-        act = (f'<a class="sv-btn hue" href="/my/serving/{_e(c["id"])}/pack">Your Sunday</a>' if c["service"]["day"] == first_day
+        act = (f'<a class="sv-btn hue" href="/my/serving/{_e(c["id"])}/pack">Your {_wd(at)}</a>' if this
                else '<span class="sv-st">You\'re on</span>' if subs_html
                else f'<a class="sv-btn" href="/my/serving?sub={_e(c["id"])}#sv-{_e(c["id"])}">Can\'t make it</a>')
     return (f'<div class="sv-row" id="sv-{_e(c["id"])}">{_date(at, soft=True)}<span class="t"><span class="ti">{_e(c["place"])} · {_e(label)}</span>'
@@ -353,7 +382,9 @@ def _hours_html(h: Optional[Dict[str, Any]], me: Dict[str, Any]) -> str:
     parts = []
     if h.get("sundays"):
         teams = [t for t in h.get("teams") or [] if t][:2]
-        parts.append("Sundays" + (f" on {_and([_e(t) for t in teams])}" if teams else ""))
+        # An outreach night or a Saturday event (serve_dates) is a day served, not a Sunday.
+        days = "Days serving" if h.get("other_days") else "Sundays"
+        parts.append(days + (f" on {_and([_e(t) for t in teams])}" if teams else ""))
     if h.get("gatherings"):
         parts.append("a group night" if h["gatherings"] == 1 else f'{h["gatherings"]} group nights')
     if h.get("extra"):
@@ -425,7 +456,8 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
             f'{_form("/my/serving/take", {"id": o["id"]}, "I&#x27;ll take it", "sv-btn hue")}</div>' for o in m["open"])
         open_ = (f'<section class="sv-sec h-gold" aria-labelledby="sv-open-h"><div class="sv-sh"><h2 id="sv-open-h">Open spots you could take</h2></div>'
                  f'<div class="sv-card">{rows}</div></section>')
-    coming_rows = "".join(_coming_row(c, first_day, sub_for["html"] if sub_for and sub_for["id"] == c["id"] else "")
+    coming_rows = "".join(_coming_row(c, first_day, sub_for["html"] if sub_for and sub_for["id"] == c["id"] else "",
+                                      m.get("soon_days"))
                           for c in m["coming"])
     coming = (f'<section class="sv-sec h-teal" aria-labelledby="sv-up-h"><div class="sv-sh"><h2 id="sv-up-h">Coming up</h2></div>'
               + (f'<div class="sv-card">{coming_rows}</div>' if coming_rows
@@ -451,7 +483,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {_check_html(m.get("hours")) if check_first else ""}
 {_hours_html(m.get("hours"), me)}
 <section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">
-<div class="sv-stat"><b>{m["this_year"]}</b><small>Sundays this year</small></div>
+<div class="sv-stat"><b>{m["this_year"]}</b><small>{"Sundays" if m.get("this_year_sundays", m["this_year"]) == m["this_year"] else "days"} this year</small></div>
 <div class="sv-stat"><b>{len(m["coming"])}</b><small>coming up</small></div>
 <div class="sv-stat"><b>{len(m["asks"])}</b><small>to answer</small></div></div></section>
 {asks}{open_}{coming}
@@ -525,19 +557,21 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
     else:
         kicker = f'{v["team"]} · {v["asked_by"]} asked' if v["asked_by"] else v["team"]
         head = f'Can you serve on <em>{_e(v["place"])}?</em>'
-    title = "Sunday" if at.weekday() == 6 else at.strftime("%A")
-    su = (f'Be there by {_clock(v["call_time"])} · service at {_at_clock(at)}' if v["call_time"] else f'Service at {_at_clock(at)}')
+    title = _wd(at)
+    su = (f'Be there by {_clock(v["call_time"])} · {_starts(at)}' if v["call_time"] else _starts(at, True))
+    if v.get("where"):
+        su += f' · {v["where"]}'
     top = (f'<div class="sv-top">{_date(at)}<span class="t"><span class="ti">{_e(title)}'
-           f'{" · " + _e(v["title"]) if v["title"] != "Sunday service" else ""}</span><span class="su">{_e(su)}</span></span></div>')
+           f'{" · " + _e(v["title"]) if v["title"] not in ("Sunday service", "An event") else ""}</span><span class="su">{_e(su)}</span></span></div>')
     vid = v["id"]
     if v["past"]:
-        state = '<p class="sv-lede" style="padding:0">That Sunday has passed. Thank you.</p>'
+        state = f'<p class="sv-lede" style="padding:0">That {_wd(at)} has passed. Thank you.</p>'
     elif v["status"] == "offered":
         state = (f'<div class="sv-ans one">{_form("/my/serving/take", {"id": vid}, ui.icon("check", 18) + "<span>Yes, I&#x27;ll take it</span>", "yes")}</div>')
     elif v["status"] == "yes" and not v["cover"] and not changing:
         state = (f'<div class="sv-done"><span class="disc" aria-hidden="true">{ui.icon("check", 26)}</span>'
                  f'<b>You\'re on for {_day(at)}.</b><small>Your yes is on {_e(v["team"])}\'s schedule.</small></div>'
-                 f'<div class="sv-acts" style="justify-content:center"><a class="sv-btn hue" href="/my/serving/{_e(vid)}/pack">Your Sunday</a>'
+                 f'<div class="sv-acts" style="justify-content:center"><a class="sv-btn hue" href="/my/serving/{_e(vid)}/pack">Your {_wd(at)}</a>'
                  f'<a class="sv-btn" href="/my/serving/{_e(vid)}.ics">Add to my calendar</a>'
                  f'<a class="sv-btn" href="/my/serving/{_e(vid)}?change=1">Change my answer</a></div>')
     elif v["status"] == "no" and not changing:
@@ -546,7 +580,7 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
         why_now = note.split(" · ")[-1] if " · " in note else ("" if offered else note)
         head2 = (f'Thanks. {_e(leader or "The church")} will see you offered {_e(note.split(" · ")[0][7:])}.' if offered
                  else "Thanks for saying so.")
-        sub2 = ("They'll find someone for this Sunday, and you'll get an ask for that one if they need you. You don't have to find a sub."
+        sub2 = (f"They'll find someone for this {_wd(at)}, and you'll get an ask for that one if they need you. You don't have to find a sub."
                 if offered else f'{_e(leader or "Whoever schedules")} finds someone. You don\'t have to text around. '
                                 f'Want to say why? Only the people who schedule see it.')
         chips = "".join(
@@ -587,7 +621,8 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
 
 
 def ics(biz: Dict[str, Any], v: Dict[str, Any]) -> str:
-    """That Sunday as a calendar event: from the arrive-by time, two hours."""
+    """That day (a Sunday, or an event date) as a calendar event: from the
+    arrive-by time, two hours."""
     at = v["at"]
     if v["call_time"]:
         h, m = (int(x) for x in v["call_time"].split(":")[:2])
@@ -605,8 +640,10 @@ def ics(biz: Dict[str, Any], v: Dict[str, Any]) -> str:
         "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Solutionist//Serving//EN", "BEGIN:VEVENT",
         f"UID:serve-{v['id']}@mysolutionist.app", f"DTSTAMP:{fmt(datetime.now(timezone.utc))}",
         f"DTSTART:{fmt(start)}", f"DTEND:{fmt(end)}",
-        f"SUMMARY:{clean(v['place'])} · {clean(church)}",
-        f"DESCRIPTION:{clean(v['team'])}. Service at {_at_clock(at)}.",
+        f"SUMMARY:{clean(v['place'])} · {clean(church)}" if not v.get("event")
+        else f"SUMMARY:{clean(v['place'])} · {clean(v['title'])} · {clean(church)}",
+        f"DESCRIPTION:{clean(v['team'])}. {clean(_starts(at, True))}.",
+        *([f"LOCATION:{clean(v['where'])}"] if v.get("where") else []),
         "END:VEVENT", "END:VCALENDAR", ""])
 
 
@@ -654,8 +691,9 @@ def render_pack(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         tabs = "".join(f'<a href="/my/serving/{_e(r["id"])}/pack"{" aria-current=\"page\"" if r["id"] == role["id"] else ""}>{_e(r["team"])}</a>'
                        for r in p["roles"])
         roles = f'<div class="sv-pk-as"><nav class="sv-seg" aria-label="See the pack as">{tabs}</nav></div>'
-    due = f'Be there by {_hm(role["call"])}' if role["call"] else f'The service is at {_hm(at.strftime("%H:%M"))}'
-    where = f'{role["place"]} · {role["team"]}'
+    due = (f'Be there by {_hm(role["call"])}' if role["call"] else f'The service is at {_hm(at.strftime("%H:%M"))}'
+           if at.weekday() == 6 else f'It starts at {_hm(at.strftime("%H:%M"))}')
+    where = f'{role["place"]} · {role["team"]}' + (f' · {p["where"]}' if p.get("where") else "")
     if role["here"]:
         here = (f'<div class="sv-pk-here done h-teal"><span class="sv-pk-disc" aria-hidden="true">{ui.icon("check", 20)}</span>'
                 f'<span class="t"><b>You\'re here. Thank you!</b><small>{_e(_first(role["leader"]) if role["leader"] else "Your team")} sees you on the list.</small></span></div>')
@@ -686,12 +724,12 @@ def render_pack(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
               f'{ui.icon("chevron", 18)}</a></section>')
     body = f"""<style>{SERVING_CSS}</style><a class="mb-back" href="/my/serving">Serving</a>
 {_flash(request)}
-<div class="sv-pk-when h-teal"><p class="sv-eb">{_e(day)} · {_e(_at_clock(at))}</p>
-<h1>{_e(_first(me.get("name")))}, here&#x27;s your Sunday</h1></div>
+<div class="sv-pk-when h-teal"><p class="sv-eb">{_e(day)} · {_e(_at_clock(at))}{" · " + _e(p["title"]) if p.get("event") else ""}</p>
+<h1>{_e(_first(me.get("name")))}, here&#x27;s your {_e(_wd(at))}</h1></div>
 {roles}
 <section class="sv-sec" style="margin-top:16px" aria-label="When and where">{here}</section>
 {songs}{moments}{order}{thread}"""
-    return _shell(biz, site, "Your Sunday", body, tab=_tab(), who=me)
+    return _shell(biz, site, f"Your {_wd(at)}", body, tab=_tab(), who=me)
 
 
 # ─── GET (through member_portal.serve) ───────────────────────────────

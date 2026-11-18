@@ -43,6 +43,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
 import sb_clients
+import serve_dates
 import worship_show as wsh
 
 WINDOW_MINUTES = 3
@@ -169,7 +170,7 @@ def _service_near(biz: str, to: datetime) -> Tuple[bool, Optional[Dict[str, Any]
     """(read, the service starting nearest the countdown's end, within SERVICE_NEAR_MINUTES)."""
     lo, hi = to - timedelta(minutes=SERVICE_NEAR_MINUTES), to + timedelta(minutes=SERVICE_NEAR_MINUTES)
     rows = sb_clients.sb_get_as_service(
-        f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+        f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false{serve_dates.plans_only()}"
         f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lte.{_q(_iso(hi))}&select=id,title,starts_at,items"
         f"&order=starts_at.asc&limit=5")
     if rows is None:
