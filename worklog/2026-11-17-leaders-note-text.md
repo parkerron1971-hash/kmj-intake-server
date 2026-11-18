@@ -7,7 +7,7 @@ status: in review
 prs: [kmj-intake-server#1911, solutionist-studio#1619]
 migrations: []
 left_undone:
-  - "A text that couldn't go (who said yes unreadable, every send failed) can't be sent again that week: the note goes once a week, email and text together. The sent page says why"
+  - "A text that couldn't go (who said yes unreadable, every send failed) can't be sent again that week: the note goes once a week, email and text together. The sent page says why. TAKEN UP: 2026-11-17-leaders-note-text-again.md (Text them again)"
   - "Quiet hours refuse the text (409) rather than hold it till morning: holding would need its own scheduled action type and runner (sms_announcement's runner texts the whole list or a group, not the leaders room)"
   - "My week's count is on the weekly text's job only; the office team page (church_team_week) and Chief don't say it"
   - "Love City: 37 of its 149 numbers get texts (keyword texters), and its texting registration has never been sent, so My week shows the note until the owner sends it (Text, the gear, Your name on texts)"

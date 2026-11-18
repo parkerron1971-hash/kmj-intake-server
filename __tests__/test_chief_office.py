@@ -103,11 +103,13 @@ def test_the_office_names_everyone_their_title_lane_duties_and_job(db):
     jess = line_of(text, "Jessica McCloud")
     assert jess.startswith("- Jessica McCloud: Executive Pastor (Manager): answers to Pastor Kevin; over the lanes: "
                            "Naiya Clark, Tiara Adams, Laquesha Bailey-Smith and Shapretta McClain; duties: The "
-                           "monthly report; Over the lanes; covers every lane's other duties, never money")
+                           "monthly report (Office › Leaders › Monthly report → Send to the pastor); Over the lanes "
+                           "(Home › Office team → One-on-one); covers every lane's other duties, never money")
     # The owner's own words: the written title and the description's first sentence, past its heading.
     naiya = line_of(text, "Naiya Clark")
     assert naiya.startswith("- Naiya Clark: Church Administrator (Manager, Office & Leadership): answers to "
-                            "Jessica McCloud; duties: The front desk; The Monday leaders note;")
+                            "Jessica McCloud; duties: The front desk (Messages › Approvals); The Monday leaders note "
+                            "(Office › Leaders › Leaders note → Text it too);")
     assert naiya.endswith("job description: “Naiya is the Church Administrator: the front desk, the calendar and the "
                           "rooms run through her”.")
     assert "Answers to the Executive Pastor" not in naiya, "one line, never the whole"
@@ -119,11 +121,13 @@ def test_the_office_names_everyone_their_title_lane_duties_and_job(db):
     assert "Treasurer (Admin)" in minnie and "The books" in minnie and "$" not in text
     # The one rule, and who moves a duty.
     rule = lines[-1]
-    assert rule.startswith("Whose job is it, one rule: an office duty") and "whose_job" in rule and "job_of" in rule
+    assert rule.startswith("Beside each duty is where it is done") and "whose_job" in rule and "job_of" in rule
+    assert "Whose job is it, one rule: an office duty" in rule
     assert "Who moves a duty: the owner or an admin, and Jessica McCloud for the Managers under them." in rule
     assert "one_on_one" in rule
-    # Small enough for the cached segment: about 700 tokens (four characters a token) for this office.
-    assert len(text) < 3200, len(text)
+    # Small enough for the cached segment: about 1,250 tokens (four characters a token) for this office, with
+    # where each duty is done (2026-11-18; about 700 before).
+    assert len(text) < 5200, len(text)
 
 
 def test_someone_elses_words_and_instruction_shaped_ones_never_reach_it(db):

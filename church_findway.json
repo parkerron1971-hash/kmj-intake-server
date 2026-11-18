@@ -111,6 +111,17 @@
           "change my days",
           "change which day i do something"
          ]
+        },
+        {
+         "id": "see-how-many-people-get-our-texts",
+         "q": "See how many people get the church’s texts",
+         "a": "Under How your week goes, the line for The weekly text and email says how many people get the church’s texts and how many signed up this week. It shows on the week of whoever does the weekly text.",
+         "words": [
+          "text sign ups",
+          "how many said yes to texts",
+          "who gets our texts",
+          "texting list"
+         ]
         }
        ]
       },
@@ -120,6 +131,9 @@
        "sub": "team",
        "name": "Office team",
        "sees": [],
+       "duties": [
+        "oversee_lanes"
+       ],
        "what": "See each office login’s week, what is late, and hand out assignments.",
        "words": [
         "office team",
@@ -167,6 +181,19 @@
          "words": [
           "escalate",
           "pass it to the pastor"
+         ]
+        },
+        {
+         "id": "get-ready-for-a-one-on-one",
+         "q": "Get ready for a one-on-one",
+         "a": "Under Assignments, press One-on-one in the person’s column. To go over lists what they finished, what is stuck and for how long, what is late, what is next and this week’s jobs, and Chief can turn it into an agenda.",
+         "words": [
+          "one on one",
+          "prepare a one-on-one",
+          "meeting with an admin",
+          "weekly huddle",
+          "check in with my team",
+          "agenda for a staff meeting"
          ]
         }
        ]
@@ -608,6 +635,18 @@
          ]
         },
         {
+         "id": "approve-a-guest-slide-that-is-waiting",
+         "q": "Approve a guest slide that is waiting",
+         "a": "The New here slide People & care sent waits under Waiting for you. Press Put it on to show it on Sunday’s screens, Change it first to edit it, or Not this time to leave it off.",
+         "words": [
+          "new here slide",
+          "guest slide",
+          "slide waiting for me",
+          "put the guest slide on",
+          "welcome slide"
+         ]
+        },
+        {
          "id": "take-an-announcement-down",
          "q": "Take an announcement down",
          "a": "Open the announcement and press Take it off the board, then Take it off. It leaves every screen.",
@@ -684,6 +723,9 @@
        "sees": [
         "worship_media"
        ],
+       "duties": [
+        "events"
+       ],
        "what": "Plan each service or event: who is coming, who is serving, and which spots are still open.",
        "words": [],
        "answers": [
@@ -718,6 +760,19 @@
           "sign someone up",
           "who is coming",
           "rsvp"
+         ]
+        },
+        {
+         "id": "make-an-events-volunteer-list",
+         "q": "Make an event’s volunteer list",
+         "a": "On the event’s card press Set up serving, or Roles if it has some, add each role with how many it needs and press Save roles. Add names at the bottom of the card with their serving role, and people can sign up for open spots on your events page when it is on and the event is public.",
+         "words": [
+          "event volunteer list",
+          "volunteers for an event",
+          "volunteer spots",
+          "volunteer sign up sheet",
+          "who is serving at the event",
+          "serving roles for an event"
          ]
         }
        ]
@@ -1065,6 +1120,9 @@
         "worship_media",
         "kids_youth",
         "people_care"
+       ],
+       "duties": [
+        "background_checks"
        ],
        "what": "Track background checks for people who serve with kids or youth, and see serving hours.",
        "words": [
@@ -2550,6 +2608,9 @@
         "office",
         "worship_media"
        ],
+       "duties": [
+        "weekly_text"
+       ],
        "what": "Text one person or everyone who said yes, and read the texts that come back.",
        "words": [
         "text",
@@ -2591,6 +2652,56 @@
          ]
         },
         {
+         "id": "send-a-text-alert-to-one-group",
+         "q": "Send a text alert to one group",
+         "a": "Press Announcement and pick the group under Who gets it, or leave it on everyone who said yes. Write the message, choose Now or Later under When, press Review, then the Send or Schedule button.",
+         "words": [
+          "text alert",
+          "alert the church by text",
+          "text a group",
+          "text one ministry",
+          "weather alert",
+          "emergency text"
+         ]
+        },
+        {
+         "id": "set-up-new-here-for-first-time-guests",
+         "q": "Set up New here for first-time guests",
+         "a": "Press New here. Under What a guest gets press Edit on a text to change its words, Turn off or Turn on to choose which go, and Change the days and times for when, then Save changes and Turn New here on.",
+         "words": [
+          "guest welcome texts",
+          "new here texts",
+          "first time guest text",
+          "welcome text for visitors",
+          "guest word",
+          "text in word"
+         ]
+        },
+        {
+         "id": "print-the-new-here-seat-cards",
+         "q": "Print the New here seat cards",
+         "a": "Press New here, then Print seat cards. Each card has your word, your texting number and a QR code a guest scans to start the text.",
+         "words": [
+          "seat cards",
+          "pew cards",
+          "qr code for new guests",
+          "cards for the seats",
+          "text in card"
+         ]
+        },
+        {
+         "id": "put-the-new-here-slide-on-sundays-screen",
+         "q": "Put the New here slide on Sunday’s screen",
+         "a": "Press New here, then Put it on Sunday’s screen, or Show the slide to see it first. It goes on the Announcements board if you plan Sunday, and otherwise waits for Media & Communications to put on.",
+         "words": [
+          "new here slide",
+          "guest slide",
+          "qr code on the screen",
+          "welcome slide",
+          "text in slide"
+         ]
+        },
+        {
          "id": "get-the-church-its-own-texting-number",
          "q": "Get the church its own texting number",
          "a": "Press the gear (Texting settings), then Get a number. Type your area code, press Look, choose a number and press Get this number.",
@@ -2610,6 +2721,9 @@
        "name": "Member messaging",
        "sees": [
         "messages_safety"
+       ],
+       "duties": [
+        "chat_rules"
        ],
        "what": "Turn member chat on, choose who may use it, and name the safety officers who watch it.",
        "words": [
@@ -3038,6 +3152,11 @@
        "sees": [
         "office"
        ],
+       "duties": [
+        "rooms",
+        "events",
+        "outreach_nights"
+       ],
        "what": "See who has which room, the van or the projector this week, and book or approve one.",
        "words": [
         "room",
@@ -3059,12 +3178,24 @@
         {
          "id": "book-a-room",
          "q": "Book a room",
-         "a": "Press Book a room, pick the room, the date and the times, say what it’s for and press Book it. If your login can’t approve bookings, the button reads Ask for it and your ask waits for a yes.",
+         "a": "Press Book a room, pick the room, the date and the times, say what it’s for and press Book it. If your login can’t approve bookings, the buttons read Ask for a room and Ask for it, and your ask waits for a yes.",
          "words": [
           "reserve the fellowship hall",
           "book the van",
           "use the sanctuary",
           "reserve the projector"
+         ]
+        },
+        {
+         "id": "ask-for-a-room-for-an-event",
+         "q": "Ask for a room for an event",
+         "a": "Press Ask for a room, pick the room, the date and the times, say what the event is and press Ask for it. Your ask waits under Your asks until whoever books the rooms says yes.",
+         "words": [
+          "request a room",
+          "room request",
+          "reserve a room for an event",
+          "room for outreach night",
+          "need the fellowship hall"
          ]
         },
         {
@@ -3373,6 +3504,9 @@
        "sees": [
         "office"
        ],
+       "duties": [
+        "meetings"
+       ],
        "what": "Plan board meetings, take the minutes, record votes and look up past decisions.",
        "words": [
         "board",
@@ -3455,6 +3589,9 @@
        "sees": [
         "office"
        ],
+       "duties": [
+        "leaders_note"
+       ],
        "what": "Read over the week’s note to every leader, add one win, and send it.",
        "words": [
         "leaders note",
@@ -3484,6 +3621,17 @@
           "undo my edits",
           "fresh draft"
          ]
+        },
+        {
+         "id": "text-the-monday-leaders-note-too",
+         "q": "Text the Monday leaders note too",
+         "a": "Under Sending, tick Text it too to see the text as their phones get it. Press the Send to button, then Send now, and the leaders who said yes to the church’s texts get it as a text as well as the email.",
+         "words": [
+          "text the leaders",
+          "leaders note by text",
+          "text it too",
+          "send the leaders a text"
+         ]
         }
        ]
       },
@@ -3493,6 +3641,9 @@
        "sub": "monthly-report",
        "name": "Monthly report",
        "sees": [],
+       "duties": [
+        "monthly_report"
+       ],
        "what": "Gather the month’s numbers for each lane, add your notes and send them to the pastor.",
        "words": [
         "monthly report",
@@ -3908,6 +4059,9 @@
        "sees": [
         "office"
        ],
+       "duties": [
+        "clips"
+       ],
        "what": "Upload a sermon recording and get short captioned clips with covers, ready to post.",
        "words": [],
        "answers": [
@@ -4080,6 +4234,9 @@
        "sees": [
         "website_outreach"
        ],
+       "duties": [
+        "posts"
+       ],
        "what": "Plan the week’s posts with Chief, approve each one and see what went out.",
        "words": [
         "marketing",
@@ -4135,6 +4292,9 @@
        "sees": [
         "website_outreach"
        ],
+       "duties": [
+        "posts"
+       ],
        "what": "Make a post, a flyer, a video or clips from a recording.",
        "words": [
         "create",
@@ -4172,6 +4332,9 @@
        "name": "Posts",
        "sees": [
         "website_outreach"
+       ],
+       "duties": [
+        "posts"
        ],
        "what": "The older plan for your posts. Marketing has taken its place on the menu.",
        "words": [
@@ -4352,6 +4515,9 @@
        "sees": [
         "website_outreach"
        ],
+       "duties": [
+        "website"
+       ],
        "what": "Build the church website with Chief, change its words and photos, and put it online.",
        "words": [
         "website",
@@ -4408,6 +4574,9 @@
        "name": "Website assistant",
        "sees": [
         "website_outreach"
+       ],
+       "duties": [
+        "website"
        ],
        "what": "Turn on the helper that answers visitors on the church website, and read what they asked.",
        "words": [
@@ -4662,6 +4831,9 @@
        "sees": [
         "website_outreach",
         "office"
+       ],
+       "duties": [
+        "website"
        ],
        "what": "Turn on the public page where people sign up for your events, and share its link.",
        "words": [

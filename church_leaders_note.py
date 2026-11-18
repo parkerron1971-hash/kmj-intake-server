@@ -42,6 +42,19 @@ are checked before the week is taken: in quiet hours the send is refused,
 saying when texts can go, rather than held. The gate is the note's own: the
 same note to the same people, so it needs no weekly_text duty.
 
+Text them again (Kevin, 2026-11-17, "build that"): a text that failed to
+go through can be sent again, the same week, to the leaders it missed and
+nobody else. The send keeps who it missed (`failed_ids`: contact ids, never
+numbers) and the exact words it sent (`short`) in the week's record;
+POST /text-again sends those same words to those same leaders, through the
+same send (yes and STOP checked again, so a leader who has since said STOP
+or never said yes is never texted), under the note's own gate, the card and
+quiet hours (refused, as the send is). When the email went without the text
+(or the text couldn't go at all: who said yes couldn't be read), the same
+button sends the week's text for the first time, to every leader who said
+yes. At most AGAIN_MOST times a week, and only in the week the note went.
+Each one takes the record under a new id first, so two presses text once.
+
 Who sends it: the owner, admins, and a Manager seat that does the leaders
 note (church_duties "leaders_note": the Office & Leadership lane's by
 default, or whoever it was given to; a Manager no lane names, by the areas
@@ -56,6 +69,10 @@ people pressing Send at once send once. No table, no migration.
   GET  /church/leaders-note?business_id=          the draft, who it goes to (`texts`: how many
                                                   of the leaders get the church's texts), the last send
   POST /church/leaders-note/send                  {business_id, subject, text, also_text?}
+  POST /church/leaders-note/text-again            {business_id}: this week's text, to whoever it missed
+
+The record is a server key (business_settings.SERVER_KEYS): the app can't
+write it, so who gets a text again is only ever what a send recorded.
 
 Switched by CHURCH_LEADERS_NOTE: off | owner | on (on by default since 2026-11-17).
 A read that fails is a 503, never an empty note.
@@ -95,6 +112,8 @@ DAY_RE = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday
 TEXT_SHORT = 300                     # the text version's letters at most, before the church's name and the way out
 CUT = "..."                          # plain dots: an ellipsis would bill the whole text at the UCS-2 rate
 TEXT_EVENT = "leaders_note_text"     # its events row: never an announcement (the weekly text's check reads those)
+AGAIN_MOST = 2                       # "Text them again" at most this many times a week
+IDS_MOST = 200                       # who a text missed, kept at most (a leaders room is far smaller)
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -567,13 +586,17 @@ def quiet_now(biz: Dict[str, Any]) -> bool:
         return False
 
 
-def quiet_words(biz: Dict[str, Any]) -> str:
+def quiet_words(biz: Dict[str, Any], again: bool = False) -> str:
+    """Why no text can go now, and when one can. `again`: for Text them
+    again, where the email has already gone."""
     import texting_hours as th
     h = th.of(biz)
     church = _plain(biz.get("name")) or "the church"
-    return (f"It's quiet hours at {church} ({th.hour_words(h['quiet_from'])} to {th.hour_words(h['quiet_until'])}), "
-            f"so texts can't go now. Send it with the text after {th.hour_words(h['quiet_until'])}, "
-            "or send the email alone now.")
+    head = (f"It's quiet hours at {church} ({th.hour_words(h['quiet_from'])} to {th.hour_words(h['quiet_until'])}), "
+            "so texts can't go now.")
+    if again:
+        return f"{head} Send the text after {th.hour_words(h['quiet_until'])}."
+    return f"{head} Send it with the text after {th.hour_words(h['quiet_until'])}, or send the email alone now."
 
 
 def text_reach(biz: Dict[str, Any], people: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -594,29 +617,49 @@ def text_reach(biz: Dict[str, Any], people: Dict[str, Any]) -> Optional[Dict[str
             "name": biz.get("name") or "the business", "most": TEXT_SHORT}
 
 
-def text_leaders(biz_id: str, people: Dict[str, Any], short: str) -> Dict[str, Any]:
-    """The short text to the leaders whose numbers said yes
-    (sms_routing.text_people, the announcement's own send): how many leaders
-    it reached (`sent`; a shared number reaches each who shares it), how many
-    texts went (`texts`), how many leaders it skipped (no number, no yes, or
-    STOP), how many a failed text missed, and the text as it went. When none
-    could go it says why (`error`); the email has gone either way."""
+def _text(biz_id: str, to: List[Dict[str, str]], short: str) -> Dict[str, Any]:
+    """The short text to these leaders (each {id, name, phone}) through
+    sms_routing.text_people, the announcement's own send: only a number that
+    said yes, STOP checked right before each. With `went` and `missed`, the
+    leaders (contact ids) it reached and the ones a failed text missed. When
+    none went, `error`; `unsure` when the send broke partway, so who got it
+    can't be told (never sent again then)."""
     import sms_routing
     from sms_service import normalize_phone
-    phones = people.get("phones") or []
     try:
-        out = asyncio.run(sms_routing.text_people(biz_id, phones, short, event=TEXT_EVENT))
+        out = asyncio.run(sms_routing.text_people(biz_id, to, short, event=TEXT_EVENT))
     except Exception:
         logger.warning("leaders note: the text didn't go", exc_info=True)
-        out = {"error": "The text didn't go just now."}
+        return {"error": "The text didn't go just now.", "unsure": True}
     if out.get("error"):
-        return {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": "", "error": str(out["error"])}
+        return {"error": str(out["error"])}
     went = set(out.get("sent_to") or ())
     missed = set(out.get("failed_to") or ())
-    reached = sum(1 for p in phones if normalize_phone(p.get("phone")) in went)
-    failed = sum(1 for p in phones if normalize_phone(p.get("phone")) in missed)
+    return {**out,
+            "went": [p["id"] for p in to if normalize_phone(p.get("phone")) in went],
+            "missed": sorted({str(p["id"]) for p in to if p.get("id") and normalize_phone(p.get("phone")) in missed})}
+
+
+def text_leaders(biz_id: str, people: Dict[str, Any], short: str) -> Dict[str, Any]:
+    """The short text to the leaders whose numbers said yes: how many leaders
+    it reached (`sent`; a shared number reaches each who shares it), how many
+    texts went (`texts`), how many leaders it skipped (no number, no yes, or
+    STOP), how many a failed text missed, and the text as it went. Kept for
+    Text them again: who a failed text missed (`failed_ids`, contact ids) and
+    the words it sent (`short`). When none could go it says why (`error`;
+    `none_went` when the send stopped before any text, so the week's text can
+    still go); the email has gone either way."""
+    out = _text(biz_id, people.get("phones") or [], short)
+    if out.get("error"):
+        rec = {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": "", "error": out["error"], "short": short,
+               "failed_ids": []}
+        if not out.get("unsure"):
+            rec["none_went"] = True
+        return rec
+    reached, missed = len(out["went"]), out["missed"]
+    failed = len(missed)
     return {"sent": reached, "texts": int(out.get("sent") or 0), "skipped": max(0, people["leaders"] - reached - failed),
-            "failed": failed, "body": str(out.get("body") or "")}
+            "failed": failed, "body": str(out.get("body") or ""), "short": short, "failed_ids": missed[:IDS_MOST]}
 
 
 # ─── The last send, kept in the church's settings ─────────────────────
@@ -670,6 +713,112 @@ def _texts_view(t: Any) -> Optional[Dict[str, Any]]:
         return None
     return {"sent": int(t.get("sent") or 0), "texts": int(t.get("texts") or 0), "skipped": int(t.get("skipped") or 0),
             "failed": int(t.get("failed") or 0), "body": str(t.get("body") or ""), "error": str(t.get("error") or "")}
+
+
+# ─── Text them again ──────────────────────────────────────────────────
+
+AGAIN_LIMIT = (f"The text was sent again {AGAIN_MOST} times this week, the most a week allows. "
+               "The next note can go with its own text.")
+UNSURE = "It isn't clear whether the text reached them, so it can't be sent again this week."
+STUCK = timedelta(minutes=10)        # a try still "sending" after this never finished saving
+
+
+def _int(v: Any) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def _ids(v: Any) -> Optional[List[str]]:
+    """Who a text missed, as a send kept it: contact ids, at most IDS_MOST.
+    None for anything else, so who to text is never a guess."""
+    if not isinstance(v, list) or len(v) > IDS_MOST:
+        return None
+    out = set()
+    for x in v:
+        try:
+            out.add(str(uuid.UUID(str(x))))
+        except (ValueError, TypeError, AttributeError):
+            return None
+    return sorted(out)
+
+
+def _short(v: Any) -> str:
+    """The words a send kept: a text_version, so at most TEXT_SHORT letters."""
+    return v if isinstance(v, str) and v.strip() and len(v) <= TEXT_SHORT else ""
+
+
+def again_of(rec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What Text them again can do with a week's record (read strictly; a
+    shape no send writes offers nothing): `mode` "again" (the same words to
+    the leaders a failed text missed, `ids`), "first" (the week's text hasn't
+    gone: the email went alone, or the text stopped before any went) or
+    None; `short`, the words; `tries` so far; `why` it can't, when it can't."""
+    out: Dict[str, Any] = {"mode": None, "ids": [], "short": "", "tries": 0, "why": ""}
+    if not rec or rec.get("state") != "sent":
+        return out
+    t = rec.get("texts")
+    if t is None:
+        short = text_version(rec.get("subject"), rec.get("text"))
+        return {**out, "mode": "first", "short": short} if short else out
+    if not isinstance(t, dict):
+        return out
+    tries = t.get("tries", 0)
+    if isinstance(tries, bool) or not isinstance(tries, int) or not 0 <= tries <= AGAIN_MOST:
+        return out
+    out["tries"] = tries
+    short = _short(t.get("short"))
+    if t.get("state") == "sending":
+        # A try that never finished saving (a save that failed, a replica
+        # gone mid-send) can't say who it reached: after STUCK it says so,
+        # and it never goes again.
+        at = _at(t.get("at"))
+        if not at or _now() - at > STUCK:
+            return {**out, "mode": "again", "why": UNSURE}
+        return {**out, "mode": "again", "why": "The text is going out now. Open the page again in a moment."}
+    if t.get("error"):
+        if t.get("none_went") is True and not t.get("unsure") and short:
+            return {**out, "mode": "first", "short": short}
+        return out
+    if not _int(t.get("failed")):
+        return out
+    ids = _ids(t.get("failed_ids"))
+    if t.get("unsure"):
+        return {**out, "mode": "again", "why": UNSURE}
+    if not ids or not short:
+        # A send from before who it missed was kept: it can't be told.
+        return {**out, "mode": "again", "why": "This week's text went before the app kept who it missed, "
+                                               "so it can't be sent again."}
+    return {**out, "mode": "again", "ids": ids, "short": short}
+
+
+def text_failed_of(rec: Optional[Dict[str, Any]]) -> int:
+    """How many leaders the week's text didn't reach because it failed."""
+    t = (rec or {}).get("texts")
+    return _int(t.get("failed")) if isinstance(t, dict) and not t.get("error") else 0
+
+
+def again_view(biz: Dict[str, Any], rec: Optional[Dict[str, Any]], reach: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """For "The text didn't reach 2 leaders. Text them again": how many it
+    goes to, the text exactly as it goes (the church's name first, the way
+    out last, as sms_routing.text_people makes it), tries left, and whether
+    it can go now (`why` not: quiet hours, the week's limit). None when
+    there's nothing to offer; "first" only when some leader gets texts
+    (`reach`, text_reach)."""
+    a = again_of(rec)
+    if not a["mode"]:
+        return None
+    if a["mode"] == "first":
+        n = _int((reach or {}).get("reach"))
+        if not n:
+            return None
+    else:
+        n = len(a["ids"]) or text_failed_of(rec)
+    why = a["why"] or (AGAIN_LIMIT if a["tries"] >= AGAIN_MOST else "")
+    if not why and quiet_now(biz):
+        why = quiet_words(biz, again=True)
+    from sms_service import compose_outbound_body
+    body = compose_outbound_body(biz.get("name") or "the business", a["short"], include_optout=True) if a["short"] else ""
+    return {"mode": a["mode"], "leaders": n, "body": body, "tries_left": max(0, AGAIN_MOST - a["tries"]),
+            "allowed": not why, "why": why}
 
 
 def sender_name(biz: Dict[str, Any], user: AuthedUser) -> str:
@@ -727,7 +876,8 @@ def draft(me: Dict[str, Any]) -> Dict[str, Any]:
     monday = monday_of(today)
     parts = {"week": week_text(items, groups), "needed": needed_text(sunday, occasions, no_one), "win": ""}
     subject = f"Leaders, the week of {monday:%B} {monday.day}"
-    last = last_view(last_of(biz), tz)
+    rec = last_of(biz)
+    last = last_view(rec, tz)
     sent_this_week = bool(last and last["week"] == monday.isoformat())
     nxt = monday + timedelta(days=7)
     return {
@@ -745,6 +895,9 @@ def draft(me: Dict[str, Any]) -> Dict[str, Any]:
                    "roles": sum(1 for o in occasions if o.get("short")), "no_one": no_one},
         "last": last,
         "sent_this_week": sent_this_week,
+        # Text them again: this week's only.
+        "text_failed": text_failed_of(rec) if sent_this_week else 0,
+        "text_again": again_view(biz, rec, texts) if sent_this_week else None,
         "next_send": {"day": nxt.isoformat(), "words": day_words(nxt)},
     }
 
@@ -845,7 +998,7 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
              "by": me["uid"], "by_name": sender_name(fresh, me["user"]), "sent": 0,
              "no_email": people["no_email"][:200], "failed": [], "subject": subject, "text": text}
     if also_text:
-        claim["texts"] = {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": short}
+        claim["texts"] = {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": short, "short": short, "failed_ids": []}
     if not swap(biz_id, (last or {}).get("id"), claim):
         raise HTTPException(409, "Someone else is sending this week's note right now. Open the page again in a moment.")
     html = render(fresh, subject, text)
@@ -872,7 +1025,103 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     recorded = swap(biz_id, claim["id"], done)
     return {"sent": len(sent), "failed": failed, "no_email": people["no_email"], "recorded": recorded,
             "texts": _texts_view(texts), "last": last_view(done, tz), "sent_this_week": True,
+            # Text them again, when a text failed (or couldn't go at all). Not
+            # "first" after an email alone: that's offered when the page opens.
+            "text_failed": text_failed_of(done), "text_again": again_view(fresh, done, None),
             "next_send": {"day": (monday + timedelta(days=7)).isoformat(), "words": day_words(monday + timedelta(days=7))}}
+
+
+def text_again(me: Dict[str, Any]) -> Dict[str, Any]:
+    """Text this week's note again to the leaders a failed text missed: the
+    same words, to those leaders only, yes and STOP checked again as it goes
+    (a leader who has said STOP, or never said yes, is never texted). When
+    the week's text hasn't gone (the email went alone, or the text stopped
+    before any went), it goes now to every leader who said yes. The record is
+    read fresh (a failed read is a 503, never a send); the card, quiet hours
+    and AGAIN_MOST are checked; then the record is taken under a new id, so
+    two presses text once. Nothing went: the try is given back."""
+    biz = me["biz"]
+    biz_id = str(biz["id"])
+    tz = _zone(biz)
+    monday = monday_of(_now().astimezone(tz).date())
+    fresh = _business(biz_id)
+    last = last_of(fresh)
+    if not last or last.get("week") != monday.isoformat():
+        raise HTTPException(409, "This week's note hasn't gone yet. The text goes with the note: send it from this page.")
+    if last.get("state") != "sent":
+        raise HTTPException(409, "This week's note is still going out. Open the page again in a moment.")
+    a = again_of(last)
+    if not a["mode"]:
+        raise HTTPException(409, "There's nothing to text again this week: the text reached every leader it could.")
+    if a["why"]:
+        raise HTTPException(409, a["why"])
+    if a["tries"] >= AGAIN_MOST:
+        raise HTTPException(409, AGAIN_LIMIT)
+    import billing_limits
+    billing_limits.require_card(biz_id, "texts")
+    if quiet_now(fresh):
+        raise HTTPException(409, quiet_words(fresh, again=True))
+    import rate_limit
+    if not rate_limit.allow("church_leaders_note_text_again", biz_id):
+        raise HTTPException(429, "The text was tried several times this hour. Try again later.")
+    again = a["mode"] == "again"
+    people = recipients(biz_id)
+    to = [p for p in people["phones"] if p["id"] in set(a["ids"])] if again else list(people["phones"])
+    if not to:
+        raise HTTPException(409, "None of the leaders it missed is in the leaders room with a number now, so there's no one to text."
+                            if again else "None of the leaders has a number on their record, so there's no one to text.")
+    old = last["texts"] if again else {"sent": 0, "texts": 0, "skipped": 0, "failed": 0, "body": ""}
+    tries = a["tries"] + 1
+    claim = {**last, "id": uuid.uuid4().hex,
+             "texts": {**old, "short": a["short"], "state": "sending", "at": _iso(_now()), "tries": tries}}
+    claim["texts"].pop("unsure", None)
+    if not swap(biz_id, last["id"], claim):
+        raise HTTPException(409, "Someone else is texting the leaders right now. Open the page again in a moment.")
+    out = _text(biz_id, to, a["short"])
+    if out.get("error") and not out.get("unsure"):
+        # Nothing went: the try is given back (asked twice; the swap only
+        # lands on our own claim). If it still won't save, the claim reads
+        # as unsure after STUCK and never texts twice; say so now.
+        if not (swap(biz_id, claim["id"], last) or swap(biz_id, claim["id"], last)):
+            print(f"[leaders_note] {biz_id[:8]}: text-again sent nothing and its try couldn't be given back")
+            raise HTTPException(503, f"{out['error']} The page couldn't be put back either, "
+                                     "so the text may not be offered again this week.")
+        raise HTTPException(503, out["error"])
+    if out.get("error"):
+        # It broke partway: who got it can't be told, so it never goes again.
+        reached, still = [], []
+        texts = {**old, "short": a["short"], "tries": tries, "unsure": True, "failed_ids": []}
+        if not again:
+            texts["error"] = out["error"]
+    else:
+        reached, still = out["went"], out["missed"]
+        if again:
+            total = _int(old.get("sent")) + _int(old.get("skipped")) + _int(old.get("failed"))
+            sent = _int(old.get("sent")) + len(reached)
+            texts = {**old, "sent": sent, "texts": _int(old.get("texts")) + _int(out.get("sent")),
+                     "skipped": max(0, total - sent - len(still)), "failed": len(still)}
+        else:
+            texts = {"sent": len(reached), "texts": _int(out.get("sent")),
+                     "skipped": max(0, people["leaders"] - len(reached) - len(still)), "failed": len(still)}
+        texts.update({"body": str(out.get("body") or old.get("body") or ""), "short": a["short"],
+                      "failed_ids": still[:IDS_MOST], "tries": tries})
+    for k in ("state", "at", "none_went"):
+        texts.pop(k, None)
+    kept = old.get("again") if again else None
+    earlier = [x for x in kept if isinstance(x, dict)] if isinstance(kept, list) else []
+    texts["again"] = (earlier + [{"at": _iso(_now()), "by_name": sender_name(fresh, me["user"]),
+                                  "sent": len(reached), "failed": len(still)}])[-AGAIN_MOST:]
+    done = {**claim, "texts": texts}
+    recorded = swap(biz_id, claim["id"], done) or swap(biz_id, claim["id"], done)
+    warning = ""
+    if not recorded:
+        # The texts went but who they reached isn't saved: the claim stays
+        # "sending", reads as unsure after STUCK, and is never pressed again.
+        print(f"[leaders_note] {biz_id[:8]}: text-again went (reached={len(reached)}) but its record didn't save")
+        warning = "The text went, but who it reached couldn't be saved, so it can't be sent again this week."
+    return {"reached": len(reached), "failed": len(still), "recorded": recorded, "unsure": bool(out.get("error")),
+            "warning": warning, "texts": _texts_view(texts), "last": last_view(done, tz),
+            "text_failed": text_failed_of(done), "text_again": again_view(fresh, done, None) if recorded else None}
 
 
 # ─── Routes ───────────────────────────────────────────────────────────
@@ -903,3 +1152,9 @@ def leaders_note_draft(business_id: str, user: AuthedUser = Depends(require_user
 def leaders_note_send(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     return send(_access(body.get("business_id"), user), body)
+
+
+@router.post("/text-again")
+def leaders_note_text_again(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    body = body or {}
+    return text_again(_access(body.get("business_id"), user))

@@ -531,9 +531,17 @@ def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
     lines = [f"{e['name']}: {_said(row, uid, title) if written else title}" + (" (their written title)." if written
                                                                                else ".")]
     if j["duties"]:
-        lines.append(f"Duties ({len(j['duties'])}): " + "; ".join(
-            d["label"] + (f" ({d['when']}" + (", their pick" if d.get("picked") else "") + ")" if d["when"] else "")
-            for d in j["duties"]) + ".")
+        import chief_office
+
+        def duty_words(d: Dict[str, Any]) -> str:
+            # When it falls, and where on the church's menu it is done (confirmed:
+            # chief_office.place, the same words THE OFFICE gives).
+            bits = [d["when"] + (", their pick" if d.get("picked") else "")] if d["when"] else []
+            where = chief_office.place(d["key"])
+            if where:
+                bits.append(f"done in {where}")
+            return d["label"] + (f" ({'; '.join(bits)})" if bits else "")
+        lines.append(f"Duties ({len(j['duties'])}): " + "; ".join(duty_words(d) for d in j["duties"]) + ".")
     if j["covers"]:
         lines.append("Covers any lane's work as the one over the office's lanes.")
     if j["leads"] or j["oversees"] or j["helps"]:

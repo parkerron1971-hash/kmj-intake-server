@@ -284,15 +284,20 @@ def test_list_duties_by_lane_with_who_does_each_and_what_needs_someone(church):
     heads = [ln for ln in lines if ln.endswith(":") and not ln.startswith("-")]
     assert heads == ["Office & Leadership:", "People & Care:", "Sunday & Serving:", "Media & Communications:",
                      "Treasurer:", "Executive Pastor:"]
-    assert "- The weekly text and email (weekly_text; Wed): lanes: Naiya Clark, Jessica McCloud." in lines
+    # Each with where it is done on the church's menu (chief_office.place, 2026-11-18).
+    assert ("- The weekly text and email (weekly_text; Wed): lanes: Naiya Clark, Jessica McCloud. Done in: "
+            "Messages › Texts → Announcement.") in lines
     assert ("- Rooms (rooms; Fri): moved to nobody who can do it now (named but can't do it "
-            "now: Someone who has left the office).") in lines
+            "now: Someone who has left the office). Done in: Office › Building › Rooms & spaces → Waiting for a "
+            "yes.") in lines
     # Sunday's schedule, split by team: one line under each lane.
-    assert "- Who serves when (serve_schedule; Wed): lanes: Jessica McCloud." in lines
-    assert "- Worship and production teams (production_schedule; Wed): lanes: Jessica McCloud, Shapretta McClain." \
-        in lines
-    assert "- The books (books; Mon, monthly; money): lanes: Minnie Tatum." in lines
-    assert "- The monthly report (monthly_report; first Monday): lanes: Jessica McCloud." in lines
+    assert ("- Who serves when (serve_schedule; Wed): lanes: Jessica McCloud. Done in: Sunday › This week › Who serves "
+            "when → Ask.") in lines
+    assert ("- Worship and production teams (production_schedule; Wed): lanes: Jessica McCloud, Shapretta McClain. "
+            "Done in: Sunday › This week › Who serves when.") in lines
+    assert "- The books (books; Mon, monthly; money): lanes: Minnie Tatum. Done in: Giving › Gifts." in lines
+    assert ("- The monthly report (monthly_report; first Monday): lanes: Jessica McCloud. Done in: Office › Leaders › "
+            "Monthly report → Send to the pastor.") in lines
     assert any(ln.startswith("Needs someone (") and ln.endswith(": Rooms.") for ln in lines)
     assert lines[-1].startswith("Office logins: Pastor Kevin (owner); Minnie Tatum (Admin, Treasurer); ")
     assert "Naiya Clark (Manager, Office & Leadership)" in lines[-1]
@@ -316,6 +321,8 @@ def test_a_bigger_churchs_list_reaches_chief_whole(church):
                                                 lane=lanes[i % 4], name=f"Firstname{i} Lastname-Longer"))
     text = ctl._shrink(run("list_duties", {}, OWNER))
     assert "truncated" not in text and "Store orders" in text and "Firstname15 Lastname-Longer" in text
+    # Too big with where each duty is done: the list goes whole without it, and says where to read it.
+    assert "Done in:" not in text and "where each is done: job_of says it beside a person's duties." in text
 
 
 # ─── The THIS LOGIN line ──────────────────────────────────────────────

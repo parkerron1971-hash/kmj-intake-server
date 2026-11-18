@@ -55,6 +55,7 @@ these needs one (registry chief_only). list_duties is a mid-turn read.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from types import SimpleNamespace
@@ -263,6 +264,11 @@ def _first(name: str) -> str:
 
 # ─── list_duties ──────────────────────────────────────────────────────
 
+# The list with where each duty is done fits under this many JSON characters,
+# with room left for the rest of the read (the tool loop's cap is 12,000).
+PLACES_FIT = 10_500
+
+
 def list_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     atype = "list_duties"
     try:
@@ -272,25 +278,40 @@ def list_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         page = cd.build(business)
     except HTTPException as e:
         return _fail(atype, str(e.detail))
+    import chief_office
     church = " ".join(str(business.get("name") or "").split()) or "this church"
-    lines = [f"Who does what at {church}. The owner and every Admin login do every duty, money ones too. "
-             "\"lanes:\" is who does a duty by default, from the lanes; \"moved to\" is who the church named."]
     by_lane: Dict[str, List[Dict[str, Any]]] = {}
     for d in page["duties"]:
         by_lane.setdefault(d["lanes"][0], []).append(d)
-    for lane in cd.LANE_KEYS:
-        if lane not in by_lane:
-            continue
-        lines.append(f"{cd.lane_label(lane)}:")
-        for d in by_lane[lane]:
-            also = [cd.lane_label(ln) for ln in d["lanes"][1:]]
-            tags = [d["key"], d["day"]] + (["money"] if d["money"] else []) + ([f"also {_join(also)}"] if also else [])
-            lines.append(f"- {d['label']} ({'; '.join(tags)}): {_who_short(d)}.")
     needs = [_entry(page, k)["label"] for k in page["needs_someone"]]
-    if needs:
-        lines.append("Needs someone (moved to logins that can't do it now; only the owner and the admins do it "
-                     f"until someone is named or it goes back to the lanes): {_join(needs)}.")
-    lines.append(f"Office logins: {_logins_words(page)}.")
+
+    def said(places: bool) -> List[str]:
+        lines = [f"Who does what at {church}. The owner and every Admin login do every duty, money ones too. "
+                 "\"lanes:\" is who does a duty by default, from the lanes; \"moved to\" is who the church named; "
+                 + ("\"Done in:\" is where on the church's menu (→ the button its work starts from), confirmed."
+                    if places else "where each is done: job_of says it beside a person's duties.")]
+        for lane in cd.LANE_KEYS:
+            if lane not in by_lane:
+                continue
+            lines.append(f"{cd.lane_label(lane)}:")
+            for d in by_lane[lane]:
+                also = [cd.lane_label(ln) for ln in d["lanes"][1:]]
+                tags = [d["key"], d["day"]] + (["money"] if d["money"] else []) + ([f"also {_join(also)}"] if also else [])
+                where = chief_office.place(d["key"]) if places else None
+                lines.append(f"- {d['label']} ({'; '.join(tags)}): {_who_short(d)}."
+                             + (f" Done in: {where}." if where else ""))
+        if needs:
+            lines.append("Needs someone (moved to logins that can't do it now; only the owner and the admins do it "
+                         f"until someone is named or it goes back to the lanes): {_join(needs)}.")
+        lines.append(f"Office logins: {_logins_words(page)}.")
+        return lines
+
+    # Where each duty is done, while the whole list still fits the tool
+    # loop's read (12,000 characters of JSON); a big office's list goes
+    # without it, never cut short.
+    lines = said(True)
+    if len(json.dumps("\n".join(lines))) > PLACES_FIT:
+        lines = said(False)
     moved = [d["key"] for d in page["duties"] if not d["follows_lanes"]]
     label = "Who does what" + (f" · {len(needs)} need someone" if needs else f" · {len(moved)} moved" if moved else "")
     return {"type": atype, "result": "\n".join(lines), "label": label, "nav": NAV,
