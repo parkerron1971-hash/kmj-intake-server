@@ -592,6 +592,23 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "undo_job_description": {**_w("A", "puts the last change to one person's job description back from its log "
                                        "(the owner or someone over them); only the last change"),
                              "chief_only": True},
+    # One sheet per person (chief_church_sheet): what a login can open and do, the church's jobs, and making a
+    # job that isn't one of the ready-made ones. Each needs the signed-in person (who may read whose sheet, and
+    # who sets jobs up, is church_sheet's and church_job_defs'), so Chief's alone.
+    "sheet_of": {**_r("reads one church login's sheet: its level, job, areas, duties, what is guarded and "
+                      "whether it is open to them; staff by name", sensitive=True), "chief_only": True},
+    "list_church_jobs": {**_r("reads a church's jobs (the five starting ones and its own): each one's login "
+                              "level, areas and duties", sensitive=True), "chief_only": True},
+    "draft_church_job": {**_r("reads the building blocks for a new church job (the areas, the duties with their "
+                              "keys, the login levels, the jobs there are); saves nothing", sensitive=True),
+                         "chief_only": True},
+    "save_church_job": {**_w("A", "makes or changes one of a church's own jobs through church_sheet.save_job "
+                                  "(the owner, an Admin, or whoever sets up jobs and people's sheets; an Admin "
+                                  "job only the owner's); recorded, and never changes a login that holds it"),
+                        "chief_only": True},
+    "remove_church_job": {**_w("A", "takes one of a church's own jobs off the list through "
+                                    "church_sheet.remove_job (a soft delete: whoever holds it keeps their areas "
+                                    "and duties and still reads as it); recorded"), "chief_only": True},
     # Church leader roles (chief_church_roles): ask one of the church's people into a role, or take them off,
     # through the Leaders & roles routes' own functions. An ask emails them, and a role taken away sends its work
     # back, so both are C: done when asked, never on Chief's own idea. Each needs the signed-in person.

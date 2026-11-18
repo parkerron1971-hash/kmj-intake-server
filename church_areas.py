@@ -403,16 +403,30 @@ LANES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def lanes_view() -> List[Dict[str, Any]]:
-    return [{"key": k, "label": v["label"], "role": v["role"], "areas": v["areas"], "does": v["does"]}
-            for k, v in LANES.items()]
+def lanes_view(business_id: Any = None) -> List[Dict[str, Any]]:
+    """The office's lanes; with a church, its own jobs after them
+    (church_job_defs: `custom` true), so an invite can carry one."""
+    out = [{"key": k, "label": v["label"], "role": v["role"], "areas": v["areas"], "does": v["does"]}
+           for k, v in LANES.items()]
+    if business_id:
+        import church_job_defs as cj
+        out += [{"key": j["key"], "label": j["label"], "role": j["role"], "areas": j["areas"], "does": j["does"],
+                 "custom": True} for j in cj.customs(business_id)]
+    return out
 
 
-def lane(key: Any) -> Dict[str, Any]:
-    """One lane by its key; 400 for any other."""
-    if not isinstance(key, str) or key not in LANES:
-        raise HTTPException(400, "Pick one of the office's lanes")
-    return {"key": key, **LANES[key]}
+def lane(key: Any, business_id: Any = None) -> Dict[str, Any]:
+    """One lane by its key, or with a church one of its own jobs; 400 for
+    any other."""
+    if isinstance(key, str) and key in LANES:
+        return {"key": key, **LANES[key]}
+    if isinstance(key, str) and business_id:
+        import church_job_defs as cj
+        j = cj.find(business_id, key)
+        if j and j["custom"]:
+            return {"key": j["key"], "label": j["label"], "role": j["role"], "areas": j["areas"], "does": j["does"],
+                    "custom": True}
+    raise HTTPException(400, "Pick one of the office's lanes")
 
 
 def lane_of(role: Optional[str], areas: Optional[List[str]]) -> Optional[str]:
@@ -683,7 +697,11 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
                     "&select=contact_id,role,scope,status&limit=1000")
     team = _need(f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)"
                  "&select=name,email,roles,status&order=invited_at.asc&limit=100")
-    seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&select=invited_email,role,user_id&limit=200")
+    seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&select=invited_email,role,user_id,lane"
+                  "&limit=200")
+    # The church's own jobs (church_job_defs), so a login given one reads as it.
+    import church_job_defs as cj
+    own_jobs = {j["key"] for j in cj.customs(biz)}
     picks = _picks(biz)
     accountants = _need(f"/business_collaborators?business_id=eq.{_q(biz)}&status=eq.active&role=eq.accountant"
                         "&select=invited_email&limit=50")
@@ -831,7 +849,8 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         logins.append({"user_id": str(s.get("user_id") or ""), "email": s.get("invited_email") or "",
                        "name": next((p["name"] for p in people.values() if email and p["email"] == email), ""),
                        "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g], **view,
-                       "lane": lane_of(s.get("role"), view["areas"]) if view["by"] == "picked" else None})
+                       "lane": (s.get("lane") if s.get("lane") in own_jobs else
+                                lane_of(s.get("role"), view["areas"]) if view["by"] == "picked" else None)})
     rank = {"admin": 0, "manager": 1, "member": 2, "viewer": 3}
     logins.sort(key=lambda x: (rank.get(x["role"], 9), (x["name"] or x["email"]).lower()))
 
@@ -843,7 +862,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         "teams": [{"key": team_key(n), "name": n, **team_place[team_key(n)]} for n in team_names],
         "unplaced": unplaced,
         "area_order": list(AREA_ORDER),
-        "lanes": lanes_view(),
+        "lanes": lanes_view(biz),
     }
 
 
@@ -958,24 +977,57 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
         picked = lane(body.get("lane"))
         if picked["role"] != "manager":
             raise HTTPException(400, f"The {picked['label']}'s lane is an Admin login. Invite them as the "
-                                     f"{picked['label']} from Settings → Team.")
+                                     f"{picked['label']} from Logins & areas.")
         areas = picked["areas"]
-    if areas is not None:
-        if not isinstance(areas, list) or not areas or any(a not in AREAS for a in areas):
-            raise HTTPException(400, "Pick at least one of the areas")
-        if FINANCE_ONLY in areas:
-            raise HTTPException(400, "Giving opens only for admins and the accountant")
-        areas = [a for a in AREA_ORDER if a in areas]
-    # The lane is kept by name too, for the office's header (office_door):
-    # the lane these areas are exactly, else none.
-    kept = lane_of(seat[0].get("role"), areas)
+    areas = clean_login_areas(areas)
+    kept = set_login(biz, uid, seat[0].get("role"), areas=areas)
+    return {"ok": True, "user_id": uid, "areas": areas, "lane": kept}
+
+
+def clean_login_areas(areas: Any) -> Optional[List[str]]:
+    """A login's areas as they are saved (None: back to Chief's guess), or a
+    400. Giving opens only to admins and the accountant, so it is never one."""
+    if areas is None:
+        return None
+    if not isinstance(areas, list) or not areas or any(a not in AREAS for a in areas):
+        raise HTTPException(400, "Pick at least one of the areas")
+    if FINANCE_ONLY in areas:
+        raise HTTPException(400, "Giving opens only for admins and the accountant")
+    return [a for a in AREA_ORDER if a in areas]
+
+
+KEEP = object()        # set_login: leave this part of the login as it is
+
+
+def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job: Any = KEEP) -> Optional[str]:
+    """The one write of an office login's areas and its job
+    (business_users.areas, .lane): the Logins & areas route and a person's
+    sheet (church_sheet) both land here, after each checked who may. `areas`
+    is already clean (clean_login_areas). `job` is a job's key the caller
+    checked (a lane, or one of the church's own: church_job_defs); left out,
+    the lane is the one the areas are exactly, as before, kept by name for
+    the office's header (office_door). Returns the job kept. A save that
+    fails is a 503."""
+    fields: Dict[str, Any] = {}
+    if areas is not KEEP:
+        fields["areas"] = areas
+    if job is not KEEP and job:
+        fields["lane"] = job
+    else:
+        now = areas
+        if areas is KEEP:
+            got = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
+                                               "&status=eq.active&select=areas&limit=1")
+            if not isinstance(got, list) or not got:
+                raise HTTPException(503, "That didn't save. Try again.")
+            now = got[0].get("areas")
+        fields["lane"] = lane_of(role, now if isinstance(now, list) else None)
     saved = sb_clients.sb_patch_as_service(
-        f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active",
-        {"areas": areas, "lane": kept})
+        f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", fields)
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     _forget(biz, uid)
-    return {"ok": True, "user_id": uid, "areas": areas, "lane": lane_of(seat[0].get("role"), areas)}
+    return fields["lane"]
 
 
 @router.get("/lanes")
@@ -986,13 +1038,14 @@ def lanes(business_id: str, session: UserSession = Depends(sb_clients.authed_req
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, "The lanes are for churches")
-    return {"lanes": lanes_view()}
+    return {"lanes": lanes_view(business_id)}
 
 
 def lane_for_invite(business_id: str, key: Any) -> Dict[str, Any]:
-    """A lane an invite carries (business_users_router): one of the lanes,
-    for a church. 400 otherwise, before anyone is invited."""
-    picked = lane(key)
+    """A lane an invite carries (business_users_router): one of the lanes, or
+    one of the church's own jobs, for a church. 400 otherwise, before anyone
+    is invited."""
+    picked = lane(key, business_id)
     import church_follow_up as cfu
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,settings&limit=1")
     if not isinstance(rows, list):

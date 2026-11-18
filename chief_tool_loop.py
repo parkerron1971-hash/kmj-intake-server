@@ -228,6 +228,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
     import chief_church_jobs
     out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
+    import chief_church_sheet
+    out += list(chief_church_sheet.TOOLS)  # a person's sheet, the church's jobs, a job's pieces: the same
     import chief_office
     out += list(chief_office.TOOLS)  # the office team's week and the monthly report's draft: the same
     import chief_move_in
@@ -429,7 +431,8 @@ def _shrink(result: Any) -> str:
     if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
                                                            'move_in_status', 'church_email', 'whose_job', 'job_of',
                                                            'draft_job_description', 'team_week',
-                                                           'monthly_report_draft'):
+                                                           'monthly_report_draft', 'sheet_of',
+                                                           'list_church_jobs', 'draft_church_job'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
         # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
@@ -488,7 +491,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "move_in_status", "people_under", "assignments_of", "church_email",
                                               "one_on_one", "whose_job", "job_of",
                                               "draft_job_description", "team_week",
-                                              "monthly_report_draft")):
+                                              "monthly_report_draft", "sheet_of", "list_church_jobs",
+                                              "draft_church_job")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

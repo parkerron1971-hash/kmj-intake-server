@@ -262,6 +262,7 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
+import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
 import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
 import chief_office as _church_office  # the office team's week and the monthly report, read for the office
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
@@ -421,6 +422,7 @@ _ACTION_PHRASES = {
     "list_duties": "reading who does what",
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
+    **_church_sheet.PROGRESS,
     **_church_roles.PROGRESS,
     **_church_office.PROGRESS,
     "move_duty": "moving the duty",
@@ -6693,6 +6695,15 @@ async def handle_navigate(client, biz, action) -> Dict:
     except ValueError as exc:
         return _fail("navigate", str(exc))
     if contact_id: nav["contactId"] = contact_id
+    # One login's sheet on a church's Logins & areas (church_sheet): the app
+    # opens that person's sheet. Only a login id rides along, never free text.
+    sheet = str(action.get("sheet") or "").strip()
+    if sheet and tab == "operate" and (page or sub) == "areas":
+        try:
+            import uuid as _uuid_mod
+            nav["sheet"] = str(_uuid_mod.UUID(sheet))
+        except (ValueError, TypeError):
+            pass
 
     # Build a human label
     label_parts = [tab.upper()]
@@ -12434,6 +12445,7 @@ ACTION_HANDLERS = {
     "list_duties":           handle_list_duties,
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
+    **_church_sheet.HANDLERS,
     **_church_roles.HANDLERS,
     **_church_office.HANDLERS,
     "move_duty":             handle_move_duty,

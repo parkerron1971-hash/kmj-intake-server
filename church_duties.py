@@ -454,7 +454,10 @@ def _moved(biz: str) -> Dict[str, List[str]]:
     rows = _need(f"/church_duty_holders?business_id=eq.{_q(biz)}&select=duty,user_id&limit=2000")
     out: Dict[str, List[str]] = {}
     for r in rows:
-        if r.get("duty") and r.get("user_id"):
+        # Only the catalog's duties: the same table keeps who "sets up jobs
+        # and people's sheets" (church_job_defs.GRANT), which is a permission
+        # and never one of the office's duties.
+        if r.get("duty") in CATALOG and r.get("user_id"):
             out.setdefault(str(r["duty"]), []).append(str(r["user_id"]))
     return {k: sorted(set(v)) for k, v in out.items()}
 

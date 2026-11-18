@@ -105,6 +105,11 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
         "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
+        # One sheet per person (chief_church_sheet): a login's sheet, the church's jobs, and making a job that
+        # isn't ready-made. Who may read whose sheet and who sets jobs up (the owner, an Admin, or whoever the
+        # owner gave "Sets up jobs and people's sheets") is the handlers', through church_sheet's and
+        # church_job_defs' own checks: never an area's, and never the owner's alone, so they aren't in OWNERS.
+        "sheet_of", "list_church_jobs", "draft_church_job", "save_church_job", "remove_church_job",
         # Moving a church's duty, and putting one back (chief_duties): the owner's and admins', and whoever is
         # over the office's lanes for the Managers under them (Kevin, 2026-11-17: "make sure Jessica has ability
         # to request things from chief in regards to admins etc like I would as well"). The handler decides who
@@ -596,10 +601,18 @@ def turn_for(business_id: Any, user_id: Any) -> Tuple[Optional[Dict[str, Any]], 
 def _jobs(business_id: Any, user_id: Any) -> Optional[str]:
     try:
         import chief_duties
-        return chief_duties.jobs_line(business_id, user_id)
+        line = chief_duties.jobs_line(business_id, user_id)
     except Exception:  # noqa: BLE001 — a failed read leaves the line out, never the turn
         logger.warning("chief areas: duties line failed (business %s)", str(business_id)[:8])
-        return None
+        line = None
+    # Whoever the owner gave "Sets up jobs and people's sheets" hears it too
+    # (chief_church_sheet.grant_line); most logins have no such line.
+    try:
+        import chief_church_sheet
+        more = chief_church_sheet.grant_line(business_id, user_id)
+    except Exception:  # noqa: BLE001
+        more = None
+    return "\n".join(x for x in (line, more) if x) or None
 
 
 def _plain(v: Any) -> str:

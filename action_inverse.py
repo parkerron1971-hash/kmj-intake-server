@@ -308,6 +308,14 @@ INVERSES: Dict[str, Inverse] = {
         lambda a, r: ({"type": "undo_job_description", "person": r["person"], "change_id": r["change_id"]}
                       if r.get("changed") and isinstance(r.get("person"), str) and r["person"]
                       and isinstance(r.get("change_id"), str) and r["change_id"] else None)),
+    # A church's own job (chief_church_sheet): a job just made comes back off
+    # the list (a soft delete; nobody held it yet). A change to one isn't
+    # reversed here: the receipt reads back what it was.
+    "save_church_job": Inverse(
+        "remove_church_job",
+        "take that job back off the list",
+        lambda a, r: ({"type": "remove_church_job", "job": r["job"]}
+                      if r.get("created") and isinstance(r.get("job"), str) and r["job"] else None)),
     "move_duty": Inverse(
         "undo_duty",
         "put that duty back the way it was",

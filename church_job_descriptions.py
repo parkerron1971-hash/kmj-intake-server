@@ -1239,7 +1239,16 @@ def jobs_roster(business_id: str, session: UserSession = Depends(sb_clients.auth
     if J.ch.role(str(session.user.id)) not in READ_ALL:
         raise HTTPException(403, ALL_ONLY)
     with church_map.once():
-        return roster(J)
+        out = roster(J)
+    # The office's jobs ride along (church_sheet: the five starting ones and
+    # the church's own, and whether this login may set them up). They never
+    # fail the roster; GET /church/sheet/jobs is the read that always answers.
+    try:
+        import church_sheet
+        out.update(church_sheet.jobs_view(biz, str(session.user.id)))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 @router.get("/jobs/person")

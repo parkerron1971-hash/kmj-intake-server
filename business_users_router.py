@@ -238,6 +238,15 @@ def _lane_label(biz: str, user_id: str, role: str, areas: Any) -> Optional[str]:
         f"/business_users?business_id=eq.{quote(str(biz), safe='')}&user_id=eq.{quote(str(user_id), safe='')}"
         f"&status=eq.active&select=lane&limit=1") or []
     key = seat[0].get("lane") if seat else None
+    if key and key not in church_areas.LANES:
+        # One of the church's own jobs (church_job_defs), a removed one too.
+        try:
+            import church_job_defs
+            own = church_job_defs.label_of(biz, key)
+            if own:
+                return own
+        except Exception:  # noqa: BLE001 — my-role never fails for a label
+            pass
     if key not in church_areas.LANES:
         key = church_areas.lane_of(role, areas if isinstance(areas, list) else None)
     return church_areas.LANES[key]["label"] if key in church_areas.LANES else None
@@ -430,13 +439,20 @@ def validate_invite(token: str) -> Dict[str, Any]:
     lane = inv.get("lane") if inv.get("lane") in church_areas.LANES else church_areas.lane_of(
         inv.get("role"), inv.get("areas") if isinstance(inv.get("areas"), list) else None)
     church = office_door.church_by_business(inv.get("business_id"))
+    own_job = None
+    if inv.get("lane") and inv.get("lane") not in church_areas.LANES:
+        try:
+            import church_job_defs
+            own_job = church_job_defs.label_of(str(inv.get("business_id")), inv.get("lane"))
+        except Exception:  # noqa: BLE001 — the welcome never fails for a label
+            own_job = None
     return {"ok": True, "valid": True,
             "email": inv.get("invited_email"),
             "role": inv.get("role"),
             "business_name": (biz[0].get("name") if biz else None),
             "name": person.get("name"),
             "first_name": person.get("first_name"),
-            "lane": church_areas.LANES[lane]["label"] if lane else None,
+            "lane": own_job or (church_areas.LANES[lane]["label"] if lane else None),
             # A church's invite opens at its office door, in its colours,
             # even on a link sent before the door existed.
             "door": office_door.brand(church) if church else None,
