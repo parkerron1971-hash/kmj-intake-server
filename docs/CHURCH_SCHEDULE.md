@@ -18,7 +18,7 @@ gave stays private. Step 2 adds the limit: only so many of a group, or of a depa
 one service date; days nobody takes off; two people who can't be away together; and the same
 path for volunteers when their date is full or they already said yes to serve it.
 
-**Where it stands (2026-11-18).** Three PRs.
+**Where it stands (2026-11-18).** Four PRs.
 
 - **S1-1 (#1929, merged)** holds step 1's tables:
   `supabase/APPLY-2026-11-19-church-schedule.sql` (**not applied yet**), its real-Postgres
@@ -30,18 +30,24 @@ path for volunteers when their date is full or they already said yes to serve it
   404 until the migration is applied.
 - **S1-4** holds `church_schedule_tell.py`: who is told of an ask, an answer and a take-back,
   and the hourly sweep on the worker (what a write couldn't tell, the one nudge, an ask sent on
-  when who is over someone changes, a private reason cleared 90 days after the last day).
-  Owner-only by default, and silent until the migration is applied: the sweep reads nothing
-  before it. No migration of its own.
+  when who is over someone changes, a private reason and an answer's note cleared 90 days after
+  the last day). Owner-only by default, and silent until the migration is applied: the sweep
+  reads nothing before it. No migration of its own.
+- **S1-5 (#1936)** holds `member_portal_dates.py`: Dates on the member app's Lead tab, where one of the
+  church's people asks for time off, says "I can't make it", takes one back, says yes or not
+  this one to what went to them, and sees who else is away. `church_schedule.section` gives the
+  Lead tab its Dates entry, and `member_portal._leads` gives the tab to someone on the schedule
+  who leads nothing else. A person's notice now opens this page. Owner-only by default, and
+  not there at all until the migration is applied. No migration of its own.
 
-The member app has no page yet (S1-5), and the Serving Away form and the scheduler are
-untouched (S1-6): until those land, an ask exists only for someone who calls the office routes,
-and a notice points at the Lead tab or the office app, where the ask isn't on a screen yet.
+The Serving Away form and the scheduler are untouched (S1-6), and the office app has no screen
+yet: a login's notice still points at the office app, where the ask isn't shown. A login whose
+person is on the schedule answers in the member app, as that person.
 
 In sections 3 to 6, what is marked **built** describes code that exists; the rest is still the
-plan for the PRs ahead (S1-5 to S1-7, then step 2). Section 7 is what was decided; 7.4 is what
-the build of S1-2 and S1-3 decided, and 7.5 what the build of S1-4 decided, each with where it
-differs from the plan above it.
+plan for the PRs ahead (S1-6 and S1-7, then step 2). Section 7 is what was decided; 7.4 is what
+the build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, and 7.6 what the build
+of S1-5 decided, each with where it differs from the plan above it.
 
 **Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
 away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
@@ -643,6 +649,15 @@ roster(ch) -> Roster                   # inside church_map.once():
                                        #   then adds (their grp, whatever the data says) and removes
 roster_kept(biz) -> Optional[Roster]   # 60 s a replica; None on a failed read, never kept; for the member side
 forget(biz)                            # a change is read again at once on this replica
+waiting_kept(biz) -> Optional[Dict[str,int]]   # S1-5. {person: asks waiting for their yes}, by waiting()'s rule for a
+                                       # person; 60 s a replica beside the roster; reads who and how many, never a
+                                       # reason or a note; None on a failed read, never kept
+forget_waiting(biz)                    # S1-5. _after calls it: a write on this replica is counted at once
+section(biz, cid) -> Optional[{"waiting": int}]   # S1-5. the Lead tab's Dates entry for a person. None = no entry:
+                                       # the tables aren't there (asked first, so nothing else is read before the
+                                       # migration), the switch is closed, or they are not on the kept roster and
+                                       # nothing waits on them. A count that couldn't be read is 0. Never raises:
+                                       # anything that goes wrong is one logged line and no entry
 set_listed(ch, me, contact_id, listed, grp=None) -> dict   # upsert or delete in church_schedule_people; the answer
                                        # (the schedule after) is worked out before the write; forgets the kept roster
 people(ch, me) -> dict                 # GET people
@@ -666,7 +681,8 @@ answer(ch, me, ask_id, yes, note=None) -> dict   # may_decide or 403; /rpc/churc
 withdraw(ch, me, ask_id) -> dict             # may_withdraw or 403; settle 'withdrawn'; changed False = 409
 _after(what, ch, row, **kw) -> None          # S1-4. hands the row to church_schedule_tell once the write is back
                                              # (member_push._later: a thread of its own, a Church of its own); never
-                                             # raises. ask -> tell_new, answer -> tell_answer, withdraw -> tell_withdrawn
+                                             # raises. ask -> tell_new, answer -> tell_answer, withdraw -> tell_withdrawn.
+                                             # Since S1-5 it also forgets the kept counts (forget_waiting)
 shape(ch, me, row, names) -> dict            # the one place a reason can leave: None unless sees_reason
 mine(ch, me, now) -> List[dict]              # my asks, waiting first, 90 days back
 waiting(ch, me) -> List[dict]                # asks that went to me and still wait
@@ -683,7 +699,6 @@ holds(biz_id, lo, hi) -> List[dict]          # S1-6. the scheduler's hook: [{con
                                              # asks (and, from S1-7, commitment days). Never raises; [] when off, not
                                              # ready, or the read failed
 takes(biz, cid) -> bool                      # S1-6. on(biz) and cid on the kept roster: the Serving Away form asks instead
-section(biz, cid) -> Optional[{"waiting": int}]   # S1-5. the Lead tab's switcher; None = no Dates entry
 add_commitment(ch, me, body) -> dict; drop_commitment(ch, me, id) -> None    # S1-7
 commitment_days(rows, lo, hi) -> Dict[str, List[date]]   # S1-7. pure; 366 days at most
 ```
@@ -700,7 +715,9 @@ commitment_days(rows, lo, hi) -> Dict[str, List[date]]   # S1-7. pure; 366 days 
 
 ```
 KIND = "serving"; NUDGE_DAYS = 3; REASON_DAYS = 90; SETTLE_SECONDS = 120; ANSWER_DAYS = 7
-MEMBER_PAGE = "/my/lead"        # where a person's notice points today; S1-5 moves it to /my/lead/dates
+MEMBER_PAGE = "/my/lead/dates"  # where a person's notice points: Dates on the Lead tab (S1-5; it was /my/lead)
+MEMBER_LINK = "Open your dates" # the email's button (S1-5; it was "Open your Lead tab")
+PRIVATE = "or=(reason.not.is.null,decided_note.not.is.null)"   # an ask that still holds either private text
 FIELDS = "id,business_id,contact_id,kind,starts_on,ends_on,state,flags,to_user_id,to_contact_id,decided_by_*,
           decided_at,told_at,answer_told_at,nudged_at,created_at"     # all a notice may know: never reason, never decided_note
 _bare(ask) -> dict              # the ask with FIELDS only: every function below starts with it
@@ -719,7 +736,7 @@ to_person(biz, cid, *, title, body, ref, subject, text, url=MEMBER_PAGE, link_la
                                 -> {"rang", "mailed"}
                                 # member_push.send(biz, KIND, …, contact_ids=[cid], ref_id=ref): the push and the line in
                                 # the church's conversation, once a ref; when rang == 0 and they have an email:
-                                # clt.deliver(clt.render_email(…)), the link {site origin}/my/lead
+                                # clt.deliver(clt.render_email(…)), the link {site origin}/my/lead/dates
 to_login(ch, uid, *, title, body, ref, subject, text, email=None, name="") -> {"rang", "mailed"}
                                 # push_notifications.send_to_user(nav=cas.NAV) and an email (cot.render, cot._link).
                                 # cas._login_email None: nothing is sent, so nothing is claimed
@@ -744,23 +761,38 @@ sweep_tick(now=None) -> Dict[str,int]   # hourly on the worker: {churches, moved
   - `state=eq.asked`: sent on where stale (below), told when untold and older than `SETTLE_SECONDS`, nudged;
   - `state=eq.yes&kind=eq.cant&told_at=is.null`: an untold "can't make it", until its last day has passed;
   - `state=in.(yes,no)&answer_told_at=is.null`, decided by someone in the last `ANSWER_DAYS`: untold answers;
-  - `reason=not.is.null&ends_on=lt.…`: ids only, then `reason` set null by id (section 7, item 14).
+  - `or=(reason.not.is.null,decided_note.not.is.null)&ends_on=lt.…`: ids only, then `reason` and `decided_note`
+    set null by id, the write naming the same rule again (section 7, item 14). A row with a note and no reason is
+    found too. The note went with the reason in S1-5 (7.6); S1-4 cleared the reason alone.
 - **Sent on** (section 7, item 15, as built in 7.5): a waiting ask whose `to` is empty, a login that has left the
   office, or no longer anyone `nearest()` gives goes to `goes_to()`'s answer, with `told_at` cleared. Never one that
   `needs_no_yes`. An ask whose last day has passed is neither sent on, told nor nudged.
 - **Not in the sweep** (corrected in S1-1): the spec had "a yes with no `serve_away` row is settled again". `church_away_settle` writes the yes and its fact in one transaction, so a yes without a fact can only be a fact deleted afterwards, and a second yes answers `changed: false` and writes nothing. That is on purpose: the function must not bring back an away date its person took off.
 
-**`member_portal_dates.py`** (`APIRouter()`; a copy of `member_portal_assign.py`'s shape)
+**`member_portal_dates.py`** (**built**, S1-5; `APIRouter()`; a copy of `member_portal_assign.py`'s shape)
 
 ```
-HERE = "/my/lead/dates"; DONE, ERRORS, DATES_CSS
-view(biz, contact_id, now=None) -> dict         # {mine, waiting, away, commitments, notice_days, people (to pick who covers)}
-body(v) -> str; render(biz, site, request, me, active, v, seg, *, err="") -> str
-async serve(request, biz, site, me, *, err="")  # GET /my/lead/dates
-_go(**q); _code(e) -> str; async _act(request, fn, ok)   # as member_portal_assign :428-479, the switch being church_schedule.on
+HERE = "/my/lead/dates"; WINDOW_DAYS = 62; PICK_MAX = 200; DONE, DONE_ALONE, ERRORS, DATES_CSS
+_ch_me(biz, me) -> (Church, who)                # THE ONE PLACE that says who `me` is: always co.who(PERSON, …)
+view(biz, contact_id, now=None) -> dict         # {mine (each with on_calendar), waiting, away, people (to pick who
+                                                # covers), on_it, top, to, notice_days, near, today, tz}. Every ask
+                                                # through shape() as that person. `away` is name, days, who covers
+                                                # and "waiting for your yes" and nothing else
+chief_line(v) -> str; body(v) -> str
+render(biz, site, request, me, v, seg, *, err="") -> str; render_not_here(biz, site, me) -> str
+async serve(request, biz, site, me, *, err="")  # GET /my/lead/dates: (html, status), or None when it is not a page
+                                                # at all (closed, or before the tables). The page reads fresh; someone
+                                                # with nothing of theirs there gets render_not_here and a 404
+_go(**q); _code(e) -> str; async _act(request, fn, ok)   # as member_portal_assign, the switch being church_schedule.on;
+                                                # fn may answer with its own done code
+_cover(ch, me, form) -> Optional[str]           # who covers, from the list: on the schedule here, never the asker
 ```
 
-Page order: Waiting for your yes (if any); Ask for time off (dates, kind, private reason, who covers); I can't make it; My dates with their state and Withdraw; Who else is away (name, dates, who covers, never a reason); Things that repeat (S1-7). No ids on the page; ids ride in form addresses.
+Page order: Waiting for your yes (if any); Ask for time off (first day, last day, kind, private reason, who covers); I can't make it; My dates with their state and Take it back; Who else is away (name, days, who covers; never a reason, a note or the kind). Things that repeat is S1-7 and has no place on the page yet. No ids on the page; ids ride in form addresses and option values.
+
+- **A member-app session is a person, never a login** (section 7, item 6). Every call into the engine is made as `co.who(PERSON, …)` through `_ch_me`, whoever is signed in: the owner's own person and the person of whoever oversees the office read a reason and answer only what went to them (or to the office login tied to exactly them), and their own.
+- **A refusal comes back as plain words.** `_code` turns the engine's 400, 403, 404, 409 and 503 into a short code; the page's own `ERRORS` says it. Nothing but the code rides in the address: the name ("waiting for …'s yes") and the number of days are filled in on the page.
+- **My dates reads the fact.** A yes is "on the calendar" only while its `serve_away` row is there (`_on_calendar`); one taken off since is shown as "Off the calendar" (section 2.1, "Not solved by the tables").
 
 ### 3.2 Existing files changed, step 1
 
@@ -772,12 +804,12 @@ Page order: Waiting for your yes (if any); Ask for time off (dates, kind, privat
 | `sunday_planning.py` | `_Board.is_away` `:946-948` | also true for a row in `self.held`. `board.away` and `GET /planning/schedule` (`:1018-1026`) stay untouched, so a pending ask is never listed |
 | `member_portal_serving.py` | `away` route `:895-898`, `DONE` `:209` | capture `add_away`'s result in a closure and flash "Asked. {name} will say yes or not this one." (`done=asked`) |
 | `member_portal_serving.py` | `render_page` `:466-492` | for someone on the leaders schedule, one line under Away linking to `/my/lead/dates` |
-| `member_portal_lead.py` | ContextVars `:59-76`, `_context` `:639`, `_seg` `:826`, `serve` `:660` | new `DATES` ContextVar set from `church_schedule.section`; a `("dates", "/my/lead/dates", "Dates · n")` entry; `if selected == "dates": return await member_portal_dates.serve(...)` |
-| `member_portal.py` | `_leads` `:1197` | after the tasks check: `church_schedule.section(biz, me_id) is not None` gives the tab, so an office login's person with no role still reaches Dates |
-| `kmj_intake_automation.py` | routers `:453-456`, `:607-610`; jobs `:2039-2053` (f859d05a) | include `church_schedule.router` (done in S1-2) and `member_portal_dates.router` (S1-5); `add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1, id="church_schedule_sweep")`, after the hand-overs sweep. Done in S1-4 |
+| `member_portal_lead.py` | ContextVars `:59-76`, `_context` `:639`, `_seg` `:826`, `serve` `:660` | new `DATES` ContextVar set from `church_schedule.section`; a `("dates", "/my/lead/dates", "Dates · n")` entry after Tasks (the switcher takes the class `fit` only when Dates is in it: each entry keeps its words on one line and the row scrolls inside itself on a phone); `selected == "dates"` goes to `member_portal_dates.serve`; with nothing else to lead, `/my/lead` opens on Dates. Done in S1-5 |
+| `member_portal.py` | `_leads` `:1197` | after the tasks check: `church_schedule.section(biz, me_id) is not None` gives the tab, so an office login's person with no role still reaches Dates. It answers from what is kept a minute: no read on a page view. Done in S1-5 |
+| `kmj_intake_automation.py` | routers `:453-456`, `:607-610`; jobs `:2039-2053` (f859d05a) | include `church_schedule.router` (done in S1-2) and `member_portal_dates.router` (done in S1-5, beside the other Lead tab routers); `add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1, id="church_schedule_sweep")`, after the hand-overs sweep. Done in S1-4 |
 | `sb_clients.py` | `sb_patch_as_service` | takes `redact=` as the GET and the POST do, so a refused update of an ask never logs the row. Done in S1-4 |
 | `account_lifecycle.py` | `EXPORT_EXCLUDED` `:100` | the four tables (2.3). Done in S1-1 |
-| `__tests__/conftest.py` | near `:169-178` | autouse: `church_schedule._FORCE = False`, so no other suite gains a read; the schedule suites set it True |
+| `__tests__/conftest.py` | near `:169-178` | autouse: `church_schedule._FORCE = False`, so no other suite gains a read; the schedule suites set it True. Since S1-5 it also empties the kept counts (`_WAITING`), as it does the kept roster |
 | `__tests__/test_sample_church_no_sends.py` | `TICKS` `:97` | `"church_schedule_sweep": "church_schedule_tell:sweep_tick"`. Done in S1-4 |
 | `__tests__/church_schedule_fake.py` | `build`, `later` | what a write hands on to be told is kept in `db.later` and not run, so every schedule suite sees that nothing is told inside a write; `later(db)` runs it. Done in S1-4 |
 | `.env.example` | near `:718-729` (f859d05a) | the `CHURCH_SCHEDULE` block: off / owner / on, owner by default, read on both services (unset means owner on both), needs the migration. Done in S1-4 |
@@ -873,15 +905,19 @@ Changes to existing code:
 
 All `include_in_schema=False`, `_signed_in`, never the preview, `rate_limit.allow_strict("member_action", …)`, a 303 back to `/my/lead/dates?done=…|err=…`.
 
+The first five rows are **built** (S1-5); the two commitments rows are S1-7.
+
 | Route | Form | Who |
 |---|---|---|
-| `GET /my/lead/dates` | | `church_schedule.section` is not None |
-| `POST /my/lead/dates/ask` | `start, end, kind (time_off\|commitment), reason, cover (contact id or ''), cover_name` | on the leaders schedule |
-| `POST /my/lead/dates/cant` | `start (today by default), end, reason` | on the leaders schedule |
+| `GET /my/lead/dates` (served by `member_portal_lead.serve`, never in the owner's preview) | `?done=` or `?err=`, a short code | on the leaders schedule, or with an ask waiting for their yes, or with asks of their own. Anyone else: a few plain words and a 404. Closed, or before the tables: the Lead tab's own 404 |
+| `POST /my/lead/dates/ask` | `start, end, kind (time_off\|commitment), reason, cover (the id of someone on the schedule, or ''), cover_name` | on the leaders schedule |
+| `POST /my/lead/dates/cant` | `start (today on the church's clock by default), end, reason` | on the leaders schedule |
 | `POST /my/lead/dates/{id}/withdraw` | | the asker |
-| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` | it went to this person (or to the login this person is) |
+| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only) | it went to this person (or to the login this person is) |
 | `POST /my/lead/dates/commitments` | `label, weekday, pattern, nth, start, until` | on the leaders schedule (S1-7) |
 | `POST /my/lead/dates/commitments/{id}/remove` | | theirs |
+
+Every POST answers 404 while the switch is closed for the church or its tables aren't there (`church_schedule.on`), refuses another site's POST (and lets `Origin: null` from this address through, by `Sec-Fetch-Site`), and never writes in the owner's preview.
 
 - Unchanged addresses with new behaviour: `POST /my/serving/away` and `/my/serving/away/remove` (3.2).
 - Step 2 adds nothing new for volunteers: the same two routes; the team leader answers on `/my/lead/dates`.
@@ -986,8 +1022,8 @@ Each is safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` is False un
 | **S1-1 Migration** (this doc's PR) | `APPLY-2026-11-19-church-schedule.sql`; `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_schedule_db.mjs` and the `ci.yml` line; `docs/CHURCH_SCHEDULE.md`; the worklog entry | PGlite, 152 checks: twice changes nothing, with rows there; the RPC (yes writes one fact, a second yes none, withdrawn deletes it, no leaves none, another church gets null, a bad or null state raises); `serve_away_ask_guard`; `church_away_asks_one_open`; the same-business triggers; a person or church deleted takes its rows, in either order the foreign keys fire; a login deleted leaves the ask; server-only under Supabase's default grants. `test_export_import` green | this is it; apply after review. Nothing reads it yet |
 | **S1-2 Switch and roster** (built, in one PR with S1-3) | `church_schedule.py`: switch, `ready`, the gate, `roster`, `roster_kept`, `set_listed`, `office_overseers`, `goes_to`; `GET status`, `GET/PUT people`; the `conftest` pin; `.env.example` | `test_church_schedule_roster.py` at the four churches: roster equals `leaders_room_people` split by `Church.person_login`, and `set(ch.person_login)` equals `mpm.office_contacts` (pinned as `Church.held` is to `standing`); someone in both counts in leaders; add / remove; Riverside is empty; `goes_to` for a department leader, a group leader with no role, a Manager, an Admin, a senior and the owner; `off` and other churches under `owner` get 404; before the migration 404; a failed read 503; `test_business_access_ratchet` green | no (404 until applied) |
 | **S1-3 Asks** (built, in one PR with S1-2) | `ask`, `answer`, `withdraw`, `shape`, `mine`, `waiting`, `calendar`, settings; the `asks`, `leaders` and `settings` routes; no notices yet | `test_church_schedule.py`: every step-1 row of section 5 through the real routes; the RPC faked on `ThreeDB` (as `test_church_duties.py:77`); **privacy**: the reason is absent for another leader, for an Admin and for the `serve_schedule` holder, present for the asker, `to`, the owner and the office overseer; `serve_away.note` stays `''`; a failed write is a 503 with nothing saved; races give 409 | yes |
-| **S1-4 Notices** (built) | `church_schedule_tell.py`; the hooks in `church_schedule.ask / answer / withdraw` (`_after`); the sweep job (with the one nudge after 3 days, the re-address and the 90-day clearing of reasons: section 7, items 1, 14, 15); `TICKS`; `.env.example` "both services"; `sb_patch_as_service(redact=)` | `test_church_schedule_tell.py`, at New Hope through the real routes and senders: no reason and no note in any push, email, conversation line or log line, and the words the same with or without them; nothing told inside a write, and a failed notice never fails it; person vs login channels; email only when no phone rang; `cant` ignores quiet hours, a planned ask and an answer wait; claim before send, let go when nothing went; told once (two sweeps at once, the write's notice and the sweep); a yes nobody gave tells nobody; `_login_email` None is not claimed; one nudge, never a second; a waiting ask is sent on when who is over them changes, their login leaves the office or it names nobody, never one that needs no yes, and never round the same step; the reason, and only the reason, is gone 90 days after the last day; every read names its state and is paged (1,003 rows); take-backs; where a notice points; a sample church is told nothing; before the migration and with the switch off the sweep reads nothing; on `owner` one church is swept. Each rule was broken once to see its test go red (the PR lists them) | no (silent until it is applied) |
-| **S1-5 Dates on the Lead tab** | `member_portal_dates.py`; `member_portal_lead` (`DATES`, `_context`, `_seg`, `serve`); `member_portal._leads`; router include | `test_member_portal_dates.py` (the `test_member_portal_assign` harness): the page for a leader, for someone over people, for an office person with no role, for the owner's person; no ids and no office words on screen; a reason only where allowed; every POST; preview never writes; cross-site refused, `Origin: null` allowed; closed means no Dates entry and 404 writes; a member-app session never gets the owner's across-the-board view | yes |
+| **S1-4 Notices** (built) | `church_schedule_tell.py`; the hooks in `church_schedule.ask / answer / withdraw` (`_after`); the sweep job (with the one nudge after 3 days, the re-address and the 90-day clearing of reasons: section 7, items 1, 14, 15); `TICKS`; `.env.example` "both services"; `sb_patch_as_service(redact=)` | `test_church_schedule_tell.py`, at New Hope through the real routes and senders: no reason and no note in any push, email, conversation line or log line, and the words the same with or without them; nothing told inside a write, and a failed notice never fails it; person vs login channels; email only when no phone rang; `cant` ignores quiet hours, a planned ask and an answer wait; claim before send, let go when nothing went; told once (two sweeps at once, the write's notice and the sweep); a yes nobody gave tells nobody; `_login_email` None is not claimed; one nudge, never a second; a waiting ask is sent on when who is over them changes, their login leaves the office or it names nobody, never one that needs no yes, and never round the same step; the reason (and, since S1-5, the note that came with the answer), and only those, are gone 90 days after the last day; every read names its state and is paged (1,003 rows); take-backs; where a notice points; a sample church is told nothing; before the migration and with the switch off the sweep reads nothing; on `owner` one church is swept. Each rule was broken once to see its test go red (the PR lists them) | no (silent until it is applied) |
+| **S1-5 Dates on the Lead tab** (built) | `member_portal_dates.py`; `church_schedule.section`, `waiting_kept`, `forget_waiting`; `member_portal_lead` (`DATES`, `_context`, `_seg`, `serve`); `member_portal._leads`; router include; `church_schedule_tell.MEMBER_PAGE` and the button's words; the sweep clears the answer's note with the reason | `test_member_portal_dates.py` (the `test_member_portal_assign` harness, at New Hope): the page and its order for a leader, for someone over people, for an office person with no role, for the owner's person, for someone taken off the schedule who is still over someone; no ids, no office words, no title words and no keys on screen; a reason and a note only where `shape()` allows, and never under Who else is away; every POST; preview never writes; cross-site refused, `Origin: null` allowed; closed or before the tables means no Dates entry and 404 writes; a member-app session never gets the owner's or the office overseer's across-the-board view, and every call into the engine is made as a person; every refusal comes back as plain words; who covers is the people on the schedule here, never the asker, 200 at most; days in the church's own clock; short notice said before and after and never blocked; real labels on every field; the switcher's count from what is kept a minute, with no read on a page view. `test_church_schedule_tell.py`: where a person's notice points, and the note cleared with the reason. Each rule was broken once to see its test go red (the PR lists them) | no (not there until it is applied) |
 | **S1-6 Serving Away form and the scheduler hold** | `sunday_serving.add_away / drop_away`; `member_portal_serving` flash and line; `sunday_planning._Board` `held` | `test_sunday_planning_holds.py`: a waiting ask makes `candidates` say away, `do_ask` 409 and `do_fill` skip; it is absent from `/planning/schedule`'s `away`; closed or a failed read gives no extra read and no 503; a volunteer's Away is byte-for-byte as before (`test_sunday_serving` untouched); a core leader's Away makes an ask; removing an approved date withdraws the ask | yes |
 | **S1-7 Things that repeat** | commitments routes, the Dates section, `calendar` `standing`, `holds` adds `commitment_days` | weekly / every other / nth and "last"; `until`; the scheduler holds them on those days only; 10 a person | yes |
 | S1-8 (optional) My week count | `church_my_week` `dates` | a login sees how many wait for their yes | yes |
@@ -1052,7 +1088,7 @@ The numbers are the build spec's open questions, kept so the PRs ahead can cite 
 | 11 | Standing commitments and the limit | Shown, and they hold the person from the scheduler. Not counted toward a limit, never blocked. |
 | 12 | `holds()` on a failed read | Fails open (returns `[]`), on purpose, and its docstring says why: the other choice is Who serves when failing whenever this table blips. The worst case is asking someone whose ask is still waiting. |
 | 13 | Other readers of `serve_away` (`sunday_serving.mine`, `free_sundays`) | Left as they are: they don't see waiting asks, so a leader with a pending ask can still be shown an open place on their own page. |
-| 14 | Private reasons kept for good | The sweep clears `reason` 90 days after `ends_on` (built, S1-4). Reasons can be medical. Only `reason`: the ask, and the note that came with its answer, stay (7.5). |
+| 14 | Private reasons kept for good | The sweep clears `reason` 90 days after `ends_on` (built, S1-4). Reasons can be medical. Since S1-5 it clears `decided_note` with it: the note that came with an answer can say why, so it is as private (7.6). The ask and its answer stay. |
 | 15 | Asks made before a role change | The sweep re-addresses a waiting ask whose `to` is no longer who `goes_to` gives, and clears `told_at` (built, S1-4). As built, "no longer" means no longer anyone at the nearest step over the asker (7.5). |
 | 16 | Away dates written before the switch opened | A core leader's old instant `serve_away` rows have no ask. The calendar shows them as plain "away" with no kind, and `drop_away` deletes them as today. |
 | 17 | Roster cost | Kept 60 seconds a replica for the member side; an add or remove on one replica can show up to a minute late on another. The office routes always read fresh. |
@@ -1227,16 +1263,96 @@ reopened with him.
   where only the platform owner's login is (`open_to`): a write he makes at someone else's
   church tells nobody there.
 - **Only `reason` is cleared at 90 days.** `decided_note` is as private as the reason and
-  stays: the brief said only the reason. Say so if the note should go with it.
+  stays: the brief said only the reason. Say so if the note should go with it. **Changed in
+  S1-5** (the lead session, in the review of #1934): the note goes with the reason (7.6).
 - **Where a notice points.** A person: `{the church's site}/my/lead` in the email and
   `/my/lead` in the conversation (the Lead tab's front page, the nearest page leaders have
   today). A login: the office app (`church_office_tasks._link`), and the push opens My week
-  (`church_assignments.NAV`). Neither place shows the ask yet. **S1-5 moves the person's link
-  to the Dates page** (`MEMBER_PAGE`, one constant); the login's moves when the office screen
-  exists.
+  (`church_assignments.NAV`). Neither place shows the ask yet. **S1-5 moved the person's link
+  to the Dates page** (`MEMBER_PAGE`, one constant: now `/my/lead/dates`, where the ask is on
+  the screen); the login's moves when the office screen exists.
 - **`sb_clients.sb_patch_as_service` takes `redact=`**, as the GET and the POST already did.
   Every update this module makes to `church_away_asks` uses it, and asks back for `id` only.
 - **`church_schedule.nearest`** is new and `goes_to` is its first row: what `goes_to` answers
   is unchanged.
 - **The tells answer with a word** (`told`, `held`, `taken`, `unsent`, `unread`, `none`,
   `closed`) where the plan had `None`, for the sweep's counts and the tests.
+
+### 7.6 Decided while building S1-5
+
+All decided in the build unless it says the lead session; none is Kevin's call, and any can be
+reopened with him.
+
+- **The answer's note is cleared with the reason, 90 days after the last day** (decided by the
+  lead session, in the review of #1934; it replaces 7.5's "only the reason"). The sweep's read
+  finds an ask that still holds either (`church_schedule_tell.PRIVATE`), so a note with no
+  reason is found, and the write clears both, naming the same rule again. `cleared` counts
+  asks, not texts.
+- **The switcher's count is kept a minute too.** The brief asked for the kept roster and no
+  fresh read on a Lead-tab view; `member_portal._leads` asks on every page of the app, for
+  every member. So how many asks wait for each person is kept beside the roster
+  (`waiting_kept`: one paged read a church a minute a replica, of who and how many, never a
+  reason or a note), and `section` answers from the two with no read of its own. A write on a
+  replica forgets its count at once (`_after`); on another replica "Dates · 1" can lag a
+  minute. The Dates page itself always shows what it just read.
+- **The count is `waiting()`'s rule for a person**: the ask names them, or the office login
+  tied to exactly them; never their own, never one that needs no yes. A test holds the two
+  equal for everyone on the schedule.
+- **`section` asks about the tables first** (`ready()`, kept), then the switch: before the
+  migration nothing else is read, and no other test suite gains a read.
+- **`section` never raises.** Every page of the member app waits on it (through `_leads`), so
+  whatever goes wrong there is one logged line and no Dates entry, never a broken page. The
+  two kept maps are walked as copies: page views ask from many threads at once.
+- **What is kept decides the switcher and the tab, never the page.** `/my/lead/dates` reads
+  fresh. Someone with nothing of theirs there (not on the schedule, nothing waiting for their
+  yes, no asks of their own) who follows a link gets a few plain words and a 404. While the
+  switch is closed for the church, or before its tables, it is not a page at all: the Lead tab
+  answers as it does for any address it doesn't know.
+- **Someone taken off the schedule who is still over someone** keeps a Dates entry while an ask
+  waits for their yes, and sees only that (and any asks of their own): no forms, no "Who else
+  is away".
+- **Who covers is picked from the people on the leaders schedule**, not from the whole church:
+  by name, never the asker, 200 at most (`PICK_MAX`), their names read a hundred at a time.
+  Anyone else (a volunteer, say) is typed as a name. The member route refuses a picked id that
+  isn't on the schedule; the engine and the office route still take any of the church's
+  people. A church's whole list is never sent to a leader's phone.
+- **"Who else is away" says a name, the days and who covers.** Never the kind: time off,
+  another commitment and "can't make it" read the same there, as they do on a lock screen
+  (7.5), because the kind can hint at the reason. Two months ahead, one list, not by group.
+  An ask waiting for the reader's own yes is in it, marked so; nobody else's waiting ask is.
+- **Once an ask is answered, the one who answered no longer has its reason on this page.**
+  `shape()` would still give it to them; the page has no place that shows it (they read it
+  while it waited). The asker keeps their own reason, and the note that came with the answer,
+  under My dates.
+- **My dates reads the fact.** A yes whose away date was taken off since (Serving, Away, until
+  S1-6) is shown as "Off the calendar" with no button to take it back, never as away.
+- **A note goes with "not this one" only.** The form offers it there, and the member route
+  drops a note sent with a yes.
+- **"Can't make it" with no day named is today**, on the church's own clock. `/ask` takes time
+  off or another commitment; "can't make it" has its own route.
+- **Short notice is said on a planned ask only**, before it is sent (one line under the form,
+  with the church's own number of days) and right after (the words that follow the press, and
+  a mark on the ask). A "can't make it" is never marked short: it always is.
+- **The page's own words for a refusal**, by a short code (`_code`, `ERRORS`): the engine's
+  sentences name "the owner, or whoever oversees the office", which the member app doesn't
+  say. Someone not on the schedule reads "The church office can add you."
+- **Nothing on the page says the reason is cleared after 90 days, and it doesn't say an answer
+  "will be told".** Both depend on the sweep and on someone having a phone or an address. The
+  one such line is on "I can't make it": "{name} is let know."
+- **Who reads a reason, as the page says it**: "{who it goes to} can read this, and so can
+  those who look after the whole church. Nobody else who sees your dates can." Those are the
+  owner and whoever oversees the office, in the office app, without a title.
+- **No role names in the page's header.** The other Lead pages show the person's roles as
+  chips; this one says nothing by title. The one title that can appear is inside the church's
+  own name for its owner (`practitioner_name`), where an ask goes to them, as on the
+  Assignments page.
+- **The switcher scrolls inside itself only when Dates is in it** (`ld-seg fit`). Six entries
+  don't fit a phone; the class is added only for someone with a Dates entry, so nobody else's
+  Lead tab changes by a pixel.
+- **With nothing else to lead, `/my/lead` opens on Dates**, as it opens on tasks for someone
+  with only tasks.
+- **A notice's words are unchanged.** Only where a person's notice opens (`MEMBER_PAGE`) and
+  the email's button ("Open your dates") moved: every sentence already described what the page
+  now does. A login's notice still opens the office app, which has no screen for it yet.
+- **Tests run at New Hope**, the made-up church of 500: Love City's fixture carries real
+  names, and this page's tests and pictures use none.

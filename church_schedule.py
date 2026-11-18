@@ -79,8 +79,13 @@ Who is told is church_schedule_tell's (S1-4): ask, answer and withdraw hand
 it the row once the write is back (_after), never inside the write, and its
 hourly sweep tells whatever was missed.
 
-Not here yet (their own PRs): Dates on the member app's Lead tab, the Serving
-Away form and the scheduler's hold, things that repeat.
+The member app's side is member_portal_dates (S1-5): Dates on the Lead tab,
+where `me` is always a person. section() is what its switcher and
+member_portal._leads ask: the kept roster and a kept count, never a fresh
+read on every page.
+
+Not here yet (their own PRs): the Serving Away form and the scheduler's hold,
+things that repeat.
 """
 from __future__ import annotations
 
@@ -123,6 +128,7 @@ _STATE: Dict[str, Any] = {"yes": None, "at": 0.0}
 # the migration); production leaves it None and asks the database.
 _FORCE: Optional[bool] = None
 _KEPT: Dict[str, Tuple[float, "Roster"]] = {}
+_WAITING: Dict[str, Tuple[float, Dict[str, int]]] = {}      # church -> (when, {person: asks waiting for their yes})
 
 FIELDS = ("id,business_id,contact_id,made_by,grp,department_id,kind,starts_on,ends_on,reason,cover_contact_id,"
           "cover_name,to_user_id,to_contact_id,state,flags,decided_by_user_id,decided_by_contact_id,decided_at,"
@@ -534,6 +540,16 @@ def roster(ch: co.Church) -> Roster:
     return ch._got("schedule_roster", lambda: _roster_of(*_base(ch)))
 
 
+def _own_row(biz: Any) -> Optional[Dict[str, Any]]:
+    """The church's own row (its owner and settings): the one handed in when
+    it is whole, else read. None for no such church; a failed read raises."""
+    if isinstance(biz, dict) and biz.get("owner_id"):
+        return biz
+    b = str(biz.get("id") if isinstance(biz, dict) else biz)
+    rows = _need(f"/businesses?id=eq.{_q(b)}&select=id,name,type,owner_id,settings&limit=1")
+    return rows[0] if rows else None
+
+
 def roster_kept(biz: Any) -> Optional[Roster]:
     """roster(), kept a minute a replica, for the member side (a page view
     is about eleven reads otherwise): an add or a remove on one replica can
@@ -541,18 +557,16 @@ def roster_kept(biz: Any) -> Optional[Roster]:
     be read, and that is never kept."""
     b = str(biz.get("id") if isinstance(biz, dict) else biz)
     now = clock.monotonic()
-    for k in [k for k, (at, _r) in _KEPT.items() if now - at >= ROSTER_SECONDS]:
+    # list(): page views ask from many threads at once, and one of them may be adding a church right now.
+    for k in [k for k, (at, _r) in list(_KEPT.items()) if now - at >= ROSTER_SECONDS]:
         _KEPT.pop(k, None)
     hit = _KEPT.get(b)
     if hit:
         return hit[1]
     try:
-        row = biz if isinstance(biz, dict) and biz.get("owner_id") else None
+        row = _own_row(biz)
         if row is None:
-            rows = _need(f"/businesses?id=eq.{_q(b)}&select=id,name,type,owner_id,settings&limit=1")
-            if not rows:
-                return None
-            row = rows[0]
+            return None
         got = _roster_of(*_base(co.Church(row)))
     except HTTPException:
         return None
@@ -563,6 +577,83 @@ def roster_kept(biz: Any) -> Optional[Roster]:
 def forget(biz: Any) -> None:
     """A roster that changed is read again at once on this replica."""
     _KEPT.pop(str(biz.get("id") if isinstance(biz, dict) else biz), None)
+
+
+def waiting_kept(biz: Any) -> Optional[Dict[str, int]]:
+    """How many asks wait for each person's yes, as the member app counts
+    them: {contact id: n}, kept a minute a replica beside the roster, so the
+    Lead tab's switcher (and member_portal._leads, which every page of the
+    app asks) costs no read of its own. Exactly waiting()'s rule for a
+    person: the ask names them, or the office login tied to exactly them;
+    never their own ask, never one that needs no yes. Only who and how many
+    is read: never a reason, never a note. None when it couldn't be read,
+    and that is never kept. A write on this replica forgets it (_after), so
+    the count is right again at once here and within the minute elsewhere."""
+    b = str(biz.get("id") if isinstance(biz, dict) else biz)
+    now = clock.monotonic()
+    for k in [k for k, (at, _n) in list(_WAITING.items()) if now - at >= ROSTER_SECONDS]:
+        _WAITING.pop(k, None)
+    hit = _WAITING.get(b)
+    if hit:
+        return hit[1]
+    try:
+        row = _own_row(biz)
+        if row is None:
+            return None
+        ch = co.Church(row)
+        rows = _every(f"/church_away_asks?business_id=eq.{_q(b)}&state=eq.asked"
+                      "&select=id,business_id,contact_id,kind,state,to_user_id,to_contact_id")
+        got: Dict[str, int] = {}
+        for r in rows:
+            if str(r.get("business_id")) != b or r.get("state") != "asked":
+                continue
+            to = str(r.get("to_contact_id") or "") or (ch.login_person.get(str(r.get("to_user_id") or "")) or "")
+            if not to:
+                continue
+            me = co.who(co.PERSON, to)
+            if _went_to(ch, me, r) and not _is_asker(ch, me, r) and not needs_no_yes(ch, r):
+                got[to] = got.get(to, 0) + 1
+    except HTTPException:
+        return None
+    _WAITING[b] = (now, got)
+    return got
+
+
+def forget_waiting(biz: Any) -> None:
+    """The kept counts are read again at once on this replica."""
+    _WAITING.pop(str(biz.get("id") if isinstance(biz, dict) else biz), None)
+
+
+def section(biz: Any, cid: Any) -> Optional[Dict[str, int]]:
+    """The Lead tab's Dates entry for one of the church's people, in the
+    member app: {"waiting": n}, n being the asks waiting for their yes.
+    None means no entry at all: the tables aren't there, the switch is
+    closed for the church, or they are not on the schedule and nothing
+    waits on them (so the app is unchanged for everyone else). Both answers
+    come from what is kept a minute a replica (roster_kept, waiting_kept):
+    member_portal._leads asks this on every page of the app.
+
+    The tables are asked about first (kept too), so before the migration
+    nothing else is read. A roster that couldn't be read is no entry, unless
+    something waits on them; a count that couldn't be read is 0. NEVER
+    RAISES: every page of the member app waits on this, so whatever goes
+    wrong here is one logged line and no entry, never a broken page."""
+    try:
+        if not ready() or not church_open(biz):
+            return None
+        cid = str(cid or "")
+        if not cid:
+            return None
+        n = int((waiting_kept(biz) or {}).get(cid, 0))
+        if not n:
+            r = roster_kept(biz)
+            if r is None or cid not in r.people():
+                return None
+        return {"waiting": n}
+    except Exception as e:  # noqa: BLE001 — the tab bar is never worth a 500
+        b = str(biz.get("id") if isinstance(biz, dict) else biz)
+        print(f"[church_schedule] {b[:8]}: the Dates entry couldn't be worked out ({type(e).__name__})", flush=True)
+        return None
 
 
 def department_of(ch: co.Church, cid: Any) -> Optional[Dict[str, Any]]:
@@ -815,7 +906,9 @@ def _after(what: str, ch: co.Church, row: Dict[str, Any], **kw: Any) -> None:
     is not tried again). `what` is one of church_schedule_tell's tell_new,
     tell_answer, tell_withdrawn. The row is handed over whole;
     church_schedule_tell keeps only what a notice may say (never the reason,
-    never the note)."""
+    never the note). The kept counts for the member app's switcher are
+    forgotten here too: every write that changes what waits passes through."""
+    forget_waiting(ch.b)
     try:
         import member_push
         biz, row = dict(ch.business), dict(row)

@@ -613,6 +613,11 @@ app.include_router(member_portal_leading_router)
 # stuck, send up, give, start, and Got it on what the office sent.
 from member_portal_assign import router as member_portal_assign_router
 app.include_router(member_portal_assign_router)
+# Dates on the Lead tab (member_portal_dates.py): someone on the leaders
+# schedule asks for time off, says "I can't make it", takes one back, and
+# says yes or not this one to what went to them. BEFORE public_site_router.
+from member_portal_dates import router as member_portal_dates_router
+app.include_router(member_portal_dates_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router
