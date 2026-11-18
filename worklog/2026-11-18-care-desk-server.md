@@ -2,7 +2,7 @@
 title: Prayer & care as a care desk, server half (names and roles on hand-offs, pastor-only crisis requests, lock with password)
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
-asked: "not sure if you are clear on the fact that i like the prayer mock and want that built", with "yes page should and require a password and no work has been done but that should be custom to settings because others might like something else. help request should be align logins for now ... build it"
+asked: 'Kevin: "not sure if you are clear on the fact that i like the prayer mock and want that built", with "yes page should and require a password and no work has been done but that should be custom to settings because others might like something else. help request should be align logins for now ... build it"'
 status: in review
 prs: [kmj-intake-server (this PR)]
 migrations: [supabase/APPLY-2026-11-18-care-lock.sql (not applied)]
