@@ -962,7 +962,7 @@ def test_the_migration_is_one_server_only_table_and_the_export_knows_it():
     assert st.TABLE not in account_lifecycle.EXPORT_EXCLUDED
     ledger = (pathlib.Path(ROOT) / "docs" / "MIGRATIONS.md").read_text(encoding="utf-8")
     row = next(ln for ln in ledger.splitlines() if "APPLY-2026-11-18-church-structure-drafts.sql" in ln)
-    assert row.rstrip().endswith("| **NOT APPLIED** |") and "church-structure-key" not in ledger
+    assert "| **APPLIED 2026-11-18**" in row and "church-structure-key" not in ledger
 
 
 def test_a_church_that_cant_be_read_is_a_503_with_nothing_kept(db, monkeypatch):
