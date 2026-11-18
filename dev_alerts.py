@@ -22,14 +22,15 @@ router = APIRouter(tags=['dev-bridge'], route_class=store.BoundedRoute)
 NAV = 'studio:platform-dev-desk:'
 SOURCES = {'worker_needs_you': 'push', 'worker_finished': 'inbox', 'kai': 'push', 'missions': 'push',
            'session_crashed': 'push', 'ci': 'push', 'deploys': 'push', 'sites': 'push',
-           'schedules': 'push', 'desktop_offline': 'push', 'customers': 'push'}
+           'schedules': 'push', 'desktop_offline': 'push', 'customers': 'push', 'database': 'push'}
 DEVICE_SOURCES = {'worker_needs_you', 'worker_finished', 'kai', 'missions', 'session_crashed'}
 SERVER_SOURCES = set(SOURCES) - DEVICE_SOURCES
 Level = Literal['info', 'warn', 'urgent']
 Mode = Literal['push', 'inbox', 'off']
 # Pages outside the Dev Desk an alert may open. A new customer (stripe_billing,
-# source "customers") opens Mission Control's Subscriptions.
-OTHER_NAV = frozenset({'studio:platform-subscriptions'})
+# source "customers") opens Mission Control's Subscriptions; the weekly
+# database check (db_health, source "database") opens Systems → Database.
+OTHER_NAV = frozenset({'studio:platform-subscriptions', 'studio:platform-database'})
 _COLUMNS = 'id,created_at,source,kind,level,title,body,nav,card_id,delivered,count,read_at'
 
 

@@ -996,6 +996,10 @@ app.include_router(platform_today_router)
 # income and the tax / reserve / pay split. Owner-only.
 from platform_money import router as platform_money_router
 app.include_router(platform_money_router)
+# Mission Control → Systems → Database (2026-11-18): the weekly database
+# health check and when to move the database up a size. Owner-only.
+from db_health import router as db_health_router
+app.include_router(db_health_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
@@ -1888,6 +1892,19 @@ async def startup():
                               hours=1, id="email_domain_monitor")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
+    # The weekly database health check (db_health.py, Mission Control →
+    # Systems → Database): Sunday-morning readings every 15 minutes, a
+    # Wednesday baseline, and Monday 8 AM Eastern's verdict. The job runs
+    # every 5 minutes and decides in code whether a reading or the report
+    # is due, so a deploy at the wrong moment loses at most 5 minutes; each
+    # 15-minute slot is claimed by its row, so it is read once.
+    # DB_HEALTH_CHECK=off stops it.
+    try:
+        import db_health as _db_health
+        scheduler.add_job(g("db_health", _db_health.tick), "cron", minute="*/5",
+                          id="db_health", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] database health check not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in
