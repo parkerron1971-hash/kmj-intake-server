@@ -91,6 +91,8 @@ def test_a_visitor_sees_the_switched_box(monkeypatch):
         return []
     asked = []
     monkeypatch.setattr(ps, "_sb", _no_rows)
+    # A site's products are read as the server (the anon key reads none since 2026-11-18).
+    monkeypatch.setattr(ps, "_sb_service", _no_rows)
     monkeypatch.setattr(ps, "_inject_brand_meta", lambda html, biz_id: html)
     monkeypatch.setattr(ps, "_optimize_images", lambda html: html, raising=False)
     monkeypatch.setattr(tr, "own_texting_pages", lambda bid: asked.append(bid) or {"terms": TERMS, "privacy": PRIVACY})

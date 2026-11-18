@@ -45,6 +45,7 @@ def fixture(monkeypatch, *, biz=None, offerings=None, bookings=None, busy=None):
         return deepcopy(tables[url.path][offset:offset+100])
     monkeypatch.setattr(ca,'_sb',read)
     monkeypatch.setattr(ca,'_busy_get',read)
+    monkeypatch.setattr(ca,'_owner_tz_get',read)
     return calls,tables
 
 

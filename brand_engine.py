@@ -144,7 +144,11 @@ DISCLAIMER_PHRASES: Dict[str, str] = {
 # — composer, director, slot system, override system, etc. They all
 # pick up the RLS-aware behavior for free via this central change.
 
+import re as _re
+
 import sb_clients
+
+_ID_SHAPED = _re.compile(r"[0-9A-Za-z-]{1,64}")
 
 
 def _sb_url() -> str:
@@ -188,12 +192,18 @@ def _server_owned(path: str) -> bool:
     return path.startswith(_SERVER_OWNED_PATHS)
 
 
+# Read as the server, never written here. practitioner_profiles is keyed by
+# the business OWNER and its one policy is the owner's own row, so under an
+# office login's JWT the owner's profile reads back empty (_owner_profile).
+_SERVER_READ_PATHS = ("/practitioner_profiles?owner_id=eq.",)
+
+
 def _sb_get(path: str) -> Optional[Any]:
     """RLS-readiness migration — delegates to sb_clients.sb_get_current_context.
     User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded
     automatically. Falls back to service-role when no JWT is bound
     (server-initiated paths). Server-owned tables are read as the server."""
-    if _server_owned(path):
+    if _server_owned(path) or path.startswith(_SERVER_READ_PATHS):
         return sb_clients.sb_get_as_service(path)
     return sb_clients.sb_get_current_context(path, allow_service_fallback=True)
 
@@ -204,6 +214,33 @@ def _sb_patch(path: str, body: Dict[str, Any]) -> Optional[Any]:
     if _server_owned(path):
         return sb_clients.sb_patch_as_service(path, body)
     return sb_clients.sb_patch_current_context(path, body, allow_service_fallback=True)
+
+
+def _owner_profile(owner_id: Any) -> Optional[Dict[str, Any]]:
+    """The business owner's practitioner profile, read as the server.
+
+    practitioner_profiles is keyed by the OWNER and its one policy is the
+    owner's own row (owner_id = auth.uid()). Under an office login's JWT the
+    row read back only through an allow-all policy
+    (APPLY-2026-11-18-close-allow-all-policies.sql drops it); without that
+    the bundle of a business the caller may work would lose its
+    practitioner's name, title and timezone for everyone but the owner. The
+    caller has passed the access check for this business by the time it is
+    here, and the owner id comes from that business's own row.
+
+    It goes through `_sb_get`, the module's one read seam, which reads this
+    path as the server (_SERVER_READ_PATHS). A profile that cannot be read
+    (no row yet, a refused read, the service key missing) is no profile:
+    the bundle is built without the practitioner, never refused."""
+    owner = str(owner_id or "")
+    if not _ID_SHAPED.fullmatch(owner):     # it goes into a PostgREST path
+        return None
+    try:
+        rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner}&limit=1") or []
+    except Exception as e:
+        logger.warning("brand_engine: the owner's profile could not be read (%s)", type(e).__name__)
+        return None
+    return rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
 
 
 def _safe_get_one(table: str, eq_col: str, eq_val: str) -> Optional[Dict[str, Any]]:
@@ -1007,7 +1044,7 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
 
     practitioner = None
     if business.get("owner_id"):
-        practitioner = _safe_get_one("practitioner_profiles", "owner_id", business["owner_id"])
+        practitioner = _owner_profile(business["owner_id"])
 
     site = _safe_get_one("business_sites", "business_id", business_id) or {}
     site_slug = site.get("slug")

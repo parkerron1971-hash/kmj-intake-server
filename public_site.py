@@ -1393,6 +1393,12 @@ def _check_rate(slug: str, limit: Optional[int] = None) -> bool:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _sb(client: httpx.AsyncClient, path: str):
+    """A GET with the public anon key. It reads only what a signed-out
+    visitor may read through PostgREST themselves. `products` is NOT one of
+    those: its allow-all policy is dropped by
+    APPLY-2026-11-18-close-allow-all-policies.sql, so a site's products are
+    read with `_sb_service`, filtered to the business the public slug
+    resolved to and to what the owner switched on for the website."""
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
         "apikey": _supabase_anon(),
@@ -1428,6 +1434,33 @@ async def _sb_service(client: httpx.AsyncClient, path: str):
         return None
     text = resp.text
     return json.loads(text) if text else None
+
+# What a business switched on for its website, in the order it set.
+_WEBSITE_PRODUCTS = ("&status=eq.active&display_on_website=eq.true"
+                     "&order=sort_order.asc,created_at.desc&select=*&limit=100")
+
+
+async def _site_products(client: httpx.AsyncClient, biz_id: str, query: str) -> List[Dict[str, Any]]:
+    """The products a public page shows, read as the server.
+
+    `products` carries no policy for a signed-out visitor
+    (APPLY-2026-11-18-close-allow-all-policies.sql), so the anon key reads
+    none. The read is bounded to the one business the public slug resolved
+    to; `query` is the rest of the filter, written by the caller, never by
+    the visitor.
+
+    It never takes the page down. A refused read, a network failure or a
+    missing service key is a page with no products on it, and a line in the
+    log."""
+    try:
+        rows = await _sb_service(client, f"/products?business_id=eq.{biz_id}{query}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"public_site: products for {str(biz_id)[:8]} could not be read ({type(e).__name__})")
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
 
 async def _sb_service_patch(client: httpx.AsyncClient, path: str, body: dict):
     """Academy Phase 4B — service-role PATCH for learner-portal progress
@@ -1679,9 +1712,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
 
         # Pass 3: Smart Sites flag-gate. ANY failure falls through to legacy.
         if _use_smart_sites(site) and biz_id:
-            products_for_smart = await _sb(client,
-                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
-                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            products_for_smart = await _site_products(client, biz_id, _WEBSITE_PRODUCTS)
             smart_html = await _try_render_smart_site(
                 biz_id, "home", products=products_for_smart)
             if smart_html:
@@ -1702,9 +1733,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
         biz_settings: Dict[str, Any] = {}
         if biz_id:
             prod_rows, biz_rows = await asyncio.gather(
-                _sb(client,
-                    f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
-                    f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
+                _site_products(client, biz_id, _WEBSITE_PRODUCTS),
                 _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
             )
             products = prod_rows or []
@@ -4524,13 +4553,11 @@ async def booking_slots(slug: str, days: int = 14):
         # BUILD -> Products & Services automatically makes it bookable.
         product_services = []
         try:
-            product_services = await _sb(
-                client,
-                f"/products?business_id=eq.{biz_id}&status=eq.active"
-                f"&type=eq.service&display_on_website=eq.true"
-                f"&order=sort_order.asc&limit=50"
-                f"&select=id,name,description,price,currency,pricing_type,duration_minutes"
-            ) or []
+            product_services = await _site_products(
+                client, biz_id,
+                "&status=eq.active&type=eq.service&display_on_website=eq.true"
+                "&order=sort_order.asc&limit=50"
+                "&select=id,name,description,price,currency,pricing_type,duration_minutes")
         except Exception:
             product_services = []
 
@@ -5842,9 +5869,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     biz_settings: Dict[str, Any] = {}
     if biz_id:
         prod_rows, biz_rows = await asyncio.gather(
-            _sb(client,
-                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
-                f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
+            _site_products(client, biz_id, _WEBSITE_PRODUCTS),
             _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
         )
         products = prod_rows or []
@@ -7167,9 +7192,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
 
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
-            products = await _sb(client,
-                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
-                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            products = await _site_products(client, biz_id, _WEBSITE_PRODUCTS)
             smart_html = await _try_render_smart_site(
                 biz_id, "home", products=products, path=path,
             )
@@ -7330,9 +7353,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
                 headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _use_smart_sites(site) and biz_id:
-            products = await _sb(client,
-                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
-                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            products = await _site_products(client, biz_id, _WEBSITE_PRODUCTS)
             smart_html = await _try_render_smart_site(
                 biz_id, "home", products=products, path=path,
             )

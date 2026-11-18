@@ -13976,7 +13976,10 @@ async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
                           value: Dict[str, Any], increment: bool = False) -> None:
     """Insert or merge a chief_patterns row. Confidence ramps with occurrences."""
     try:
-        existing = await _sb(
+        # Read as the server too, so the read and the write that follows see
+        # the same row whoever is signed in (a read the login could not make
+        # would add the pattern again every time).
+        existing = await _sb_service(
             client, "GET",
             f"/chief_patterns?business_id=eq.{biz_id}"
             f"&pattern_type=eq.{pattern_type}&pattern_key=eq.{pattern_key}"
@@ -13988,14 +13991,21 @@ async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
             merged = {**(row.get("pattern_value") or {}), **(value or {})}
             occ = (row.get("occurrences") or 1) + (1 if increment else 0)
             conf = min(0.95, 0.5 + (occ * 0.05))
-            await _sb(client, "PATCH", f"/chief_patterns?id=eq.{row['id']}", {
+            # Written as the server: chief_patterns is Chief's own record of
+            # what it has learned about this business. Its policies give the
+            # owner everything and an office login a read, so under an office
+            # login's JWT these two writes landed only through an allow-all
+            # policy (APPLY-2026-11-18-close-allow-all-policies.sql drops it)
+            # and would be refused and swallowed. biz_id is the chat's own
+            # authenticated business; the row is pinned to it.
+            await _sb_service(client, "PATCH", f"/chief_patterns?id=eq.{row['id']}&business_id=eq.{biz_id}", {
                 "pattern_value": merged,
                 "occurrences": occ,
                 "confidence": conf,
                 "last_seen": now_iso,
             })
         else:
-            await _sb(client, "POST", "/chief_patterns", {
+            await _sb_service(client, "POST", "/chief_patterns", {
                 "business_id": biz_id,
                 "pattern_type": pattern_type,
                 "pattern_key": pattern_key,
