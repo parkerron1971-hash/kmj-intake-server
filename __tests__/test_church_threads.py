@@ -996,10 +996,11 @@ def test_the_group_chat_carries_the_groups_notes_and_its_poll_counts_them(fake, 
     assert any(r["thread"] == f"group:{GROUP}" and r["contact_id"] == ANA for r in fake.t["church_thread_reads"])
     # The poll sees a new note without anyone reloading by hand.
     feed = c.get(f"/my/messages/feed/{tid}").json()
-    assert feed == {"count": 3, "notes": 1}
+    newest = cid(912)                                       # Ben's "Thank you, Ana" (member_instant_send's poll)
+    assert feed == {"count": 3, "last": newest, "notes": 1}
     fake.note(contact_id=ANA, thread=f"group:{GROUP}", kind="groups", title="Tuesday Night Group",
               body="Tasha asked the group to pray", url=f"/my/groups/{GROUP}/prayer", created_at=iso(NOW))
-    assert c.get(f"/my/messages/feed/{tid}").json() == {"count": 3, "notes": 2}
+    assert c.get(f"/my/messages/feed/{tid}").json() == {"count": 3, "last": newest, "notes": 2}
     # Closed: the chat is just the chat, and the poll has no notes in it.
     monkeypatch.setenv("CHURCH_THREADS", "off")
     html = _app(fake, monkeypatch, ANA).get(f"/my/groups/{GROUP}/chat").text

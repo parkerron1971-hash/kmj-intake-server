@@ -246,9 +246,10 @@ def test_members_watch_and_chat_by_first_name_and_initial(db):
     page = m.get("/my/live").text
     assert "youtube-nocookie.com/embed/abc123" in page and "I'm here</button>" in page
     r = m.post("/my/live/chat", data={"body": "  Good morning   church! "}, headers=JSON)
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200 and r.json() == {"ok": True, "id": r.json()["id"]}
     feed = m.get("/my/live/feed?v=0").json()
     assert feed["live"] and not feed["same"]
+    assert r.json()["id"] == feed["messages"][0]["id"]               # the live room settles its copy by this id
     assert feed["messages"] == [{"id": feed["messages"][0]["id"], "author": "Ana R.", "body": "Good morning church!",
                                  "host": False, "mine": True, "at": feed["messages"][0]["at"]}]
     assert ANA not in m.get("/my/live/feed?v=0").text                 # never a record id
