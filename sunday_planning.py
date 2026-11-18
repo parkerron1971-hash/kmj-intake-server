@@ -907,8 +907,9 @@ def serves(service: Dict[str, Any], team: Dict[str, Any]) -> bool:
 
 class _Board:
     """Everything a schedule decision needs, read once: the services in a
-    window, the teams and places, every ask and answer, who's away, and how
-    many Sundays each person is on in each month."""
+    window, the teams and places, every ask and answer, who's away (and who
+    has asked to be and still waits: `held`), and how many Sundays each
+    person is on in each month."""
 
     def __init__(self, biz: str, start: Optional[str], weeks: int, month_reach: bool = True):
         self.biz = biz
@@ -931,6 +932,13 @@ class _Board:
         last = (hi - timedelta(days=1)).date()
         self.away = _read(f"/serve_away?business_id=eq.{_q(biz)}&starts_on=lte.{last.isoformat()}"
                           f"&ends_on=gte.{self.lo_day.isoformat()}&select=contact_id,starts_on,ends_on,note")
+        # Days someone has asked to be away and still waits on (the leaders
+        # schedule): they read as away for those days, in the same words, so
+        # nobody asks them then. Who and which days only; never in `away`,
+        # which is what was agreed. It fails open and costs no read where the
+        # leaders schedule isn't open (church_schedule.holds).
+        import church_schedule
+        self.held = church_schedule.holds(biz, self.lo_day, last)
         self.place_name = {p["id"]: p["name"] for t in self.teams for p in t["places"]}
         self.place_team = {p["id"]: t for t in self.teams for p in t["places"]}
         self.service = {s["id"]: s for s in self.month_services}
@@ -944,8 +952,12 @@ class _Board:
         return None
 
     def is_away(self, cid: str, sid: str) -> bool:
+        """Away that day: an away date of theirs, or days they have asked
+        for and still wait on (`held`). The board says "away" for both and
+        never which."""
         day = self.service[sid]["day"]
-        return any(str(a["contact_id"]) == cid and str(a["starts_on"]) <= day <= str(a["ends_on"]) for a in self.away)
+        return any(str(a["contact_id"]) == cid and str(a["starts_on"]) <= day <= str(a["ends_on"])
+                   for a in (*self.away, *self.held))
 
     def load(self, cid: str, month: str) -> int:
         """The Sundays (services) this person is on that month: an event

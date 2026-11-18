@@ -28,6 +28,12 @@ built to look as drawn:
 The logic is sunday_serving.py. The owner's preview shows the pages; nothing
 saves. Asks reach phones once the sending sweep ships; until then a member
 finds them here and on Home.
+
+Someone on the church's leaders schedule (church_schedule, where its switch
+is open): their Away is asked for instead of saved, the page says so with a
+way to their Dates page (/my/lead/dates), and taking off a date that came
+from an ask takes the ask back. For everyone else nothing here changes, by a
+byte: `m["dates"]` is None and both of its parts are empty.
 """
 from __future__ import annotations
 
@@ -214,6 +220,20 @@ DONE = {
 }
 ERRS = {"preview": "This is a preview, so nothing was saved.", "slow": "One moment, then try that again.",
         "error": "That didn't save. Please try again in a moment."}
+# Away, for someone on the leaders schedule: it was asked for, not saved.
+# {to}: who it went to, by the name the church knows them by (worked out on
+# the page; only the short code rides in the address).
+DATES_PAGE = "/my/lead/dates"
+ASKED = {
+    "asked": "Asked. {to} will say yes or not this one, and with a yes these days go on your away days.",
+    "asked_short": "Asked. It's short notice, so {to} may need a little time with it. With a yes these days go on "
+                   "your away days.",
+}
+ASKED_ALONE = {
+    "asked": "Asked. It's waiting for a yes, and with a yes these days go on your away days.",
+    "asked_short": "Asked. It's short notice, so the answer may take a little time. With a yes these days go on "
+                   "your away days.",
+}
 
 
 def _e(s: Any) -> str:
@@ -276,6 +296,31 @@ def _flash(request: Request) -> str:
         return f'<p class="mp-err mp-flash" role="alert">{_e(err)}</p>'
     done = DONE.get(str(q.get("done") or ""))
     return f'<p class="mp-ok mp-flash" role="status">{_e(done)}</p>' if done else ""
+
+
+def _asked_flash(request: Request, m: Dict[str, Any]) -> str:
+    """What pressing Save under Away did for someone on the leaders
+    schedule: it was asked for, who answers, and where to follow it. Empty
+    for everyone else, whatever the address says."""
+    d = m.get("dates")
+    code = str(request.query_params.get("done") or "")
+    if not d or code not in ASKED or request.query_params.get("err"):
+        return ""
+    to = str(d.get("to") or "")
+    words = ASKED[code].replace("{to}", to) if to else ASKED_ALONE[code]
+    return (f'<p class="mp-ok mp-flash" role="status">{_e(words)} '
+            f'<a href="{DATES_PAGE}" style="color:inherit;font-weight:600;text-decoration:underline">See it under Dates</a></p>')
+
+
+def _dates_line(m: Dict[str, Any]) -> str:
+    """One line under Away for someone on the leaders schedule: what Save
+    does for them, and the way to their Dates page. Empty for everyone
+    else."""
+    if not m.get("dates"):
+        return ""
+    return ('<p class="sv-lede" style="padding:0 0 12px">You&#x27;re on the leaders schedule, so away days you add here '
+            f'go through your <a href="{DATES_PAGE}" style="color:inherit;font-weight:600;text-decoration:underline">'
+            'Dates</a> page. That&#x27;s where you see the answer, take one back, or say you can&#x27;t make it.</p>')
 
 
 def _form(action: str, fields: Dict[str, str], button: str, cls: str = "sv-btn") -> str:
@@ -479,7 +524,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <div class="sv-lt h-teal"><p class="sv-eb">{_e(me.get("name") or "")}</p><h1 class="sv-h">My <em>serving</em></h1></div>
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
 {f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
-{_flash(request)}
+{_flash(request)}{_asked_flash(request, m)}
 {_check_html(m.get("hours")) if check_first else ""}
 {_hours_html(m.get("hours"), me)}
 <section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">
@@ -489,7 +534,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {asks}{open_}{coming}
 {"" if check_first else _check_html(m.get("hours"))}
 <section class="sv-sec" id="away" aria-labelledby="sv-aw-h"><div class="sv-sh"><h2 id="sv-aw-h">Away</h2></div>
-<p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p><div class="sv-away">{away_chips}{add}</div></section>
+<p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p>{_dates_line(m)}<div class="sv-away">{away_chips}{add}</div></section>
 <section class="sv-sec" aria-labelledby="sv-of-h"><div class="sv-sh"><h2 id="sv-of-h">How often</h2></div>
 <form method="post" action="/my/serving/often"><div class="sv-seg" role="radiogroup" aria-label="How often">{seg}</div></form>
 <p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>
@@ -763,6 +808,34 @@ async def hours_for(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) -
         return None
 
 
+def _dates(request: Request, biz: Dict[str, Any], cid: str) -> Optional[Dict[str, str]]:
+    """For someone on the church's leaders schedule: {"to": who their last
+    ask went to}, the name looked up only when the page is about to say
+    "Asked" (right after the press). None for everyone else, and then My
+    serving is exactly what it always was. Asked from what is kept a minute
+    (church_schedule.on_schedule): no read where the switch is closed or
+    before its tables. NEVER RAISES: the page stands without it."""
+    try:
+        import church_schedule as cs
+        if cs.on_schedule(biz, cid) is not True:
+            return None
+        to = ""
+        if str(request.query_params.get("done") or "") in ASKED:
+            try:
+                import member_portal_dates as mpd
+                ch, who = mpd._ch_me(biz, {"id": cid})
+                waiting = [a for a in cs.mine(ch, who) if a.get("state") == "asked"]
+                newest = max(waiting, key=lambda a: str(a.get("created_at") or ""), default=None)
+                to = ((newest or {}).get("to") or {}).get("name") or ""
+                to = "" if to == cs.LEFT else to
+            except Exception:  # noqa: BLE001 — the words stand without a name
+                to = ""
+        return {"to": to}
+    except Exception:  # noqa: BLE001 — never worth the page
+        logger.warning("my serving: the leaders schedule part didn't load", exc_info=True)
+        return None
+
+
 async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], sub: str):
     from member_portal import _page, _SECURE_HEADERS
     biz, site = church["business"], church.get("site")
@@ -783,6 +856,7 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
                 sub_for = {"id": want, "html": _subs_panel(hit, cands, v["leader"])}
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
             m["hours"] = await hours_for(request, biz, me)
+            m["dates"] = await asyncio.to_thread(_dates, request, biz, str(me["id"]))
             import member_portal_checks as mpck
             return _page(render_page(biz, site, request, me, m, sub_for, door=await mpck.door_async(request, biz)))
         if rest.endswith("/pack"):
@@ -894,8 +968,18 @@ async def cant(request: Request):
 
 @router.post("/my/serving/away", include_in_schema=False)
 async def away(request: Request):
-    back, out = await _act(request, False, ss.add_away, "start", "end")
-    return out or _go("/my/serving", done="away")
+    said: Dict[str, Any] = {}
+
+    def add(biz: Dict[str, Any], cid: str, start: str, end: str) -> None:
+        said.update(ss.add_away(biz, cid, start, end) or {})
+
+    back, out = await _act(request, False, add, "start", "end")
+    # Someone on the leaders schedule: it was asked for, not saved, unless it
+    # needed nobody's yes (then it is on their away days now, as anyone's is).
+    done = "away"
+    if said.get("asked") and said.get("state") != "yes":
+        done = "asked_short" if said.get("short") else "asked"
+    return out or _go("/my/serving", done=done)
 
 
 @router.post("/my/serving/away/remove", include_in_schema=False)
