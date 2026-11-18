@@ -194,6 +194,25 @@ qr code and stuff is made for guest as well." `new_here._may_edit` (Text › New
 - A failed duties read is a 503 on the change and the slide; the room still reads, without its
   buttons. Texting hours (`texting_hours._may_edit`) stays the weekly text's.
 
+### The guest card (2026-11-17)
+
+Kevin, 2026-11-17, "build that": a printed connect card and guest QR the first-time guests' login
+makes herself. The cards print in the app (Forms › Print for guests, and Text › New here: a table
+tent, seat cards, a half-sheet connect card), with no server write. `guest_card.py` keeps one choice:
+
+- **`GET /church/guest-card/{business_id}`** (any login of the church): the cards a guest can be sent
+  to (switched on, not private), each with the address its code opens (the church's own address,
+  else the API host), the chosen one, the New here text when it is on with the church's own number,
+  and `can_choose`. A failed duty read reads as `can_choose` false; a failed cards read is a 503.
+- **`PUT /church/guest-card/{business_id}`** `{form_id}` or `{form_id: null}`: a login that `holds()`
+  `first_guests` (Tiara by default; the owner and Admins always). Not the weekly text's login, not a
+  member. A failed duty read is a 503. A switched-off card, a private one (a prayer or help card:
+  it never gives a guest a person and a call date) or another church's is refused.
+- Kept in `settings.new_here.guest_form`, written with `business_settings.merge(under=["new_here"])`
+  (New here's key is a server key, so the app's own logins never write it); New here's own PUT keeps
+  it (`new_here.KEPT`). Media & Communications still makes the bulletin and the connect card: their
+  "New here?" code opens the guest card when there is one, else the links page as before.
+
 ## Moving a duty
 
 - `PUT /church/duties/{duty}` with `{business_id, user_ids}`. `[]` or `null` puts the duty back to

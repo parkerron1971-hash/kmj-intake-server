@@ -91,6 +91,9 @@ NOT_YOURS = ("Only the owner, an admin, or whoever does the first-time guests or
 SCREEN_REF = "new_here"                 # worship_announcements.source_ref of the room's Sunday slide
 SCREEN_TITLE = "New here? We’d love to meet you."
 SCREEN_QR_LABEL = "Scan, then send the text"
+# Keys inside settings.new_here that another endpoint writes, which New here's
+# own PUT keeps as they are: the church's guest card (guest_card.py).
+KEPT = ("guest_form",)
 
 DEFAULTS: Dict[str, Any] = {
     "on": False,
@@ -884,7 +887,8 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
     if not is_church(business):
         raise HTTPException(404, "New here is for churches.")
     settings = dict(business.get("settings") or {})
-    settings["new_here"] = clean(body)
+    saved = settings.get("new_here") if isinstance(settings.get("new_here"), dict) else {}
+    settings["new_here"] = {**clean(body), **{k: saved[k] for k in KEPT if k in saved}}
     if sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz)}", {"settings": settings}) is None:
         raise HTTPException(503, "That didn't save just now. Try again in a minute.")
     return overview({**business, "settings": settings}, can_edit=True)
