@@ -1690,6 +1690,14 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     church_first_start = False
     if status_value == "active":
         church_first_start = await _church_first_start(business_id, sub_obj.get("id"))
+    # The subscription the church's row held before this event's patch, so
+    # the storage count is lowered only from the church's own subscription
+    # (church_billing.sync_extra_storage). Read only once storage is sold.
+    import church_billing
+    storage_sync = plan_key in fg.CHURCH_PLANS or church_billing.has_storage_item(items)
+    held_before = None
+    if storage_sync and church_billing.extra_storage_prices():
+        held_before = await church_billing.held_subscription(business_id)
     try:
         await _patch_business(business_id, patch)
     except Exception:
@@ -1705,12 +1713,13 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
     # A church's extra office logins, as the subscription carries them now.
-    import church_billing
     if plan_key in fg.CHURCH_PLANS or church_billing.extra_login_quantity(items):
         await church_billing.sync_extra_logins(business_id, items, status_value)
-    # And the blocks of storage it bought (church_storage adds them to its room).
-    if plan_key in fg.CHURCH_PLANS or church_billing.extra_storage_quantity(items):
-        await church_billing.sync_extra_storage(business_id, items, status_value)
+    # And the blocks of storage it bought (church_storage adds them to its
+    # room). Lowered only on positive evidence; see sync_extra_storage.
+    if storage_sync:
+        await church_billing.sync_extra_storage(business_id, items, status_value,
+                                                sub_id=sub_obj.get("id"), held_before=held_before)
     # Its first paid month on a church plan takes a founding place while one
     # is left (church_founding). Never fails the webhook: the patch above is
     # what it exists for, and every renewal tries again.

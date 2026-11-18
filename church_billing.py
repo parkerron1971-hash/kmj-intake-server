@@ -42,7 +42,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
@@ -284,20 +284,83 @@ async def sync_extra_logins(business_id: str, items, status: Optional[str]) -> N
         logger.warning(f"extra logins sync for {business_id} failed (non-fatal): {e}")
 
 
-async def sync_extra_storage(business_id: str, items, status: Optional[str]) -> None:
-    """The same for extra storage: the blocks the subscription carries, 0
-    once it is cancelled. Writes only when it changed (a stored value that
-    isn't a count is written over). Never raises."""
+async def held_subscription(business_id: str) -> Tuple[bool, str]:
+    """(read, the subscription id the church's row holds), read before a
+    webhook's patch overwrites it: sync_extra_storage lowers the count only
+    from the church's own subscription. (False, "") when unreadable."""
     try:
+        import stripe_billing as sb
+        biz = await sb._load_business(business_id)
+        return True, str(biz.get("stripe_subscription_id") or "").strip()
+    except Exception as e:  # noqa: BLE001  (unread: the count is never lowered on it)
+        print(f"[church_billing] subscription held by {str(business_id)[:8]} unread: {type(e).__name__}", flush=True)
+        return False, ""
+
+
+def has_storage_item(items) -> bool:
+    """The subscription carries an item on a storage price we know."""
+    prices = extra_storage_prices()
+    return bool(prices) and any(_price_id(it) in prices for it in (items or []))
+
+
+async def sync_extra_storage(business_id: str, items, status: Optional[str], *,
+                             sub_id: Optional[str] = None,
+                             held_before: Optional[Tuple[bool, str]] = None) -> None:
+    """The same for extra storage, from the subscription as Stripe holds it
+    (the webhook): the blocks it carries, 0 once it is cancelled. Writes
+    only when it changed. Never raises.
+
+    The count is read off the items by their price ids, which come from the
+    env. A storage price var missing or changed would make the blocks Stripe
+    still bills look like none, and a lower count makes the church look
+    over its room, where the 14-day rule removes recordings. So the count is
+    raised (or a value that isn't a count replaced by one) from a storage
+    item we recognise, and LOWERED only on positive evidence:
+      * no storage price is configured: nothing is written at all;
+      * an item whose price isn't a known plan, login or storage price is
+        on the subscription: never lowered (it could be the blocks);
+      * otherwise lowered when a recognised storage item shows the lower
+        quantity (not cancelled), or when every item is recognised and the
+        subscription is clearly the church's own: it carries a church plan
+        price and it is the subscription the church's row held before this
+        event (`held_before`, read before the webhook's patch; None or an
+        unread row is never clearly its own). A cancelled subscription goes
+        to 0 only by that second rule.
+    Each skip is print()ed with why."""
+    bid = str(business_id)[:8]
+    try:
+        storage = extra_storage_prices()
+        if not storage:
+            print(f"[church_billing] extra storage for {bid} not synced: no storage price is configured", flush=True)
+            return
+        plans = feature_gates.price_to_plan()
+        known = set(plans) | extra_login_prices() | storage
+        unknown = sorted({str(_price_id(it)) for it in (items or []) if _price_id(it) not in known})
+        recognised = has_storage_item(items)
         count = 0 if status == "canceled" else extra_storage_quantity(items)
         import stripe_billing as sb
         biz = await sb._load_business(business_id)
-        if extra_storage_blocks(biz) == count:
+        stored = extra_storage_blocks(biz)
+        if stored == count:
             return
+        if stored is None or count < stored:
+            church_plan = any(plans.get(_price_id(it) or "") in feature_gates.CHURCH_PLANS for it in (items or []))
+            own = (church_plan and bool(sub_id) and held_before is not None and held_before[0]
+                   and held_before[1] in ("", str(sub_id)))
+            why = None
+            if unknown:
+                why = f"the subscription has items on prices we don't know ({', '.join(unknown)[:200]})"
+            elif not (recognised and status != "canceled") and not own:
+                why = ("no storage item shows the lower count, and the subscription isn't clearly the church's "
+                       "own (a church plan price, and the one its row held)")
+            if why:
+                print(f"[church_billing] extra storage for {bid} kept at {stored} (Stripe event shows {count}): "
+                      f"{why}", flush=True)
+                return
         await _merge_setting(business_id, EXTRA_STORAGE, count or None)
-        print(f"[church_billing] extra storage for {str(business_id)[:8]}: {count} blocks", flush=True)
+        print(f"[church_billing] extra storage for {bid}: {stored} -> {count} blocks", flush=True)
     except Exception as e:
-        print(f"[church_billing] extra storage sync for {str(business_id)[:8]} failed (non-fatal): "
+        print(f"[church_billing] extra storage sync for {bid} failed (non-fatal): "
               f"{type(e).__name__}: {e}", flush=True)
 
 

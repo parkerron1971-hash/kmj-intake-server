@@ -75,22 +75,34 @@ def test_unlimited_stays_unlimited(monkeypatch):
 
 # ─── 2. the webhook ───────────────────────────────────────────────────
 
-def _webhook(monkeypatch, items, status="active", stored=None):
+def _webhook(monkeypatch, items, status="active", stored=None, held=None, storage=True):
+    """`held`: the subscription the church's row holds before the event
+    (the storage sync is handed it, read before the patch). `storage`:
+    whether the storage price is set."""
     patches, synced = [], []
     stored = [] if stored is None else stored
+    row = {"id": BIZ, "stripe_subscription_id": held}
     monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING", "price_grow")
     monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN", "price_login")
-    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", "price_store")
+    if storage:
+        monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", "price_store")
+    else:
+        monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE", raising=False)
 
     async def patch(bid, body, match=None):
         patches.append(body)
+        row.update(body)
+
+    async def load(bid):
+        return dict(row)
 
     async def sync(bid, its, st):
         synced.append((bid, cb.extra_login_quantity(its), st))
 
-    async def sync_storage(bid, its, st):
-        stored.append((bid, cb.extra_storage_quantity(its), st))
+    async def sync_storage(bid, its, st, **kw):
+        stored.append((bid, cb.extra_storage_quantity(its), st, kw))
     monkeypatch.setattr(sb, "_patch_business", patch)
+    monkeypatch.setattr(sb, "_load_business", load)
     monkeypatch.setattr(cb, "sync_extra_logins", sync)
     monkeypatch.setattr(cb, "sync_extra_storage", sync_storage)
     asyncio.run(sb._apply_subscription_state("customer.subscription.updated",
@@ -626,44 +638,160 @@ def test_the_webhook_keeps_the_storage_count_whichever_item_comes_first(monkeypa
     stored = []
     items = [{"price": {"id": "price_store"}, "quantity": 3}, {"price": {"id": "price_login"}, "quantity": 1},
              {"price": {"id": "price_grow"}, "quantity": 1}]
-    patches, synced = _webhook(monkeypatch, items, stored=stored)
+    patches, synced = _webhook(monkeypatch, items, stored=stored, held="sub_0")
     assert patches[0]["subscription_plan"] == "price_grow" and patches[0]["tier"] == "church_growing"
-    assert synced == [(BIZ, 1, "active")] and stored == [(BIZ, 3, "active")]
+    # The row's subscription as it was BEFORE this event's patch wrote sub_1.
+    assert synced == [(BIZ, 1, "active")]
+    assert stored == [(BIZ, 3, "active", {"sub_id": "sub_1", "held_before": (True, "sub_0")})]
 
 
 def test_storage_off_a_church_plan_is_still_synced_when_the_subscription_carries_it(monkeypatch):
     stored = []
     _webhook(monkeypatch, [{"price": {"id": "price_other"}, "quantity": 1},
                            {"price": {"id": "price_store"}, "quantity": 1}], stored=stored)
-    assert stored == [(BIZ, 1, "active")]
+    assert [x[:3] for x in stored] == [(BIZ, 1, "active")]
     stored.clear()
     _webhook(monkeypatch, [{"price": {"id": "price_other"}, "quantity": 1}], stored=stored)
     assert stored == []
 
 
-def test_storage_sync_writes_only_a_change_and_zero_once_cancelled(monkeypatch):
+PLAN = {"price": {"id": "price_grow"}, "quantity": 1}
+OWN = (True, "sub_1")               # the church's row held this subscription before the event
+
+
+@pytest.fixture
+def synced_row(monkeypatch):
+    """The church's row and the settings writes the storage sync makes.
+    Prices: Growing, the login and the monthly storage block."""
     from settings_merge_fake import install
-    row = {"id": BIZ, "settings": {"extra_storage": 2, "other": "kept"}}
+    row = {"id": BIZ, "stripe_subscription_id": "sub_1", "settings": {"extra_storage": 2, "other": "kept"}}
 
     async def load(bid):
-        return {"id": bid, "settings": dict(row["settings"])}
+        return {**row, "settings": dict(row["settings"]) if isinstance(row["settings"], dict) else row["settings"]}
 
     async def patch(bid, body, match=None):
         raise AssertionError("extra storage is never a whole-row patch")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING", "price_grow")
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN", "price_login")
     monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_STORAGE", "price_store")
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE_ANNUAL", raising=False)
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE_QUARTERLY", raising=False)
     monkeypatch.setattr(sb, "_load_business", load)
     monkeypatch.setattr(sb, "_patch_business", patch)
-    writes = install(monkeypatch, lambda bid: row)
-    two = [{"price": {"id": "price_store"}, "quantity": 2}]
-    asyncio.run(cb.sync_extra_storage(BIZ, two, "active"))
+    return row, install(monkeypatch, lambda bid: row)
+
+
+def _sync(items, status="active", held=OWN, sub_id="sub_1"):
+    asyncio.run(cb.sync_extra_storage(BIZ, items, status, sub_id=sub_id, held_before=held))
+
+
+def _store_item(n, pid="price_store"):
+    return {"price": {"id": pid}, "quantity": n}
+
+
+def test_storage_sync_writes_only_a_change_and_zero_once_cancelled(synced_row):
+    row, writes = synced_row
+    _sync([PLAN, _store_item(2)])
     assert writes == []
-    asyncio.run(cb.sync_extra_storage(BIZ, two, "canceled"))
+    _sync([PLAN, _store_item(2)], "canceled")                       # the church's own subscription, ended
     assert writes == [{"id": BIZ, "set": {}, "drop": ["extra_storage"], "under": []}]   # the key, and only it
     assert row["settings"] == {"other": "kept"}
-    # A stored value that isn't a count is written over with what Stripe holds.
+
+
+def test_more_storage_is_written_from_a_recognised_item(synced_row, capsys):
+    row, _writes = synced_row
+    _sync([PLAN, _store_item(3), _store_item(1, "price_mystery")], held=None)   # even beside an unknown item
+    assert row["settings"]["extra_storage"] == 3
+    # A stored value that isn't a count is written over from a recognised item.
     row["settings"] = {"extra_storage": "lots"}
-    asyncio.run(cb.sync_extra_storage(BIZ, two, "active"))
-    assert row["settings"] == {"extra_storage": 2}
+    _sync([PLAN, _store_item(2)], held=None)
+    assert row["settings"]["extra_storage"] == 2
+
+
+def test_a_recognised_storage_item_lowers_the_count(synced_row):
+    row, _writes = synced_row
+    row["settings"]["extra_storage"] = 3
+    _sync([_store_item(1), PLAN], held=None)                       # the item itself shows 1
+    assert row["settings"]["extra_storage"] == 1
+
+
+def test_no_storage_price_configured_writes_nothing(synced_row, monkeypatch, capsys):
+    row, writes = synced_row
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_STORAGE")
+    _sync([PLAN, _store_item(2)], "canceled")
+    _sync([PLAN])
+    assert writes == [] and row["settings"]["extra_storage"] == 2
+    assert "no storage price is configured" in capsys.readouterr().out
+
+
+def test_a_renamed_storage_price_never_lowers_the_count(synced_row, capsys):
+    # The bug this guards: STRIPE_PRICE_ID_EXTRA_STORAGE now names a new price
+    # while Stripe still bills the old one. The old item is unknown, so the
+    # blocks it carries are never read as none.
+    row, writes = synced_row
+    _sync([PLAN, _store_item(2, "price_store_old")])
+    _sync([PLAN, _store_item(2, "price_store_old")], "canceled")
+    assert writes == [] and row["settings"]["extra_storage"] == 2
+    out = capsys.readouterr().out
+    assert "kept at 2" in out and "price_store_old" in out
+
+
+def test_an_unknown_item_beside_a_recognised_one_never_lowers(synced_row, capsys):
+    row, writes = synced_row
+    _sync([PLAN, _store_item(1), _store_item(5, "price_mystery")])
+    assert writes == [] and row["settings"]["extra_storage"] == 2
+    assert "prices we don't know" in capsys.readouterr().out
+
+
+def test_none_on_the_churchs_own_subscription_lowers_to_zero(synced_row):
+    row, _writes = synced_row
+    _sync([PLAN, {"price": {"id": "price_login"}, "quantity": 1}])  # every item known, the blocks taken off
+    assert "extra_storage" not in row["settings"]
+
+
+def test_the_first_subscription_of_a_church_counts_as_its_own(synced_row):
+    row, _writes = synced_row
+    _sync([PLAN], held=(True, ""))
+    assert "extra_storage" not in row["settings"]
+
+
+@pytest.mark.parametrize("items,held,sub_id", [
+    ([PLAN], (True, "sub_other"), "sub_1"),       # not the subscription the row held
+    ([PLAN], (False, ""), "sub_1"),               # the row couldn't be read before the patch
+    ([PLAN], None, "sub_1"),                      # not told what the row held
+    ([PLAN], OWN, None),                          # no subscription id on the event
+    ([{"price": {"id": "price_login"}, "quantity": 1}], OWN, "sub_1"),   # no church plan on it
+])
+def test_not_clearly_the_churchs_own_never_lowers(synced_row, capsys, items, held, sub_id):
+    row, writes = synced_row
+    _sync(items, held=held, sub_id=sub_id)
+    _sync(items, "canceled", held=held, sub_id=sub_id)
+    assert writes == [] and row["settings"]["extra_storage"] == 2
+    assert "isn't clearly the church's own" in capsys.readouterr().out
+
+
+def test_a_cancelled_subscription_that_isnt_its_own_keeps_the_count(synced_row):
+    row, writes = synced_row
+    _sync([PLAN, _store_item(2)], "canceled", held=(True, "sub_new"))   # an old one, ended late
+    assert writes == [] and row["settings"]["extra_storage"] == 2
+
+
+def test_an_unreadable_count_is_only_replaced_on_evidence(synced_row):
+    row, writes = synced_row
+    row["settings"] = {"extra_storage": "lots"}
+    _sync([PLAN], held=(True, "sub_other"))
+    assert writes == [] and row["settings"]["extra_storage"] == "lots"    # stays unreadable: nothing decided
+    _sync([PLAN])
+    assert "extra_storage" not in row["settings"]
+
+
+def test_the_webhook_hands_the_sync_what_the_row_held(monkeypatch):
+    stored = []
+    _webhook(monkeypatch, [PLAN], stored=stored, held="sub_0")
+    assert stored == [(BIZ, 0, "active", {"sub_id": "sub_1", "held_before": (True, "sub_0")})]
+    stored.clear()
+    _webhook(monkeypatch, [PLAN], stored=stored, held="sub_0", storage=False)
+    assert stored and stored[0][3]["held_before"] is None            # not read until storage is sold
 
 
 @pytest.fixture
