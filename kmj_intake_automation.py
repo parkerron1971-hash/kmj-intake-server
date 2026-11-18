@@ -456,6 +456,12 @@ from church_handovers import router as church_handovers_router
 app.include_router(church_handovers_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
+# One sheet per person (church_sheet.py): a login's job, areas, duties and what
+# Chief knows, read and set in one place, and the church's own jobs. AFTER the
+# job descriptions' router: its fixed /church/jobs/person, /whose and /draft
+# must match before this one's /church/jobs/{key}.
+from church_sheet import router as church_sheet_router
+app.include_router(church_sheet_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)

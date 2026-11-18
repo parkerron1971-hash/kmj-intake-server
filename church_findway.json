@@ -4892,7 +4892,7 @@
        "sees": [
         "office"
        ],
-       "what": "See who has each part of the church, and set what each office login sees and does.",
+       "what": "See who has each part of the church, set each office login’s sheet, and keep the church’s jobs.",
        "words": [
         "areas",
         "logins",
@@ -4941,12 +4941,69 @@
         {
          "id": "change-what-a-login-can-see",
          "q": "Change what a login can see",
-         "a": "Open the Office logins tab and press Change beside the person, or Give areas if they have none yet. Tick every area they work in and press Save.",
+         "a": "Open the Office logins tab and press Open sheet beside the person. Switch their areas on or off and press Save.",
          "words": [
-          "who sees what",
-          "limit access",
+          "limit what someone sees",
+          "give access",
+          "take away access",
           "permissions",
-          "hide giving from staff"
+          "areas for a login"
+         ]
+        },
+        {
+         "id": "open-a-persons-sheet",
+         "q": "Open a person’s sheet",
+         "a": "On the Office logins tab press Open sheet beside the person. Their level, job, areas, duties and what Chief knows about them are all on that one page.",
+         "words": [
+          "what can someone do",
+          "checklist for a person",
+          "access sheet",
+          "what does chief know about"
+         ]
+        },
+        {
+         "id": "start-someone-from-a-job",
+         "q": "Start someone from a job",
+         "a": "Open their sheet and pick a job under Start from a job. It fills in the areas and duties. Change what is different, then press Save.",
+         "words": [
+          "set someone up",
+          "give someone a role",
+          "assign a job",
+          "make someone treasurer"
+         ]
+        },
+        {
+         "id": "make-a-job-of-your-own",
+         "q": "Make a job of your own",
+         "a": "Open the Jobs tab and press New job. Give it a title, one line of what it does, its areas and duties, and press Save the new job.",
+         "words": [
+          "custom role",
+          "create a role",
+          "our own roles",
+          "new position",
+          "leadership structure"
+         ]
+        },
+        {
+         "id": "have-chief-draft-a-job",
+         "q": "Have Chief draft a job",
+         "a": "On the Jobs tab press Have Chief draft it. Chief asks what the person does and who they answer to, then drafts the job for you.",
+         "words": [
+          "job description",
+          "chief write a role",
+          "responsibilities",
+          "draft a role"
+         ]
+        },
+        {
+         "id": "let-someone-else-set-up-jobs",
+         "q": "Let someone else set up jobs and sheets",
+         "a": "Open their sheet, open Office under Duties and tick Sets up jobs and people’s sheets, then press Save. They can then make jobs and change the sheets of Manager logins and below, never their own, an Admin’s, or anything to do with giving.",
+         "words": [
+          "delegate",
+          "let my wife change roles",
+          "who can change access",
+          "executive pastor permissions"
          ]
         },
         {
