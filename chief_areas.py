@@ -104,7 +104,15 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "send_handover",
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
-        "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description")},
+        "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
+        # Moving a church's duty, and putting one back (chief_duties): the owner's and admins', and whoever is
+        # over the office's lanes for the Managers under them (Kevin, 2026-11-17: "make sure Jessica has ability
+        # to request things from chief in regards to admins etc like I would as well"). The handler decides who
+        # may (church_duties.overseer_refusal), never an area: everyone else hears it's the owner's or an admin's.
+        "move_duty", "undo_duty",
+        # The office team's week and the monthly report's draft (chief_office): the handlers keep them to whoever
+        # is over the lanes or gathers the report, the owner and the admins, as the pages do.
+        "team_week", "monthly_report_draft")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
@@ -167,10 +175,6 @@ VERBS: Dict[str, Tuple[str, ...]] = {
 # errands. Listed so that a new verb is placed on purpose: a test fails
 # until every verb Chief has is in VERBS or here.
 OWNERS = frozenset({
-    # Moving a church's duty, and putting one back: the owner's and admins'
-    # (chief_duties). Here rather than in the Office, so a lane's login is
-    # told it's the owner's or an admin's, never "ask whoever has the Office".
-    "move_duty", "undo_duty",
     # Switching a church's mail over (chief_church_mail): the owner's alone.
     "switch_on_church_mail",
     # Changing a church's leaders map, its waiting changes and its ready-mades (chief_map), the same.

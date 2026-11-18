@@ -25,9 +25,10 @@ great, but you would make the changes for love city directly but chief would do 
    the PUT refuses it, and `holds()` says no to a Manager for a money duty even if a row names them.
 2. Whoever asks for money never approves it. The money ladder (`church_money_levels`) is
    untouched.
-3. The owner, or an Admin, makes every change. Chief moves a duty only on the owner's or an
-   admin's word, and suggests anything it thinks of first. For Love City, the session sets it
-   directly, at Kevin's word.
+3. The owner, or an Admin, makes every change, and since 2026-11-17 whoever is over the lanes
+   (the Executive Pastor) moves the duties of the Managers under her (step 8). Chief moves a duty
+   only on one of their words, and suggests anything it thinks of first. For Love City, the
+   session sets it directly, at Kevin's word.
 4. Every change is recorded (who, what, when, from and to) and can be undone.
 5. Area walls stay walls. A duty never opens an area's guarded part. Giving names, kids' medical
    notes and pastors-only notes keep their keepers.
@@ -534,3 +535,39 @@ built in `church_my_week.rhythm` from the duties it holds (`church_duties.standi
   (`church_my_week.rhythm_within`, the rule `church_team_week.within` keeps for the rest of the week).
 
 The app's band and walkthrough read this (solutionist-studio, "How your week goes").
+
+## Step 8: Chief knows the office, and the Executive Pastor runs her team (built 2026-11-17)
+
+Kevin, 2026-11-17: "make sure the chief is aware of everyones duties and job description
+responsibility and also make sure Jessica has ability to request things from chief in regards to
+admins etc like I would as well". `chief_office.py`, `chief_duties.py`, `church_duties.py`:
+
+- **THE OFFICE**: one line for each office login (the owner, every Admin, every Manager seat):
+  name, title, seat and lane, who they answer to, whom the Executive Pastor is over, the duties
+  they do of their own by label (money by label only), and the first line of their written job
+  description or that none is written. It ends with the one rule for "whose job is this?" (an
+  office duty: THE OFFICE; other work: `whose_job`; someone's whole job: `job_of`), who moves a
+  duty, and how to get ready for a one-on-one or the huddle (`one_on_one`). It is the same for
+  everyone on the church's team, so it sits in Chief's per-business cached segment, after the
+  church's menu; kept two minutes a replica and dropped when a duty or a description changes here.
+  The owner, the admins and the Managers get it; a Member or a Viewer doesn't. A written title or
+  description goes in only when the owner wrote it in their own words and nothing in it is shaped
+  like an instruction; anyone else's words are only `job_of`'s to read. About 750 tokens for Love
+  City's office; at most 12 logins named, 16 duty labels each, 6,000 characters.
+- **Moving her team's duties** (`church_duties.oversees`, `overseer_refusal`): a Manager that does
+  `oversee_lanes` may move or put back a duty when it isn't money, isn't her own oversight
+  (`monthly_report`, `oversee_lanes`), and everyone who does it now and everyone it goes to (the
+  lanes' defaults for `[]`) is her or a Manager she is over (`church_over`: never the owner, an
+  Admin, or a Manager whose person is a pastor or an elder). The PUT and the undo route ask the
+  same function (403 with the reason; any other Manager is the same 404 as before), and so do
+  Chief's `move_duty` and `undo_duty`, now placed for every login in `chief_areas` with the handler
+  deciding. Every change is logged with her as `changed_by`.
+- **Two reads for her** (and the owner and the admins): `team_week` (the Office team page,
+  `church_team_week.team`, behind its own gates) and `monthly_report_draft` (the report's draft,
+  `church_monthly_report.build` behind `_access`). Sending the report stays on its page. The
+  report's notes are someone's words: fenced, and they mark the turn so later writes wait.
+- **Her jobs line** names her own duties (the oversight two and any moved to her), says she covers
+  the rest of the lanes, and lists what she can ask Chief to do for her team: one-on-ones and the
+  huddle (`one_on_one`), `people_under`, `assignments_of`, `give_assignment` and its take-back,
+  `move_duty` and `undo_duty`, job descriptions, `team_week` and `monthly_report_draft`. Money,
+  logins and what each login sees stay the owner's and the admins'.

@@ -37,10 +37,21 @@ Who holds a duty (holds):
   GET  /church/duties?business_id=         the catalog and who does each duty
                                            (a manager seat or above)
   PUT  /church/duties/{duty}               {business_id, user_ids} (the owner or
-                                           an admin): who does it; [] or null
-                                           puts it back to the lanes' defaults
-  POST /church/duties/{duty}/undo          {business_id} (the owner or an
-                                           admin): puts the last change back
+                                           an admin; whoever is over the lanes for
+                                           the Managers under them): who does it;
+                                           [] or null puts it back to the lanes'
+                                           defaults
+  POST /church/duties/{duty}/undo          {business_id} (the same people):
+                                           puts the last change back
+
+Whoever is over the lanes (a Manager that does oversee_lanes: the Executive
+Pastor) moves the duties of the team under her (Kevin, 2026-11-17: "make sure
+Jessica has ability to request things from chief in regards to admins etc like
+I would as well"): a duty that isn't money and isn't her own oversight, and
+only while everyone who does it now and everyone it goes to is her or a
+Manager she is over (church_over.is_over: never the owner, an Admin, or a
+Manager whose person is a pastor or an elder). overseer_refusal says why not;
+the route and Chief ask the same function.
 
 Chief reads and moves duties through the same functions (chief_duties.py:
 list_duties reads build(), move_duty and undo_duty call move() and undo()).
@@ -332,6 +343,7 @@ STARTER[EXEC] = [k for k, d in CATALOG.items() if not d["money"]]
 OVERSIGHT: FrozenSet[str] = frozenset(k for k, d in CATALOG.items() if d["lanes"] == [EXEC])
 
 ALL: FrozenSet[str] = frozenset(CATALOG)
+OVERSEE = "oversee_lanes"            # whoever does it is over the office's lanes
 MAX_HOLDERS = 12
 NOT_CHURCH = "Duties are for a church's office"
 
@@ -535,6 +547,8 @@ def _forget(biz: str) -> None:
         _FAILED.pop(k, None)
     import church_map_asks          # a duty that moved changes a login's work: its check is due again
     church_map_asks.forget(biz)
+    import chief_office             # and THE OFFICE, Chief's roster of who does what
+    chief_office.forget(biz)
 
 
 def _prune(now: float) -> None:
@@ -897,17 +911,23 @@ def _uuid(v: Any, what: str) -> str:
         raise HTTPException(400, f"That {what} isn't valid")
 
 
-def _church_for_change(body: Dict[str, Any], user: AuthedUser, duty: str) -> Tuple[str, Dict[str, Any]]:
-    """The church a change is for, and the owner or an admin making it."""
+def _church_for_change(body: Dict[str, Any], user: AuthedUser, duty: str) -> Tuple[str, Dict[str, Any], bool]:
+    """The church a change is for, and whether whoever makes it is over the
+    lanes (False: the owner or an admin, any duty). A Manager that isn't over
+    the lanes, and anyone below, is the same 404 as before."""
     _gate(user, (body or {}).get("business_id"))
     biz = _uuid((body or {}).get("business_id"), "church")
-    assert_access(biz, user, "admin")
+    role = assert_access(biz, user, "manager")
     if duty not in CATALOG:
         raise HTTPException(404, "That isn't one of the duties")
     business = _business(biz)
     if not _is_church(business):
         raise HTTPException(404, NOT_CHURCH)
-    return biz, business
+    if role in KEEPS_ALL:
+        return biz, business, False
+    if role == "manager" and oversees(biz, user.id):
+        return biz, business, True
+    raise HTTPException(404, "business not found")
 
 
 def _why_not(business: Dict[str, Any], seats: Dict[str, Dict[str, Any]], uid: str, duty: str) -> Optional[str]:
@@ -936,6 +956,75 @@ def _check(biz: str, business: Dict[str, Any], user_ids: List[str], duty: str) -
     return next((why for why in (_why_not(business, seats, u, duty) for u in user_ids) if why), None)
 
 
+# ─── Whoever is over the lanes moves her own team's duties ────────────
+
+def oversees(business_id: str, user_id: Any) -> bool:
+    """Whether this login is a Manager over the office's lanes here (it does
+    oversee_lanes: the Executive Pastor by default, or whoever the owner or an
+    admin moved it to). Never the owner or an Admin: they move every duty
+    already. A failed read is a 503."""
+    s = standing(str(business_id), str(user_id or ""))
+    return bool(s["church"]) and s["role"] == "manager" and OVERSEE in s["duties"]
+
+
+def _lane_holders(ch: Any, duty: str) -> List[str]:
+    """Who does a duty when it follows the lanes: each Admin whose stored lane
+    does it, and each Manager whose lanes do (the Executive Pastor's are every
+    duty but money), or with no lane its areas: the same defaults _build and
+    holds() use."""
+    moved = {k: v for k, v in ch.moved.items() if k != duty}
+    out = []
+    for uid in ch.office:
+        role, lanes = ch.role(uid), set(ch.lanes(uid))
+        if role == "admin":
+            if any(duty in STARTER.get(ln, ()) for ln in lanes):
+                out.append(uid)
+        elif role == "manager" and not CATALOG[duty]["money"]:
+            by_area = None if lanes else _area_duties(ch.b, uid, role)
+            if duty in _manager_duties(lanes, uid, moved, by_area):
+                out.append(uid)
+    return out
+
+
+def overseer_refusal(business: Dict[str, Any], duty: str, by: str, to: List[str]) -> Optional[str]:
+    """Why whoever is over the lanes (`by`, a Manager: oversees()) can't hand
+    this duty to `to` ([] is back to the lanes' defaults), in words to pass
+    on; None when she can. A duty that isn't money and isn't her own
+    oversight (OVERSIGHT); everyone who does it now (the logins it was moved
+    to, else the lanes' defaults; one who has left the office doesn't count)
+    and everyone it would go to is her or a Manager login she is over
+    (church_over: never the owner, an Admin, or a Manager whose person is a
+    pastor or an elder). A read that fails is a 503."""
+    d = _known(duty)
+    label = d["label"]
+    if d["money"]:
+        return f"“{label}” is a money job, so it stays with the owner and the admins."
+    if duty in OVERSIGHT:
+        return (f"“{label}” is the job of whoever is over the office's lanes, so only the owner or an admin "
+                "moves it.")
+    import church_map
+    import church_over as co
+    ch = co.Church(business)
+    with church_map.once():
+        team = {i for k, i, _w in co._under(ch, co.who(co.LOGIN, by)) if k == co.LOGIN}
+        now = ch.moved.get(duty) or _lane_holders(ch, duty)
+        then = sorted({str(u) for u in to}) if to else _lane_holders(ch, duty)
+        for uid, going in [(u, False) for u in now] + [(u, True) for u in then]:
+            role = ch.role(uid)
+            left = role not in ("owner", "admin", "manager")       # no longer on the office: does nothing now
+            if uid == by or (role == "manager" and uid in team) or (left and not going):
+                continue
+            name = ch.login_name(uid)
+            if not going:
+                return (f"{name} does “{label}” now and isn't on the team under you, so the owner or an admin "
+                        "moves it.")
+            if not to:
+                return (f"Back to the lanes, “{label}” would go to {name}, who isn't on the team under you, so the "
+                        "owner or an admin puts it back.")
+            return f"{name} isn't on the team under you, so “{label}” goes to them only from the owner or an admin."
+    return None
+
+
 def _write(biz: str, duty: str, user_ids: List[str], by: str, undoes: Optional[str] = None) -> Dict[str, Any]:
     """Who does one duty, and its log row, in one transaction
     (church_duty_set): the holders it no longer names go, the new ones come
@@ -957,14 +1046,16 @@ def _result(duty: str, holders: List[str], change: Optional[Dict[str, Any]]) -> 
 
 # ─── Moving and putting back: the routes' and Chief's one code path ───
 
-def move(business: Dict[str, Any], duty: str, user_ids: List[Any], by: str) -> Dict[str, Any]:
+def move(business: Dict[str, Any], duty: str, user_ids: List[Any], by: str, *,
+         overseer: bool = False) -> Dict[str, Any]:
     """Name who does one duty at this church: the PUT and Chief's move_duty
     (chief_duties). `business` is the church's row and `by` the owner or an
-    admin making the change; each caller checked both. [] puts the duty back
-    to its lanes' defaults. Refused (400): more than MAX_HOLDERS, a login id
-    that isn't valid, or a login that can't hold it (_why_not). The same
-    names again change nothing and log nothing. A read or a save that fails
-    is a 503."""
+    admin making the change, or with `overseer` whoever is over the lanes
+    (oversees()); each caller checked which. [] puts the duty back to its
+    lanes' defaults. Refused (400): more than MAX_HOLDERS, a login id that
+    isn't valid, or a login that can't hold it (_why_not); for the overseer
+    (403), a change outside her team (overseer_refusal). The same names again
+    change nothing and log nothing. A read or a save that fails is a 503."""
     _known(duty)
     if len(user_ids) > MAX_HOLDERS:
         raise HTTPException(400, f"Name up to {MAX_HOLDERS} logins, or none to follow the lanes")
@@ -973,17 +1064,23 @@ def move(business: Dict[str, Any], duty: str, user_ids: List[Any], by: str) -> D
     why = _check(biz, business, ids, duty)
     if why:
         raise HTTPException(400, why)
+    if overseer:
+        why = overseer_refusal(business, duty, str(by), ids)
+        if why:
+            raise HTTPException(403, why)
     if _moved(biz).get(duty, []) == ids:
         return _result(duty, ids, None)
     return _result(duty, ids, _write(biz, duty, ids, str(by)))
 
 
-def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] = None) -> Dict[str, Any]:
+def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] = None, *,
+         overseer: bool = False) -> Dict[str, Any]:
     """Put the last change to one duty back (the undo route and Chief's
     undo_duty); again puts back the one before. With `change_id`, only while
     that change is still the one an undo puts back (409 once another came
     after it). Nothing to put back is a 404; a login it would hand the duty
-    back to that can't hold it now is a 409."""
+    back to that can't hold it now is a 409. With `overseer`, a put-back is a
+    move like any other: refused (403) outside her team (overseer_refusal)."""
     _known(duty)
     biz = str(business["id"])
     last = _undoable(_changes(biz, duty))
@@ -997,28 +1094,33 @@ def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] 
     why = _check(biz, business, restore, duty)
     if why:
         raise HTTPException(409, f"That can't be put back: {why} Name who does it instead.")
+    if overseer:
+        why = overseer_refusal(business, duty, str(by), restore)
+        if why:
+            raise HTTPException(403, why)
     return _result(duty, restore, _write(biz, duty, restore, str(by), undoes=str(last["id"])))
 
 
 @router.put("/duties/{duty}")
 def give_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """Name who does one duty. [] or null puts it back to the lanes'
-    defaults. The owner or an admin; a money duty only to the owner or an
-    Admin login; only logins on this church's office."""
+    defaults. The owner or an admin, or whoever is over the lanes for the
+    Managers under her; a money duty only to the owner or an Admin login; only
+    logins on this church's office."""
     user = session.user
     body = body or {}
-    _, business = _church_for_change(body, user, duty)
+    _, business, overseer = _church_for_change(body, user, duty)
     raw = body.get("user_ids")
     if raw is None:
         raw = []
     if not isinstance(raw, list) or len(raw) > MAX_HOLDERS:
         raise HTTPException(400, f"Name up to {MAX_HOLDERS} logins, or none to follow the lanes")
-    return move(business, duty, raw, str(user.id))
+    return move(business, duty, raw, str(user.id), overseer=overseer)
 
 
 @router.post("/duties/{duty}/undo")
 def undo_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """Put the last change to one duty back. Again puts back the one before."""
     user = session.user
-    _, business = _church_for_change(body or {}, user, duty)
-    return undo(business, duty, str(user.id))
+    _, business, overseer = _church_for_change(body or {}, user, duty)
+    return undo(business, duty, str(user.id), overseer=overseer)

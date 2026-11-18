@@ -228,6 +228,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
     import chief_church_jobs
     out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
+    import chief_office
+    out += list(chief_office.TOOLS)  # the office team's week and the monthly report's draft: the same
     import chief_move_in
     out += [chief_move_in.TOOL]  # a new church's move: the same
     import chief_church_mail
@@ -426,7 +428,8 @@ def _shrink(result: Any) -> str:
         limit = REPORT_MAX_RESULT_CHARS
     if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
                                                            'move_in_status', 'church_email', 'whose_job', 'job_of',
-                                                           'draft_job_description'):
+                                                           'draft_job_description', 'team_week',
+                                                           'monthly_report_draft'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
         # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
@@ -484,7 +487,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "search_templates", "my_work", "list_asks",
                                               "move_in_status", "people_under", "assignments_of", "church_email",
                                               "one_on_one", "whose_job", "job_of",
-                                              "draft_job_description")):
+                                              "draft_job_description", "team_week",
+                                              "monthly_report_draft")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:
