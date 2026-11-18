@@ -120,4 +120,32 @@ for (const role of ['anon', 'authenticated']) {
   await db.exec('RESET ROLE');
 }
 
+// The treasurer pays (APPLY-2026-11-18-help-treasurer-pays.sql): additive,
+// safe twice; a request sent to the treasurer names who gets paid; a bank
+// payment is a way to pay; references stay short; the index finds what waits.
+await db.exec(await sql('APPLY-2026-11-18-help-treasurer-pays.sql'));
+await db.exec(await sql('APPLY-2026-11-18-help-treasurer-pays.sql'));   // idempotent
+const owed = await one(`INSERT INTO church_help_requests(business_id, need, status, approved_cents)
+  VALUES ($1, 'bill', 'approved', 21200) RETURNING *`, [b2]);
+assert.equal(owed.pay_to, null); assert.equal(owed.sent_to_pay_at, null); checks++;
+await refuses(`UPDATE church_help_requests SET sent_to_pay_at = now() WHERE id = $1`, [owed.id], /sent_has_payee/);
+await refuses(`UPDATE church_help_requests SET pay_to = '' WHERE id = $1`, [owed.id], /pay_to_short/);
+await refuses(`UPDATE church_help_requests SET pay_ref = repeat('x', 121) WHERE id = $1`, [owed.id], /pay_ref_short/);
+const sent = await one(`UPDATE church_help_requests SET pay_to = 'Nashville Electric Service', pay_ref = 'acct ending 4421',
+  pay_due = '2026-11-20', sent_to_pay_at = now(), sent_to_pay_by = gen_random_uuid() WHERE id = $1 RETURNING *`, [owed.id]);
+assert.equal(sent.pay_to, 'Nashville Electric Service'); assert.equal(sent.pay_ref, 'acct ending 4421'); checks++;
+const paid = await one(`INSERT INTO church_help_given(business_id, request_id, how, amount_cents, given_on, payee, reference)
+  VALUES ($1, $2, 'transfer', 21200, '2026-11-18', 'Nashville Electric Service', 'Check 1042') RETURNING *`, [b2, owed.id]);
+assert.equal(paid.how, 'transfer'); assert.equal(paid.reference, 'Check 1042'); checks++;
+await refuses(`INSERT INTO church_help_given(business_id, request_id, how, amount_cents, given_on)
+  VALUES ('${b2}', '${owed.id}', 'venmo', 100, '2026-11-18')`, [], /how_check/);
+await refuses(`UPDATE church_help_given SET reference = repeat('x', 121) WHERE id = $1`, [paid.id], /reference_short/);
+const idx = await one(`SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'church_help_requests_to_pay'`);
+assert.equal(idx.n, 1); checks++;
+for (const role of ['anon', 'authenticated']) {
+  await db.exec(`SET ROLE ${role}`);
+  await refuses(`SELECT pay_to FROM church_help_requests`, [], /permission denied/);
+  await db.exec('RESET ROLE');
+}
+
 console.log(`church help requests: ${checks} checks passed`);
