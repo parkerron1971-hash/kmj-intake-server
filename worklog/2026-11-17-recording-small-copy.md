@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "build" (two promises: "Two weeks after a service, its recording is saved again at a smaller size (about 1.3 GB instead of 6), and it still looks right on a phone. Clips get cut before then, from the full-quality copy." and "Every recording gets a Download button, so deleting never means losing it.")'
 status: waiting on Kevin
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1910]
 migrations: [supabase/APPLY-2026-11-17-recording-small-copy.sql (NOT applied)]
 left_undone:
   - "Kevin: apply supabase/APPLY-2026-11-17-recording-small-copy.sql (after APPLY-2026-11-17-church-storage.sql), BEFORE setting the switch."
