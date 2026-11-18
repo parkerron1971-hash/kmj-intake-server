@@ -330,13 +330,24 @@ def test_right_code_signs_in_once_with_a_host_cookie(fake):
     assert "$50.00" in c.get("/my/me").text
 
 
-def test_one_person_per_email(fake):
-    # Kevin, 2026-09-29: one person per email. A signed-in session ends the
-    # moment a second record shares the address, and no code is sent to it.
+def _later(monkeypatch, seconds):
+    """member_cache keeps a signed-in member's record PEOPLE_SECONDS (30 s,
+    2026-11-18): move its clock past that."""
+    import member_cache
+    real = member_cache._now
+    monkeypatch.setattr(member_cache, "_now", lambda: real() + seconds)
+
+
+def test_one_person_per_email(fake, monkeypatch):
+    # Kevin, 2026-09-29: one person per email. A signed-in session ends once
+    # a second record shares the address (within member_cache.PEOPLE_SECONDS,
+    # 30 s, since 2026-11-18), and no code is sent to it.
+    import member_cache
     c = _client()
     _verify(c, _ask(c, fake))
     assert "Hi, <em>Ana.</em>" in c.get("/my").text
     fake.contacts.append({"id": "c2", "business_id": BIZ, "name": "Ben Rivers", "email": "ANA@example.com"})
+    _later(monkeypatch, member_cache.PEOPLE_SECONDS + 1)
     page = c.get("/my")
     assert "Send my code" in page.text and "Ben Rivers" not in page.text
     mailed = len(fake.mailed)
@@ -361,11 +372,16 @@ def test_another_churchs_member_is_not_on_this_list(fake):
 # ─── 6. re-checks, failures, limits ──────────────────────────────────
 
 
-def test_session_ends_when_the_record_changes(fake):
+def test_session_ends_when_the_record_changes(fake, monkeypatch):
+    """At most member_cache.PEOPLE_SECONDS (30 s) after the office changes
+    the email, never longer."""
+    import member_cache
     c = _client()
     _verify(c, _ask(c, fake))
     assert "Hi, <em>Ana.</em>" in c.get("/my").text
     fake.contacts[0]["email"] = "new@example.com"
+    assert "Hi, <em>Ana.</em>" in c.get("/my").text          # still kept: under 30 s
+    _later(monkeypatch, member_cache.PEOPLE_SECONDS + 1)
     assert "Send my code" in c.get("/my").text
 
 
