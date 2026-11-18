@@ -186,7 +186,7 @@ async def _phones_found(client: httpx.AsyncClient, path_for: Callable[[str], str
 
 
 async def said_yes_to_texts(client: httpx.AsyncClient, business_id: str,
-                            phones: Iterable[str]) -> Optional[Set[str]]:
+                            phones: Iterable[str], *, before: Optional[str] = None) -> Optional[Set[str]]:
     """Which of these phones may get a text this business wrote itself,
     sent to many people at once (the bulletin, a church's news). Kevin,
     2026-10-28: the bulletin texted everyone with a number, skipping only
@@ -197,31 +197,40 @@ async def said_yes_to_texts(client: httpx.AsyncClient, business_id: str,
     to its texts, or texted it, since it registered. Otherwise THE CONSENT
     RULE above (has_sms_consent) for many. STOP always wins, the platform's
     and the business's own. None when any read fails: a send to many that
-    can't tell who said yes sends nothing."""
+    can't tell who said yes sends nothing.
+
+    `before` (an ISO time) counts only the yeses given before it (a consent,
+    a keyword texted, a text in): who had said yes by then, as stops stand
+    now. My week's "+k this week" is who says yes now less who had by
+    Monday (sms_routing.said_yes_count)."""
     wanted = sorted({p for p in (normalize_phone(x) for x in phones) if p})
     if not wanted:
         return set()
     biz = business_id
+
+    def by(col: str) -> str:
+        return f"&{col}=lt.{_pq(before)}" if before else ""
+
     own = await own_registration(client, biz)
     if own:
         since = own.get("since")
         yes = await _phones_found(
             client, lambda ps: f"/sms_consents?business_id=eq.{biz}&phone=in.({ps})"
-                               + (f"&consented_at=gte.{_pq(since)}" if since else "")
+                               + (f"&consented_at=gte.{_pq(since)}" if since else "") + by("consented_at")
                                + "&select=phone&limit=5000", wanted, "phone")
         texted = await _phones_found(
             client, lambda ps: f"/sms_messages?business_id=eq.{biz}&direction=eq.inbound"
                                f"&phone_number=in.({ps})"
-                               + (f"&created_at=gte.{_pq(since)}" if since else "")
+                               + (f"&created_at=gte.{_pq(since)}" if since else "") + by("created_at")
                                + "&select=phone_number&limit=5000", wanted, "phone_number")
     else:
         yes = await _phones_found(
             client, lambda ps: f"/sms_consents?phone=in.({ps})"
                                f"&or=(and(business_id.eq.{biz},source.neq.booking_marketing),source.eq.web_form)"
-                               "&select=phone&limit=5000", wanted, "phone")
+                               + by("consented_at") + "&select=phone&limit=5000", wanted, "phone")
         texted = await _phones_found(
             client, lambda ps: f"/sms_bindings?customer_phone=in.({ps})&business_id=eq.{biz}"
-                               "&select=customer_phone&limit=5000", wanted, "customer_phone")
+                               + by("bound_at") + "&select=customer_phone&limit=5000", wanted, "customer_phone")
     stopped = await _phones_found(
         client, lambda ps: f"/sms_opt_outs?phone=in.({ps})&or=(business_id.is.null,business_id.eq.{biz})"
                            "&select=phone&limit=5000", wanted, "phone")

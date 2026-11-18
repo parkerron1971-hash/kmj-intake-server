@@ -197,7 +197,9 @@ def test_is_opted_out_query_scopes_to_business(monkeypatch):
 
 @pytest.mark.parametrize("module, fn", [
     (sms_service, "send_sms_core"),
-    (sms_routing, "announce"),  # broadcast sends through announce
+    # broadcast sends through announce, and announce and the leaders note's
+    # text through the shared send loop
+    (sms_routing, "_text_each"),
 ])
 def test_outbound_gates_pass_the_business_to_is_opted_out(module, fn):
     src = inspect.getsource(getattr(module, fn))

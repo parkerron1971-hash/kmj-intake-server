@@ -996,52 +996,122 @@ async def announce(business_id: str, message: str, group_id: Optional[str] = Non
         biz_name = await _biz_name(client, business_id)
         from sms_service import compose_outbound_body
         msg = compose_outbound_body(biz_name, msg, include_optout=True)
-
-        sent, skipped, failed, not_yes = 0, 0, 0, 0
-        texted: set = set()
-        for c in contacts:
-            phone = normalize_phone(c.get("phone"))
-            if not phone or phone in texted:
-                skipped += 1
-                continue
-            if phone not in yes:
-                not_yes += 1
-                continue
-            texted.add(phone)
-            if await is_opted_out(client, phone, business_id):
-                skipped += 1
-                continue
-            try:
-                sid = await _send_platform_sms(
-                    phone, msg, business_id=business_id, client=client)
-                await _store_sms(
-                    client, business_id=business_id, contact_id=c.get("id"),
-                    phone_number=phone, message=msg, direction="outbound",
-                    telnyx_id=sid, status="sent", sent_by="practitioner",
-                )
-                sent += 1
-            except Exception as e:
-                failed += 1
-                logger.warning(f"[ROUTE] broadcast send failed to {phone}: {e}")
-            await asyncio.sleep(0.25)   # gentle pacing — carrier-friendly
+        went = await _text_each(client, business_id, contacts, yes, msg)
+        counts = {k: went[k] for k in ("sent", "skipped", "failed", "not_yes")}
 
         await _log_event(client, business_id, None, "sms_broadcast", {
-            "preview": msg[:200], "sent": sent, "skipped": skipped, "failed": failed,
-            "not_yes": not_yes, "group_id": group_id,
+            "preview": msg[:200], **counts, "group_id": group_id,
         })
-    logger.info(f"[ROUTE] broadcast biz {business_id[:8]}: sent={sent} skipped={skipped} "
-                f"failed={failed} not_yes={not_yes}")
-    # A big announcement is what crosses a church plan's 80% or 100%: say so
-    # now rather than at tomorrow's check (church_texts.py). After the send,
-    # never before it: the count never holds a text back.
-    if sent:
+    logger.info(f"[ROUTE] broadcast biz {business_id[:8]}: sent={counts['sent']} skipped={counts['skipped']} "
+                f"failed={counts['failed']} not_yes={counts['not_yes']}")
+    await _after_texts(business_id, counts["sent"])
+    return {"ok": True, **counts, "total_contacts": len(contacts)}
+
+
+async def _text_each(client: httpx.AsyncClient, business_id: str, contacts: List[Dict[str, Any]],
+                     yes: set, msg: str) -> Dict[str, Any]:
+    """The send to many: one text a number (a number two people share gets
+    one), only a number that said yes (`yes`, sms_alerts.said_yes_to_texts),
+    STOP checked again right before each, gently paced. `msg` is the whole
+    body as it leaves. The counts, and the numbers it went to and didn't."""
+    sent, skipped, failed, not_yes = 0, 0, 0, 0
+    texted: set = set()
+    sent_to: set = set()
+    failed_to: set = set()
+    for c in contacts:
+        phone = normalize_phone(c.get("phone"))
+        if not phone or phone in texted:
+            skipped += 1
+            continue
+        if phone not in yes:
+            not_yes += 1
+            continue
+        texted.add(phone)
+        if await is_opted_out(client, phone, business_id):
+            skipped += 1
+            continue
         try:
-            import church_texts
-            await asyncio.to_thread(church_texts.check_allowance, business_id)
-        except Exception:  # noqa: BLE001
-            logger.info("[ROUTE] text allowance check didn't run", exc_info=True)
-    return {"ok": True, "sent": sent, "skipped": skipped, "failed": failed,
-            "not_yes": not_yes, "total_contacts": len(contacts)}
+            sid = await _send_platform_sms(
+                phone, msg, business_id=business_id, client=client)
+            await _store_sms(
+                client, business_id=business_id, contact_id=c.get("id"),
+                phone_number=phone, message=msg, direction="outbound",
+                telnyx_id=sid, status="sent", sent_by="practitioner",
+            )
+            sent += 1
+            sent_to.add(phone)
+        except Exception as e:
+            failed += 1
+            failed_to.add(phone)
+            logger.warning(f"[ROUTE] broadcast send failed to {phone}: {e}")
+        await asyncio.sleep(0.25)   # gentle pacing — carrier-friendly
+    return {"sent": sent, "skipped": skipped, "failed": failed, "not_yes": not_yes,
+            "sent_to": sent_to, "failed_to": failed_to}
+
+
+async def _after_texts(business_id: str, sent: int) -> None:
+    """A big send is what crosses a church plan's 80% or 100%: say so now
+    rather than at tomorrow's check (church_texts.py). After the send, never
+    before it: the count never holds a text back."""
+    if not sent:
+        return
+    try:
+        import church_texts
+        await asyncio.to_thread(church_texts.check_allowance, business_id)
+    except Exception:  # noqa: BLE001
+        logger.info("[ROUTE] text allowance check didn't run", exc_info=True)
+
+
+async def text_people(business_id: str, contacts: List[Dict[str, Any]], message: str, *,
+                      event: str) -> Dict[str, Any]:
+    """Text these people of this business's (each {id, name, phone}) the
+    way an announcement goes: only a number that said yes
+    (sms_alerts.said_yes_to_texts), one text a number, STOP always winning,
+    the church's name first and the way out last (compose_outbound_body),
+    counted on the church's texts like any other. For a list someone else
+    drew: the leaders note's "Text it too" (church_leaders_note), the
+    leaders room. Logged as `event`, never as an announcement (My week reads
+    those for the weekly text, church_work_checks.texts). The caller has
+    checked who may send, the card and the hour. {"error", "status"} when
+    nothing could go."""
+    import sms_alerts
+    msg = (message or "").strip()
+    if not msg:
+        return {"error": "The text was empty, so nothing was sent.", "status": 400}
+    async with httpx.AsyncClient() as client:
+        yes = await sms_alerts.said_yes_to_texts(client, business_id, [c.get("phone") for c in contacts])
+        if yes is None:
+            return {"error": "Couldn't check who has said yes to your texts, so no text was sent. "
+                             "Try again in a minute.", "status": 503}
+        from sms_service import compose_outbound_body
+        body = compose_outbound_body(await _biz_name(client, business_id), msg, include_optout=True)
+        went = await _text_each(client, business_id, contacts, yes, body)
+        counts = {k: went[k] for k in ("sent", "skipped", "failed", "not_yes")}
+        await _log_event(client, business_id, None, event, {"preview": body[:200], **counts})
+    logger.info(f"[ROUTE] {event} biz {business_id[:8]}: sent={counts['sent']} skipped={counts['skipped']} "
+                f"failed={counts['failed']} not_yes={counts['not_yes']}")
+    await _after_texts(business_id, counts["sent"])
+    return {"ok": True, **counts, "body": body, "sent_to": went["sent_to"], "failed_to": went["failed_to"]}
+
+
+async def said_yes_count(business_id: str, since: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """How many numbers on this business's list get its texts now: the
+    whole-list announcement's reach (broadcast_reach's said_yes, the same
+    rule). With `since` (an ISO time), `new` is how many of those first said
+    yes then or later: none of their yeses is older. `new` is None when that
+    part couldn't be read; the whole is None when the count couldn't be."""
+    import sms_alerts
+    async with httpx.AsyncClient() as client:
+        contacts, yes = await _bulletin_list(client, business_id)
+        if yes is None:
+            return None
+        now = ({normalize_phone(c.get("phone")) for c in contacts} - {""}) & yes
+        new: Optional[int] = None
+        if since:
+            before = (await sms_alerts.said_yes_to_texts(client, business_id, sorted(now), before=since)
+                      if now else set())
+            new = None if before is None else len(now - before)
+    return {"said_yes": len(now), "new": new}
 
 
 async def run_scheduled_announcement(biz: Dict[str, Any], action: Dict[str, Any]):

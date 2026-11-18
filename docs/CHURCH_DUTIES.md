@@ -106,7 +106,7 @@ route made stays (the switch, the card, the seat on that church, the keepers).
 | rooms | `church_spaces._access` | Booking straight away, approving, keeping the spaces; the Rentals list without one amount (`rental_list` in `me`). The Office's alone since the split (2026-11-02): every room is booked from one place | Fees, deposits and bills: the owner and Admins (`rentals` in `me` still means the page with its money); Member and Viewer logins still go by the Office area |
 | events | `church_event_signups._office` | The sign-ups' status, summary and each event's sign-ups | Prices, places, cancelling and the export: the owner and Admins (one PUT carries prices with the rest) |
 | events, outreach_nights | `church_spaces._access` (2026-11-17) | A room request: a Manager without `rooms` that holds either asks for a room as an office Member does (status `book: true, approve: false`), whatever its areas | Approving, the spaces, the Rentals list, amounts and an outside renter's email and phone: whoever does the rooms; the owner and Admins |
-| leaders_note | `church_leaders_note._access` | The draft and the send | Once a week; the leaders room as the list |
+| leaders_note | `church_leaders_note._access` | The draft and the send, and its short text to the leaders whose numbers said yes ("Text it too", 2026-11-17: no `weekly_text` needed, the same note to the same people) | Once a week; the leaders room as the list; announcements to the whole church stay `weekly_text`'s |
 
 A Manager no lane names keeps what its areas gave it: the duty's own area decides, as `holds()`
 says. Event sign-ups were the one job whose old area (the Office) isn't its duty's (Website &
