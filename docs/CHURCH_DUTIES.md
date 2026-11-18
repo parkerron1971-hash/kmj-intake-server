@@ -136,8 +136,34 @@ Worship & media alone).
   themselves up there, with the page's address (`events_url_for_site`). Sunday's own places are
   Who serves when's: Chief points there (its Ask reaches each person's phone), never at a text to
   the whole church, which is the Office's weekly text.
-- **Not done:** Who serves when (`sunday_planning`) schedules Sundays only; an event's or an
-  outreach night's volunteers aren't on it.
+- **Done since (same day, below):** Who serves when takes an event date that isn't a Sunday.
+
+### Event dates on Who serves when (2026-11-17)
+
+Kevin: "build that", about Laquesha scheduling greeters, ushers, parking, kids and hospitality for
+a Thursday outreach night, a Saturday event or a Wednesday Bible study.
+
+- **Who:** whoever changes the Volunteers' teams (`serve_schedule`, the owner, an Admin) adds an
+  event date (`POST /planning/dates`), picked from an upcoming Services & Events entry
+  (`GET /planning/events`: not a Sunday, not past, not already on) or typed, and takes it off while
+  nobody was asked (`DELETE /planning/dates/{id}`). ChurchSavvy's scheduler and a Manager with
+  neither duty hear `serve_schedule`'s refusal; a booth volunteer and a viewer are refused as before.
+- **What it is:** a `worship_services` row of kind `event` (`serve_dates`,
+  `supabase/APPLY-2026-11-17-event-volunteer-dates.sql`): no order of service, never a template, an
+  optional place and the entry it came from. Only the Volunteers' teams serve it: ChurchSavvy's
+  door doesn't list it and its teams are never asked, offered or filled for it
+  (`sunday_planning.serves`). It isn't one of a team's Sundays a month.
+- **ChurchSavvy never sees it:** every read of the Sunday plans adds `serve_dates.plans_only()`
+  (`worship_show_router` list, one service, save, delete and the lobby's next service;
+  `sunday_order`'s order, Today and upcoming; the leaders note; the monthly report; the
+  countdown's count; the work checks' plans). A new plan reader must add it too.
+- **The member hears the real day:** the ask, My serving, the pack, the .ics, the alerts and the
+  email link say "Thursday, Nov 19" and the event's name, never Sunday; "I can do another Sunday"
+  isn't offered for an event date.
+- **My week:** `job_serve_schedule` still judges Sunday alone and says the week's event dates beside
+  it ("…, and 4 of 6 for Thursday's Outreach night").
+- **Switch:** `CHURCH_EVENT_VOLUNTEERS` (off | owner | on, owner by default: the platform owner's
+  own church). Event dates already made stay whatever it says.
 
 ### Background checks (2026-11-02)
 

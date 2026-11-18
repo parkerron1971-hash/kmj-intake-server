@@ -131,7 +131,7 @@ def _claims(token: str, ask: bool = True) -> Dict[str, Any]:
     if not claims:
         raise HTTPException(410, "This link has run out. Your church can send you a new one.")
     if ask and not claims.get("a"):
-        raise HTTPException(404, "This link doesn't open a Sunday.")
+        raise HTTPException(404, "This link doesn't open a day to serve.")
     return claims
 
 
@@ -223,11 +223,13 @@ def view(token: str) -> Dict[str, Any]:
         raise
     at: datetime = a["at"]
     free = [{"id": f["id"], **_when(f["at"])} for f in ss.free_sundays(biz_id, cid, at.tzinfo, at)] \
-        if a["status"] in ("asked", "no") and not a["cover"] else []
+        if a["status"] in ("asked", "no") and not a["cover"] and not a.get("event") else []
     out["ask"] = {
         "id": a["id"], "status": a["status"], "cover": a["cover"], "cover_from": a["cover_from"],
         "place": a["place"], "team": a["team"], "title": a["title"], "asked_by": a["asked_by"] or None,
         "leader": a["leader"], "arrive": _arrive(at, a.get("call_time")), "past": a["past"], **_when(at),
+        # The day's own name ("Thursday" for an outreach night: serve_dates), and where an event date is.
+        "weekday": at.strftime("%A"), "event": bool(a.get("event")), "where": a.get("where") or "",
         "with": [{"name": w["name"], "place": w["place"], "status": w["status"]} for w in a["with"]],
         "free": free,
         # For "Add to my calendar": from when they're due until the service is under way.

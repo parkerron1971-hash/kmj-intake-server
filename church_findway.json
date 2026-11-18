@@ -1069,13 +1069,15 @@
        "sees": [
         "office"
        ],
-       "what": "Fill the volunteer teams’ places for the next five Sundays.",
+       "what": "Fill the volunteer teams’ places for the next five Sundays and for events that aren’t on a Sunday.",
        "words": [
         "volunteer schedule",
         "volunteers schedule",
         "who volunteers",
         "usher schedule",
-        "greeter schedule"
+        "greeter schedule",
+        "event volunteers",
+        "outreach night volunteers"
        ],
        "answers": [
         {
@@ -1107,6 +1109,18 @@
           "whole sunday",
           "all the teams",
           "everyone serving"
+         ]
+        },
+        {
+         "id": "schedule-volunteers-for-an-event-that-isnt-on-sunday",
+         "q": "Schedule volunteers for an event that isn’t on Sunday",
+         "a": "Press Add an event date, then pick the event from Services & Events or choose Type one in and give its name, day and start time. It shows beside the Sundays and only the volunteer teams serve it, so tap an open spot to ask someone or press Fill.",
+         "words": [
+          "outreach night volunteers",
+          "saturday event volunteers",
+          "bible study volunteers",
+          "event volunteer schedule",
+          "not on sunday"
          ]
         }
        ]

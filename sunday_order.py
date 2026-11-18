@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 import sb_clients
+import serve_dates as sd
 import sunday_planning as sp
 from auth_supabase import AuthedUser, require_user
 from sunday_planning import _gate, _ids, _q, _read, _staff, _uuid
@@ -42,14 +43,18 @@ BEFORE = ("before", "before the service", "before service")
 AFTER = ("after", "after the service", "after service")
 
 
-def _service(biz: str, sid: Optional[str], zone) -> Dict[str, Any]:
+def _service(biz: str, sid: Optional[str], zone, plans: bool = True) -> Dict[str, Any]:
+    """One service (the next one without an id). plans: a Sunday plan,
+    never an event date (serve_dates), which has no order; the member's
+    pack reads either."""
+    only = sd.plans_only() if plans else ""
     if sid:
-        rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&archived_at=is.null"
-                     f"&select=id,title,starts_at,items,is_template&limit=1")
+        rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&archived_at=is.null{only}"
+                     f"&select=id,title,starts_at,items,is_template{sd.fields()}&limit=1")
     else:
         now = sp._now() - timedelta(hours=3)
-        rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
-                     f"&starts_at=gte.{_q(now.isoformat())}&select=id,title,starts_at,items,is_template"
+        rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false{only}"
+                     f"&starts_at=gte.{_q(now.isoformat())}&select=id,title,starts_at,items,is_template{sd.fields()}"
                      f"&order=starts_at.asc&limit=1")
     if not rows or rows[0].get("is_template"):
         raise HTTPException(404, "That service isn't here")
@@ -58,7 +63,7 @@ def _service(biz: str, sid: Optional[str], zone) -> Dict[str, Any]:
 
 def _upcoming(biz: str, zone) -> List[Dict[str, Any]]:
     now = sp._now() - timedelta(hours=3)
-    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false{sd.plans_only()}"
                  f"&starts_at=gte.{_q(now.isoformat())}&select=id,title,starts_at&order=starts_at.asc&limit={UPCOMING}")
     out = []
     for r in rows:
