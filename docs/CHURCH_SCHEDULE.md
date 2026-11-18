@@ -24,7 +24,7 @@ path for volunteers when their date is full or they already said yes to serve it
   `supabase/APPLY-2026-11-19-church-schedule.sql` (**not applied yet**), its real-Postgres
   check (`__tests__/church_schedule_db.mjs`), the export decision for the four new tables, and
   this doc.
-- **S1-2 and S1-3, in one PR** hold `church_schedule.py`: the switch, who is on the schedule,
+- **S1-2 and S1-3 (#1930, one PR)** hold `church_schedule.py`: the switch, who is on the schedule,
   asking, answering, withdrawing, the calendar and the notice days, behind the office routes of
   section 4.1 (all but the commitments routes). Owner-only by default, and every route answers
   404 until the migration is applied. **Nobody is told anything yet** (S1-4), the member app
