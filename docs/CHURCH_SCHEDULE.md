@@ -1,0 +1,989 @@
+# The leaders schedule: who is away, who says yes, and how many at once
+
+Kevin, 2026-11-18. The ask, in his words:
+
+- "I want to be able to build Leaders schedule. this is for when leaders are planning time off
+  and have certain obiligations so that we as a church can plan around meeting ... making sure
+  that everyone is not gone at the same time on our services. allowing only so many people off at
+  the same time. ... there should volunteers one and one for leadership ... divided amongs the
+  department to manage there department as well. so since [name] is over that she should be able
+  to see the full list of people on for the week so she can manage volunteer hours".
+- Shown the five calls the plan rests on (section 7): "Yes build to all five".
+
+**What it is.** A leader asks to be away: planned time off, another commitment, or "I can't make
+it". The ask goes to the person over them on the church's own leaders map, who says yes or not
+this one. A yes becomes an away date in `serve_away`, the one table Who serves when already
+reads, so the scheduler stops asking that person without learning anything new. The reason they
+gave stays private. Step 2 adds the limit: only so many of a group, or of a department, away on
+one service date; days nobody takes off; two people who can't be away together; and the same
+path for volunteers when their date is full or they already said yes to serve it.
+
+**Where it stands (2026-11-18).** PR S1-1 holds step 1's tables and nothing else:
+`supabase/APPLY-2026-11-19-church-schedule.sql` (**not applied yet**), its real-Postgres check
+(`__tests__/church_schedule_db.mjs`), the export decision for the four new tables, and this
+doc. **No code reads the tables.** Sections 3 to 6 are the plan for the PRs still ahead (S1-2
+to S1-7, then step 2), not a description of code that exists. Section 7 is what was decided.
+
+**Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
+away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
+Chief has them doing, `docs/CHURCH_LEADERS_STEP2.md`) and to `member_asks` (`member_asks.py`:
+a member asks the church for a room, help, a visit). None reads or writes another.
+
+**Rule code reads the church's data, never a title.** Who is over whom comes from
+`church_over.above`; who is on the schedule from the roles, groups, departments and seats the
+church set up, plus its own add and remove list. No title word or role key decides anything
+(`test_church_no_title_words.py`'s rule). Tests use the four fixture churches in
+`__tests__/church_three.py`.
+
+**Line references.** Every `path:line` below was read at `a73eb5c6` (2026-11-18), and each
+names its function, which is the durable part. Main has moved twice since (#1926, #1927). The
+references marked `f859d05a` were corrected in S1-1; for the rest, these are the shifts from
+`a73eb5c6` to `f859d05a`:
+
+| File | Shift |
+|---|---|
+| `kmj_intake_automation.py` | +5 after line 462, +9 after 996, +22 after 1888 |
+| `church_over.py` | +1 after line 272 |
+| `church_duties.py` | +13 after line 463, +14 after 845, +15 after 984 |
+| `account_lifecycle.py` | +4 after line 310, +5 after 744, +10 after 947 |
+| `chief_of_staff.py` | +1 after line 263, +2 after 423, +6 after 6704, +7 after 12446, +16 after 15907 |
+| `action_registry.py` | +11 after line 602 |
+| `chief_areas.py` | +4 after line 110 |
+| `.env.example` | +9 after line 44 |
+
+`__tests__/test_sample_church_no_sends.py` gained 3 lines after line 165, below the `TICKS`
+neighbours cited. No other file cited here changed between the two.
+
+---
+
+## 1. Findings that shape the design
+
+### 1.1 `serve_away` today
+
+- **Shape** (`supabase/APPLY-2026-10-23-sunday-planning.sql:86-96`): `id, business_id, contact_id, starts_on, ends_on, note text default '' (<=100), created_at`; check `ends_on >= starts_on and ends_on - starts_on <= 366`; index `serve_away_by_person (business_id, contact_id, ends_on)`.
+- **Trigger** `serve_same_business` (rewritten in `APPLY-2026-10-23-serving-member.sql:33-70`) only checks the contact is the church's. It fires before every insert and every update of a row (no column list), so any later update of a `serve_away` row looks its person up again. RLS on, no policies.
+- **Writers** (only two):
+  - `sunday_serving.add_away(biz, cid, start, end, note="")` `:467-484`. No past dates, 366 days at most, `MAX_AWAY = 20` open rows a person.
+  - `sunday_serving.drop_away` `:487-490` deletes by `id + business_id + contact_id`.
+  - Both are called only from `member_portal_serving.py:895-904`.
+- **The note is never written.** The route passes only `"start", "end"` (`:897`), so `serve_away.note` is `''` everywhere. "Never copy the reason into note" costs nothing.
+- **`add_away` never touches `serve_assignments`.** Someone who said yes and then adds away dates keeps their place.
+- **Readers** (none selects `kind` or `ask_id`, so two new nullable columns break nothing):
+
+| Reader | Where | What it does |
+|---|---|---|
+| `sunday_planning._Board.__init__` | `:932-933` | one read per board, `select=contact_id,starts_on,ends_on,note` |
+| `_Board.is_away` | `:946-948` | feeds `candidates` `:974-979`, `do_ask` `:1309` (409 "is away that Sunday") and `do_fill` `:1428` |
+| `GET /planning/schedule` | `:1018-1026` | returns `away: [{contact_id, name, starts_on, ends_on}]` to every Planning reader |
+| `sunday_serving.mine` | `:101-102` | their own chips |
+| `sunday_serving.free_sundays` | `:305` | "I can do another Sunday" |
+| `church_serving._sunday_spans` | `:456-474` | a yes on an away day earns no hours |
+
+- **Privacy consequence:** an approved leader's away fact already shows by name and dates on `/planning/schedule`. That is allowed. A pending ask must not be merged into `board.away`.
+- **Lifecycle:** `serve_away` is in `account_lifecycle.BUSINESS_CHILD_TABLES` `:256` and `_IMPORT_SKIP` (the block at `:851`, f859d05a). The export carries its two new columns; it is not re-imported.
+
+### 1.2 `church_over`: who is over a contact
+
+- `me` / `who` is `{kind: 'login'|'person', id}` (`church_over.py:84-88`, `who()` `:200`, `parse_for` `:208`).
+- **`above(ch, who)` `:911-919` / `_above` `:930-975` is the right function for "who says yes".** It returns nearest first; `[]` only at the top.
+
+**(a) A ministry leader (person)** `:949-975`
+- `church_leader_tasks.overseer` (`:789-814`) gives the first step of `church_map.chain_for` (`church_map.py:445-524`) where the map is open: the department's overseer, then the item's department leader then overseer, then `answers_to_contact_id`, then `church_roles.chain_above`.
+- With the map closed it is `chain_above` alone.
+- A group leader with no role uses `clt.group_department` `:817-836`.
+- A step can hold **several** people (`:964-974`).
+- A step whose person has an office login becomes that login; one who is the owner's identity becomes the owner's login.
+- Nobody found: `_top`, the owner's login (`:922-927`).
+
+**(b) An office login** `:931-941`
+- A Manager not over the lanes: `church_duties.manager_holders(b, "oversee_lanes")` (`church_duties.py:749`), else the owner.
+- An Admin, or the login over the lanes: the owner.
+- **A person who has an office login is routed as that login** (`:947-948`), even if they also lead a department.
+
+**(c) Directly under the owner**
+- Seniors (`Church.seniors` `:452-465`) go to the owner (`:945-946`).
+- The owner's own identity (`Church.top` `:438-450`) gets `[]`.
+
+Other facts:
+- `is_over` (`:806-813`) and `under` (`:794-803`) walk down. They are heavier and answer "anyone over them", which is wider than the privacy rule allows. Do not use them to decide who may answer an ask.
+- **Guarded people** (`Church.guarded` `:523-527`, `is_guarded` `:816-829`): no office standing is over a shepherd or a senior. This matters for step 2's "goes up to the office overseer".
+- **Office overseer:** role keys from `church_duties.overseer_keys` `:477-491` (the map's `office_overseer_roles`, else the Executive Pastor key); the logins are `Church.exec_users` `:280-292`. `Church.over_lanes(uid)` `:275-278` is true for the owner and Admins too, so use `manager_holders(b, OVERSEE)` for "the office overseer" alone.
+
+### 1.3 Seat to contact
+
+- `Church.login_person` `:388-414`: user id to contact id for the owner and **every** active seat.
+  - `business_users.contact_id` first, else the one contact the seat's `invited_email` names (several: the one whose first name the seat gave). One batched read (`_by_email` `:340-354`).
+  - The owner: `settings.church_owner_contact_id` (`owner_pick` `:370-386`), else the sign-in email.
+- `Church.person_login` `:416-419`: contact to office login (Admin and Manager only).
+- `Church.owner_person` `:421-427`, `owner_how` `:429-436`.
+- `business_users_router.seat_person` `:191-198` does the same match for one seat and **writes** the tie (`_keep_contact` `:177-188`); `chief_areas.who_for` `:564-584` calls it. `docs/CHURCH_ASSIGNMENTS.md:149-153` says not to use it in rule code. Use `Church.login_person`.
+- **A seat that matches no contact has no person.** `serve_away.contact_id` is NOT NULL, so that login cannot hold an away fact.
+
+### 1.4 The switch pattern
+
+- `church_over.mode / open_to / church_open / office_open` `:134-166`; the same shape is in `church_map.py:79-111`, `church_leader_tasks.py:105-131` and `serve_dates.py:57-81`.
+- `owner` means `member_asks.platform_church(biz)` (`member_asks.py:193-213`): one businesses read plus the owner's email, kept ten minutes per replica.
+- Sweeps read the switch on the worker; `.env.example:718-729` (f859d05a) says "set it on BOTH services".
+- Owner-mode sweeps scope with `church_assignments._open_churches` `:1271-1287`, which also drops sample churches.
+- **"Is the migration there" probe:** `serve_dates.ready()` `:85-110` (cached 600 s yes, 60 s no, `_FORCE` for tests). `conftest.py:169-178` pins `_FORCE = False` so every other suite reads as before the migration. Our scheduler hook needs the same pin, or the default `owner` mode adds `platform_church` reads to every Planning test.
+
+### 1.5 `leaders_room_people` and its cost
+
+- `member_portal_messaging.leaders_room_people` `:177-217`:
+  - leaders of active groups;
+  - holders of an active role that leads (`can_lead` where the map is open, else `LEADER_JOBS` `:174`, or a role another role reports to);
+  - on an open map, each active department's leader and overseer who hold a role;
+  - **already the office**: `office_contacts` `:220-244` (Admin and Manager seats as their contact).
+- It returns a flat list with no group label. `church_leader_tasks.leaders` `:333-361` subtracts `office_contacts` to get "leaders who aren't office". The owner is in the list only if he holds a leading role.
+- **Cost, uncached:** `group_members` (limit 5000), `groups`, `church_leader_roles`, `cr.defs`, `church_map.opened` (5 reads unless inside `church_map.once()` `:277-291`), `business_users`, plus one `contacts` read per untied seat. About 11 calls plus one per untied seat.
+- Too heavy to run on every Lead-tab page view. Keep the roster 60 s per replica, as `church_duties.CACHE_SECONDS = 60` (`:538`) does.
+
+### 1.6 Notify patterns
+
+**To a contact**
+- `member_push.send(business, kind, title=, body=, url='/my…', contact_ids=[…], ref_id=, tag=)` `:277-293`.
+  - Never raises; returns phones reached.
+  - 0 when the church hasn't switched that kind on (`church_kinds` `:112`), or `ref_id` was already claimed (`member_push_sends`).
+- **Callers never call `church_threads.record` themselves.** `_send` does it (`:325-331`) for `THREAD_KINDS` (`church_threads.py:92-93`, which includes `serving`), with one row per contact and identical keys (`:256-291`).
+- Email fallback: `church_leader_tasks.deliver` `:551` with `render_email` `:540`, reply-to `_office_email` `:525`.
+- "Email when the phone wasn't reached" is `sunday_serving_alerts.tell` `:196-214` (`if email_ok or not rang`).
+- `serving` is not in `QUIET_KINDS` (`member_push.py:103`), so the caller must check `member_push.quiet_hour(biz)` `:156` itself.
+
+**To a seat**
+- `push_notifications.send_to_user(uid, title=, body=, nav=, tag=, business_id=)` `:178`.
+- Email to `church_assignments._login_email(ch, uid)` `:1169-1180` (`None` means unread: don't claim), rendered with `church_office_tasks.render` `:178`, link `cot._link` `:138`. Worked example: `tell_raised` `:1183-1257`.
+- Claim before send, release on failure: `church_handovers._claim/_release` `:546-559`.
+
+**Sweeps**
+- Registered at `kmj_intake_automation.py:2039-2053` (f859d05a).
+- **Every `add_job` must be listed in `__tests__/test_sample_church_no_sends.py` `TICKS` (`:97-98` are the neighbours).**
+
+### 1.7 The Lead tab
+
+- `member_portal_lead.serve` `:660-731` dispatches on `selected` (tasks, sundays, families, groups, safety, prayer, a follow-up id).
+- `_context` `:639-657` sets per-request ContextVars (`SUNDAYS`, `PARTS`, `PAID_BACK`, `TASKS`, `ASSIGN` `:59-76`).
+- `_seg` `:826-853` builds the switcher from them.
+- The best template is `member_portal_assign.py`:
+  - `view` `:144`, `section` `:375-397` (the switcher count; `None` while closed), `serve` `:400-423`;
+  - `_act` `:455-479`: `_signed_in`, preview never writes, `cfu.is_church`, switch or 404, `rate_limit.allow_strict("member_action", …)`, the form, the function in a thread, a 303 back with a short code;
+  - `_code` `:434-452`: refusals become codes, never words in the URL.
+- `_signed_in` is `member_portal_church.py:1135-1151`; the Origin / Sec-Fetch-Site refusal lives under it (`member_portal_assign.py:33-36`).
+- Routers are included at `kmj_intake_automation.py:607-610` (f859d05a).
+- **Who gets the tab:** `member_portal._leads` `:1197-1219` (a role, a led group, a tasks section, or serve-mode parts). An office login's person with no role or group gets no Lead tab today.
+
+### 1.8 Tests and lints a new church module must pass
+
+- **Fixtures:** `__tests__/church_three.py` `build(monkeypatch, map_on=…, filled=…)`: four churches in one fake PostgREST (`ThreeDB` `:104`, `MAX_ROWS = 1000`), with `db.who[church][handle]` and `db.label`. New tables are added as `d.t["…"] = []` (`test_church_handovers.py:54-57`).
+- **Office app fixture:** `test_church_handovers.py:84-107` (`dependency_overrides[sb_clients.authed_request]`, `as_(app, biz, handle)`).
+- **Member app fixture:** `test_member_portal_assign.py:67-104` (fake `_shell`, patched `mpc._signed_in`, `page()`, `text()`).
+  - It asserts no ids and no office words on screen: `UUID` and `OFFICE_WORDS` regexes `:47-48`.
+  - It asserts cross-site POST is refused, `Origin: null` is allowed, and the preview never writes.
+- **RPC fake precedent:** `test_church_duties.py:77` (`/rpc/church_duty_set`).
+- **Real-Postgres check:** `__tests__/church_assignments_db.mjs` is the shape; every `*_db.mjs` runs in the `test-db` job of `.github/workflows/ci.yml` (PGlite 0.5.8). This feature's is `__tests__/church_schedule_db.mjs` (S1-1).
+- **Lints:**
+  - `test_church_no_title_words.py` is a pinned list of named readers, not a general scan. The rule still binds: decide from data, never from a title word or role key.
+  - `test_business_access_ratchet.py` (`ownership_sweep.py`): an office handler taking a business id must reach a gate that raises. `church_assignments._church_from_body` `:299-307` (`business_access.assert_access`) qualifies.
+  - `test_export_import.py:205` (`test_every_business_scoped_table_is_a_decision`) scans `create table … business_id` in the migrations. Every new table must be in `BUSINESS_CHILD_TABLES` or `EXPORT_EXCLUDED` (`account_lifecycle.py:100`, `:196`). Step 1's four are in `EXPORT_EXCLUDED` (S1-1).
+  - `test_sample_church_no_sends.py` `TICKS`.
+  - `test_brand_voice.py` covers the public site only.
+
+### 1.9 Service days
+
+- No per-church service weekday exists. The weekly service is assumed to be Sunday:
+  - `sunday_planning._sunday_on_or_after` `:847`;
+  - `POST /planning/sundays` `:1033-1060` (adds `worship_services` rows on Sundays at a typed time, default 10:30);
+  - `church_work_checks.py:213, :307` ("last Sunday");
+  - `serve_dates.is_sunday` `:135`.
+- A dated occasion that isn't Sunday is a `worship_services` row with `kind='event'` (`serve_dates.py:1-33`); only the Volunteers' teams serve it (`sunday_planning.serves` `:902-905`).
+- **Two clock helpers:** `sunday_planning._zone` (`:360`) and `church_work_checks.church_zone` (`:71-81`, also `Church.tz` at `church_over.py:305-312`). Both end at `business_marketing.business_tz` (`:232`).
+
+### 1.10 Departments and Sunday teams
+
+- A Sunday team is a `groups` row of `kind='team'` plus a `serve_teams` row; its leaders are `group_members.role='leader'` (`sunday_leading.led_teams` `:26-39`).
+- It hangs from a department as a `group` unit (`church_department_units.group_id`, "any kind, serve teams and ministries too", `APPLY-2026-11-04-church-map.sql:~283`), or by name as a `serve_option` label unit.
+- Lookup: `Map.department_of(kind, ref)` (`church_map.py:165-173`).
+- #1719's fallback for a team with no leader is `church_map.team_head(m, defs, holders, team)` `:426-441`: the department's leader while they hold a role that leads, else its overseer while they hold one that oversees.
+
+---
+
+## 2. Data model
+
+### 2.1 Step 1: `supabase/APPLY-2026-11-19-church-schedule.sql` (S1-1; not applied yet)
+
+The file is the source; this is the map of it. `serve_away` stays the one table of facts
+("this person is away these dates") and everything that reads it today reads it as before.
+
+| Object | What it holds |
+|---|---|
+| `church_away_asks` | One row an ask: the person, the dates (366 days at most), the `kind` (`time_off`, `commitment`, `cant`), a private `reason` (500 at most), who covers (`cover_contact_id` or a typed `cover_name`, never the asker), the group they were on when they asked (`grp`), the department, who it went to (`to_user_id` or `to_contact_id`, never both), the `state` (`asked`, `yes`, `no`, `withdrawn`), who decided (`decided_by_user_id` or `decided_by_contact_id`, never both), `decided_at`, `decided_note` (300 at most), `withdrawn_at`, the `flags`, and three marks for the notices (`told_at`, `answer_told_at`, `nudged_at`) |
+| `church_away_settle(p_business_id, p_ask_id, p_state, p_by_user, p_by_contact, p_note)` | One decision in one transaction (the precedent is `church_duty_set`, `APPLY-2026-11-01-church-duties.sql:51-89`). Answers `{"changed": bool, "ask": row}`, or null when that church has no such ask |
+| `serve_away.ask_id`, `serve_away.kind` | The ask a fact came from and that ask's kind. Both null on every row that exists and on every away date added the way it always was |
+| `church_away_commitments` | Something that repeats: a label, a weekday (1 Monday to 7 Sunday), `weekly`, `every_other` (counted from `starts_on`, which must fall on that weekday) or `month_nth` (`nth` 1 to 5, 5 meaning the last), from when, until when |
+| `church_schedule_people` | The church's own add list (with the group, `leaders` or `office`) and remove list; one row a person |
+| `church_schedule_settings` | One row a church: `notice_days` (14 by default, 0 to 90) |
+
+**What `church_away_settle` does**
+
+| Asked for | The ask is | Written | Answers |
+|---|---|---|---|
+| `yes` | `asked` | state `yes`, `decided_at`, who decided, the note, `answer_told_at` cleared; **one** `serve_away` row: the ask's church, person, dates and kind, `note` `''`, `ask_id` | `changed: true` |
+| `no` | `asked` | state `no`, `decided_at`, who decided, the note; no fact | `changed: true` |
+| `yes` or `no` | anything else | nothing | `changed: false`, the ask as it stands |
+| `withdrawn` | `asked` or `yes` | state `withdrawn`, `withdrawn_at`; its fact, if any, deleted | `changed: true` |
+| `withdrawn` | `no` or `withdrawn` | nothing | `changed: false` |
+| anything | not this church's, or not there | nothing | null |
+| a state that isn't one of the three, or null | | nothing | raises |
+
+The row is locked (`for update`) before it is read, so two answers at once land one after the
+other and the second gets `changed: false`. The reason is never copied: the fact's `note` is
+always `''`.
+
+**What a state holds** (`church_away_asks_decided`): `asked` has no `decided_at` and no
+`withdrawn_at`; `yes` and `no` have a `decided_at` and no `withdrawn_at`; `withdrawn` has a
+`withdrawn_at`, and keeps its `decided_at` when it had been a yes.
+
+**Guards**
+
+- `church_away_asks_same_business` (before insert, and before an update that names one of
+  `business_id, contact_id, cover_contact_id, to_contact_id, decided_by_contact_id,
+  department_id`): the asker, who covers, who it goes to, who answered and the department are
+  the ask's own church's; an ask never changes its church or its person. Each is checked only
+  when a write names them, so a foreign key setting one of them null checks nothing.
+- `serve_away_ask_guard` (before insert, and before an update of `ask_id`, `business_id` or
+  `contact_id`): the ask a fact names is the same church's and the same person's.
+- `serve_away_one_per_ask` (unique, where `ask_id is not null`): one fact an ask.
+- `church_away_asks_one_open` (unique on church, person, start, end, where `state = 'asked'`):
+  a double press never makes two asks for the same days. Once answered, the days can be asked
+  again.
+- `church_schedule_person_same_business`: the person on the list, and the person a commitment
+  is, are the church's own, and the row stays with its church.
+
+**Server-only.** All four tables: RLS on, no policies, `anon` and `authenticated` revoked,
+`service_role` granted. All four functions: execute revoked from `public`, `anon` and
+`authenticated`; `church_away_settle` granted to `service_role`. It is not `security definer`:
+it runs as the server's role, which already has every table it touches.
+
+**What goes with what.** A church deleted takes everything. A person deleted takes their asks,
+their facts, their commitments and their place on the lists. A login deleted leaves the ask
+with nulls in its place (`made_by`, `to_user_id`, `decided_by_user_id`); so does a person who
+covered, answered or was asked, and a department. An ask deleted by hand leaves its fact as a
+plain away date (`on delete set null`).
+
+**How it goes in.** One transaction, `lock_timeout` 5s, safe to run twice, ends with
+`NOTIFY pgrst`. `serve_away`'s foreign key and check go in `NOT VALID`: its two new columns are
+null on every existing row, so nothing old is scanned under the lock and every row written
+from then on is checked. The file's own Check and Rollback blocks are at its end.
+
+**Changed from the draft in the build spec, and why** (the check rehearses red without each of
+the first four):
+
+1. **A null state is refused by name.** The draft tested `p_state not in (…)`, which is null for
+   a null state, so the function fell through to an update that set `state` to null and failed
+   on the column's NOT NULL with a message nobody would read as "bad state". Now
+   `p_state is null or p_state not in (…)`.
+2. **`church_away_asks_decided` pins `withdrawn_at` too.** The draft's third arm was
+   `or state = 'withdrawn'`, which let a withdrawn row have no `withdrawn_at`, and let an asked
+   or answered row carry one. It now says what `church_away_settle` writes for each state.
+3. **An ask stays with its person.** The draft re-checked a changed `contact_id` against the
+   church; the trigger now refuses the change. Nothing moves an ask to another person, and
+   allowing it would let a fact name an ask that is no longer its own person's.
+4. **`serve_away_ask_guard` also fires when a fact's `business_id` or `contact_id` is
+   updated.** The draft fired on `ask_id` only, so a fact with an ask could be moved to another
+   person without the guard looking.
+5. **`NOTIFY pgrst, 'reload schema'` after the commit**, as the files since 2026-11-17 do: the
+   API has to see a new function before `/rpc/church_away_settle` answers.
+6. **The header no longer says "nothing dropped".** The file drops and re-makes its own
+   triggers, as every file here does. It now says no table, column or row is dropped.
+7. **The Check block also asks about `anon`, `service_role` and the old rows**, and the table
+   comment says the table is unrelated to `church_map_asks` and `member_asks`. The Check and
+   Rollback blocks were run as written: the rollback leaves `serve_away` and the catalog as they
+   were before the file, keeps every away row, and the file applies again after it.
+
+**Checked and kept as drafted** (run on PGlite 0.5.8, which carries PostgreSQL 18.3; production
+may be an older Postgres, and none of this is new behaviour)
+
+- `on conflict (ask_id) where ask_id is not null do nothing` does infer the partial unique index
+  `serve_away_one_per_ask` (run for real: a yes on an ask that already has a fact lands and
+  leaves one fact).
+- `old.…` read inside an insert trigger's `tg_op = 'INSERT' or …` test is null, not an error.
+- **`on delete set null` on `serve_away.ask_id` is safe with `serve_same_business`.** That
+  trigger looks the person up on every update, and a set-null is an update, so the worry was a
+  person's delete being refused when their ask happened to go before their fact. It isn't:
+  Postgres runs the foreign keys' own deletes first and the set-nulls they queue afterwards, by
+  which time the fact is gone by `serve_away`'s own keys. The check deletes a person and a
+  church with an approved ask in both orders the foreign keys can fire.
+- The trigger column lists: each foreign key that sets a column null updates only that column;
+  for `cover_contact_id`, `to_contact_id`, `decided_by_contact_id` and `department_id` the
+  trigger fires and finds nothing to check, and for the three login columns it doesn't fire.
+
+**Not solved by the tables** (for the PRs that write the code)
+
+- **Withdrawing a yes tells whoever said it** (section 5), and no column claims that notice:
+  `told_at` is "whoever it went to was told of the ask" and `answer_told_at` "the asker was told
+  the answer". S1-4 either sends it straight after the write (never retried) or adds a mark.
+- **A fact taken off the old way leaves its ask at `yes`.** `sunday_serving.drop_away` deletes
+  the `serve_away` row; until S1-6 teaches it to withdraw the ask instead, and whenever the
+  switch is closed, the ask stays a yes with no fact. `church_away_settle` will not make the
+  fact again, on purpose. Anything that shows "away" must read the fact, not the ask's state.
+- `church_away_asks_untold` (`where told_at is null`) keeps every ask that was answered or
+  withdrawn before it was told. The sweep's read needs its own state filter.
+
+### 2.2 Step 2: `supabase/APPLY-2026-11-XX-church-schedule-limits.sql` (the plan for S2-1; not a file yet)
+
+This is a draft, kept here until S2-1 ships it as its own file with its own PGlite check. It carries the two changes S1-1 made to `church_away_settle` (a null state is refused by name; it never makes a fact again for an ask that is already a yes). It was rehearsed once on PGlite over the step 1 file on 2026-11-18 (see the note under it); S2-1 still reads every statement again.
+
+```sql
+-- APPLY-2026-11-XX-church-schedule-limits.sql
+--
+-- The leaders schedule, step 2: the limit (church_schedule_limits.py;
+-- docs/CHURCH_SCHEDULE.md). Kevin, 2026-11-18: "making sure that everyone is
+-- not gone at the same time on our services. allowing only so many people off
+-- at the same time."
+--
+--   church_schedule_settings.leaders_limit / office_limit
+--                           how many of each group may be away on one service
+--                           date (null = max(1, people / 4), worked out)
+--   church_schedule_settings.service_weekdays
+--                           the church's usual service days, 1 Monday … 7
+--                           Sunday (null = worked out from its own plans,
+--                           else Sunday)
+--   church_schedule_department_limits   one number a department
+--   church_protected_days   a day nobody takes off (a date and its name)
+--   church_away_pairs       two people who can't be away together
+--   church_away_asks.excepted       the flags a yes was given over: the
+--                           exception, by the owner or whoever oversees the
+--                           office (decided_by says who)
+--   church_away_asks.team_group_id  a volunteer's ask: the Sunday team whose
+--                           leader it went to
+--   church_away_settle()    takes the exception with the yes (one more
+--                           argument, '{}' by default)
+--
+-- Server-only, one transaction, lock_timeout 5s, safe to run twice. The one
+-- thing replaced is church_away_settle (dropped and made again here, in this
+-- transaction, so there is never two of it for PostgREST to choose between);
+-- step 1's six-argument calls keep working.
+begin;
+
+set local lock_timeout = '5s';
+
+alter table public.church_schedule_settings
+  add column if not exists leaders_limit smallint,
+  add column if not exists office_limit smallint,
+  add column if not exists service_weekdays smallint[];
+
+alter table public.church_away_asks
+  add column if not exists excepted text[] not null default '{}',
+  add column if not exists team_group_id uuid;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'church_schedule_settings_limits'
+                   and conrelid = 'public.church_schedule_settings'::regclass) then
+    alter table public.church_schedule_settings add constraint church_schedule_settings_limits
+      check ((leaders_limit is null or leaders_limit between 1 and 99)
+             and (office_limit is null or office_limit between 1 and 99));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'church_schedule_settings_weekdays'
+                   and conrelid = 'public.church_schedule_settings'::regclass) then
+    alter table public.church_schedule_settings add constraint church_schedule_settings_weekdays
+      check (service_weekdays is null
+             or (cardinality(service_weekdays) between 1 and 7
+                 and service_weekdays <@ array[1, 2, 3, 4, 5, 6, 7]::smallint[]));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'church_away_asks_excepted'
+                   and conrelid = 'public.church_away_asks'::regclass) then
+    alter table public.church_away_asks add constraint church_away_asks_excepted
+      check (excepted <@ array['over_limit', 'protected_day', 'pair']::text[] and excepted <@ flags);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'church_away_asks_team_group_id_fkey'
+                   and conrelid = 'public.church_away_asks'::regclass) then
+    alter table public.church_away_asks add constraint church_away_asks_team_group_id_fkey
+      foreign key (team_group_id) references public.groups(id) on delete set null;
+  end if;
+end $$;
+
+create table if not exists public.church_schedule_department_limits(
+  department_id uuid primary key references public.church_departments(id) on delete cascade,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  at_most smallint not null check (at_most between 1 and 99),
+  set_by_user_id uuid references auth.users(id) on delete set null,
+  set_by_contact_id uuid references public.contacts(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  constraint church_schedule_department_limits_by_one
+    check (set_by_user_id is null or set_by_contact_id is null)
+);
+create index if not exists church_schedule_department_limits_by_church
+  on public.church_schedule_department_limits (business_id);
+
+create table if not exists public.church_protected_days(
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  day date not null,
+  name text not null check (char_length(btrim(name)) between 1 and 80),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists church_protected_days_one
+  on public.church_protected_days (business_id, day);
+
+create table if not exists public.church_away_pairs(
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  a_contact_id uuid not null references public.contacts(id) on delete cascade,
+  b_contact_id uuid not null references public.contacts(id) on delete cascade,
+  note text check (note is null or char_length(note) <= 140),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint church_away_pairs_ordered check (a_contact_id < b_contact_id)     -- one row a pair
+);
+create unique index if not exists church_away_pairs_one
+  on public.church_away_pairs (business_id, a_contact_id, b_contact_id);
+create index if not exists church_away_pairs_b on public.church_away_pairs (business_id, b_contact_id);
+
+-- A department's limit names this church's department; a pair, two of this
+-- church's people; a volunteer's ask, one of this church's groups. Each check
+-- sits under its own table test (PL/pgSQL doesn't short-circuit `and`).
+create or replace function public.church_schedule_limits_same_business() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if tg_table_name = 'church_schedule_department_limits' then
+    if not exists (select 1 from public.church_departments d
+                   where d.id = new.department_id and d.business_id = new.business_id) then
+      raise exception 'That department is not in this church';
+    end if;
+  end if;
+  if tg_table_name = 'church_away_pairs' then
+    if (select count(*) from public.contacts c
+         where c.id in (new.a_contact_id, new.b_contact_id) and c.business_id = new.business_id) <> 2 then
+      raise exception 'Both people are this church''s own';
+    end if;
+  end if;
+  if tg_table_name = 'church_away_asks' then
+    if new.team_group_id is not null
+       and (tg_op = 'INSERT' or new.team_group_id is distinct from old.team_group_id) then
+      if not exists (select 1 from public.groups g
+                     where g.id = new.team_group_id and g.business_id = new.business_id) then
+        raise exception 'That team is not in this church';
+      end if;
+    end if;
+  end if;
+  return new;
+end $$;
+revoke all on function public.church_schedule_limits_same_business() from public, anon, authenticated;
+
+drop trigger if exists church_schedule_limits_same_business on public.church_schedule_department_limits;
+create trigger church_schedule_limits_same_business
+  before insert or update of department_id, business_id on public.church_schedule_department_limits
+  for each row execute function public.church_schedule_limits_same_business();
+drop trigger if exists church_schedule_limits_same_business on public.church_away_pairs;
+create trigger church_schedule_limits_same_business
+  before insert or update of a_contact_id, b_contact_id, business_id on public.church_away_pairs
+  for each row execute function public.church_schedule_limits_same_business();
+drop trigger if exists church_away_asks_team_same_business on public.church_away_asks;
+create trigger church_away_asks_team_same_business
+  before insert or update of team_group_id on public.church_away_asks
+  for each row execute function public.church_schedule_limits_same_business();
+
+-- The decision, now carrying the exception a yes was given over. As in step
+-- 1, it never makes a fact again for an ask that is already a yes.
+drop function if exists public.church_away_settle(uuid, uuid, text, uuid, uuid, text);
+create or replace function public.church_away_settle(
+  p_business_id uuid, p_ask_id uuid, p_state text,
+  p_by_user uuid default null, p_by_contact uuid default null, p_note text default null,
+  p_excepted text[] default '{}')
+returns jsonb
+language plpgsql set search_path = public as $$
+declare
+  v public.church_away_asks;
+begin
+  if p_state is null or p_state not in ('yes', 'no', 'withdrawn') then
+    raise exception 'An ask is answered yes or no, or withdrawn';
+  end if;
+  select * into v from public.church_away_asks a
+   where a.id = p_ask_id and a.business_id = p_business_id for update;
+  if not found then
+    return null;
+  end if;
+  if (p_state in ('yes', 'no') and v.state <> 'asked')
+     or (p_state = 'withdrawn' and v.state not in ('asked', 'yes')) then
+    return jsonb_build_object('changed', false, 'ask', to_jsonb(v));
+  end if;
+  if p_state = 'withdrawn' then
+    update public.church_away_asks a
+       set state = 'withdrawn', withdrawn_at = clock_timestamp(), updated_at = clock_timestamp()
+     where a.id = v.id returning * into v;
+    delete from public.serve_away s where s.ask_id = v.id and s.business_id = v.business_id;
+  else
+    update public.church_away_asks a
+       set state = p_state, decided_at = clock_timestamp(), decided_by_user_id = p_by_user,
+           decided_by_contact_id = p_by_contact, decided_note = nullif(btrim(left(coalesce(p_note, ''), 300)), ''),
+           excepted = case when p_state = 'yes' then coalesce(p_excepted, '{}') else '{}' end,
+           answer_told_at = null, updated_at = clock_timestamp()
+     where a.id = v.id returning * into v;
+    if p_state = 'yes' then
+      insert into public.serve_away(business_id, contact_id, starts_on, ends_on, note, ask_id, kind)
+      values (v.business_id, v.contact_id, v.starts_on, v.ends_on, '', v.id, v.kind)
+      on conflict (ask_id) where ask_id is not null do nothing;
+    end if;
+  end if;
+  return jsonb_build_object('changed', true, 'ask', to_jsonb(v));
+end $$;
+revoke all on function public.church_away_settle(uuid, uuid, text, uuid, uuid, text, text[]) from public, anon, authenticated;
+grant execute on function public.church_away_settle(uuid, uuid, text, uuid, uuid, text, text[]) to service_role;
+
+do $$ declare t text; begin
+  foreach t in array array['church_schedule_department_limits', 'church_protected_days', 'church_away_pairs'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon, authenticated', t);
+    execute format('grant all on public.%I to service_role', t);
+  end loop;
+end $$;
+
+comment on column public.church_schedule_settings.leaders_limit is
+  'How many of the leaders group may be away on one service date. Null = max(1, people / 4).';
+comment on column public.church_schedule_settings.office_limit is
+  'How many of the office group may be away on one service date. Null = max(1, people / 4).';
+comment on column public.church_schedule_settings.service_weekdays is
+  'The church''s usual service days (1 Monday … 7 Sunday), for dates with no service planned yet. Null = worked out from its own plans, else Sunday.';
+comment on table public.church_schedule_department_limits is
+  'How many of a department''s people may be away on one service date. No row = no limit. Server-only.';
+comment on table public.church_protected_days is
+  'A day nobody takes off. Only the owner or whoever oversees the office says yes to an ask on one. Server-only.';
+comment on table public.church_away_pairs is
+  'Two people who can''t be away together (a_contact_id < b_contact_id, one row a pair). Server-only.';
+comment on column public.church_away_asks.excepted is
+  'The flags (over_limit, protected_day, pair) a yes was given over: the exception. decided_by says who gave it.';
+comment on column public.church_away_asks.team_group_id is
+  'A volunteer''s ask: the Sunday team whose leader it went to.';
+
+commit;
+
+notify pgrst, 'reload schema';
+
+-- Check / Rollback: same shape as step 1 (three tables true/0/false; one church_away_settle, seven arguments).
+```
+
+**Rehearsed 2026-11-18** (a one-off run on PGlite 0.5.8, over the step 1 file; not a kept
+check): the draft applies twice; one `church_away_settle` is left, with seven arguments; a
+six-argument call still answers; a yes records `excepted` and a no clears it; an exception that
+isn't one of the ask's flags, or is `serving`, is refused; a null state is refused by name; a
+team, a pair or a department of another church is refused; a pair is ordered and unique; one
+protected day a date; weekdays outside 1 to 7, an empty list and a limit of 0 are refused; the
+three tables and both functions are server-only; a person in a pair and the church delete
+cleanly. S2-1 turns that into `__tests__/church_schedule_limits_db.mjs`.
+
+### 2.3 Lifecycle registration
+
+All in `account_lifecycle.EXPORT_EXCLUDED` (`:100`), each with a reason sentence. Step 1's four
+went in with S1-1; step 2's three go in with S2-1.
+
+| Table | Reason, in short |
+|---|---|
+| `church_away_asks` | who it went to and who answered are sign-in user ids; a private reason and told marks a restore must not carry; cascade on business and person |
+| `church_away_commitments`, `church_schedule_people` | cite people by an id an import mints anew; the church sets them again |
+| `church_schedule_settings` | one number; set again |
+| step 2: `church_schedule_department_limits`, `church_protected_days`, `church_away_pairs` | same reasons |
+
+`serve_away` stays where it is (`BUSINESS_CHILD_TABLES`, exported, not re-imported). Its export
+now carries `ask_id` and `kind`: an id of an ask the export leaves out, and that ask's kind.
+Neither is the reason.
+
+---
+
+## 3. Module layout
+
+### 3.1 New files, step 1
+
+**`church_schedule.py`** (the engine and the office router, `APIRouter(prefix="/church", tags=["church"])`)
+
+```
+SWITCH = "CHURCH_SCHEDULE"; KINDS = ("time_off","commitment","cant"); GROUPS = ("leaders","office","volunteers")
+NOTICE_DAYS = 14; MAX_OPEN = 20; ROSTER_SECONDS = 60; _FORCE: Optional[bool] = None
+
+mode() -> str                          # off | owner | on; owner when unset
+open_to(user) -> bool                  # as church_over.open_to :139
+church_open(biz) -> bool               # member_asks.platform_church with `owner`
+office_open(user, biz) -> bool
+ready() -> bool                        # church_away_asks answers; serve_dates.ready's cache and _FORCE
+on(biz) -> bool                        # church_open(biz) and ready(); what every reader outside the routes asks
+
+settings(ch) -> {"notice_days": int}   # no row = 14; a failed read is a 503
+save_settings(ch, me, body) -> dict    # the owner, or whoever oversees the office
+
+class Roster: leaders: Set[str]; office: Set[str]; added: Dict[str,str]; removed: Set[str]
+    group_of(cid) -> Optional[str]; people() -> Set[str]
+roster(ch) -> Roster                   # inside church_map.once():
+                                       #   base = member_portal_messaging.leaders_room_people(ch.b)   (None = 503)
+                                       #   office = set(ch.person_login)
+                                       #   leaders = base - office, plus anyone in both who leads something
+                                       #   then adds (their grp) and removes
+roster_kept(biz) -> Optional[Roster]   # 60 s a replica (church_duties.CACHE_SECONDS); None on a failed read; for the member side
+set_listed(ch, me, contact_id, listed, grp=None) -> dict   # upsert or delete in church_schedule_people; forgets the kept roster
+
+office_overseers(ch) -> List[str]      # church_duties.manager_holders(ch.b, co.OVERSEE)
+person_of(ch, me) -> Optional[str]     # a person is themself; a login, ch.login_person
+goes_to(ch, asker_cid) -> Optional[Dict]   # co.above(ch, who(PERSON, cid))[0]; None only for the owner's own identity
+may_decide(ch, me, ask) -> bool
+sees_reason(ch, me, ask) -> bool       # the asker, or may_decide
+is_short(ch, starts_on, today) -> bool # starts_on < today + notice_days
+
+ask(ch, me, body, *, now=None) -> dict       # the one write of an ask (section 5); reads everything before it writes (cas._ready's rule :350)
+answer(ch, me, ask_id, yes, note=None) -> dict   # may_decide or 403; /rpc/church_away_settle; changed False = 409
+withdraw(ch, me, ask_id) -> dict             # the asker (or the login that made it); settle 'withdrawn'
+withdraw_fact(biz, cid, away_id) -> bool     # sunday_serving.drop_away: the row names an ask, so withdraw the ask
+shape(ch, me, row, names) -> dict            # the one place a reason can leave: None unless sees_reason
+mine(ch, me, now) -> List[dict]              # my asks, open first, 90 days back
+waiting(ch, me) -> List[dict]                # asks waiting for my yes
+calendar(ch, me, lo, hi) -> dict             # by group and department: name, dates, who covers; reasons through shape()
+holds(biz_id, lo, hi) -> List[dict]          # the scheduler's hook: [{contact_id, starts_on, ends_on}] for waiting asks
+                                             # (and, from S1-7, commitment days). Never raises; [] when off, not ready, or the read failed
+takes(biz, cid) -> bool                      # on(biz) and cid on the kept roster: the Serving Away form asks instead
+section(biz, cid) -> Optional[{"waiting": int}]   # the Lead tab's switcher; None = no Dates entry
+add_commitment(ch, me, body) -> dict; drop_commitment(ch, me, id) -> None
+commitment_days(rows, lo, hi) -> Dict[str, List[date]]   # pure; 366 days at most
+```
+
+- **The gate** copies `church_assignments._church` / `_church_from_body` (`:289-307`): a church (404), `office_open` (404), `ready()` (404), then `co.Church(biz)`.
+- **Who changes the structure** (section 7, item 7): `save_settings` and `set_listed` are for the owner and whoever oversees the office only. An Admin does not change the roster, the notice days or (step 2) the leaders and office numbers.
+- **`may_decide`** differs by door:
+  - a login (office app): it went to them (`to_user_id`, or `to_contact_id in ch.persons_of(me)`), or they are the owner, or one of `office_overseers(ch)`;
+  - a person (member app): `to_contact_id == me`, or `ch.login_person.get(to_user_id) == me`. Never the owner's or overseer's across-the-board power (section 7, item 6).
+
+**`church_schedule_tell.py`**
+
+```
+KIND = "serving"; NUDGE_DAYS = 3
+tell_new(ch, ask) -> None       # claim told_at, tell whoever it went to. `cant` goes at once; any other kind waits out
+                                # member_push.quiet_hour(biz) for the sweep
+tell_answer(ch, ask) -> None    # claim answer_told_at, tell the asker
+to_person(biz, cid, *, title, body, url, ref, subject, text, link_label) -> {"rang", "mailed"}
+                                # member_push.send(biz, KIND, …, contact_ids=[cid], ref_id=ref); when rang == 0 and they have an
+                                # email: clt.deliver(render_email(…))
+to_login(ch, uid, *, title, body, subject, text, tag) -> {"rang", "mailed"}
+                                # push_notifications.send_to_user + cas._login_email (None = don't claim) + cot.render
+sweep_tick(now=None) -> Dict[str,int]   # hourly on the worker
+```
+
+- Words never include the reason; a lock screen says "Marcus asked for Dec 20 to 27".
+- `tell_new` and `tell_answer` run through `member_push._later` (`:699`) after the write returns.
+- The sweep, for the churches `cas._open_churches()` gives:
+  - untold asks older than 2 minutes;
+  - untold answers;
+  - one nudge to the decider after `NUDGE_DAYS`;
+  - an ask whose `to_*` are both null goes to the owner;
+  - a waiting ask whose `to` is no longer who `goes_to` gives is re-addressed (`to_*` changed, `told_at` cleared; section 7, item 15);
+  - `reason` is cleared 90 days after `ends_on` (section 7, item 14).
+- **Not in the sweep** (corrected in S1-1): the spec had "a yes with no `serve_away` row is settled again". `church_away_settle` writes the yes and its fact in one transaction, so a yes without a fact can only be a fact deleted afterwards, and a second yes answers `changed: false` and writes nothing. That is on purpose: the function must not bring back an away date its person took off.
+
+**`member_portal_dates.py`** (`APIRouter()`; a copy of `member_portal_assign.py`'s shape)
+
+```
+HERE = "/my/lead/dates"; DONE, ERRORS, DATES_CSS
+view(biz, contact_id, now=None) -> dict         # {mine, waiting, away, commitments, notice_days, people (to pick who covers)}
+body(v) -> str; render(biz, site, request, me, active, v, seg, *, err="") -> str
+async serve(request, biz, site, me, *, err="")  # GET /my/lead/dates
+_go(**q); _code(e) -> str; async _act(request, fn, ok)   # as member_portal_assign :428-479, the switch being church_schedule.on
+```
+
+Page order: Waiting for your yes (if any); Ask for time off (dates, kind, private reason, who covers); I can't make it; My dates with their state and Withdraw; Who else is away (name, dates, who covers, never a reason); Things that repeat (S1-7). No ids on the page; ids ride in form addresses.
+
+### 3.2 Existing files changed, step 1
+
+| File | Function | Change |
+|---|---|---|
+| `sunday_serving.py` | `add_away` `:467` | first line: `if church_schedule.takes(biz, cid): return church_schedule.ask(Church(biz), who(PERSON, cid), {"starts_on": a, "ends_on": b, "kind": "time_off"})`, returning `{"asked": True, "to": name}`; everyone else unchanged |
+| `sunday_serving.py` | `drop_away` `:487` | when `church_schedule.on(biz)`: read the row's `ask_id`; if set, `church_schedule.withdraw_fact` (the RPC removes the fact); else the delete as today. While the switch is closed the delete goes as today and leaves that ask at `yes` with no fact; the calendar reads facts from `serve_away`, so nothing shows as away that isn't |
+| `sunday_planning.py` | `_Board.__init__` `:932` | after the `serve_away` read: `self.held = church_schedule.holds(biz, self.lo_day, last)` |
+| `sunday_planning.py` | `_Board.is_away` `:946-948` | also true for a row in `self.held`. `board.away` and `GET /planning/schedule` (`:1018-1026`) stay untouched, so a pending ask is never listed |
+| `member_portal_serving.py` | `away` route `:895-898`, `DONE` `:209` | capture `add_away`'s result in a closure and flash "Asked. {name} will say yes or not this one." (`done=asked`) |
+| `member_portal_serving.py` | `render_page` `:466-492` | for someone on the leaders schedule, one line under Away linking to `/my/lead/dates` |
+| `member_portal_lead.py` | ContextVars `:59-76`, `_context` `:639`, `_seg` `:826`, `serve` `:660` | new `DATES` ContextVar set from `church_schedule.section`; a `("dates", "/my/lead/dates", "Dates · n")` entry; `if selected == "dates": return await member_portal_dates.serve(...)` |
+| `member_portal.py` | `_leads` `:1197` | after the tasks check: `church_schedule.section(biz, me_id) is not None` gives the tab, so an office login's person with no role still reaches Dates |
+| `kmj_intake_automation.py` | routers `:453-456`, `:607-610`; jobs `:2039-2053` (f859d05a) | include `church_schedule.router` and `member_portal_dates.router`; `add_job(g("church_schedule_sweep", _cst.sweep_tick), "interval", hours=1, id="church_schedule_sweep")` |
+| `account_lifecycle.py` | `EXPORT_EXCLUDED` `:100` | the four tables (2.3). Done in S1-1 |
+| `__tests__/conftest.py` | near `:169-178` | autouse: `church_schedule._FORCE = False`, so no other suite gains a read; the schedule suites set it True |
+| `__tests__/test_sample_church_no_sends.py` | `TICKS` `:97` | `"church_schedule_sweep": "church_schedule_tell:sweep_tick"` |
+| `.env.example` | near `:718-729` (f859d05a) | the `CHURCH_SCHEDULE` block: off / owner / on, owner by default, set on both services, needs the migration |
+| `docs/MIGRATIONS.md` | ledger | one row a file. Step 1's is in S1-1 |
+| `.github/workflows/ci.yml` | the `test-db` job's list | `node __tests__/church_schedule_db.mjs`. Done in S1-1 |
+| `church_my_week.py` (optional, S1-8) | where `from_office` is built `:332-395` | `dates: {waiting: n}` for a login: the office front page's count |
+
+### 3.3 Step 2
+
+**`church_schedule_limits.py`**
+
+```
+service_days(ch, lo, hi) -> List[{"day": date, "kind": "service"|"event"|"protected", "name": str}]
+usual_weekdays(ch) -> List[int]                 # settings.service_weekdays, else worked out, else [7]
+limit_for(ch, grp, department_id=None) -> Optional[int]
+away_on(ch, day, grp, department_id=None) -> Set[str]    # facts only (serve_away), chunked in.() reads of 100 ids
+department_people(ch, department_id) -> Set[str]         # members of its Sunday teams
+departments_of(ch, cid) -> List[dict]
+flags_for(ch, asker_cid, grp, starts_on, ends_on, *, department_id=None) -> {"flags": [...], "why": [...]}
+goes_up(ch, asker_cid) -> Dict                  # the office overseer, unless the asker is guarded or is them: then the owner
+volunteer_plan(ch, cid, starts_on, ends_on) -> {"instant": bool, "flags", "to", "team_group_id", "assignments"}
+team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_members.role = leader, by name), else
+                                                # church_map.team_head, else the owner
+set_limit(ch, me, grp, at_most, department_id=None); may_set_limit(ch, me, department_id) -> bool
+protected_days(ch, lo, hi); add_protected(ch, me, body); drop_protected(ch, me, id)
+pairs(ch); add_pair(ch, me, a, b, note); drop_pair(ch, me, id)
+```
+
+Changes to existing code:
+- `church_schedule.ask`: `flags_for`, then `goes_up` when a flag says so.
+- `church_schedule.answer`: recompute the flags; pass `p_excepted`.
+- `church_schedule.calendar`: counts per service date.
+- `sunday_serving.add_away`: the volunteer branch (`volunteer_plan`).
+- `sunday_serving.mine` `:101`: a volunteer's waiting asks beside the away chips.
+- `member_portal_serving.render_page` `:466-492`: the "waiting for {leader}" chip and the find-a-sub link to `/my/serving?sub=<id>` (`ss.subs` `:422`, `ask_sub` `:434`).
+
+### 3.4 Where step 5 (Chief verbs) hooks in
+
+- A new `chief_church_schedule.py` in the shape of `chief_church_assignments.py`.
+- `HANDLERS` and `PROGRESS` merged at `chief_of_staff.py:12446` and `:423`.
+- A `turn_line` beside `:15897-15900`.
+- Registry rows beside `action_registry.py:548-573`.
+- Each verb calls `church_schedule.ask / answer / withdraw / calendar` with `me = co.who(LOGIN, turn user)`. Every read goes through `shape()`, so Chief never says a reason to a login that can't read it.
+
+---
+
+## 4. Routes
+
+### 4.1 Office (`/church/schedule/…`)
+
+- Session and gate as `church_handovers.py:447-482`: `Depends(sb_clients.authed_request)`; reads use `Depends(business_access.business_access("member"))`; writes use `_church_from_body` (`assert_access(..., "member")`).
+- Closed, not a church, or before the migration: 404. A failed read or write: 503.
+
+**The ask shape**
+
+```
+{id, contact_id, name, group, department: {id,name}|null, kind, starts_on, ends_on,
+ state, flags: [..], to: {kind,id,name}|null, cover: {contact_id|null, name}|null,
+ decided: {by, at, note}|null, reason: str|null, reason_hidden: bool,
+ mine: bool, can_answer: bool, can_withdraw: bool, created_at}
+```
+
+**Step 1**
+
+| Route | Body / query | Answers | Who |
+|---|---|---|---|
+| `GET /church/schedule/status?business_id=` | | `{open, me: {person: contact_id\|null, group: 'leaders'\|'office'\|null, goes_to: {kind,id,name}\|null, sees_all: bool, can_set: bool}, owner_how, notice_days}` | any seat |
+| `GET /church/schedule/people?business_id=` | | `{leaders: [{contact_id,name,what,department}], office: [...], added: [...], removed: [...], can_change}` | a seat whose person is on the schedule; the owner, an Admin, the office overseer. `can_change` is true for the owner and the office overseer only |
+| `PUT /church/schedule/people` | `{business_id, contact_id, listed: 'add'\|'remove'\|null, group?}` | the same shape | the owner, the office overseer (not an Admin: section 7, item 7) |
+| `GET /church/schedule/leaders?business_id=&from=&to=` (93 days at most) | | `{from, to, groups: [{key, name, people, away: [ask or plain fact], waiting: [ask], standing: [{contact_id,name,day,label}]}]}`. `waiting` and reasons only as `shape()` allows; everyone on the schedule gets name, dates and who covers | on the schedule, or the owner / office overseer. **The `serve_schedule` holder gets a 403 here unless they are on the schedule themselves** |
+| `GET /church/schedule/asks?business_id=&box=mine\|to_me\|all` | | `{asks: [ask]}`; `all` is the owner and the office overseer only | as the box says |
+| `POST /church/schedule/asks` | `{business_id, starts_on, ends_on, kind, reason?, cover_contact_id?, cover_name?, for?: "person:<id>"}` | `{saved: ask}` | a seat for its own person (409 "This login isn't matched to a person here yet" when it has none); `for` only by the owner / office overseer |
+| `POST /church/schedule/asks/{id}/answer` | `{business_id, yes: bool, note?}` | `{saved: ask}`; 409 when it had already moved | `may_decide` |
+| `POST /church/schedule/asks/{id}/withdraw` | `{business_id}` | `{saved: ask}` | the asker's login, or whoever made it |
+| `GET /church/schedule/settings?business_id=` / `PUT` | `{business_id, notice_days}` | `{notice_days}` | read: on the schedule; write: the owner, the office overseer |
+| `GET /church/schedule/commitments?business_id=` / `POST` / `DELETE …/{id}` | `{business_id, label, weekday, pattern, nth?, starts_on, until_on?}` | `{commitments: [...]}` / `{saved}` | a seat for its own person |
+
+**Step 2**
+
+| Route | Body | Who |
+|---|---|---|
+| `GET /church/schedule/limits?business_id=` | `{leaders: {at_most, set, people}, office: {…}, departments: [{id, name, at_most\|null, people, can_set}], service_weekdays, worked_out: bool}` | on the schedule; the `serve_schedule` holder sees `departments` only |
+| `PUT /church/schedule/limits` | `{business_id, group: 'leaders'\|'office', at_most\|null}` or `{business_id, department_id, at_most\|null}` or `{business_id, service_weekdays\|null}` | groups and weekdays: the owner, the office overseer (not an Admin: section 7, item 7). A department: its leader, its overseer, the owner, the office overseer, or `church_duties.holds(biz, user, "serve_schedule")` |
+| `GET /church/schedule/days?business_id=&from=&to=` | `{days: [{day, kind, name, leaders: {away, at_most}, office: {…}, departments: [{id, away, at_most}]}]}`: counts and names only | as `limits` |
+| `GET` / `POST` / `DELETE /church/schedule/protected-days` | `{business_id, day, name}` | read: on the schedule; write: the owner, the office overseer |
+| `GET` / `POST` / `DELETE /church/schedule/pairs` | `{business_id, a_contact_id, b_contact_id, note?}` | the owner and the office overseer only, reads too |
+| `GET /church/schedule/volunteers?business_id=&from=&to=` | by department: volunteers' facts and waiting asks, never a leader's ask or anyone's reason | `serve_schedule` holders, the owner, the office overseer, an Admin, each department's leader and overseer for their own |
+
+### 4.2 Member app
+
+All `include_in_schema=False`, `_signed_in`, never the preview, `rate_limit.allow_strict("member_action", …)`, a 303 back to `/my/lead/dates?done=…|err=…`.
+
+| Route | Form | Who |
+|---|---|---|
+| `GET /my/lead/dates` | | `church_schedule.section` is not None |
+| `POST /my/lead/dates/ask` | `start, end, kind (time_off\|commitment), reason, cover (contact id or ''), cover_name` | on the leaders schedule |
+| `POST /my/lead/dates/cant` | `start (today by default), end, reason` | on the leaders schedule |
+| `POST /my/lead/dates/{id}/withdraw` | | the asker |
+| `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` | it went to this person (or to the login this person is) |
+| `POST /my/lead/dates/commitments` | `label, weekday, pattern, nth, start, until` | on the leaders schedule (S1-7) |
+| `POST /my/lead/dates/commitments/{id}/remove` | | theirs |
+
+- Unchanged addresses with new behaviour: `POST /my/serving/away` and `/my/serving/away/remove` (3.2).
+- Step 2 adds nothing new for volunteers: the same two routes; the team leader answers on `/my/lead/dates`.
+
+---
+
+## 5. The rules, as a decision table
+
+**Definitions**
+- `to` = `co.above(ch, person)[0]`, else the owner's login.
+- "Told" = `church_schedule_tell` (person: push and the church thread, email if no phone was reached; login: staff push and email).
+- "Hold" = `church_schedule.holds`, so the scheduler won't ask them.
+
+### Step 1
+
+| Who asks | When / kind | Goes to | Flags | Written | Told |
+|---|---|---|---|---|---|
+| Core leader (leaders group) | planned (start is at least `notice_days` out), time off or another commitment | `to` | none | ask `asked`; hold | `to`, outside quiet hours |
+| same | short notice (inside the window) | `to` (the same person; not blocked) | `short_notice` | ask `asked`; hold | `to`; the words say "short notice" |
+| same | can't make it | nobody decides | `short_notice` if so | ask, then settled yes with nobody in `decided_by`; `serve_away(ask_id, kind='cant')` | `to`, at once, quiet hours or not |
+| Office login's person (office group) | all three | as above; `to` comes from the office rule (a Manager: the office overseer, else the owner; an Admin or the office overseer: the owner) | as above | as above | as above |
+| A leader who is also an office login | all three | routed as the login (`church_over.py:947`); counted in `leaders` | | | |
+| On the add list | all three | `to`, as anyone's | | `grp` as listed | |
+| The owner's own person | any | nobody is over them | none | ask settled yes at once; fact | the office overseer(s), for their information |
+| On the remove list, or a volunteer | Serving, Away | none | none | plain `serve_away` row, exactly as today (no ask, `ask_id` null) | nobody |
+| Core leader using Serving, Away | | `to` | as planned / short | an ask (`time_off`, no reason), not a row | `to`; the page says "Asked" |
+
+**Answers and withdrawals**
+
+| Event | Written | Told |
+|---|---|---|
+| Yes (by `to`; in the office app also the owner or the office overseer) | settle yes: the fact is written, the hold becomes a fact | the asker |
+| Not this one (optional note) | settle no: no fact, the hold ends | the asker |
+| Withdraw (the asker; `asked` or `yes`) | settle withdrawn: the fact is deleted | `to`, only if it had been a yes |
+| Two answers at once, or an answer after a withdraw | the RPC answers `changed: false`; the route returns 409 "That one was already answered" | |
+
+**Refusals**
+- Dates in the past, an end before the start, or more than 366 days: 400.
+- The same dates already waiting: 409 (`church_away_asks_one_open`).
+- More than `MAX_OPEN` waiting: 400.
+- Who covers is the asker: 400.
+- A reason over 500 characters: 400.
+
+**Standing commitments**
+- No yes is needed. `to` is told once when one is added (`told_at`).
+- They show on the calendar; from S1-7 they hold the person from the scheduler.
+
+### Step 2
+
+Computed in `flags_for` when asked, and again at yes.
+
+| Case | Goes to | Flags | Written | Told |
+|---|---|---|---|---|
+| Core leader / office, every counted date under the group's limit, no protected day, no pair | as step 1 | as step 1 | as step 1 | as step 1 |
+| A counted date already at the limit (facts for that group on that date >= limit) | `goes_up`: the office overseer, else the owner. For a pastor or elder (`co.is_guarded`), or the office overseer themself: the owner | `+over_limit` | ask `asked`; hold | `goes_up`; step 1's `to` for their information |
+| A protected day in the range | `goes_up` | `+protected_day` | same | same; the page names the day |
+| The other of a pair has a fact or a waiting ask on any of the same days | `goes_up` | `+pair` | same | same; the asker sees "This overlaps with someone you can't be away with" and no name |
+| A yes on a flagged ask | only the owner or the office overseer (403 for anyone else) | | settle yes with `p_excepted` = the flags still true | the asker |
+| A yes on an unflagged ask that became over / protected / paired since it was asked | the decider gets 409; the ask is re-addressed to `goes_up` (`to_*` changed, `told_at` cleared, flags added) | the new flags | still `asked` | `goes_up` |
+| Can't make it, any of the above | nobody decides; never blocked | the flags are recorded | fact at once | `to`, at once; `goes_up` too when flagged |
+| The dates hold no service date and no protected day (a Monday to Thursday trip) | as step 1 | never `over_limit` | | |
+| Volunteer: none of their departments' dates full, and no yes to serve in the range | none | none | plain `serve_away` row, instant, as today | nobody |
+| Volunteer: a department's date is full | the team's leader (`team_leader`: the team's leaders, else `church_map.team_head`, else the owner) | `over_limit` | ask `grp='volunteers'`, `team_group_id`, `department_id`; hold | the leader; the page offers Find a sub |
+| Volunteer: already said yes to serve one of the days | the leader of that place's team | `serving` (and `over_limit` if so) | same | same; each such Sunday links to `/my/serving?sub=<assignment>` |
+| The team leader says yes | | | fact; each of their yes places in the range with no sub agreed is opened as `sunday_serving.cant_make_it` does (`:451-463`) | the volunteer; Planning's own alerts tell the office |
+| Volunteer, sick today | none | | they use Can't make it on the place itself (`ss.cant_make_it`, today's path); an away row for today stays instant | as today |
+
+### Which dates count ("service date")
+
+For a range, in the church's own clock (`ch.tz`):
+1. Every day with a live `worship_services` row of `kind='service'` (not a template, not archived).
+2. For days with no such row: the church's usual service weekdays.
+   - `settings.service_weekdays`; else
+   - any weekday that holds two or more of its `kind='service'` rows from 8 weeks back to 8 weeks ahead; else
+   - Sunday (the platform's rule today, `sunday_planning.py:847`).
+3. Every protected day.
+4. A `kind='event'` date counts toward **department** limits only (only the Volunteers' teams serve it, `sunday_planning.py:902`).
+
+Counting:
+- The leaders and office limits count distinct people of that group with a fact on the date.
+- A department's limit counts distinct members of its Sunday teams.
+- Waiting asks are shown ("2 away, 1 waiting") and not counted; the recount at yes covers the gap.
+
+---
+
+## 6. PR split
+
+Each is safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` is False until the file is applied, and `conftest` pins it off for every other suite.
+
+### Step 1
+
+| PR | Contains | Tests | Migration first? |
+|---|---|---|---|
+| **S1-1 Migration** (this doc's PR) | `APPLY-2026-11-19-church-schedule.sql`; `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_schedule_db.mjs` and the `ci.yml` line; `docs/CHURCH_SCHEDULE.md`; the worklog entry | PGlite, 152 checks: twice changes nothing, with rows there; the RPC (yes writes one fact, a second yes none, withdrawn deletes it, no leaves none, another church gets null, a bad or null state raises); `serve_away_ask_guard`; `church_away_asks_one_open`; the same-business triggers; a person or church deleted takes its rows, in either order the foreign keys fire; a login deleted leaves the ask; server-only under Supabase's default grants. `test_export_import` green | this is it; apply after review. Nothing reads it yet |
+| **S1-2 Switch and roster** | `church_schedule.py`: switch, `ready`, the gate, `roster`, `roster_kept`, `set_listed`, `office_overseers`, `goes_to`; `GET status`, `GET/PUT people`; the `conftest` pin; `.env.example` | `test_church_schedule_roster.py` at the four churches: roster equals `leaders_room_people` split by `Church.person_login`, and `set(ch.person_login)` equals `mpm.office_contacts` (pinned as `Church.held` is to `standing`); someone in both counts in leaders; add / remove; Riverside is empty; `goes_to` for a department leader, a group leader with no role, a Manager, an Admin, a senior and the owner; `off` and other churches under `owner` get 404; before the migration 404; a failed read 503; `test_business_access_ratchet` green | no (404 until applied) |
+| **S1-3 Asks** | `ask`, `answer`, `withdraw`, `shape`, `mine`, `waiting`, `calendar`, settings; the `asks`, `leaders` and `settings` routes; no notices yet | `test_church_schedule.py`: every step-1 row of section 5 through the real routes; the RPC faked on `ThreeDB` (as `test_church_duties.py:77`); **privacy**: the reason is absent for another leader, for an Admin and for the `serve_schedule` holder, present for the asker, `to`, the owner and the office overseer; `serve_away.note` stays `''`; a failed write is a 503 with nothing saved; races give 409 | yes |
+| **S1-4 Notices** | `church_schedule_tell.py`; the sweep job (with the one nudge after 3 days, the re-address and the 90-day clearing of reasons: section 7, items 1, 14, 15); `TICKS`; `.env.example` "both services" | `test_church_schedule_tell.py`: person vs login channels; email only when no phone rang; `cant` ignores quiet hours, a planned ask waits; claim / release; told once; no reason in any title, body or email; `_login_email` None is not claimed; a waiting ask is re-addressed when who is over them changes; a reason is gone 90 days after the last day; a sample church sends nothing (`test_sample_church_no_sends`) | yes |
+| **S1-5 Dates on the Lead tab** | `member_portal_dates.py`; `member_portal_lead` (`DATES`, `_context`, `_seg`, `serve`); `member_portal._leads`; router include | `test_member_portal_dates.py` (the `test_member_portal_assign` harness): the page for a leader, for someone over people, for an office person with no role, for the owner's person; no ids and no office words on screen; a reason only where allowed; every POST; preview never writes; cross-site refused, `Origin: null` allowed; closed means no Dates entry and 404 writes; a member-app session never gets the owner's across-the-board view | yes |
+| **S1-6 Serving Away form and the scheduler hold** | `sunday_serving.add_away / drop_away`; `member_portal_serving` flash and line; `sunday_planning._Board` `held` | `test_sunday_planning_holds.py`: a waiting ask makes `candidates` say away, `do_ask` 409 and `do_fill` skip; it is absent from `/planning/schedule`'s `away`; closed or a failed read gives no extra read and no 503; a volunteer's Away is byte-for-byte as before (`test_sunday_serving` untouched); a core leader's Away makes an ask; removing an approved date withdraws the ask | yes |
+| **S1-7 Things that repeat** | commitments routes, the Dates section, `calendar` `standing`, `holds` adds `commitment_days` | weekly / every other / nth and "last"; `until`; the scheduler holds them on those days only; 10 a person | yes |
+| S1-8 (optional) My week count | `church_my_week` `dates` | a login sees how many wait for their yes | yes |
+
+**Turning on:** set `CHURCH_SCHEDULE=owner` (the default) on **both** `kmj-intake-server` and `kmj-intake-worker` once S1-4 ships. The scheduler hold (S1-6) is read on the web service.
+
+### Step 2
+
+| PR | Contains | Tests | Migration |
+|---|---|---|---|
+| **S2-1 Migration** | the limits file; ledger; `EXPORT_EXCLUDED`; `church_schedule_limits_db.mjs` | twice is a no-op; a pair is ordered and unique; one protected day a date; the seven-argument settle with `excepted`, and the six-argument call still works; server-only | this is it |
+| **S2-2 Service days and limits (read and set, nothing enforced)** | `service_days`, `usual_weekdays`, `limit_for`, `away_on`, `department_people`; `GET/PUT limits`, `GET days`, `GET volunteers` | the default is `max(1, n // 4)`; who may set each number (the department's leader and overseer as persons from the member app are deferred; a login whose person leads it may); a Saturday church's weekdays worked out from its plans; event dates count for departments only; a read over 1,000 rows is paged or chunked | yes |
+| **S2-3 Limit and protected days for leaders** | `flags_for`, `goes_up`; `ask` / `answer` wired; the protected-days routes; the Dates page words | each step-2 leader row; the recheck at yes; a pastor's or elder's flagged ask goes to the owner, never the office overseer; `excepted` recorded; `cant` never blocked | yes |
+| **S2-4 Pairs** | the pairs routes; `+pair` | the second ask goes up; the asker never sees the other's name; only the owner and the office overseer read pairs | yes |
+| **S2-5 Volunteers** | `volunteer_plan`, `team_leader`; `add_away` branch; My serving chips and the sub offer; yes opens their places | instant when free; an ask when full or already serving; no-leader team goes to the department leader, then the overseer, then the owner (the #1719 cases, `test_church_map_serve.py`); the coordinator never sees a leader's ask | yes |
+
+---
+
+## 7. Decisions
+
+Settled 2026-11-18. Two kinds, and the difference matters when one is questioned later:
+**Kevin's** are his words, or a call he was shown and said yes to. **Decided in the build**
+are calls the build made on the questions the spec left open; Kevin has not ruled on those,
+and any of them can be reopened with him.
+
+### 7.1 Kevin's
+
+His words are at the top of this doc. On the five calls the plan rests on he said: **"Yes build
+to all five"**. The five, as they were put to him:
+
+1. **Who the core leaders are.** Pastors, elders, ministers, department leaders and overseers,
+   plus the office admins as their own group. Any name can be added or removed.
+2. **The number.** The leaders' number starts at about one in four away on any Sunday. Each
+   department leader sets their own number with the volunteer coordinator.
+3. **Volunteers.** They need no yes to be away, unless the date is full or they already agreed
+   to serve it; then it goes to their team leader.
+4. **Who says yes.** The person over a leader on the leaders map. Past the limit, or on a
+   protected Sunday, only the owner or whoever oversees the office.
+5. **Notice.** Two weeks' notice for planned time off. Sickness and emergencies are never
+   blocked.
+
+The code reads none of those titles: "pastors, elders, ministers" is who the church's own roles,
+groups, departments and seats put on the schedule (section 3.1, `roster`).
+
+### 7.2 Decided in the build
+
+The numbers are the build spec's open questions, kept so the PRs ahead can cite them.
+
+| # | Question | Decision |
+|---|---|---|
+| 0 | One Postgres function for the yes? | Yes: `church_away_settle` sets the ask and writes the fact in one transaction (section 2.1). |
+| 1 | Several people at the nearest step above (`co.above` can return more than one) | The ask goes to the first, in the library's order. The owner and the office overseer can always answer in the office app. One nudge goes after 3 days. Naming all of them would widen who reads the reason. |
+| 2 | A leader who also has an office login | Routed by the office rule (`church_over.py:947-948`); they still count in the `leaders` group. |
+| 3 | A login matched to no person | A 409 in plain words, and `status.me.person` is null so the screen asks them to pick their record. Rule code never calls `seat_person`. |
+| 4 | The owner's person may be unknown (`owner_how == 'none'`) | Before S1-5 is switched on for a church, the owner's person must be found (their sign-in email on their record, or `PUT /church/owner-person`). The lead session checks the first church's before S1-5 opens there. |
+| 5 | The push kind | Reuse `serving` (it lands in the church conversation). Email whenever no phone was reached. A church with Serving alerts off gets email only. |
+| 6 | The member app and a login's across-the-board power | A member-app session never carries the owner's or the office overseer's power. There, a person reads reasons and answers only asks that went to them, or to the login tied to exactly them. "Every ask and every reason" is the office routes only. |
+| 7 | Admins | **Changed from the spec's recommendation.** Admins do **not** change the roster, the notice days, or the leaders and office numbers: those are the owner and whoever oversees the office only (what Kevin was shown said "set by you"). Admins still do not read reasons or answer asks unless one went to them. A department's number: its leader, its overseer, the owner, the office overseer, or the holder of the `serve_schedule` duty. |
+| 8 | The office overseer and guarded people (step 2) | A flagged ask from a guarded person (a shepherd or a senior, `co.is_guarded`) goes to the owner only. |
+| 9 | A department with no number set | No limit, so volunteers stay instant as today. The one-in-four default (`max(1, people // 4)`) applies to the leaders and office groups only. |
+| 10 | A yes to a volunteer who already said yes to serve | It opens those places, as `sunday_serving.cant_make_it` does. It runs after the RPC, not in its transaction; failures are logged, and Planning's own "still no answer" alerts catch the rest. |
+| 11 | Standing commitments and the limit | Shown, and they hold the person from the scheduler. Not counted toward a limit, never blocked. |
+| 12 | `holds()` on a failed read | Fails open (returns `[]`), on purpose, and its docstring says why: the other choice is Who serves when failing whenever this table blips. The worst case is asking someone whose ask is still waiting. |
+| 13 | Other readers of `serve_away` (`sunday_serving.mine`, `free_sundays`) | Left as they are: they don't see waiting asks, so a leader with a pending ask can still be shown an open place on their own page. |
+| 14 | Private reasons kept for good | The sweep clears `reason` 90 days after `ends_on` (S1-4). Reasons can be medical. |
+| 15 | Asks made before a role change | The sweep re-addresses a waiting ask whose `to` is no longer who `goes_to` gives, and clears `told_at` (S1-4). |
+| 16 | Away dates written before the switch opened | A core leader's old instant `serve_away` rows have no ask. The calendar shows them as plain "away" with no kind, and `drop_away` deletes them as today. |
+| 17 | Roster cost | Kept 60 seconds a replica for the member side; an add or remove on one replica can show up to a minute late on another. The office routes always read fresh. |
+| 18 | Two clocks | `ch.tz` for "today" and notice; the scheduler keeps its own zone for the service day. |
+| 19 | Step 2 drops and re-makes `church_away_settle` | Kept, and its file's header says so. It avoids two functions for PostgREST to choose between; a six-argument call from an old replica still resolves through the new argument's default. |
+| 20 | The name `church_away_asks` | Kept. This doc's header and the table's own comment say it is unrelated to `church_map_asks` and `member_asks`. |
+| 21 | The office frontend | Comes after the backend. The route shapes in section 4 are its contract. Until it exists, a login's yes is reachable only through the member app as their own person, and the roster, settings and limits writes are API-only. |
+| | Short notice | Flagged, never blocked, and it goes to the same person. |
+| | "Can't make it" | Instant: nobody decides, and the person over them is told at once. |
+
+### 7.3 Decided while writing S1-1
+
+Small, and all decided in the build:
+
+- The seven changes to the draft SQL (section 2.1).
+- The service weekdays (step 2) are set by the same people as the leaders and office numbers:
+  the owner and the office overseer. Decision 7 names the numbers; the weekdays were grouped
+  with them in the route table and are kept there. Confirm in S2-2.
+- The office overseer is named among those who read `GET /church/schedule/volunteers`. The
+  spec's row listed the owner and an Admin and left the overseer out; decision 6 gives the
+  overseer every ask in the office routes.
+- The sweep does not "settle again" a yes with no fact (section 3.1).
