@@ -27,7 +27,7 @@ _LEGACY_FIELDS = "id,created_at,status,submission"
 # A hand-off to an office login: its heads-up and due time (care_handoff,
 # APPLY-2026-11-18-care-login-due.sql). Read first when they're there; the
 # reads fall back to the ones above when they aren't.
-_LOGIN_FIELDS = ",assigned_due_at,assigned_told_at,assigned_acted_at,assigned_late_level"
+_LOGIN_FIELDS = ",assigned_by,assigned_due_at,assigned_told_at,assigned_acted_at,assigned_late_level"
 
 def needs_private_care(form, data):
     settings = form.get("settings") or {}
