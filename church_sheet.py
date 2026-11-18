@@ -531,7 +531,9 @@ def change(business: Dict[str, Any], viewer: str, target: str, body: Dict[str, A
         cj.changed(business, "sheet", viewer, ed or "", ch.login_name(viewer), summary, subject=target,
                    detail={"job": body.get("job") if job_set else None, "areas": areas if areas_set else None,
                            "duties": {"add": add, "remove": remove}, "grant": grant})
-    return {"widens": widens, "summary": summary, "changed": bool(said)}
+    # A holder's change is sent to the owner (cj.changed); the app says so.
+    return {"widens": widens, "summary": summary, "changed": bool(said),
+            "owner_told": bool(said) and ed == "holder"}
 
 
 # ─── The jobs, for the people who set them up ─────────────────────────
@@ -541,7 +543,12 @@ def jobs_view(business: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     can_make_admin_job}."""
     ch = co.Church(business)
     ed = cj.editor(ch.b, user_id, ch.role(user_id))
-    return {"jobs": cj.jobs(ch.b), "can_manage": ed is not None, "can_make_admin_job": ed == "owner"}
+    # The duty list a job's form ticks from, so whoever sets up jobs needs no
+    # other page's read for it (the duties page is not theirs to open).
+    duties = [{"key": d["key"], "label": d["label"], "area": d["area"], "money": bool(d["money"]),
+               "does": d["does"]} for d in cd.build(business)["duties"]]
+    return {"jobs": cj.jobs(ch.b), "can_manage": ed is not None, "can_make_admin_job": ed == "owner",
+            "duties": duties}
 
 
 def _jobs_editor(body_biz: Any, user: Any) -> Tuple[Dict[str, Any], str, str]:
@@ -606,7 +613,8 @@ def put_sheet(body: Dict[str, Any], request: Request, session: UserSession = Dep
     import ledger_unlock
     got = change(business, str(user.id), target, body, widening=lambda: ledger_unlock.require_unlock(
         request, str(user.id), ledger_unlock.SCOPE_ACCESS))
-    return {**compose(business, str(user.id), target), "changed": got["changed"], "summary": got["summary"]}
+    return {**compose(business, str(user.id), target), "changed": got["changed"], "summary": got["summary"],
+            "owner_told": got["owner_told"]}
 
 
 @router.get("/sheet/jobs")
