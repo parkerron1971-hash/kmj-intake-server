@@ -249,6 +249,8 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm.lm-push .mb-top{min-height:58px;}
 .lm .mb-back{color:var(--acc);font:600 16px/1 var(--mb-ui);gap:2px;}
 .lm .mb-top-t{font:650 15px/1.2 var(--mb-ui);}
+/* a main tab keeps its logo and name at the top: no title slides in over them */
+.lm.lm-tab .mb-top-t{display:none;}
 
 /* the page */
 .lm .mp-shell{padding:0 20px 40px;}
@@ -428,6 +430,16 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 """)
 
 
+def templates() -> Tuple[Template, ...]:
+    """The sheet's parts, in order: the foundation's rules, then each page's
+    own block (member_lumen_bible.CSS: the Bible, its reader and plans;
+    member_lumen_classes.CSS: Classes). member_app_ui.sheet("lumen") serves
+    them as one file."""
+    import member_lumen_bible
+    import member_lumen_classes
+    return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS))
+
+
 def css() -> str:
     """The sheet's text (member_app_ui.sheet("lumen") serves it as a file)."""
-    return _CSS.template
+    return "".join(t.template for t in templates())

@@ -300,6 +300,11 @@ def render_plans(biz, site, me, *, devs: Optional[List[Dict[str, Any]]], done: O
                  show: str = "all", preview: bool = False, tr: str = "kjv", today: Optional[date] = None,
                  flash: str = "") -> str:
     """Plans & devotionals (approved board 10)."""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        return mlb.render_plans(biz, site, me, devs=devs, done=done, mine=mine, church_today=church_today,
+                                church_done=church_done, show=show, preview=preview, today=today, flash=flash)
     import member_app_photos as photos
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -835,9 +840,10 @@ async def home_extras(biz, me, *, preview: bool = False, church_reading: bool = 
     return devotional, own, own_done
 
 
-async def bible_home(biz, site, me, *, preview: bool = False) -> str:
-    """The Bible tab's devotional and reading-plan sections ('' on any
-    failure: the rest of the tab still shows)."""
+async def bible_home_data(biz, me, *, preview: bool = False) -> Optional[Dict[str, Any]]:
+    """What the Bible tab's devotional and reading-plan sections show, read
+    at once: {devs, done, mine, church_today, church_done}. None on any
+    failure (the rest of the tab still shows)."""
     import asyncio
     try:
         bid, cid = biz["id"], str(me["id"])
@@ -851,8 +857,20 @@ async def bible_home(biz, site, me, *, preview: bool = False) -> str:
         plan = rp.current(biz)
         today = rp.today_for(biz)
         cdone = await asyncio.to_thread(rp.read_days, bid, cid, plan) if plan and today and not preview else set()
-        return bible_sections(biz, site, devs=devs, done=done, mine=mine, church_today=today, church_done=cdone,
-                              preview=preview)
+        return {"devs": devs, "done": done, "mine": mine, "church_today": today, "church_done": cdone}
+    except Exception:  # noqa: BLE001
+        logger.warning("member bible: plans sections skipped", exc_info=True)
+        return None
+
+
+async def bible_home(biz, site, me, *, preview: bool = False) -> str:
+    """The Bible tab's devotional and reading-plan sections ('' on any
+    failure: the rest of the tab still shows)."""
+    data = await bible_home_data(biz, me, preview=preview)
+    if data is None:
+        return ""
+    try:
+        return bible_sections(biz, site, **data, preview=preview)
     except Exception:  # noqa: BLE001
         logger.warning("member bible: plans sections skipped", exc_info=True)
         return ""

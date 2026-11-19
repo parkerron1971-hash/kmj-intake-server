@@ -335,6 +335,11 @@ def _open_card(c: Dict[str, Any], tz: str) -> str:
 def render_classes(biz, site, request: Request, data: Optional[Dict[str, Any]], who=None) -> str:
     """Connect › Classes: the next class night, the road, your classes,
     classes to join."""
+    import member_lumen
+    if member_lumen.page():
+        # The new look (member_lumen_classes): the academy, pushed from Connect.
+        import member_lumen_classes as mlc
+        return mlc.render(biz, site, request, data, who=who)
     import member_app_samples as samples
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -369,10 +374,6 @@ def render_classes(biz, site, request: Request, data: Optional[Dict[str, Any]], 
                          f'{cards}<p class="mp-muted mb-cfoot">Joining puts the class here, '
                          f'and your teacher sees you on the list.</p></section>')
         body = "".join(parts)
-    import member_lumen
-    if member_lumen.page():
-        return _shell(biz, site, "Classes", f"{mpc.connect_head(biz, 'classes')}{mpc._flash(request)}{body}",
-                      tab="classes", who=who)
     return _shell(biz, site, "Classes", f"""
 <div class="mb-lt"><h1>Connect</h1></div>
 {mpc.connect_tabs(biz, "classes")}

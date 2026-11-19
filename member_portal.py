@@ -650,7 +650,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
-           wide: bool = False, inline_css: bool = False) -> str:
+           wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", "")) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -666,7 +666,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     its rows side by side, see band()); a phone never sees a difference.
     The look is member_app_ui's: the shared stylesheet file and the
     church's colours (member_app_ui.head); `inline_css` puts the whole
-    sheet in the page instead (the offline page, kept for no connection)."""
+    sheet in the page instead (the offline page, kept for no connection).
+    `lumen_bar` = (middle, right): more in a pushed page's bar under the
+    new look (the reader's chapter and Aa); today's look ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
@@ -744,7 +746,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     if signed_in and member_lumen.page():
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
-            word=word, avatar=avatar, side=side, body_cls=body_cls)
+            word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -777,7 +779,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
                  who: Optional[Dict[str, Any]], back: Optional[Tuple[str, str]], bare: bool, bar: bool,
                  ctx: Dict[str, Any], name: str, logo: str, word: str, avatar: str, side: Tuple[str, str],
-                 body_cls: str) -> Tuple[str, str, str, str]:
+                 body_cls: str, extra: Tuple[str, str] = ("", "")) -> Tuple[str, str, str, str]:
     """The new look's frame for one page (member_lumen_ui): (top bar, body
     class attribute, tab bar, scroll script).
 
@@ -787,7 +789,9 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
     bubble with the unread count (member_portal_threads' count, already read
     for this page), the bell and the profile picture. Every other page is
     pushed: a plain back bar, its own back link or, with none, Back to the
-    tab it was opened over (the browser's history; Home without it)."""
+    tab it was opened over (the browser's history; Home without it).
+    `extra` = (middle, right) puts more in a pushed page's bar: the reader's
+    chapter in the middle (instead of the title that slides in) and its Aa."""
     import member_lumen
     import member_lumen_ui as lm
     import member_portal_messaging as mpm
@@ -808,10 +812,11 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
         mark = "" if back else " data-back"
         left = f'<a class="mb-back" href="{_e(href)}"{mark}>{lm.ic("back", 24)}{_e(label)}</a>'
         right = ""
+    mid, more = extra if not main else ("", "")
     top = "" if bare else (
-        f'<header class="mb-top"><div class="mb-top-l">{left}</div>'
-        f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
-        f'<span class="mb-top-right">{right}</span></header>')
+        f'<header class="mb-top{" lm-mid" if mid else ""}"><div class="mb-top-l">{left}</div>'
+        + (f'<div class="lm-barmid">{mid}</div>' if mid else f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>')
+        + f'<span class="mb-top-right">{right}{more}</span></header>')
     names = re.findall(r'class="([^"]*)"', body_cls)
     cls = " ".join(["lm", "lm-tab" if main else "lm-push"] + (names[0].split() if names else []))
     import member_app_ui as ui
