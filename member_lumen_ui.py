@@ -254,7 +254,6 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm .mp-shell{padding:0 20px 40px;}
 .lm .mp-shell.mb-has-nav{padding-bottom:calc(112px + env(safe-area-inset-bottom,0px));}
 .lm .mp-foot{margin-top:44px;color:var(--fg3);}
-.lm h1,.lm h2,.lm h3{color:var(--fg);}
 /* today's pages under the new look: the big title in serif, its accent word in the church's colour */
 .lm .mb-lt h1{font:400 40px/1.02 var(--mb-serif);letter-spacing:-.025em;}
 .lm .mb-lt h1 em,.lm .mb-hello em{color:var(--acc);}

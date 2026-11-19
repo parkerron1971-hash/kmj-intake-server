@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, on the member app: it "feels like ai built it but not creative designer". He approved the "clean Lumen" mock (version 29, accent level 2) after several rounds. Step one: the switch every Lumen page asks. Step two: the foundation (the look as its own file, the bars, Home, Connect, Messages from the bubble).'
 status: in review
-prs: [kmj-intake-server#1952, "kmj-intake-server (the foundation)"]
+prs: [kmj-intake-server#1952, kmj-intake-server#1955, "kmj-intake-server (dark-card titles)"]
 migrations: []
 left_undone:
   - "Follow-up PRs, each in today's look under Lumen's white tokens and bars until then: Bible and its reader, Give, Watch and Live, the Messages inbox and a thread, Classes, Prayer, Events, a group's page, Me (and its details and notifications), News."
@@ -23,6 +23,7 @@ decisions:
   - "The bubble's count is the one serve() already reads (member_portal_threads.BADGE, kept 15 s); the bell's hook (member_lumen.bell_dot) runs in a thread beside serve()'s first reads, only for someone who sees the new look, and answers no dot until the alerts list lands. Home's reads are the same as today's Home (a test counts them); the news block is built once."
   - "Home under Lumen: the lead is the first thing on the calendar (as today), Today on its day, Live wins; the check-in card is a compact one-tap card (all of the family, as the full card starts ticked; Choose who opens the full card), the full card once checked in. The hero photo is in colour unless the church chose a look for it. The church's own tiles show only when it saved some (the default four repeat what's on the page). The Messages card is gone (the bubble carries the count)."
   - "Connect (/my/connect, new): your group, serving (next date, Details, Can't make it), prayer, events, classes, your next step (keep going on a class; Get baptized and Ask for a visit or help only when those asks are on), find a group, directory (when on), news. Groups, Classes and Directory are pushed from it with a back bar; their segmented Connect tabs are gone under Lumen. Off, /my/connect goes to /my/groups."
+  - "Follow-up fix: the sheet set every heading under body.lm to the page's text colour, which turned a dark card's white title dark (Give before online giving: 'Every gift matters' vanished). Headings keep their own colours; a test pins it."
   - "Classes' card says 'Your classes', not '<church> Academy': the mock's 'Grace Academy' is a name no church has chosen."
 related: [2026-11-18-member-app-tabs-fast.md, 2026-11-18-member-app-cache.md, 2026-11-18-member-app-stopwatch.md]
 ---
