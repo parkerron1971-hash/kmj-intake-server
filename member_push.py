@@ -532,7 +532,12 @@ async def my_notifications_save(request: Request):
 
 def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Request,
                 me: Dict[str, Any], off: Optional[Set[str]], quiet: Optional[Dict[str, bool]] = None,
-                chats: Optional[List[Dict[str, Any]]] = None) -> str:
+                chats: Optional[List[Dict[str, Any]]] = None, recent: Optional[str] = None) -> str:
+    """The Notifications page. `recent` (member_alerts, while the redesign
+    shows it): the page becomes "Your alerts", that Recent section on top
+    ('' when the list couldn't load: the page shows without it), then these
+    settings under "What reaches this phone". None: the settings page as
+    it always was."""
     from html import escape
     from member_portal import _shell
     import member_spaces as msp
@@ -544,10 +549,15 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
         flash = '<p class="mp-ok" role="status">Saved.</p>'
     elif q.get("err"):
         flash = '<p class="mp-err" role="alert">That didn&#x27;t save. Please try again.</p>'
+    title, top = "Notifications", ""
+    if recent is not None:
+        title = "Your alerts"
+        top = (f'<div class="mb-lt"><h1>Your <em>alerts</em></h1></div>{recent}'
+               '<h2 class="mp-sect al-next">What reaches this phone</h2>')
     if not offered or not ready():
-        body = ('<section class="mp-card"><p>Your church hasn&#x27;t turned on notifications yet.</p>'
+        body = (f'{top}<section class="mp-card"><p>Your church hasn&#x27;t turned on notifications yet.</p>'
                 '<p><a href="/my/me">Back to Me</a></p></section>')
-        return _shell(biz, site, "Notifications", body, tab="me", who=me)
+        return _shell(biz, site, title, body, tab="me", who=me)
     off = off or set()
     boxes = "".join(
         f'<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
@@ -574,8 +584,9 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
     # Each group chat: Every message / Evening summary / Off (group_chat_notify).
     import group_chat_notify as gcn
     chat_section = gcn.notifications_section(chats, escape) if any(k == "messages" for k, _, _ in offered) else ""
-    return _shell(biz, site, "Notifications", f"""
+    return _shell(biz, site, title, f"""
 {flash}
+{top}
 <section class="mp-card" aria-labelledby="np-dev">
   <h2 id="np-dev" class="mp-sect" style="margin-top:0">This phone</h2>
   <p class="mp-muted" id="np-state">Checking…</p>

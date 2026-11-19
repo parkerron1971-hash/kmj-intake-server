@@ -1509,10 +1509,28 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/notifications":
         import member_push
         import group_chat_notify as gcn
-        off, quiet, chats = await asyncio.gather(asyncio.to_thread(member_push.turned_off, biz["id"], me["id"]),
-                                                 asyncio.to_thread(member_push.quiet_prefs, biz["id"], me["id"]),
-                                                 asyncio.to_thread(gcn.my_chats, biz, str(me["id"])))
-        return _page(member_push.render_page(biz, site, request, me, off, quiet, chats))
+        # The redesign's "Your alerts" (member_alerts): the recent list on
+        # top, read only here and only while the redesign shows it.
+        import member_alerts
+        show = member_alerts.shown()
+        reads = [asyncio.to_thread(member_push.turned_off, biz["id"], me["id"]),
+                 asyncio.to_thread(member_push.quiet_prefs, biz["id"], me["id"]),
+                 asyncio.to_thread(gcn.my_chats, biz, str(me["id"]))]
+        if show:
+            reads += [asyncio.to_thread(member_alerts.recent_alerts, biz, me["id"]),
+                      asyncio.to_thread(member_alerts.seen_at, biz, me["id"]),
+                      asyncio.to_thread(member_alerts.zone_of, biz)]
+        got = await asyncio.gather(*reads)
+        off, quiet, chats = got[0], got[1], got[2]
+        recent = None
+        if show:
+            rows, seen, zone = got[3], got[4], got[5]
+            recent = member_alerts.render_recent(rows, zone=zone, seen=seen)
+            # Opening the page marks everything seen; the owner's preview
+            # never writes, and a list that couldn't load wasn't seen.
+            if rows is not None and not preview:
+                member_alerts.mark_seen_later(biz, me["id"])
+        return _page(member_push.render_page(biz, site, request, me, off, quiet, chats, recent=recent))
     from giving_router import giving_is_active
     # Giving opens inside the app (2026-10-14): /my/give is the give
     # page's own form in the app's look, the member's name and email filled.

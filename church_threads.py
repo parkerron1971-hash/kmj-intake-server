@@ -86,7 +86,7 @@ logger = logging.getLogger("church_threads")
 router = APIRouter(tags=["church-threads"])
 
 NOTES = "church_thread_notes"
-READS = "church_thread_reads"
+READS = "church_thread_reads"     # also member_alerts' last look: thread 'alerts', never a note's thread
 THREAD_KINDS = ("announcements", "live", "sermons", "events", "classes", "prayer", "kids", "news", "serving",
                 "groups")
 CHURCH = "church"
