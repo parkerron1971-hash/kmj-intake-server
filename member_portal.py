@@ -786,16 +786,17 @@ def _marks(biz: Dict[str, Any], site, theme: Dict[str, Any], tab: Optional[str],
     return name, logo, word, brand, mine, avatar
 
 
-def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str,
-                 who: Optional[Dict[str, Any]]) -> Tuple[str, str, str, str]:
+def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Optional[Dict[str, Any]],
+                 theme: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, str]:
     """The new look's frame for a member page that draws its own document
     (Give with online giving on: giving_router.render_give_page): (the top
     bar, the body tag's class attribute, the tab bar with the early loading,
-    the scroll script), as _shell draws them around a Lumen page."""
+    the scroll script), as _shell draws them around a Lumen page. `theme`:
+    the page's resolve_theme answer, when it has one already."""
     import member_app_ui as ui
     import member_spaces as msp
     from public_form_theme import resolve_theme
-    theme = resolve_theme(biz, site)
+    theme = theme or resolve_theme(biz, site)
     name, logo, word, brand, mine, avatar = _marks(biz, site, theme, tab, who)
     ctx = msp.CURRENT.get() or {}
     space = ctx.get("space") or "church"
@@ -915,7 +916,7 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
         # script, in the Lumen frame with the form in the mock's layout.
         import giving_router as gr
         import member_lumen_give as mlg
-        bar, body, nav, scroll = lumen_chrome(biz, site, "Give", tab="give", who=me)
+        bar, body, nav, scroll = lumen_chrome(biz, site, "Give", tab="give", who=me, theme=theme)
         funds = gr.configured_funds(gr.giving_settings(biz.get("settings")))
         return render_give_page(
             biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
