@@ -1,5 +1,5 @@
 ---
-title: Member app new look (Lumen) — the people pages, step one: Messages (the inbox and a conversation)
+title: "Member app new look (Lumen) — the people pages, step one: Messages (the inbox and a conversation)"
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, on the approved "clean Lumen" mock (version 29, accent level 2): messages "look generic. it should feel like text messages area"; prayer, events and groups are "cool but there is no wow factor". Restyle Messages, Prayer, Events, a group''s page, Me (details, notifications) and News in the new look, in a few PRs.'
