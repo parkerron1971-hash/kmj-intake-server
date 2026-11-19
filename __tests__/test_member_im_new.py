@@ -642,6 +642,27 @@ def test_the_card_says_start_then_your_path(fake, monkeypatch):
     assert imn.TOLD_SECONDS == 600 and imn.NOT_YET_SECONDS == 60
 
 
+def test_connect_leads_with_the_card(fake, monkeypatch):
+    """The Lumen hook (member_lumen.new_here_card) answers with this card, and
+    Connect's "Your next step" carries it."""
+    import member_lumen
+    me = fake.contact(ANA)
+    assert "I'm new here" in member_lumen.new_here_card(fake.biz, me)
+    assert member_lumen.new_here_card(fake.biz, me) == imn.new_here_card(fake.biz, {"me": me}, None)
+    c = _app(fake, monkeypatch, ANA)
+    token = member_lumen.CURRENT.set(True)
+    try:
+        r = c.get("/my/connect")
+    finally:
+        member_lumen.CURRENT.reset(token)
+    assert r.status_code == 200 and 'class="lm-newslot"' in r.text
+    assert 'href="/my/new">Start</a>' in r.text.split('class="lm-newslot"', 1)[1]
+    monkeypatch.setenv("MEMBER_IM_NEW", "off")
+    imn._TOLD.clear()
+    imn._NOT_YET.clear()
+    assert member_lumen.new_here_card(fake.biz, me) == ""
+
+
 def test_the_card_follows_the_page_look(fake, monkeypatch):
     import member_lumen
     monkeypatch.setenv("MEMBER_LUMEN", "off")
