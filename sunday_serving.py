@@ -537,12 +537,20 @@ def add_away(biz: Dict[str, Any], cid: str, start: str, end: str, note: str = ""
     """Away days: saved at once, and nobody asks them on those days. Someone
     on the church's leaders schedule (church_schedule.takes) asks for them
     instead, through the leaders schedule and all its rules: {"asked": True,
-    ...} and nothing is saved here."""
+    ...} and nothing is saved here. So does a volunteer whose days are full
+    for their department, or who already said yes to serve one of them
+    (church_schedule_volunteers.away: it goes to their team's leader,
+    {"asked": True, "volunteer": True, ...}). For every other Away, and
+    whenever that can't be looked at, what follows is what it always was."""
     import church_schedule
     if church_schedule.takes(biz, cid):
         asked = _ask_away(biz, cid, start, end)
         if asked is not None:
             return asked
+    import church_schedule_volunteers
+    asked = church_schedule_volunteers.away(biz, cid, start, end)
+    if asked is not None:
+        return asked
     biz_id = str(biz["id"])
     try:
         a, b = date.fromisoformat(str(start)[:10]), date.fromisoformat(str(end or start)[:10])

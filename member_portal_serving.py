@@ -34,6 +34,16 @@ is open): their Away is asked for instead of saved, the page says so with a
 way to their Dates page (/my/lead/dates), and taking off a date that came
 from an ask takes the ask back. For everyone else nothing here changes, by a
 byte: `m["dates"]` is None and both of its parts are empty.
+
+A volunteer (S2-5, church_schedule_volunteers, where the leaders schedule's
+step 2 reaches the church): Away on a day full for their department, or on a
+day they said yes to serve, goes to their team's leader. The page says so, by
+name and why (`done=vol_asked`, the rest read on the page), with a way to find
+someone to cover; under Away, an ask still waiting sits beside their away
+dates with the same x to take it back, and a "not this one" whose days are
+still to come says who said it. Every other Away is saved at once, as always,
+and with no such ask of theirs the page is what it always was, by a byte:
+`m["vol"]` is None and its three parts are empty.
 """
 from __future__ import annotations
 
@@ -234,6 +244,21 @@ ASKED_ALONE = {
     "asked_short": "Asked. It's short notice, so the answer may take a little time. With a yes these days go on "
                    "your away days.",
 }
+# Away, for a volunteer (S2-5): a day full for their department, or one they
+# said yes to serve, went to their team's leader. {to}: who, by name; {why}:
+# their own reason it went there (VOL_WHY), never anyone else's. Only the
+# short code rides in the address; the rest is read on the page.
+VOL_DONE = "vol_asked"
+VOL_SENT = "Sent to {to}, because {why}. With a yes these days go on your away days."
+VOL_ALONE = "Sent to your team's leader, who says yes or not this one. With a yes these days go on your away days."
+VOL_WHY = {
+    ("serving", True): "you're on the schedule that day",
+    ("serving", False): "you're on the schedule on one of those days",
+    ("full", True): "that day is full for {dept}",
+    ("full", False): "one of those days is full for {dept}",
+    ("both", True): "you're on the schedule that day, and it's full for {dept}",
+    ("both", False): "you're on the schedule on one of those days, and one of them is full for {dept}",
+}
 
 
 def _e(s: Any) -> str:
@@ -310,6 +335,80 @@ def _asked_flash(request: Request, m: Dict[str, Any]) -> str:
     words = ASKED[code].replace("{to}", to) if to else ASKED_ALONE[code]
     return (f'<p class="mp-ok mp-flash" role="status">{_e(words)} '
             f'<a href="{DATES_PAGE}" style="color:inherit;font-weight:600;text-decoration:underline">See it under Dates</a></p>')
+
+
+def _vol_why(a: Dict[str, Any]) -> str:
+    """Why a volunteer's own ask went to their team's leader, in their words:
+    they are on the schedule then, and/or the day is full for their
+    department (by its name). Read from the ask's own flags."""
+    flags = a.get("flags") or []
+    one = a.get("starts_on") == a.get("ends_on")
+    kind = ("both" if "serving" in flags and "over_limit" in flags else "full" if "over_limit" in flags
+            else "serving")
+    dept = ((a.get("department") or {}).get("name") or "").strip() or "your team"
+    return VOL_WHY[(kind, one)].replace("{dept}", dept)
+
+
+def _vol_to(a: Dict[str, Any]) -> str:
+    import church_schedule as cs
+    to = str((a.get("to") or {}).get("name") or "")
+    return "" if to in ("", cs.LEFT, "Someone") else to
+
+
+def _vol_flash(request: Request, m: Dict[str, Any]) -> str:
+    """What pressing Save under Away did for a volunteer whose days went to
+    their team's leader: who, by name, and why, from their newest ask still
+    waiting; with a way to find someone to cover each Sunday they were on
+    for. Empty for everyone else, whatever the address says."""
+    v = m.get("vol")
+    if not v or str(request.query_params.get("done") or "") != VOL_DONE or request.query_params.get("err"):
+        return ""
+    waiting = [a for a in v.get("asks") or [] if a.get("state") == "asked"]
+    if not waiting:
+        return (f'<p class="mp-ok mp-flash" role="status">{_e(VOL_ALONE)}</p>' if v.get("unread") else "")
+    a = max(waiting, key=lambda x: str(x.get("created_at") or ""))
+    to = _vol_to(a)
+    words = VOL_SENT.replace("{to}", to).replace("{why}", _vol_why(a)) if to else VOL_ALONE
+    subs = ""
+    if "serving" in (a.get("flags") or []):
+        on = [c for c in m.get("coming") or [] if a["starts_on"] <= c["service"]["day"] <= a["ends_on"]
+              and not c.get("swap_to")][:3]
+        subs = "".join(f' <a href="/my/serving?sub={_e(c["id"])}" style="color:inherit;font-weight:600;'
+                       f'text-decoration:underline">Find someone to cover {_e(_day(c["service"]["at"]))}</a>'
+                       for c in on)
+    return f'<p class="mp-ok mp-flash" role="status">{_e(words)}{subs}</p>'
+
+
+def _vol_chips(m: Dict[str, Any]) -> str:
+    """A volunteer's asks still waiting, beside their away dates: the days
+    and who it's waiting for, with the same x to take one back. Empty for
+    everyone else."""
+    out = ""
+    for a in (m.get("vol") or {}).get("asks") or []:
+        if a.get("state") != "asked" or not a.get("id"):
+            continue
+        to = _vol_to(a)
+        said = f'{_range(a)} · waiting for {to}' if to else f'{_range(a)} · waiting for a yes'
+        out += (f'<span class="on">{_e(said)}<form method="post" action="/my/serving/away/remove">'
+                f'<input type="hidden" name="id" value="{_e(a["id"])}">'
+                f'<button type="submit" aria-label="Take back {_e(_range(a))}">{_x()}</button></form></span>')
+    return out
+
+
+def _vol_lines(m: Dict[str, Any]) -> str:
+    """A "not this one" to a volunteer's ask, while its days are still to
+    come: who said it, and the note that came with it (theirs to read, as
+    shape() gave it). Empty for everyone else."""
+    out = ""
+    for a in (m.get("vol") or {}).get("asks") or []:
+        if a.get("state") != "no":
+            continue
+        by = str((a.get("decided") or {}).get("by") or "").strip() or "Your team's leader"
+        out += f'<p class="sv-lede" style="padding:10px 0 0">{_e(by)} said not this one to {_e(_range(a))}.</p>'
+        note = (a.get("decided") or {}).get("note")
+        if note:
+            out += f'<p class="sv-lede" style="padding:2px 0 0">{_e(_first(by))}&#x27;s note: {_e(note)}</p>'
+    return out
 
 
 def _dates_line(m: Dict[str, Any]) -> str:
@@ -524,7 +623,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <div class="sv-lt h-teal"><p class="sv-eb">{_e(me.get("name") or "")}</p><h1 class="sv-h">My <em>serving</em></h1></div>
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
 {f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
-{_flash(request)}{_asked_flash(request, m)}
+{_flash(request)}{_asked_flash(request, m)}{_vol_flash(request, m)}
 {_check_html(m.get("hours")) if check_first else ""}
 {_hours_html(m.get("hours"), me)}
 <section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">
@@ -534,7 +633,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {asks}{open_}{coming}
 {"" if check_first else _check_html(m.get("hours"))}
 <section class="sv-sec" id="away" aria-labelledby="sv-aw-h"><div class="sv-sh"><h2 id="sv-aw-h">Away</h2></div>
-<p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p>{_dates_line(m)}<div class="sv-away">{away_chips}{add}</div></section>
+<p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p>{_dates_line(m)}<div class="sv-away">{away_chips}{_vol_chips(m)}{add}</div>{_vol_lines(m)}</section>
 <section class="sv-sec" aria-labelledby="sv-of-h"><div class="sv-sh"><h2 id="sv-of-h">How often</h2></div>
 <form method="post" action="/my/serving/often"><div class="sv-seg" role="radiogroup" aria-label="How often">{seg}</div></form>
 <p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>
@@ -836,6 +935,27 @@ def _dates(request: Request, biz: Dict[str, Any], cid: str) -> Optional[Dict[str
         return None
 
 
+def _vol(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
+    """A volunteer's own asks (S2-5: Away on a day full for their department,
+    or one they said yes to serve, went to their team's leader): {"asks":
+    [...]} for those still waiting and a "not this one" still to come, or
+    {"asks": [], "unread": True} when they couldn't be read. None where the
+    leaders schedule's step 2 doesn't reach this church: no read is made
+    then, and the page is exactly what it always was (as it is too for
+    someone with no such ask). NEVER RAISES."""
+    try:
+        import church_schedule_volunteers as csv
+        if not csv.here(biz):
+            return None
+        rows = csv.mine(biz, cid)
+        if rows is None:
+            return {"asks": [], "unread": True}
+        return {"asks": rows} if rows else None
+    except Exception:  # noqa: BLE001 — never worth the page
+        logger.warning("my serving: a volunteer's own asks didn't load", exc_info=True)
+        return None
+
+
 async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], sub: str):
     from member_portal import _page, _SECURE_HEADERS
     biz, site = church["business"], church.get("site")
@@ -857,6 +977,7 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
             m["hours"] = await hours_for(request, biz, me)
             m["dates"] = await asyncio.to_thread(_dates, request, biz, str(me["id"]))
+            m["vol"] = await asyncio.to_thread(_vol, biz, str(me["id"]))
             import member_portal_checks as mpck
             return _page(render_page(biz, site, request, me, m, sub_for, door=await mpck.door_async(request, biz)))
         if rest.endswith("/pack"):
@@ -976,9 +1097,11 @@ async def away(request: Request):
     back, out = await _act(request, False, add, "start", "end")
     # Someone on the leaders schedule: it was asked for, not saved, unless it
     # needed nobody's yes (then it is on their away days now, as anyone's is).
+    # A volunteer whose day was full, or who was on for it: it went to their
+    # team's leader (S2-5).
     done = "away"
     if said.get("asked") and said.get("state") != "yes":
-        done = "asked_short" if said.get("short") else "asked"
+        done = VOL_DONE if said.get("volunteer") else ("asked_short" if said.get("short") else "asked")
     return out or _go("/my/serving", done=done)
 
 

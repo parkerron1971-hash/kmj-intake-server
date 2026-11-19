@@ -66,6 +66,14 @@ only when they are the one who may give the exception (the owner's person,
 or that of whoever oversees the office, on an ask that went up to them);
 anyone else who has the card reads the same words without a name.
 
+VOLUNTEERS (S2-5): a volunteer's Away on My serving that went to their team's
+leader (church_schedule_volunteers) waits here, under Waiting for your yes,
+for whoever it went to, whether or not they are on the leaders schedule
+themself (church_schedule.section gives them the entry while it waits). Its
+card says why it came to them: the volunteer is on the schedule to serve on
+one of those days, or a day is full for their department (a count and the
+day, never who). Their yes is a plain yes, over the department's number too.
+
 A reason, and the note that came with an answer, appear only where
 church_schedule.shape() gave them. "Who else is away" is built from name,
 days and who covers alone (view's `away`), so nothing else can be printed
@@ -356,7 +364,10 @@ def _limits(ch, cid: str, mine: List[Dict[str, Any]], waiting: List[Dict[str, An
     import church_schedule as cs
     import church_schedule_limits as csl
     up = cs.goes_up(ch, cid)["name"] if asks else ""
-    flagged = [a for a in mine + waiting if a.get("state") == "asked" and cs.flagged(a)]
+    # A volunteer's ask on a day full for their department (S2-5) is looked
+    # at the same way for its card, for that department alone.
+    flagged = [a for a in mine + waiting if a.get("state") == "asked"
+               and (cs.flagged(a) or (cs.volunteer(a) and "over_limit" in (a.get("flags") or [])))]
     spans = [(cs._day(a["starts_on"]), cs._day(a["ends_on"])) for a in flagged]
     spans = [(lo, hi) for lo, hi in spans if lo and hi]
     if not spans:
@@ -373,6 +384,10 @@ def _limits(ch, cid: str, mine: List[Dict[str, Any]], waiting: List[Dict[str, An
         own = id(a) in theirs
         why = csl.flags_of(pic, a["contact_id"], first, last, (a.get("department") or {}).get("id"),
                            before=a.get("created_at"), pairs=not own)["why"]
+        if cs.volunteer(a):
+            # Their department's number, and nothing of the leaders' rules.
+            a["why"] = [w for w in why if w.get("flag") == "over_limit" and w.get("of") == "department"]
+            continue
         if own and "pair" in (a.get("flags") or []):
             why.append({"flag": "pair"})                # as it was when they asked: never looked at again
         elif not own and a.get("can_answer"):
@@ -522,6 +537,43 @@ def _up_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
     return f'<div class="dt-it dt-full"><b>Why it came to you</b>{body}</div>'
 
 
+def _vol_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
+    """Said while a volunteer's ask waits (S2-5): why it went to their
+    team's leader. They are on the schedule to serve on one of these days,
+    and/or one of them is full for their department, as a count and the day
+    (never who is away). To the one it came to, that their yes is all it
+    needs; to the volunteer, who it is waiting on. '' for any other ask."""
+    import church_schedule as cs
+    if a.get("state") != "asked" or not cs.volunteer(a):
+        return ""
+    flags = a.get("flags") or []
+    lines: List[str] = []
+    if "serving" in flags:
+        lines.append("You’re on the schedule to serve on one of these days." if theirs
+                     else f"{_first(a.get('name'))} is on the schedule to serve on one of these days.")
+    if "over_limit" in flags:
+        why = a.get("why")
+        dept = (a.get("department") or {}).get("name") or "their team"
+        if why:
+            lines += _why_lines(why, today)
+        elif why is None:
+            lines.append(f"One of these days was full for {dept} when {'you' if theirs else 'they'} asked.")
+        else:
+            lines.append(f"One of these days was full for {dept} when {'you' if theirs else 'they'} asked. "
+                         "There’s room now.")
+    if not lines:
+        return ""
+    if theirs:
+        to = (a.get("to") or {}).get("name") or ""
+        to = "" if to == cs.LEFT else to
+        head = f"Why it went to {to}" if to else "Why it went to your team’s leader"
+        end = "With a yes these days go on your away days."
+    else:
+        head, end = "Why it came to you", "Your yes is all it needs."
+    return (f'<div class="dt-it dt-full"><b>{_e(head)}</b>' + "".join(f"<p>{_e(x)}</p>" for x in lines)
+            + f"<p>{_e(end)}</p></div>")
+
+
 def _shown(a: Dict[str, Any]) -> str:
     """What this card shows as being in the way, for its Yes to carry: the
     flags the "Why it came to you" box spells out (the days as they stand,
@@ -548,7 +600,7 @@ def _wait_card(a: Dict[str, Any], today: date, tz) -> str:
             f'<div class="dt-top"><b>{_e(a["name"])}</b>'
             f'<span class="dt-state wait">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</span></div>'
             f'<p class="dt-when">{_e(_days(a["starts_on"], a["ends_on"], today))}</p>{_short(a)}'
-            f'{_up_line(a, False, today)}{reason}'
+            f'{_up_line(a, False, today)}{_vol_line(a, False, today)}{reason}'
             f'{_cover_line(a) or "<p class=dt-meta>Nobody is covering yet.</p>"}{_serving_line(a, False)}'
             + (f'<p class="dt-meta">Asked {_e(asked)}</p>' if asked else "")
             + f'<div class="dt-acts"><form method="post" action="{act}"><input type="hidden" name="ans" value="yes">'
@@ -609,7 +661,8 @@ def _mine_card(a: Dict[str, Any], today: date, tz) -> str:
     return (f'<section class="ld-pr dt-card" aria-label="{_e(days)}">'
             f'<div class="dt-top"><b>{_e(days)}</b><span class="dt-state {st["cls"]}">{_e(st["chip"])}</span></div>'
             f'<p class="dt-meta">{_e(KIND_WORDS.get(a.get("kind"), "Time away"))}</p>{_short(a)}'
-            f'<p class="dt-when">{_e(st["line"])}</p>{_up_line(a, True, today)}{_serving_line(a, True)}{note_html}'
+            f'<p class="dt-when">{_e(st["line"])}</p>{_up_line(a, True, today)}{_vol_line(a, True, today)}'
+            f'{_serving_line(a, True)}{note_html}'
             f'{reason}{_cover_line(a)}{back}'
             f'</section>')
 
@@ -752,6 +805,9 @@ def body(v: Optional[Dict[str, Any]], draft: Optional[Dict[str, Any]] = None) ->
                      '<p class="ld-quiet">Nobody else is away in the next two months.</p>') + '</div>')
         quiet = ("Everyone on the leaders schedule sees your days and who covers. Why you’re away stays between you, "
                  "whoever your ask goes to and those who look after the whole church.")
+    elif not v["waiting"] and any(a.get("group") == "volunteers" for a in mine):
+        # A volunteer who followed a link to their own (S2-5): theirs are on My serving too.
+        quiet = "These are the away days you asked your team’s leader for. They’re on My serving too."
     else:
         quiet = ("You see only the asks that came to you. You aren’t on the leaders schedule yourself, so there’s "
                  "nothing to ask for here.")

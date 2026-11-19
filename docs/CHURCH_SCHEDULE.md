@@ -18,10 +18,10 @@ gave stays private. Step 2 adds the limit: only so many of a group, or of a depa
 one service date; days nobody takes off; two people who can't be away together; and the same
 path for volunteers when their date is full or they already said yes to serve it.
 
-**Where it stands (2026-11-18).** Eight PRs. Step 1's tables and step 2's are both in
+**Where it stands (2026-11-18).** Nine PRs. Step 1's tables and step 2's are both in
 production. The limit on how many can be away at once is built for leaders and the office (S2-2
-and S2-3, below), and so are people who can't be away together (S2-4); the volunteers' rules
-(S2-5) and things that repeat (S1-7) are not.
+and S2-3, below), and so are people who can't be away together (S2-4) and the volunteers' rules
+(S2-5); things that repeat (S1-7) are not.
 
 **Step 1's migration is applied.** `supabase/APPLY-2026-11-19-church-schedule.sql` was run by the
 owner on 2026-11-18 and checked by the lead session with the file's own Check block: the four
@@ -97,17 +97,30 @@ production that time has passed.
   is kept and does nothing. Owner-only by default; both migrations were applied before it
   merged, so it is live at the platform owner's church from its first deploy. No migration of
   its own; on a database with step 1's file alone nothing of it is read.
+- **S2-5** holds the volunteers' rules (`church_schedule_volunteers.py`; the owner's call 3:
+  "Volunteers need no yes to be away, unless the date is full or they already agreed to serve
+  it; then it goes to their team leader"). A volunteer's Away on the Serve page on a free date is
+  saved at once, byte for byte as before. On a day full for one of their departments (counting
+  only away dates that were agreed, as S2-3 counts), or a day they said yes to serve, it is an
+  ask (`grp = volunteers`, `team_group_id`) to the leader of the Sunday team concerned, and the
+  page says so by name and why. That leader answers on Dates (the entry is theirs while it waits,
+  on the leaders schedule or not) with a plain yes, over the department's number too; the yes
+  writes the away date and opens the places they had agreed to. A volunteer's Away never fails
+  because of this: anything that goes wrong saves it at once. Owner-only by default; both
+  migrations were applied before it merged, so it is live at the platform owner's church from its
+  first deploy, and **real volunteers there meet it on deploy**. No migration of its own; on a
+  database with step 1's file alone a volunteer's Away is exactly what it was.
 
 The office app has no screen yet: a login's notice still points at the office app, where the
 ask isn't shown. A login whose person is on the schedule answers in the member app, as that
 person.
 
 In sections 3 to 6, what is marked **built** describes code that exists; the rest is still the
-plan for the PRs ahead (S1-7 and S2-5). Section 7 is what was decided; 7.4 is
+plan for the PR ahead (S1-7). Section 7 is what was decided; 7.4 is
 what the build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, 7.6 what the build
 of S1-5 decided, 7.7 what the build of S1-6 decided, 7.8 what the writing of S2-1 decided,
-7.9 what the build of S2-2 and S2-3 decided, and 7.10 what the build of S2-4 decided, each with
-where it differs from the plan above it.
+7.9 what the build of S2-2 and S2-3 decided, 7.10 what the build of S2-4 decided, and 7.11 what
+the build of S2-5 decided, each with where it differs from the plan above it.
 
 **Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
 away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
@@ -933,18 +946,62 @@ to `goes_up` when it isn't, and never sends one back down to the nearest step.
 pairs of whoever asked what waits for the reader's yes and names the other only on a card the
 reader may answer; `_why_lines` says a pair once, after the days (7.10).
 
-**Still ahead** (their own PRs)
+**`church_schedule_volunteers.py`** (**built**, S2-5; the volunteers' rules. No router: the
+member app's Serve page and Dates, and the hourly sweep, call it)
 
 ```
-departments_of(ch, cid) -> List[dict]                                           # S2-5
-volunteer_plan(ch, cid, starts_on, ends_on) -> {"instant": bool, "flags", "to", "team_group_id", "assignments"}
-team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_members.role = leader, by name), else
-                                                # church_map.team_head, else the owner
+GRP = "volunteers"; MINE_MAX = 50
+here(biz) -> bool                              # church_schedule._here (switch, tables, church: kept) and step2() (kept).
+                                               # NEVER RAISES. False: nothing here reads
+teams_of(ch, cid) -> List[gid]                 # the Sunday teams they are on (serve_teams, active), by name; paged
+departments_of(ch, cid) -> List[{id, name, teams}]   # the active departments those teams hang from (as one of its
+                                               # groups, or by name as one of its Serve options), the church's order
+team_step(ch, gid, department_id=None, *, but) -> List[{kind, id, name}]   # everyone at the first step that has
+                                               # anyone: the team's own leaders (group_members role leader, by name);
+                                               # the department it hangs from, its leader while they hold a role that
+                                               # leads, else its overseer while they hold one that oversees
+                                               # (church_map.team_head's rule, #1719); its leader, else its overseer,
+                                               # whatever they hold; whoever keeps Who serves when (the Manager logins
+                                               # holding serve_schedule; never an Admin); the owner. Never `but`
+leader_of(ch, gid, department_id=None, *, but) -> Optional[{kind, id, name}]   # team_step's first: the doc's
+                                               # `team_leader` (that word is a role key, kept out of rule code)
+volunteer_plan(ch, cid, starts_on, ends_on, *, now) -> {"instant", "flags", "to", "team_group_id", "department_id",
+                                               "full": [{department, why}], "places": [...]}   # READS ONLY
+ask(ch, cid, starts_on, ends_on, plan) -> row  # the one write: time off, no reason, grp volunteers, team_group_id,
+                                               # department_id, to the plan's `to`; the same days again answer with
+                                               # the one waiting; 20 waiting a 400 (TOO_MANY)
+away(biz, cid, start, end) -> Optional[dict]   # the Serve page's branch (sunday_serving.add_away). None: SAVED AT
+                                               # ONCE, AS ALWAYS (free, closed, on the leaders schedule or can't tell,
+                                               # or ANYTHING going wrong: one line logged). Else {"asked": True,
+                                               # "volunteer": True, "state", "to", "short": False}
+mine(biz, cid, now=None) -> Optional[List[shaped]]   # My serving: their own still waiting, and a "not this one"
+                                               # still to come, through shape() as that person. One bounded read;
+                                               # None closed (no read) or unreadable. NEVER RAISES
+take_back(biz, cid, ask_id) -> bool            # the x on a waiting one (church_schedule.withdraw_fact asks it when no
+                                               # away date has that id, and only with step 2 there)
+stale(ch, ask) -> Optional[{kind, id, name}]   # the sweep: who it should sit with now, or None to leave it
 ```
 
-- `sunday_serving.add_away`: the volunteer branch (`volunteer_plan`).
-- `sunday_serving.mine` `:101`: a volunteer's waiting asks beside the away chips.
-- `member_portal_serving.render_page` `:466-492`: the "waiting for {leader}" chip and the find-a-sub link to `/my/serving?sub=<id>` (`ss.subs` `:422`, `ask_sub` `:434`).
+Where it is wired (**built**, S2-5):
+
+- `church_schedule.volunteer(ask)`: `grp` (or shape()'s `group`) is `volunteers`. `flagged()`
+  is false for such an ask, so it never goes up and whoever it went to answers it;
+  `answer()` never rechecks one and never gives it an exception; `withdraw_fact` hands an
+  id that names no away date to `take_back`.
+- `sunday_serving.add_away`: after `takes()` says no, `church_schedule_volunteers.away`; None
+  goes on to the code as it always was.
+- `member_portal_serving`: `_vol` (`m["vol"]`), `_vol_flash` (`done=vol_asked`: "Sent to {to},
+  because {why}. …", with "Find someone to cover {day}" for each Sunday they were on for),
+  `_vol_chips` ("Dec 18 – 25 · waiting for {name}", with the same x), `_vol_lines` (a "not this
+  one" still to come, and its note). With `m["vol"]` None all three are empty.
+- `member_portal_dates`: `_limits` works out `why` for a volunteer's ask on a full day (their
+  department's number alone); `_vol_line` is its card's "Why it came to you" (and, on their own
+  card, "Why it went to {name}"); a volunteer who opens Dates by a link reads that theirs are on
+  My serving too.
+- `church_schedule_tell`: `FIELDS` gains `grp` and `department_id`; `volunteer_why`, the words
+  of a volunteer's ask and its answer; `SERVING_PAGE` (`/my/serving`, "Open My serving") for
+  the volunteer's own notices; the sweep reads `team_group_id` where step 2 is there and sends a
+  volunteer's waiting ask on only along its team's chain (`stale`).
 
 ### 3.4 Where step 5 (Chief verbs) hooks in
 
@@ -1001,7 +1058,7 @@ team_leader(ch, group_id) -> Optional[Dict]     # the team's leaders (group_memb
 | `GET /church/schedule/protected-days?business_id=&from=&to=` (from today for a year when unnamed) | `{days: [{id, day, name}], can_change}` | as `limits` |
 | `POST /church/schedule/protected-days` | `{business_id, day, name}` (today or later; a name of 80 at most). One row a date: naming a day again renames it. `{saved: {id, day, name}}` | the owner, the office overseer |
 | `DELETE /church/schedule/protected-days/{id}?business_id=` | `{removed: {id, day, name}}`; 404 for one that isn't this church's | the owner, the office overseer |
-| `GET /church/schedule/volunteers?business_id=&from=&to=` (**built**, read only; 93 days at most) | `{from, to, departments: [{id, name, at_most\|null, people, away: [{contact_id, name, starts_on, ends_on}], waiting: [{contact_id, name, starts_on, ends_on, flags}]}]}`. `away` is the department's own people's away dates (the facts). `waiting` holds only a volunteer's ask (`grp = volunteers`), never a leader's, and the read does not select a reason. Empty until S2-5 | `serve_schedule` holders (so an Admin), the owner, the office overseer: every department. An office login whose person leads a department or is over it: that one. Anyone else: 403 |
+| `GET /church/schedule/volunteers?business_id=&from=&to=` (**built**, read only; 93 days at most) | `{from, to, departments: [{id, name, at_most\|null, people, away: [{contact_id, name, starts_on, ends_on}], waiting: [{contact_id, name, starts_on, ends_on, flags}]}]}`. `away` is the department's own people's away dates (the facts). `waiting` holds only a volunteer's ask (`grp = volunteers`), never a leader's, and the read does not select a reason. Since S2-5 such asks exist: each is listed under the department it was filed under (the full one, else the serving team's own), and under none when that team hangs from no department | `serve_schedule` holders (so an Admin), the owner, the office overseer: every department. An office login whose person leads a department or is over it: that one. Anyone else: 403 |
 | `GET /church/schedule/pairs?business_id=` (**built**, S2-4) | `{pairs: [{id, a: {contact_id, name, on_schedule}, b: {…}, note, in_force, created_at}], can_change}`, `a` the smaller id. `in_force` is false while either is off the leaders schedule (kept, and it does nothing) | the owner and the office overseer only (403 for anyone else: an Admin, a Manager who doesn't oversee the office, a department's leader, one of the pair) |
 | `POST /church/schedule/pairs` (**built**, S2-4) | `{business_id, a_contact_id, b_contact_id, note?}`, either order. Two different people (400), both this church's own (400), both on the leaders schedule (400), a note of 140 at most (400); the same two again, either order, 409. `{saved: pair}` | as `GET` |
 | `DELETE /church/schedule/pairs/{id}?business_id=` (**built**, S2-4) | `{removed: pair}`; 404 for one that isn't this church's | as `GET` |
@@ -1031,7 +1088,7 @@ The first five rows are **built** (S1-5); the two commitments rows are S1-7.
 Every POST answers 404 while the switch is closed for the church or its tables aren't there (`church_schedule.on`), refuses another site's POST (and lets `Origin: null` from this address through, by `Sec-Fetch-Site`), and never writes in the owner's preview.
 
 - Unchanged addresses with new behaviour (**built**, S1-6): `POST /my/serving/away` and `/my/serving/away/remove` (3.2). For someone on the leaders schedule the first asks instead of saving and goes back with `done=asked` or `done=asked_short`; the second takes the ask back when the date came from one. For everyone else both do what they always did. `POST /my/serving/cant` ("Can't make it" on a place they agreed to) is unchanged for everyone.
-- Step 2 adds nothing new for volunteers: the same two routes; the team leader answers on `/my/lead/dates`.
+- Step 2 adds nothing new for volunteers: the same two routes; the team leader answers on `/my/lead/dates`. **Built** (S2-5): `POST /my/serving/away` for a volunteer whose day is full or who is on for it goes back with `done=vol_asked` (only the code rides in the address); `POST /my/serving/away/remove` with the id of their waiting ask takes it back (the chip's x). For every other Away both are what they always were.
 
 ---
 
@@ -1093,7 +1150,8 @@ Every POST answers 404 while the switch is closed for the church or its tables a
 
 Computed in `flags_for` when asked, and again at yes. The leader and office rows, the protected
 day row, the yes rows and the "can't make it" row are **built** (S2-2 and S2-3), the pair row
-too (S2-4); the volunteer rows are S2-5.
+too (S2-4), and the volunteer rows (S2-5, `church_schedule_volunteers`; where they differ from
+the rows as planned, 7.11 says).
 
 | Case | Goes to | Flags | Written | Told |
 |---|---|---|---|---|
@@ -1106,11 +1164,13 @@ too (S2-4); the volunteer rows are S2-5.
 | Not this one on a flagged ask | as any ask that went to them | | settle no; no exception | the asker |
 | Can't make it, or the owner's own time away, on any of the above | nobody decides; never blocked; **never looked at** | none of step 2's (7.9: the plan recorded them) | fact at once. It counts for the next person who asks | step 1's `to`, at once (the owner's own: nobody) |
 | The dates hold no service date and no protected day (a Monday to Thursday trip) | as step 1 | never `over_limit` | | |
-| Volunteer: none of their departments' dates full, and no yes to serve in the range | none | none | plain `serve_away` row, instant, as today | nobody |
-| Volunteer: a department's date is full | the team's leader (`team_leader`: the team's leaders, else `church_map.team_head`, else the owner) | `over_limit` | ask `grp='volunteers'`, `team_group_id`, `department_id`; hold | the leader; the page offers Find a sub |
-| Volunteer: already said yes to serve one of the days | the leader of that place's team | `serving` (and `over_limit` if so) | same | same; each such Sunday links to `/my/serving?sub=<assignment>` |
-| The team leader says yes | | | fact; each of their yes places in the range with no sub agreed is opened as `sunday_serving.cant_make_it` does (`:451-463`) | the volunteer; Planning's own alerts tell the office |
+| Volunteer: none of their departments' dates full, and no yes to serve in the range (**built**) | none | none | plain `serve_away` row, instant, as today, byte for byte | nobody |
+| Volunteer: a department's date is full (**built**) | the team's leader (`leader_of`: the team's own leaders, else the department's by `church_map.team_head`'s rule, else its leader or overseer, else whoever keeps Who serves when, else the owner) | `over_limit` | ask `grp='volunteers'`, `team_group_id`, `department_id`; hold | the leader ("That day is already full, so it came to you"); the page says who, and "that day is full for {department}" |
+| Volunteer: already said yes to serve one of the days (**built**) | the leader of that place's team | `serving` (and `over_limit` if so) | same | same; the page links each such Sunday to `/my/serving?sub=<assignment>` ("Find someone to cover") |
+| The team leader says yes (**built**) | | | a plain yes (no recheck, no exception, over the number too): fact; each of their yes places in the range still to come opened as `sunday_serving.cant_make_it` does (`open_places`, S1-6) | the volunteer, on My serving; Planning's own alerts tell the office |
+| The team leader says not this one (**built**) | | | settle no, with the note | the volunteer; My serving says who said it, and the note, while the days are still to come |
 | Volunteer, sick today | none | | they use Can't make it on the place itself (`ss.cant_make_it`, today's path); an away row for today stays instant | as today |
+| Anything going wrong while a volunteer's Away is looked at (**built**) | none | none | plain `serve_away` row, instant, as always; one line logged (the church's id cut short) | nobody |
 
 The sweep (S1-4) and a flagged ask (**built**, S2-3): it stays with whoever may give its
 exception and is never sent back down to the nearest step. It is sent on, to `goes_up`, only
@@ -1164,7 +1224,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 | **S2-2 Service days and limits** (built, #1943, in one PR with S2-3) | `church_schedule_limits.py`: `ready`, `picture`, `service_days`, `usual_weekdays`, `limit_for`, `away_on`, `department_people`, `may_set_limit`, `limits`, `set_limit`, `days`, `volunteers`; `GET/PUT limits`, `GET days`, `GET volunteers` (read only); the `conftest` pin; `church_schedule_fake` taught step 2's file | `test_church_schedule_limits.py`, at New Hope: the default is `max(1, n // 4)`; the church's own number replaces it and null puts it back; a number is 1 to 99; who may set each number (an Admin sets no church-wide number and no usual days; a department's by those who run it and whoever keeps Who serves when; from the member app, as a person, deferred); a Saturday church's weekdays worked out from its plans, once is not usual, the church's own replace them; a late-evening service is counted on the church's own day; a protected day counts and says its name; event dates count for departments only; who is away is counted from the facts, each person once; a waiting ask is never counted and never shown; 1,003 away dates, 1,003 plans and a team of 1,003 are read whole; a window too wide is refused before anything is read; every value in an address is quoted; a failed read is a 503; with step 1's file alone every route is a 404, the engine is step 1 key for key and nothing of step 2 is read. Each rule was broken once to see its test go red (the PR lists them) | no. Both were applied before this merged |
 | **S2-3 Limit and protected days for leaders** (built, #1943, in one PR with S2-2) | `flags_of`, `flags_for`, `nearest_open`, `look`; `church_schedule.step2`, `flagged`, `gives_exception`, `goes_up`, `held_right`, `_recheck`, `_send_up`; `ask` / `answer` / `may_decide` / `shape` wired; the protected-days routes; `church_schedule_tell.up_words` and the sweep; the Dates page: the look before sending, the cards | `test_church_schedule_limits.py`: each step-2 leader row; never refused; at the number is full; a guarded person's flagged ask goes to the owner alone, and the office overseer's own; a department past its number; only someone who may give the exception says yes; `excepted` recorded in one transaction, kept by a yes taken back; the flags still true; the recheck at yes (past the number, a protected day, by someone who may give it, a second new flag), and "not this one" never rechecked; an ask entered for someone never goes up to whoever entered it; `cant` and the owner's own never flagged, never blocked, and still counted; a member-app session gives an exception only on an ask that went up to that very person; an Admin never gives one; a failed read is a 503 with nothing saved; a yes whose exception fails leaves nothing half made; two answers at once; no title word or role key. `test_church_schedule_tell.py`: a flagged ask's notice goes to whoever it went up to and adds only that it is past the number or on a protected day; the sweep never sends one back down, and sends it on only when it no longer sits with someone who may give the exception. `test_member_portal_dates.py`: before sending nothing is sent and the page says what is in the way, the nearest open days and who can make an exception, with what they typed still in the form; ask anyway; the card after; why it came, as a count and never a name; a protected day named; a yes that no longer lands in plain words; nobody gets an across-the-board view; with step 1 alone the page never looks. Each rule was broken once to see its test go red (the PR lists them) | no |
 | **S2-4 Pairs** (built, #1948) | `church_schedule_limits`: `pairs`, `view_pairs`, `add_pair`, `drop_pair`, the pairs routes, `picture(who=)`, `Picture.pair_hits`, `flags_of`/`flags_for` (`+pair`, `before`), `nearest_open` without pairs; `church_schedule`: `shape` hides `pair`, `_recheck` with `before`, `NEEDS_NOW` and `_now_words`; `church_schedule_tell.up_words`; the Dates page's words and `_limits`; `church_schedule_fake` taught the table's update | `test_church_schedule_pairs.py`, at New Hope: only the owner and the office overseer read or change pairs (an Admin, a Manager who doesn't oversee the office, a department's leader, one of the pair and every member-app session refused); two different people of this church on the schedule, saved once, the smaller first, the same two a 409 (two at once too); another church's id refused and its pair not found; the second ask goes up and the first does not, on any day, from a guarded asker to the owner alone; a pair and a full day are one ask with both flags; the recheck catches a pair that arose after the ask (a new pair, the other's "can't make it"); a later waiting ask of the other never sends the first up; an exception over `pair` only when shown; a pair dropped before the yes is a plain yes; "can't make it" and the owner's own read no pair and count for the other; never named to the asker, never on the calendar for anyone who doesn't read the reason; the other's waiting ask never shown to anyone who may not read it; the nearest open days never give the other's days away; a pair with someone off the schedule does nothing and says so to the owner; with no pairs an ask and its yes each make one read more and nothing else changes, and nothing else reads one; a failed read is a 503; every value quoted; 1,003 pairs listed whole; the fake refuses as the SQL does; no title word or role key. `test_church_schedule_tell.py`: the notice says it overlaps with someone, never who or which days. `test_member_portal_dates.py`: before sending and on the asker's card, unnamed, never the other's days, said from the flag; whoever may give the exception reads who, and their Yes carries `pair`; anyone else with the card reads no name; a yes that no longer lands for a pair alone never says pair. Each rule was broken once to see its test go red (the PR lists them) | no. Both were applied before this merged |
-| **S2-5 Volunteers** | `volunteer_plan`, `team_leader`; `add_away` branch; My serving chips and the sub offer; yes opens their places (the opening itself is built, S1-6, and runs for every yes) | instant when free; an ask when full or already serving; no-leader team goes to the department leader, then the overseer, then the owner (the #1719 cases, `test_church_map_serve.py`); the coordinator never sees a leader's ask | yes |
+| **S2-5 Volunteers** (built) | `church_schedule_volunteers.py` (`volunteer_plan`, `leader_of` / `team_step` for the plan's `team_leader`, `departments_of`, `ask`, `away`, `mine`, `take_back`, `stale`); `church_schedule.volunteer`, `flagged`, `answer`, `withdraw_fact`; the `add_away` branch; My serving's flash, chips and lines; Dates' card; the notices' words and where they open; the sweep | `test_church_schedule_volunteers.py`, at New Hope through the real engine, scheduler and member routes: a free date saved at once with the same write and the same page, byte for byte, at a church with departments and numbers set; a waiting ask never makes a day full; closed or before step 2 nothing reads; every read that fails, and anything at all going wrong, saves it at once with one line logged; serving and full each an ask to the team's leader, never the map's step over them, never instant, a second press the same ask; the chain for a team with no leader (`church_map.team_head`'s answer, then the department's leader, whoever keeps Who serves when, the owner), never themself; someone on the leaders schedule is never a volunteer here; the team leader's yes on Dates is a plain yes that writes the date and opens their places, over the number too; not this one with a note, and the reason and the note by `shape()`'s rule; the Dates entry for a team leader off the schedule; a member-app session is a person; "can't make it" unchanged; taking one back from My serving; the notice words, the claim, quiet hours, My serving as where the volunteer's notice opens; the sweep keeps it with the team and moves it with the team's leader; the hold and the board's words; GET volunteers; 1,003 groups; quoting; no title word; plain words. `test_sunday_planning_holds.py` (the byte-for-byte pin at an open church with numbers set), `test_member_portal_dates.py` (the card), `test_sunday_serving.py`. Each rule was broken once to see its test go red (the PR lists them) | no. Both were applied before this merged |
 
 ---
 
@@ -2017,3 +2077,161 @@ choice was taken, and the one that blocks nobody.
 
 - Whether an ask that overlaps the office overseer's own time away should go to the owner.
 - Whether looks before sending should be limited (the probing above).
+
+### 7.11 Decided while building S2-5
+
+All decided in the build unless it says the lead session; none is the owner's call, and any can
+be reopened with him. His call 3 is the rule: "Volunteers need no yes to be away, unless the date
+is full or they already agreed to serve it; then it goes to their team leader." Where the plan
+and the brief didn't settle something, the choice that changes the least for volunteers was
+taken, and the one that blocks nobody.
+
+**Where things live, and who is a volunteer**
+
+- **The rules are a module of their own**, `church_schedule_volunteers.py`, beside the engine and
+  the limit, with no route of its own: the Serve page, Dates and the sweep call it. The plan's
+  `team_leader` is built as `leader_of` (and `team_step`, everyone at its first step): that word
+  is a role key, and the title-words rule keeps role keys out of rule code.
+- **A volunteer is anyone the kept roster says is not on the leaders schedule**
+  (`church_schedule.on_schedule` is False). A replica that can't tell saves the Away at once, as
+  S1-6 decided; someone taken off the schedule inside the minute the roster is kept is saved at
+  once too (S1-6's corner), and is a volunteer from the next minute.
+- **Only where step 2's tables are there.** `team_group_id` is step 2's column, so the rules ask
+  `step2()` first (after the switch, the tables and the church, each kept): with step 1's file
+  alone, or the switch closed, a volunteer's Away is exactly what it was and nothing is read.
+
+**Full, and already serving**
+
+- **Their departments** are the active departments their Sunday teams hang from, found the two
+  ways S2-2 counts a department's people (as one of its groups, or by name as one of its Serve
+  options). A department with no number never makes a day full (decision 9).
+- **Full is S2-3's count, for their departments alone**: away dates that were agreed, each person
+  once, their own never against them, at the number, on the days that count for a department
+  (the services, the usual weekdays, the event dates). **A protected day and a pair are the
+  leaders' rules and are not looked at for a volunteer** (call 3 names a full date and agreeing to
+  serve, nothing else). Say so if a protected day should send a volunteer's Away to their team's
+  leader too.
+- **Already serving** is a place they said yes to on a day inside the days, still to come
+  (`sunday_serving.yes_places`, the very places a yes opens). A place they were asked for and
+  never answered doesn't count, as it doesn't for a leader (7.7).
+- **The team concerned** is the team of the soonest place they said yes to; with none, their first
+  team (by name) in the first full department (the church's order). The ask is filed under the
+  full department where there is one (the serving team's own when that one is full), else under
+  the serving team's own department, and under none when that team hangs from none. `GET
+  /church/schedule/volunteers` lists an ask under the department it was filed under, so one filed
+  under none is in no department's list there (it still waits on the team leader's Dates, and on
+  the owner's list).
+
+**Who it goes to**
+
+- **The chain**, nearest first, everyone at the first step that has anyone (the brief asked for it
+  written down): (1) the team's own leaders, by name; (2) the department it hangs from: its
+  leader while they hold a role that leads, else its overseer while they hold one that oversees
+  (`church_map.team_head`'s rule from #1719, applied however the team hangs from it); (3) that
+  department's leader, else its overseer, whatever they hold; (4) whoever keeps Who serves when:
+  the Manager logins holding the `serve_schedule` duty (an Admin holds every duty by its seat and
+  is not picked for it); (5) the owner. Never the volunteer themself at any step, and never the
+  leaders map's step over the volunteer (`church_over.above`), which knows nothing of their team.
+- **The first of the step** gets it, as decision 1 does for a leader's ask; the owner and the office
+  overseer can always answer in the office app.
+- **A person is asked as a person** (`to_contact_id`), even one with an office login, so they
+  answer on Dates in the member app and their notice opens Dates. Steps 4 and 5 are logins.
+
+**The ask**
+
+- **It is never "flagged"** (`church_schedule.volunteer`; `flagged()` is false for it), so it never
+  goes up: the brief's "goes up like a leader's only if the doc says so", and section 5's rows send
+  it to the team's leader. **The team's leader says a plain yes over the department's number for
+  their own team** (the simpler, less blocking option the brief named): no recheck at the yes, no
+  exception recorded (`excepted` stays empty), no `shown` on its Yes. `over_limit` on the ask
+  says the day was full when they asked; `GET days` shows the department over its number from the
+  facts once it is a yes. Say so if a volunteer's yes over the number should be saved as an
+  exception, or go up to the owner or the office overseer.
+- **No short notice for a volunteer.** The notice days are the leaders' (call 5); the Serve page
+  never asked a volunteer for notice, and the flag would read as a complaint on the leader's card.
+- **What is written**: time off (the Serve page's Away has no kind), no reason (it asks for none),
+  `made_by` empty, `grp` volunteers, `team_group_id`, `department_id`, `to`, the flags, in one
+  insert sent redacted.
+- **A second press of the same days answers with the ask already waiting**, never a second (two
+  presses at once end as one, by the table's own uniqueness). Twenty waiting is a 400 in the
+  engine's own words, as twenty away dates is today: the one refusal kept.
+- **A volunteer's Away never fails because of this** (the lead session's standing rule from S1-6):
+  every read the rules make (the teams, the numbers, the away dates they count, the places, the
+  map, the asks, who is on the schedule) that fails, the ask's own write failing, or anything else
+  at all, saves it at once, as always, with one line logged that carries the church's id cut short
+  and nothing else. Only the Away's own reads and write, as they always were, can still fail it.
+
+**What the volunteer reads**
+
+- **After Save**: "Sent to {name}, because you're on the schedule that day. With a yes these days go
+  on your away days." ("that day is full for Kids", "you're on the schedule on one of those days,
+  and one of them is full for Kids"), with "Find someone to cover Dec 20" for each Sunday inside
+  the days they were on for (three at most, none that already has a cover asked). Only the short
+  code (`done=vol_asked`) rides in the address; the name, the department and the days are read on
+  that page view from their newest waiting ask. Their own reasons only, never anyone else's.
+- **Under Away**, beside their away dates: each ask still waiting as "Dec 18 – 25 · waiting for
+  {name}", with the same x to take it back (it posts the ask's id to the same route; an id that
+  names no away date of theirs is looked up as their waiting ask, only where step 2 is there).
+  A "not this one" whose days are still to come says who said it, and their note (the asker reads
+  it, by `shape()`'s rule). A yes is an away date like any other there, and taking it off takes
+  the ask back (S1-6).
+- **One bounded read more on My serving** where the rules reach (their own asks, 50 at most,
+  through `shape()` as that person); none where they don't. With no such ask the page is what it
+  always was, byte for byte (pinned open against closed at a church with numbers set, and against
+  main's own page where that commit is in the clone).
+- **The Lead tab's own serve-only page** (`/my/lead` for someone whose only part is serving) shows
+  neither the chips nor the flash, as it never showed the leaders' part either; its Away goes
+  back to My serving, which does.
+- **A volunteer who opens Dates by a link** sees their own asks under My dates, with why it went to
+  whoever it went to, and "They're on My serving too." in place of the line for someone over
+  people.
+
+**What the team's leader reads**
+
+- **On Dates**, under Waiting for your yes (the entry is theirs while it waits, on the leaders
+  schedule or not, from the kept count): "Why it came to you": "{first name} is on the schedule to
+  serve on one of these days." and/or the full day as a count and the day ("Sun, Dec 20 is full:
+  one from Kids is already away, and that's as many as can be away at once."), worked out when the
+  page is read, never who is away; then "Your yes is all it needs." S1-6's line about the place
+  that opens stands beside it.
+
+**Who is told**
+
+- **The team's leader**: "{first name} asked for Dec 20", then "They're on the schedule to serve
+  that day, so it came to you." or "That day is already full, so it came to you." Never which
+  department, how many, who else, a reason or a note. A planned ask's quiet hours, its claim
+  (`told_at`) and its one nudge, as for a leader's ask.
+- **The volunteer**: the answer in their page's words ("It's on your away days now.", "Open My
+  serving to see it."), and their notice opens My serving (`SERVING_PAGE`; the email's button
+  says "Open My serving"). A take-back by the owner or the office overseer opens it too.
+- `church_schedule_tell.FIELDS` gains `grp` and `department_id` (step 1's columns, in no notice's
+  words), so a row handed to a notice says whether it is a volunteer's.
+
+**The sweep and the hold**
+
+- **A volunteer's waiting ask is its team's**: the sweep leaves it while its `to` is still one of
+  those at the first step of its team's chain, and sends it on only along that chain (when `to`
+  is empty, a login that has left the office, or no longer one of them); never to the leaders
+  map's step over the volunteer, never round the same step. The sweep's read of waiting asks names
+  `team_group_id` only where step 2 is there.
+- **The hold is unchanged**: it already holds everyone with an ask still waiting, so a volunteer
+  is not asked to serve those days, the board says "away" in its own words, and they are never in
+  `/planning/schedule`'s list of who is away.
+
+**Tests**
+
+- **`test_church_schedule_volunteers.py`** at New Hope, with three made-up Sunday teams (Kids
+  Check-in hung from Kids by name, with a leader of its own; the Worship Team with none; the
+  Parking Team with no department); Kids may have one away at once. The byte-for-byte pin at an
+  open church with numbers set is in `test_sunday_planning_holds.py`, beside S1-6's.
+
+**Open for the lead session or the owner**
+
+- Whether a volunteer's yes over the number should be saved as an exception, or go up.
+- Whether a protected day, or the notice days, should apply to a volunteer's Away.
+- A volunteer's ask filed under no department is in no department's `GET volunteers` list.
+- A "not this one" leaves them on the place they had said yes to; nothing more tells their team's
+  leader to find a sub (the leader can, from the team's Sundays).
+- The office app has no screen for an ask yet (decision 21): an ask that went to whoever keeps Who
+  serves when, or to the owner, is answered in the member app by that login's own person, or
+  through the office routes.

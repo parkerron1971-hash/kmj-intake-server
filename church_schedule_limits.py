@@ -19,9 +19,11 @@ same time on our services. allowing only so many people off at the same time."
     DELETE /church/schedule/protected-days/{id}?business_id=
     GET    /church/schedule/volunteers?business_id=&from=&to=
                                                      by department: who of its
-                                                     people is away (read only;
-                                                     the volunteers' own rules
-                                                     come with their own PR)
+                                                     people is away, and the
+                                                     volunteers' asks waiting
+                                                     (read only; their rules
+                                                     are church_schedule_
+                                                     volunteers, S2-5)
     GET    /church/schedule/pairs?business_id=       two people who can't be
     POST   /church/schedule/pairs                    away together (S2-4): the
     DELETE /church/schedule/pairs/{id}?business_id=  owner and whoever oversees
@@ -936,8 +938,12 @@ def volunteers(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[st
     department's own people's away dates (the facts: who and which days, as
     Who serves when already shows them). `waiting` holds only a VOLUNTEER'S
     ask (grp volunteers): never a leader's ask, and never anyone's reason,
-    which this read does not even select. Volunteers ask nothing yet (their
-    rules come with their own PR), so `waiting` is empty until then."""
+    which this read does not even select. Since S2-5 a volunteer's Away on
+    a day that is full for their department, or that they said yes to
+    serve, is such an ask (church_schedule_volunteers), filed under the
+    department of the team concerned (the full one, where there is one): it
+    is listed under that department, and under no department when that team
+    hangs from none."""
     if hi < lo or (hi - lo).days > cs.WINDOW_DAYS:
         raise HTTPException(400, BAD_WINDOW)
     import church_map

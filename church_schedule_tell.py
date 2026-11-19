@@ -33,6 +33,13 @@ the number, on a protected day, or that it overlaps with someone they can't
 be away with (up_words): never how many are away, never who, never which day,
 and never who the other of a pair is.
 
+A volunteer's ask (S2-5: their day was full for their department, or they
+had said yes to serve it) is told to their team's leader with who, which days
+and why it came to them: they are on the schedule to serve then, or the day is
+already full (volunteer_why). Never which department, how many, or who else.
+The volunteer hears the answer in the words of their own page, and their
+notice opens My serving.
+
 HOW SOMEONE IS TOLD. One of the church's people: a push to their phone and a
 line in their conversation with the church (member_push.send does both, kind
 `serving`), and an email only when no phone was reached and they have one. An
@@ -60,6 +67,10 @@ open for, and never a sample church. For each:
     number, or on a protected day) went up for an exception and is never
     sent back down: it moves only when it no longer sits with someone who
     may give one, and then to whoever church_schedule.goes_up gives
+  * a VOLUNTEER'S waiting ask (S2-5) is their team's: it stays while it
+    sits with someone at the first step of its team's chain
+    (church_schedule_volunteers.stale), and is sent on along that chain only,
+    never to the leaders map's step over the volunteer
   * untold asks older than two minutes, and untold "can't make it"s
   * untold answers from the last week
   * the one nudge
@@ -92,15 +103,23 @@ SETTLE_SECONDS = 120        # the sweep leaves an ask this new to the write's ow
 ANSWER_DAYS = 7             # an answer nobody could be told of in a week is left untold
 MEMBER_PAGE = "/my/lead/dates"      # Dates on the Lead tab (member_portal_dates): where a person asks and answers
 MEMBER_LINK = "Open your dates"     # the email's button
+# A volunteer (S2-5) asked from My serving, and follows it there: what they
+# hear opens that page. Whoever it went to answers on Dates, as anyone does.
+SERVING_PAGE = "/my/serving"
+SERVING_LINK = "Open My serving"
 OFFICE = "The church office"
 _NO_NAME = {"", "Someone", "The owner", "An office login"}      # the stand-ins a notice never says
 # What a notice may know of an ask. Never `reason`, never `decided_note`.
 # `made_by` (the login that entered an ask for someone) is for the sweep
 # alone: whoever entered an ask can't answer it, so a flagged one is never
-# sent to them. It is in no notice's words.
-FIELDS = ("id,business_id,contact_id,made_by,kind,starts_on,ends_on,state,flags,to_user_id,to_contact_id,"
-          "decided_by_user_id,decided_by_contact_id,decided_at,told_at,answer_told_at,nudged_at,created_at")
-_KEEP = frozenset(FIELDS.split(","))
+# sent to them. It is in no notice's words. `grp` and `department_id` say a
+# volunteer's ask from a leader's (S2-5), and with `team_group_id` (step 2's
+# column, read by the sweep only where step 2 is there) whose it is to send
+# on: none of the three is in a notice's words either.
+FIELDS = ("id,business_id,contact_id,made_by,grp,department_id,kind,starts_on,ends_on,state,flags,to_user_id,"
+          "to_contact_id,decided_by_user_id,decided_by_contact_id,decided_at,told_at,answer_told_at,nudged_at,"
+          "created_at")
+_KEEP = frozenset(FIELDS.split(",")) | {"team_group_id"}
 
 
 def _q(v: Any) -> str:
@@ -148,10 +167,35 @@ def _hi(name: str) -> str:
     return f"Hi {first}," if first != "Someone" else "Hi there,"
 
 
+def volunteer_why(ask: Dict[str, Any]) -> str:
+    """Why a volunteer's ask came to their team's leader (S2-5), as much as a
+    lock screen may say: they are on the schedule to serve then, and/or the
+    day is already full. Never which department, how many, or who else."""
+    flags = ask.get("flags") or []
+    one = str(ask.get("starts_on") or "")[:10] == str(ask.get("ends_on") or "")[:10]
+    serving = "They’re on the schedule to serve that day" if one else \
+        "They’re on the schedule to serve on one of those days"
+    full = "that day is already full" if one else "one of those days is already full"
+    if "serving" in flags and "over_limit" in flags:
+        return f"{serving}, and {'it’s already full' if one else 'one of them is already full'}"
+    if "over_limit" in flags:
+        return full[0].upper() + full[1:]
+    return serving
+
+
 def new_words(church: str, to_name: str, asker: str, ask: Dict[str, Any]) -> Dict[str, str]:
     """A new ask, to whoever it went to. "Can't make it" needs no answer."""
     first, when, long = _first(asker), days(ask.get("starts_on"), ask.get("ends_on")), long_days(
         ask.get("starts_on"), ask.get("ends_on"))
+    if cs.volunteer(ask):
+        # A volunteer's (S2-5): who, which days, and why it came to their
+        # team's leader. Nothing else.
+        title, why = f"{first} asked for {when}", volunteer_why(ask)
+        return {"title": title, "body": f"{why}, so it came to you. Say yes or not this one when you can.",
+                "subject": f"{church}: {title}",
+                "text": "\n\n".join([_hi(to_name), f"{asker} asked to be away {long}. {why}, so it came to you. "
+                                     "It’s waiting for your yes, or not this one.",
+                                     "You can answer in the church’s app."])}
     if ask.get("kind") == "cant":
         title = f"{first} can’t make it {when}"
         return {"title": title, "body": "It’s on the calendar. Nothing for you to answer.",
@@ -209,6 +253,17 @@ def up_words(ask: Dict[str, Any]) -> str:
 def answer_words(church: str, asker: str, by: str, ask: Dict[str, Any]) -> Dict[str, str]:
     """The answer, to the one who asked. Never the note that came with it."""
     when, long = days(ask.get("starts_on"), ask.get("ends_on")), long_days(ask.get("starts_on"), ask.get("ends_on"))
+    if cs.volunteer(ask):
+        # A volunteer's (S2-5): in the words of their own page, My serving.
+        if ask.get("state") == "yes":
+            return {"title": f"{by} said yes to {when}", "body": "It’s on your away days now.",
+                    "subject": f"{church}: yes to {when}",
+                    "text": "\n\n".join([_hi(asker), f"{by} said yes to your away days, {long}. Nobody asks you "
+                                         "to serve on those days now."])}
+        return {"title": f"{by} said not this one for {when}", "body": "Open My serving to see it.",
+                "subject": f"{church}: an answer about {when}",
+                "text": "\n\n".join([_hi(asker), f"{by} said not this one to your away days, {long}.",
+                                     "You can see it on My serving, in the church’s app."])}
     if ask.get("state") == "yes":
         return {"title": f"{by} said yes to {when}", "body": "Your time away is on the calendar.",
                 "subject": f"{church}: yes to {when}",
@@ -329,10 +384,17 @@ def _reach(ch: co.Church, who: Dict[str, str]) -> Optional[Dict[str, str]]:
     return {"kind": co.PERSON, "id": cid, "name": "" if name in _NO_NAME else name, "email": p.get("email", "")}
 
 
-def _member_link(business_id: str) -> str:
+def _member_link(business_id: str, page: str = MEMBER_PAGE) -> str:
     import church_follow_up as cfu
     origin = cfu.site_origin(business_id)
-    return f"{origin}{MEMBER_PAGE}" if origin else ""
+    return f"{origin}{page}" if origin else ""
+
+
+def _page_for(ch: co.Church, ask: Dict[str, Any], to_asker: bool) -> str:
+    """Where a person's notice opens: Dates, where an ask is answered and a
+    leader's own asks are; for the volunteer who made one (S2-5), My
+    serving, where they asked and where it shows."""
+    return SERVING_PAGE if to_asker and cs.volunteer(ask) else MEMBER_PAGE
 
 
 def to_person(biz: Dict[str, Any], cid: str, *, title: str, body: str, ref: str, subject: str, text: str,
@@ -354,8 +416,8 @@ def to_person(biz: Dict[str, Any], cid: str, *, title: str, body: str, ref: str,
             email, name = p.get("email", ""), name or p.get("name", "")
         if email:
             try:
-                link = _member_link(b)
-                label = link_label or MEMBER_LINK
+                link = _member_link(b, url)
+                label = link_label or (SERVING_LINK if url == SERVING_PAGE else MEMBER_LINK)
                 html = clt.render_email(biz, text, title, link, label)
                 clt.deliver(biz, email, name, subject, html, ref, reply_to=clt._office_email(biz))
                 mailed = 1
@@ -396,11 +458,13 @@ def to_login(ch: co.Church, uid: str, *, title: str, body: str, ref: str, subjec
     return {"rang": int(rang or 0), "mailed": mailed}
 
 
-def _send(ch: co.Church, who: Dict[str, str], words: Dict[str, str], ref: str) -> bool:
-    """One notice to one person or login. True when anything went."""
+def _send(ch: co.Church, who: Dict[str, str], words: Dict[str, str], ref: str, page: str = MEMBER_PAGE) -> bool:
+    """One notice to one person or login. True when anything went. `page`:
+    where a person's notice opens (a login's opens the office app)."""
     kw = dict(title=words["title"], body=words["body"], ref=ref, subject=words["subject"], text=words["text"],
               email=who["email"], name=who["name"])
-    got = to_login(ch, who["id"], **kw) if who["kind"] == co.LOGIN else to_person(ch.business, who["id"], **kw)
+    got = to_login(ch, who["id"], **kw) if who["kind"] == co.LOGIN else to_person(ch.business, who["id"], url=page,
+                                                                                    **kw)
     return bool(got["rang"] or got["mailed"])
 
 
@@ -426,12 +490,12 @@ def _release(b: str, ask: Dict[str, Any], column: str, stamp: str) -> None:
 
 
 def _claimed_send(ch: co.Church, ask: Dict[str, Any], column: str, guard: str, who: Dict[str, str],
-                  words: Dict[str, str], ref: str, now: datetime) -> str:
+                  words: Dict[str, str], ref: str, now: datetime, page: str = MEMBER_PAGE) -> str:
     stamp = cs._iso(now)
     if not _claim(ch.b, ask, column, stamp, guard):
         return "taken"
     try:
-        sent = _send(ch, who, words, ref)
+        sent = _send(ch, who, words, ref, page)
     except Exception:  # noqa: BLE001 — a claim is never left taken for a notice that didn't go
         logger.warning("leaders schedule: a notice failed (ask %s)", str(ask.get("id"))[:8], exc_info=True)
         sent = False
@@ -510,7 +574,7 @@ def tell_answer(ch: co.Church, ask: Dict[str, Any], *, now: Optional[datetime] =
         asker = who["name"] or ch.names([cid]).get(cid, "")
         words = answer_words(_church_name(ch), asker, by, ask)
         return _claimed_send(ch, ask, "answer_told_at", f"&state=eq.{state}", who, words,
-                             f"away-answer-{ask['id']}", now)
+                             f"away-answer-{ask['id']}", now, _page_for(ch, ask, True))
     except HTTPException:
         return "unread"
 
@@ -544,6 +608,7 @@ def tell_withdrawn(ch: co.Church, ask: Dict[str, Any], *, by: Dict[str, Any]) ->
             taker = _login_called(ch, by["id"]) if by.get("kind") == co.LOGIN else OFFICE
             asker = who["name"] or ch.names([cid]).get(cid, "")
             words, ref = taken_words(church, asker, taker, ask), f"away-taken-{ask['id']}"
+            return "told" if _send(ch, who, words, ref, _page_for(ch, ask, True)) else "unsent"
         return "told" if _send(ch, who, words, ref) else "unsent"
     except HTTPException:
         return "unread"
@@ -658,6 +723,16 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
         waiting = [a for a in waiting if (cs._day(a.get("ends_on")) or today) >= today]
         for a in waiting:
             cid = str(a.get("contact_id") or "")
+            if cs.volunteer(a):
+                # A volunteer's (S2-5) is their team's, never the leaders
+                # map's: it stays while it sits with someone at the first
+                # step of its team's chain, and is sent on only when it
+                # doesn't (church_schedule_volunteers.stale).
+                import church_schedule_volunteers as csv
+                want = csv.stale(ch, a)
+                if want and _move(ch, a, want, now):
+                    stats["moved"] += 1
+                continue
             if cs.flagged(a):
                 # It went up for an exception (step 2): it stays with whoever
                 # may give one, and is NEVER sent back down to the nearest
@@ -717,8 +792,10 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
             return stats
     scope = "" if churches is None else f"&business_id=in.({','.join(_q(b['id']) for b in churches)})"
     day = now.date()            # the query's day; each church's own clock decides in _sweep_church
-    # Each read names the state it is for: the untold index keeps answered and withdrawn rows too.
-    waiting = _all(f"/church_away_asks?state=eq.asked{scope}&select={FIELDS}", "the asks still waiting")
+    # Each read names the state it is for: the untold index keeps answered and withdrawn rows too. A
+    # volunteer's ask names its team (step 2's column, so read only where step 2 is there).
+    team = ",team_group_id" if cs.step2() else ""
+    waiting = _all(f"/church_away_asks?state=eq.asked{scope}&select={FIELDS}{team}", "the asks still waiting")
     if waiting is None:
         return stats            # the read failed: next hour
     cant = _all(f"/church_away_asks?state=eq.yes&kind=eq.cant&told_at=is.null"
