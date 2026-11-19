@@ -1085,6 +1085,9 @@ def _lumen_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]]) ->
 def render_details(biz, site, request: Request, me: Dict[str, Any], directory: str = "") -> str:
     """`directory` is the member directory's part (member_directory.details_block),
     its own form below the details: '' while the church has it off."""
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_details(biz, site, request, me, directory)
     from member_portal import _e, _shell
     addr = (me.get("metadata") or {}).get("mailing_address") or {}
     if not isinstance(addr, dict):
@@ -1107,6 +1110,35 @@ def render_details(biz, site, request: Request, me: Dict[str, Any], directory: s
   {field('postal', 'ZIP code', 'postal-code')}
   <button class="mp-go" type="submit" style="margin-top:8px">Save my details</button>
 </form>{directory}""", tab="me", who=me, back=("/my/me", "Me"))
+
+
+def _lumen_details(biz, site, request: Request, me: Dict[str, Any], directory: str = "") -> str:
+    """My details in the new look (member_lumen_people): the heading in the
+    serif, then the same form (the same names and ids) as quiet fields with
+    their labels over them, and Save. The directory's part follows as it
+    is."""
+    import member_lumen_ui as lm
+    from member_portal import _e, _shell
+    addr = (me.get("metadata") or {}).get("mailing_address") or {}
+    if not isinstance(addr, dict):
+        addr = {}
+
+    def field(k: str, label: str, auto: str, value: str, kind: str = "", size: int = FIELD_MAX) -> str:
+        t = f' type="{kind}"' if kind else ""
+        return (f'<label class="lm-dfield" for="mp-{k}"><span>{label}</span>'
+                f'<input id="mp-{k}" name="{k}"{t} autocomplete="{auto}" maxlength="{size}" value="{_e(value)}"></label>')
+    head = lm.mast("", "My <em>details</em>", "Keep the church's records up to date, so they can reach you by phone or mail.")
+    body = (f'{head}{_flash(request)}<form class="lm-dform" method="post" action="/my/details">'
+            f'<p class="lm-dfnote">Email: <strong>{_e(me.get("email") or "")}</strong>. It&#x27;s how you sign in, so to change '
+            f'it, ask the church office.</p>'
+            f'{field("phone", "Phone", "tel", me.get("phone") or "", "tel", 25)}'
+            f'{field("line1", "Street address", "address-line1", addr.get("line1") or "")}'
+            f'{field("line2", "Apartment, suite (optional)", "address-line2", addr.get("line2") or "")}'
+            f'{field("city", "City", "address-level2", addr.get("city") or "")}'
+            f'<div class="lm-dfrow">{field("state", "State", "address-level1", addr.get("state") or "")}'
+            f'{field("postal", "ZIP code", "postal-code", addr.get("postal") or "")}</div>'
+            f'<button class="lm-btn block" type="submit">Save my details</button></form>{directory}')
+    return _shell(biz, site, "My details", body, tab="me", who=me, back=("/my/me", "Me"))
 
 
 # ─── Home (member app, 2026-09-30) ────────────────────────────────────

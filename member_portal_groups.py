@@ -812,6 +812,47 @@ def _hero(biz: Dict[str, Any], site, g: Dict[str, Any], people: List[Dict[str, A
             f'{facts_p}{who_p}</div></section>')
 
 
+def _lumen_head(g: Dict[str, Any], people: List[Dict[str, Any]], leaders: List[Dict[str, Any]], in_group: bool) -> str:
+    """A group's page in the new look (member_lumen_people): no photo, its
+    kind and who leads it in small teal letters, its name in the serif, when
+    and where, then faces and how many are in it. Who shows is today's
+    hero's rule: its people to its members (a few faces and the count), its
+    leaders to anyone else."""
+    import member_lumen_ui as lm
+    import member_portal_church as mpc
+    from member_portal import _e
+    kind = mpc.GROUP_KINDS.get(g.get("kind") or "", "Group")
+    led = [display_name(p, "first") for p in leaders]
+    tag = kind + (f" · led by {_and(led)}" if led else "")
+    facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
+    n = len(people)
+    mode = g.get("name_display") or "full"
+    shown = (leaders + [p for p in people if p["role"] != "leader"])[:5] if in_group else leaders[:3]
+    faces = "".join(_face(p, "gs-av", mode) for p in shown)
+    count = f"<span>{n} {'person' if n == 1 else 'people'}</span>" if in_group else ""
+    row = f'<span class="lm-faces" aria-hidden="{"false" if count else "true"}">{faces}{count}</span>' if faces or count else ""
+    sub = f'<p class="lm-sub">{facts}</p>' if facts else ""
+    return (f'<header class="lm-ghead"><span class="lm-gtag"><i></i>{_e(tag)}</span>'
+            f'<h1 class="lm-disp" id="gs-name">{lm.italic_last(g.get("name") or "")}</h1>{sub}{row}</header>')
+
+
+def _lumen_tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[Dict[str, Any]]) -> str:
+    """The group's places in the new look: one segmented control (Home, Chat,
+    Board, Prayer, Meet, People, and Video while a meeting is open), the
+    same places and links as _tabs."""
+    from member_portal import _e
+    items = [("", "Home", 0)] + ([("chat", "Chat", 0)] if chat else []) + \
+        [("board", "Board", board_new), ("prayer", "Prayer", 0), ("meet", "Meet", 0), ("people", "People", 0)]
+    out = []
+    for key, label, n in items:
+        cur = ' aria-current="page"' if key == current else ""
+        badge = f'<span class="lm-gsegn" aria-label="{n} new">{n}</span>' if n else ""
+        out.append(f'<a href="{_base(gid, key)}"{cur}>{label}{badge}</a>')
+    if live:
+        out.append(f'<a href="/my/groups/live/{_e(live["id"])}">Video</a>')
+    return f'<nav class="lm-gseg" aria-label="In this group">{"".join(out)}</nav>'
+
+
 def _and(names: List[str]) -> str:
     names = [n for n in names if n]
     if len(names) <= 1:
@@ -953,7 +994,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         return _shell(biz, site, "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 404
     g, people, leaders, role = data["group"], data["people"], data["leaders"], data.get("role")
     gid = _e(g["id"])
-    hero = _hero(biz, site, g, people, leaders, bool(role))
+    import member_lumen
+    lumen = member_lumen.page()
+    hero = _lumen_head(g, people, leaders, bool(role)) if lumen else _hero(biz, site, g, people, leaders, bool(role))
+    # The new look pushes a group from Connect, so its way back is Connect.
+    connect = "/my/connect" if lumen else "/my/groups"
     flash = _flash(request)
     about = f'<p class="gs-about">{_e(g["description"])}</p>' if g.get("description") else ""
     if not role:
@@ -972,7 +1017,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         led = "".join(f'<div class="gs-lc">{_face(p, "gs-av l", "first")}<b>{_e(display_name(p, "first"))}</b><small>Leader</small></div>'
                       for p in leaders)
         leads = f'<div class="mb-sh"><h2>Who leads</h2></div><div class="gs-lead">{led}</div>' if led else ""
-        body = (f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{flash}{about}'
+        body = (f'<a class="mb-back" href="{connect}">Connect</a>{hero}{flash}{about}'
                 f'<div class="gs-acts" style="margin-top:18px">{act}</div>{leads}')
         return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 200
     leader = role == "leader"
@@ -980,7 +1025,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     me_id = str(me["id"])
     unread = sum(1 for p in posts if p.get("ask_ack") and not p.get("i_acked"))
     chat = mpm.turned_on(biz) and g.get("chat_on") is not False
-    tabs = _tabs(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat, live=data.get("live"))
+    tabs = (_lumen_tabs if lumen else _tabs)(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat,
+                                             live=data.get("live"))
     back = _base(g["id"], tab)
     size = len(people)
     script = ""
@@ -1128,7 +1174,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             parts.append(f'<p class="gs-note">{_ic("chat", 15)}<span>The group chat opens when '
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
-    page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
+    page = f'<a class="mb-back" href="{connect}">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
     import group_bring
     import group_gatherings
     import group_prayer

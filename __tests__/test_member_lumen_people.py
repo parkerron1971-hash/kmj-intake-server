@@ -398,3 +398,110 @@ def test_coming_up_and_prayer_read_what_todays_pages_read(calendar, monkeypatch,
         c.get(path)
         got[mode] = Counter(r.split("?")[0] for r in calendar.gets)
     assert got["on"] == got["off"]
+
+
+# ─── a group's page, Me, My details, Your alerts, News ───────────────
+
+
+def test_a_groups_page_is_a_serif_name_faces_and_one_segmented_control(gchurch, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("MEMBER_LUMEN", "on")
+    html = group_page(gchurch, tmm.ANA, f"/my/groups/{tmm.GRP}").text
+    assert '<header class="lm-ghead">' in html and '<section class="gs-hero' not in html
+    assert re.search(r'<h1 class="lm-disp" id="gs-name">[^<]*<em>[^<]+</em></h1>', html)
+    assert re.search(r"<span>\d+ (person|people)</span>", html)                 # a member sees how many
+    seg = html[html.index('<nav class="lm-gseg"'):]
+    seg = seg[:seg.index("</nav>")]
+    hrefs = re.findall(r'<a href="([^"]+)"', seg)
+    assert hrefs[0] == f"/my/groups/{tmm.GRP}" and f"/my/groups/{tmm.GRP}/people" in hrefs
+    assert f'<a href="/my/groups/{tmm.GRP}" aria-current="page">Home' in seg
+    assert '<nav class="gs-tabs"' not in html
+    top = _top(html)
+    assert 'href="/my/connect"' in top and "Connect" in top                      # pushed from Connect
+
+
+def test_off_a_groups_page_is_todays(gchurch, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    html = group_page(gchurch, tmm.ANA, f"/my/groups/{tmm.GRP}").text
+    assert '<section class="gs-hero' in html and '<nav class="gs-tabs"' in html and 'class="lm-' not in html
+
+
+def test_me_is_your_circle_your_giving_and_one_list(calendar, monkeypatch):
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/me").text
+    assert 'class="mb-profile lm-prof"' in html and re.search(r"<h1>Ana Rive\w+</h1>", html)
+    # The photo form and its script, as today.
+    assert 'id="mb-photo-in"' in html and 'id="mb-photo-note"' in html and 'action="/my/photo"' in html
+    assert '<section class="lm-megive"' in html and "Your giving · " in html
+    doors = re.findall(r'<a class="lm-li" href="([^"]+)"><b>([^<]+)</b>', html)
+    assert ("/my/events", "Coming up") in doors and ("/my/details", "My details") in doors
+    assert ("/my/prayer", "Prayer") in doors
+    assert 'action="/my/signout"' in html
+    assert 'class="mb-back" href="/my" data-back' in _top(html)               # back to where it opened
+
+
+def test_off_me_is_todays(calendar, monkeypatch):
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/me").text
+    assert 'class="lm-' not in html and '<section class="mb-give-card"' in html
+
+
+def test_my_details_keeps_its_form(calendar, monkeypatch):
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/details").text
+    assert "My <em>details</em>" in html
+    form = html[html.index('<form class="lm-dform" method="post" action="/my/details">'):]
+    form = form[:form.index("</form>")]
+    for k in ("phone", "line1", "line2", "city", "state", "postal"):
+        assert f'id="mp-{k}" name="{k}"' in form and f'for="mp-{k}"' in form, k
+    assert "Save my details" in form
+
+
+def test_your_alerts_in_the_new_look(calendar, monkeypatch):
+    import member_alerts
+    import member_push
+    from datetime import datetime, timezone
+    monkeypatch.setattr(member_push, "ready", lambda: True)
+    monkeypatch.setattr(member_push, "vapid_public", lambda: "BKkey")
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(member_alerts, "recent_alerts", lambda biz, cid, limit=None, **kw: [
+        {"kind": "events", "label": "Event reminders", "title": "Tomorrow: Picnic", "body": "", "when": now.isoformat(),
+         "link": "/my/events"}])
+    monkeypatch.setattr(member_alerts, "seen_at", lambda biz, cid: "2026-01-01T00:00:00+00:00")
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/notifications").text
+    assert "Your <em>alerts</em>" in html
+    assert '<h2 id="al-recent" class="lm-h2">Recent <span class="lm-new" aria-hidden="true">NEW</span></h2>' in html
+    assert html.index("Recent") < html.index("What reaches this phone") < html.index('name="k_live"')
+    assert re.search(r'<input class="lm-sw" type="checkbox" name="k_live" checked>', html)
+    for hook in ('id="np-state"', 'id="np-on"', 'id="np-off"', 'id="np-ios"', 'action="/my/notifications"'):
+        assert hook in html, hook
+    assert "/my/push/subscribe" in html and "Back to Me" not in html
+
+
+def test_news_in_the_new_look(calendar, monkeypatch):
+    import church_news as cn
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(cn, "feed", lambda b, me_id, filt="", today=None: [
+        {"id": "00000000-0000-4000-8000-000000000811", "kind": "announcement", "title": "Food Drive", "body": "Saturday",
+         "pinned": False, "created_at": now, "published_at": now, "reactions": {}, "mine": [], "comment_count": 0}])
+    monkeypatch.setattr(cn, "can_post", lambda b, me_id: {})
+    monkeypatch.setattr(cn, "mark_seen", lambda *a, **k: None)
+    monkeypatch.setattr(cn, "comments_open", lambda b: False)
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/news").text
+    assert '<div class="lm-nwpage">' in html and "What&#x27;s <em>happening</em>" in html
+    assert 'id="p-00000000-0000-4000-8000-000000000811"' in html and "Food Drive" in html
+
+
+@pytest.mark.parametrize("path", ["/my/me", "/my/details", "/my/notifications", "/my/news"])
+def test_me_details_alerts_and_news_read_what_todays_pages_read(calendar, monkeypatch, path):
+    import member_alerts
+    # The Recent list is the bell list's own reads, on main's new look as
+    # here (member_alerts); the page's own reads are what's compared.
+    monkeypatch.setattr(member_alerts, "shown", lambda: False)
+    c = tct._app(calendar, monkeypatch, tct.ANA)
+    got = {}
+    for mode in ("on", "off"):
+        monkeypatch.setenv("MEMBER_LUMEN", mode)
+        c.get(path)
+        calendar.gets.clear()
+        c.get(path)
+        got[mode] = Counter(r.split("?")[0] for r in calendar.gets)
+    assert got["on"] == got["off"]

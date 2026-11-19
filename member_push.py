@@ -549,6 +549,9 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
         flash = '<p class="mp-ok" role="status">Saved.</p>'
     elif q.get("err"):
         flash = '<p class="mp-err" role="alert">That didn&#x27;t save. Please try again.</p>'
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_page(biz, site, request, me, off, quiet, chats, recent, offered, flash)
     title, top = "Notifications", ""
     if recent is not None:
         title = "Your alerts"
@@ -638,6 +641,100 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
     }});
   }}).catch(function(){{st.textContent='This browser can\\'t show notifications.';}});
 }})();</script>""", tab="me", who=me)
+
+
+def _lumen_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Request, me: Dict[str, Any],
+                off: Optional[Set[str]], quiet: Optional[Dict[str, bool]], chats: Optional[List[Dict[str, Any]]],
+                recent: Optional[str], offered: List[Tuple[str, str, str]], flash: str) -> str:
+    """The Notifications page in the new look (member_lumen_people): "Your
+    alerts" in the serif with the church's name over it, the Recent list as
+    member_alerts draws it, then "What reaches this phone": this phone
+    (the same state line and buttons the page's script drives), each kind
+    the church has on as a row with a switch (the same checkboxes, the same
+    form and Save), quiet hours and email the same way, the group chats,
+    and the lock screen's promise. Same reads, same posts."""
+    from html import escape
+    from member_portal import _shell
+    import member_lumen_ui as lm
+    church = (biz.get("name") or "").strip() or "Your church"
+    title = "Your alerts" if recent is not None else "Notifications"
+    head = lm.mast(church, "Your <em>alerts</em>" if recent is not None else "<em>Notifications</em>")
+    reach = '<div class="lm-sec"><h2 class="lm-h2">What reaches this phone</h2></div>'
+    if not offered or not ready():
+        body = (f'{head}{flash}{recent or ""}{reach}'
+                '<p class="lm-cnote">Your church hasn&#x27;t turned on notifications yet.</p>')
+        return _shell(biz, site, title, body, tab="me", who=me)
+    off = off or set()
+
+    def switch(name: str, on: bool, label: str, hint: str) -> str:
+        return (f'<label class="lm-krow"><span class="lm-ktx"><b>{escape(label)}</b><span>{escape(hint)}</span></span>'
+                f'<input class="lm-sw" type="checkbox" name="{name}" {"checked" if on else ""}></label>')
+    rows = "".join(switch(f"k_{k}", k not in off, label, hint) for k, label, hint in offered)
+    if any(k in QUIET_KINDS for k, _, _ in offered):
+        q = quiet or {"quiet": True, "after_hours": True, "email_missed": False}
+        rows += ('<h3 class="lm-ksub">At night</h3><input type="hidden" name="quiet_shown" value="1">'
+                 + switch("q_quiet", bool(q["quiet"]), "Quiet hours", "9 PM to 7 AM. Group news and messages wait until morning.")
+                 + switch("q_after", bool(q["after_hours"]), "Let after-hours alerts ring",
+                          "When someone in your group sends one during quiet hours, like a late prayer call."))
+        if any(k == "groups" for k, _, _ in offered):
+            rows += ('<h3 class="lm-ksub">By email</h3><input type="hidden" name="email_shown" value="1">'
+                     + switch("q_email", bool(q.get("email_missed")), "Email me if my phone misses a leader’s post",
+                              "If you haven’t opened it an hour after it went up."))
+    key = escape(vapid_public(), quote=True)
+    import group_chat_notify as gcn
+    chat_section = gcn.notifications_section(chats, escape) if any(k == "messages" for k, _, _ in offered) else ""
+    phone = ('<section class="lm-phone" aria-labelledby="np-dev"><p><b id="np-dev">Alerts on this phone</b>'
+             '<span id="np-state">Checking…</span>'
+             '<span id="np-ios" hidden>On an iPhone, first put the app on your home screen (Share, then Add to Home Screen), '
+             'open it from there, then come back here.</span></p>'
+             '<button class="lm-btn sm" type="button" id="np-on" hidden>Turn on</button>'
+             '<button class="lm-txtbtn" type="button" id="np-off" hidden>Turn off</button></section>')
+    form = (f'<form class="lm-kinds" method="post" action="/my/notifications" aria-label="What to tell me about">{rows}'
+            '<button class="lm-btn block" type="submit">Save</button></form>')
+    fine = ('<p class="lm-cnote">Only the kinds your church has switched on show here. A message on your lock screen says '
+            'something arrived, never what was written.</p>')
+    body = f"{head}{flash}{recent or ''}{reach}{phone}{form}{chat_section}{fine}"
+    return _shell(biz, site, title, body + PHONE_JS.replace("__KEY__", key), tab="me", who=me)
+
+
+# The page's phone part: the state line and the two buttons, in the new look
+# (_lumen_page). The same steps as render_page's script.
+PHONE_JS = r"""<script>(function(){
+  var KEY='__KEY__', st=document.getElementById('np-state'), on=document.getElementById('np-on'),
+      off=document.getElementById('np-off'), ios=document.getElementById('np-ios');
+  var standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
+  var iphone=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  function b64(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';var r=atob(s),a=new Uint8Array(r.length);for(var i=0;i<r.length;i++)a[i]=r.charCodeAt(i);return a;}
+  function post(u,d){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(d)});}
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
+    if(iphone&&!standalone){st.textContent='';ios.hidden=false;return;}
+    st.textContent='This browser can\'t show notifications.'; return;
+  }
+  navigator.serviceWorker.register('/my/sw.js',{scope:'/my'}).then(function(){return navigator.serviceWorker.ready;}).then(function(reg){
+    function show(sub){
+      if(sub){st.textContent='On for this phone.';on.hidden=true;off.hidden=false;}
+      else if(Notification.permission==='denied'){st.textContent='Blocked for this site in your phone\'s settings.';on.hidden=true;off.hidden=true;}
+      else{st.textContent='Off on this phone.';on.hidden=false;off.hidden=true;}
+    }
+    reg.pushManager.getSubscription().then(show);
+    on.addEventListener('click',function(){
+      on.disabled=true;
+      Notification.requestPermission().then(function(p){
+        if(p!=='granted'){on.disabled=false;return show(null);}
+        return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(KEY)}).then(function(sub){
+          return post('/my/push/subscribe',{subscription:sub.toJSON()}).then(function(r){
+            on.disabled=false; if(!r.ok){st.textContent='That didn\'t work. Please try again.';return;} show(sub);});
+        });
+      }).catch(function(){on.disabled=false;st.textContent='That didn\'t work. Please try again.';});
+    });
+    off.addEventListener('click',function(){
+      reg.pushManager.getSubscription().then(function(sub){
+        if(!sub) return show(null);
+        var ep=sub.endpoint; return sub.unsubscribe().then(function(){return post('/my/push/unsubscribe',{endpoint:ep});}).then(function(){show(null);});
+      });
+    });
+  }).catch(function(){st.textContent='This browser can\'t show notifications.';});
+})();</script>"""
 
 
 def home_card(biz: Dict[str, Any]) -> str:
