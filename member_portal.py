@@ -739,12 +739,18 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     # Its type is the church's pairing (member_lumen_fonts), from our own
     # address, in place of today's Google Fonts link.
     fonts = ui.FONTS
+    moves = ""
     if signed_in and member_lumen.page():
         import member_lumen_fonts
+        import member_lumen_motion
         fonts = member_lumen_fonts.head(biz)
+        # Listening before the page is first revealed (member_lumen_motion.JS).
+        moves = "\n" + member_lumen_motion.JS
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
+        # Watch and Live are a cinema: the phone's own bar goes dark with them.
+        bar_colour = member_lumen_motion.theme_color(tab, bar_colour)
         if lumen_dark:
             import member_lumen_bible
             body_cls = body_cls[:-1] + ' lm-dark"'
@@ -760,7 +766,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <title>{_e(title)} — {_e(name)}</title>
 {fonts}
 <style>{css_vars(theme)}</style>
-{ui.head(biz, theme, space, door=door, inline=inline_css or None, lumen=signed_in and member_lumen.page())}
+{ui.head(biz, theme, space, door=door, inline=inline_css or None, lumen=signed_in and member_lumen.page())}{moves}
 </head>
 <body{body_cls}>
 {top}
@@ -820,7 +826,10 @@ def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Option
     top, cls, tabbar, scroll = _lumen_frame(
         biz, theme, title, tab=tab, who=who, back=None, bare=False, bar=True, ctx=ctx, name=name, logo=logo,
         word=word, avatar=avatar, side=side, body_cls=_body_class(False, space, tab, False))
-    return top, cls, tabbar + ui.early(), scroll
+    # How the page moves (member_lumen_motion). _shell puts it in the <head>;
+    # this page draws its own, so it rides at the foot.
+    import member_lumen_motion
+    return top, cls, tabbar + ui.early(), scroll + member_lumen_motion.JS
 
 
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],

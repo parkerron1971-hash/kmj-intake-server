@@ -248,7 +248,9 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
     from sermons_public import day_label
     pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
-    parts = [lm.mast("Messages & live", "Watch &amp; <em>listen</em>"), live_row(live, next_occ)]
+    # Lumen Next: a cinema (member_lumen_motion). The bar says whose it is;
+    # the page opens on the next live, then the latest message edge to edge.
+    parts = ['<h1 class="mp-sr">Watch &amp; listen</h1>', live_row(live, next_occ)]
     if lib is None:
         parts.append('<p class="mp-err" role="alert" style="margin-top:24px">Messages couldn\'t load just now. '
                      'Please try again in a moment.</p>')
@@ -274,10 +276,10 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
         f'{ui.sample_hint(samples.WHERE["sermons"]) if sample else ""}'
         f'<a class="lm-bleed lm-poster" href="{href}" tabindex="-1" aria-hidden="true">{mps._art(lib, s, pal, site, pool, used)}'
         f'{ui.sample_tag() if sample else ""}</a>'
-        f'<p class="lm-kicker lm-featk">Latest · {_e(day_label(s.get("preached_on")))}</p>'
-        f'<h2 class="lm-tl" id="lm-feat-h"><a href="{href}">{_e(s.get("title"))}</a></h2>'
+        f'<p class="lm-eyebrow lm-featk"><span class="lm-dot"></span>Latest message · {_e(day_label(s.get("preached_on")))}</p>'
+        f'<h2 class="lm-disp m" id="lm-feat-h"><a href="{href}">{lm.italic_last(s.get("title"))}</a></h2>'
         f'{f"<p class=lm-meta>{_e(meta)}</p>" if meta else ""}'
-        f'<div class="lm-acts"><a class="lm-btn" href="{href}">{ui.icon("play", 15)}Watch</a>{listen}'
+        f'<div class="lm-acts"><a class="lm-btn lm-light" href="{href}">{ui.icon("play", 15)}Watch</a>{listen}'
         f'<button class="lm-btn ghost lm-sq" type="button" data-share="/sermons/{_e(s["id"])}" data-title="{_e(s.get("title"))}" '
         f'aria-label="Share">{ui.icon("share", 18)}</button></div></section>')
     by_series: Dict[str, List[Dict[str, Any]]] = {}
@@ -287,13 +289,15 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
             by_series.setdefault(sid, []).append(x)
     order = sorted(by_series, key=lambda k: str(by_series[k][0].get("preached_on")), reverse=True)
     if order:
+        # The series as posters on a rail: the art over the name in serif.
         tiles = "".join(
-            f'<a class="lm-tile lm-stile" href="/my/sermons?series={_e(sid)}"><span class="img">'
-            f'{mps._art(lib, by_series[sid][0], pal, site, pool, used)}</span><span class="tt">{_e(titles[sid])}</span>'
-            f'<span class="tm">{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}</span></a>'
+            f'<a class="lm-spost" href="/my/sermons?series={_e(sid)}"><span class="img">'
+            f'{mps._art(lib, by_series[sid][0], pal, site, pool, used)}</span><span class="lm-sptx">'
+            f'<span class="lm-kicker">{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}</span>'
+            f'<span class="tt">{lm.italic_last(titles[sid])}</span></span></a>'
             for sid in order)
         parts.append(f'<section aria-labelledby="lm-ser-h">{lm.section("Series", hid="lm-ser-h")}'
-                     f'<div class="lm-grid2">{tiles}</div></section>')
+                     f'<div class="lm-rail lm-sposts">{tiles}</div></section>')
     rows = "".join(
         f'<a class="lm-lrow" href="/my/sermons/{_e(x["id"])}"><span class="lm-th">{mps._art(lib, x, pal, site, pool)}</span>'
         f'<span class="lm-wt"><b>{_e(x.get("title"))}</b><span>{mps.meta(x)}</span></span>{_chev()}</a>'
@@ -349,7 +353,30 @@ def room_top(here_n: Optional[int]) -> str:
     return (f'<div class="lm-lvtop"><a class="lm-lvback" href="/my/sermons" aria-label="Back to Watch">{ui.icon("back", 22)}</a>'
             f'<span class="lm-lvchip"><i class="lm-dotlive" aria-hidden="true"></i>Live'
             f'<span id="lv-herewrap"{" hidden" if here_n is None else ""}>· <b data-here-n>{here_n or 0}</b> here</span>'
-            f'</span></div>')
+            f'</span></div><div class="lm-rxl" id="lm-rxl" aria-hidden="true"></div>')
+
+
+def room_watch(stack: str, here_n: Optional[int], boxed: bool) -> str:
+    """Under the title (Lumen Next): how many are here, beside the faces of
+    you once you're here and who spoke last (`stack`, the room's own); and,
+    while the box is open, Amen · a heart · Praying (member_lumen_motion's
+    ROOM_JS sends the room's own quick reply and heart; without a script
+    the two words post like the quick replies)."""
+    import member_app_ui as ui
+    out = ""
+    if here_n is not None:
+        out += f'<p class="lm-watching">{stack}<span><b data-here-n>{here_n}</b> here with you</span></p>'
+    if boxed:
+        heart = ('<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">'
+                 '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 '
+                 '2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>')
+        out += (f'<form class="lm-rxbar" id="lm-rx" method="post" action="/my/live/chat" aria-label="Send a reaction">'
+                f'<button class="lm-rxb" type="submit" name="body" value="Amen">Amen</button>'
+                f'<button class="lm-rxb h" type="button" data-heart aria-label="Send a heart">{heart}</button>'
+                f'<button class="lm-rxb p" type="submit" name="body" value="Praying">{ui.icon("pray", 20)}Praying</button>'
+                f'</form><template id="lm-rx-tpl"><span data-k="heart">{heart}</span>'
+                f'<span data-k="hands">{ui.icon("pray", 28)}</span></template>')
+    return out
 
 
 def room_give(opens: str) -> str:

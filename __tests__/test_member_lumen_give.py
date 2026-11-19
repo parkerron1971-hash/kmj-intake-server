@@ -203,14 +203,19 @@ def test_give_before_online_giving(church, fake, monkeypatch):  # noqa: F811
 
 def test_watch(church, fake, monkeypatch):  # noqa: F811
     html = _get(fake, monkeypatch, "/my/sermons")
-    assert _body_class(html).split()[:2] == ["lm", "lm-tab"]
-    assert "Watch &amp; <em>listen</em>" in html
+    assert _body_class(html).split()[:3] == ["lm", "lm-tab", "pg-watch"]             # the cinema
+    assert '<meta name="theme-color" content="#050506">' in html
+    assert '<h1 class="mp-sr">Watch &amp; listen</h1>' in html                       # the bar says whose it is
     row = html[html.index('class="lm-nrow'):]
     assert row.startswith('class="lm-nrow" href="/my/live"') and "Next live" in row[:600] and "Sunday Worship" in row[:600]
     feat = html[html.index('class="lm-feat"'):]
-    assert "Hope Has a Name" in feat[:3000] and "Pastor James · Isaiah 9:6" in feat[:3000]
+    assert '<h2 class="lm-disp m" id="lm-feat-h">' in feat[:3000] and "Hope Has a <em>Name</em>" in feat[:3000]
+    assert "Latest message · " in feat[:3000] and "Pastor James · Isaiah 9:6" in feat[:3000]
+    assert 'class="lm-btn lm-light"' in feat[:3000]
     assert "Listen</a>" in feat[:3000] and 'data-share="/sermons/' in feat[:3000]
-    assert f'href="/my/sermons?series={SER}"' in html and "2 messages" in html
+    posters = html[html.index('class="lm-rail lm-sposts"'):]
+    assert f'class="lm-spost" href="/my/sermons?series={SER}"' in posters and "2 messages" in posters
+    assert "Light Has <em>Come</em>" in posters
     assert html.count('class="lm-lrow"') == 2
     nav = html[html.index('<nav class="mb-nav lm-nav'):]
     assert 'href="/my/sermons" aria-current="page"' in nav[:nav.index("</nav>")]
@@ -222,12 +227,13 @@ def test_watch_while_live_and_with_nothing_posted(church, fake, monkeypatch):  #
     assert 'class="lm-nrow is-live" href="/my/live"' in html and "Live now" in html
     church["live"], church["lib"] = {}, {"sermons": [], "series": []}
     html = _get(fake, monkeypatch, "/my/sermons")
-    assert "Messages are on the <em>way</em>" in html and "lm-feat" not in html
+    assert "Messages are on the <em>way</em>" in html and 'class="lm-feat"' not in html
 
 
 def test_a_series_keeps_todays_page(church, fake, monkeypatch):  # noqa: F811
     html = _get(fake, monkeypatch, f"/my/sermons?series={SER}")
-    assert "lm-feat" not in html and 'class="mb-mtile-art"' in html
+    assert 'class="lm-feat"' not in html and 'class="mb-mtile-art"' in html
+    assert "pg-watch" in _body_class(html)                                             # dark like Watch
     top = html[html.index('<header class="mb-top">'):html.index("</header>")]
     assert 'class="mb-back" href="/my/sermons"' in top
 
