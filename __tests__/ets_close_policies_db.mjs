@@ -4,48 +4,59 @@
 // showed on 2026-11-19.
 //
 // 1. BEFORE, the hole as production has it: the public key reads every
-//    inquiry and email, deletes events, and the live site's own calls work
-//    (INSERT ... RETURNING id, reading the registrations table).
+//    inquiry, email and virtual link, deletes events, any login uploads to
+//    the bucket, and the live site's own calls work (select "*" on events,
+//    INSERT ... RETURNING id, reading the registrations table).
 // 2. The file's own "Check before applying" queries run as written and say
 //    what the file says they say. Then the file runs twice.
-// 3. THE PUBLIC SITE (anon), after: the events list with its tiers and
-//    files (published and sold out only; no draft, cancelled or hidden
-//    tier); an inquiry and a free registration go in the way the new site
-//    sends them (no row asked back, as PostgREST's return=minimal does it),
-//    and the live site's INSERT ... RETURNING is refused. A confirmed paid
-//    registration, a wrong amount, a hidden tier, another event's tier, a
-//    draft or sold-out event, and every staff-only field are refused. No
-//    inquiry, registration, staff row or view is readable; nothing can be
-//    updated, deleted or truncated anywhere. The count triggers still count
-//    a registration the public added (and the same insert fails if they run
-//    as the caller).
+// 3. THE PUBLIC SITE (anon), after: the events list and the event page with
+//    exactly the columns the new site build asks for, tiers and files
+//    nested (published and sold out only; no draft, cancelled or hidden
+//    tier); the virtual link and "*" on events refused; an inquiry and a
+//    free registration go in the way the new site sends them (no row asked
+//    back, as PostgREST's return=minimal does it), and the live site's
+//    INSERT ... RETURNING is refused. A confirmed paid registration, a wrong
+//    amount, a hidden tier, another event's tier, a draft or sold-out event,
+//    and every staff-only field are refused. No inquiry, registration, staff
+//    row or view is readable; nothing can be updated, deleted or truncated
+//    anywhere. The count triggers still count a registration the public
+//    added (and the same insert fails if they run as the caller).
 // 4. ets_registration_confirmation: the one registration by id and by
 //    Stripe session id, only the fields the page shows (no phone, notes,
 //    organization, check-in or Stripe fields), the virtual link only once
 //    confirmed, null for anything else (empty, too long, a pattern, a
-//    prefix, a session id two registrations share).
-// 5. A signed-in login that is not the platform owner reaches exactly what
-//    the public does and nothing more; the platform owner (JWT email, any
-//    case) reads and writes everything, views included.
+//    prefix, a session id two registrations share); the venue address where
+//    the event has no address column, the address where it has one.
+// 5. A signed-in login that is not the platform owner reads no row of the
+//    ten, truncates nothing, uploads and deletes nothing in the bucket; the
+//    platform owner (JWT email, any case) reads and writes everything,
+//    virtual link and views included, and works the bucket.
 // 6. The file's "Check after" queries say what the file says. The rollback
-//    puts the policies, grants, functions and views back exactly as they
-//    were (and the hole with them), runs twice, and the file applies again.
+//    puts the policies (storage's too), grants, functions and production's
+//    two views back exactly as they were (and the hole with them), leaves a
+//    view that already ran as the caller as it is, runs twice, and the file
+//    applies again.
 // All of it twice: tables owned by the superuser, and by a role that is not
 // a superuser and has no BYPASSRLS (as Supabase's postgres owns them), which
-// runs both files.
+// runs both files (storage.objects is another role's, as on Supabase).
 //
 // The fixture: the six tables of the frontend's supabase/ets-schema.sql
 // (module-system), with the columns production's site writes to inquiries
 // (email, phone, org_type) and the internal ones the brief names
 // (processed_at, converted_to_engagement); the four event tables built from
-// the columns the site and the app read and write, and the enums production
-// has (ets_event_status as production showed; the registration status labels
+// the columns the app saves (venue_address, no address or timezone), the
+// tier flags as production showed them (is_visible default true, is_free
+// default false, both not null), and the enums production has
+// (ets_event_status as production showed; the registration status labels
 // are those the site and the app use, a guess beyond pending and confirmed).
-// The three views as ets-schema.sql makes them. The two count trigger
-// functions are stand-ins (production's bodies were not read), plpgsql,
-// invoker, no search_path, as production showed. is_platform_owner() as
-// production defines it, with a made-up owner email, and stricter here:
-// anon may not call it, so a policy that leaned on it for the public fails.
+// Production's two views: ets_pending_agent_actions as ets-schema.sql makes
+// it, ets_event_summary a plausible stand-in (its text was not read), both
+// with no options; and a third view that already runs as the caller. The
+// two count trigger functions with production's shape (+1 / -1, unqualified
+// table names), plpgsql, invoker, no search_path. The bucket's three
+// policies as production has them. is_platform_owner() as production
+// defines it, with a made-up owner email, and stricter here: anon may not
+// call it, so a policy that leaned on it for the public fails.
 //
 // Made-up events, made-up people.
 // Run: PGLITE_MODULE=<path to @electric-sql/pglite/dist/index.js> node __tests__/ets_close_policies_db.mjs
@@ -65,7 +76,18 @@ const u = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const TABLES = ['ets_events', 'ets_event_tiers', 'ets_event_files', 'ets_registrations', 'ets_inquiries',
   'ets_engagements', 'ets_emails', 'ets_agent_log', 'ets_signatures', 'ets_sessions_log'];
 const STAFF = ['ets_engagements', 'ets_emails', 'ets_agent_log', 'ets_signatures', 'ets_sessions_log'];
-const VIEWS = ['ets_pending_agent_actions', 'ets_pipeline_summary', 'ets_revenue_summary'];
+// Production's two views (no options on 2026-11-19), and one that already
+// runs as the caller, which the rollback must leave so.
+const VIEWS = ['ets_event_summary', 'ets_pending_agent_actions'];
+const INVOKER_VIEW = 'ets_tier_overview';
+// The columns the new site build asks for (ets-web close-public-reads).
+const LIST_COLUMNS = 'id, slug, title, short_description, event_date, start_time, end_time, format, venue_name, city, '
+  + 'capacity, registrations_count, status, cover_image';
+const PAGE_COLUMNS = 'id, slug, title, short_description, description, event_date, start_time, end_time, format, '
+  + 'venue_name, venue_address, city, state, capacity, registrations_count, status, cover_image';
+const PAGE_TIER_COLUMNS = 'id, name, description, price, is_free, quantity, sold_count, sort_order, stripe_payment_link';
+const PAGE_FILE_COLUMNS = 'id, file_name, file_url, file_type, is_cover, sort_order';
+const BUCKET = 'ets-event-files';
 // A column each table has, for "update it to itself".
 const SOME_COLUMN = {
   ets_events: 'title', ets_event_tiers: 'name', ets_event_files: 'file_url', ets_registrations: 'first_name',
@@ -107,6 +129,17 @@ function schema(ownedBy) {
   return `
 CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;
 ${ownedBy ? `CREATE ROLE ${ownedBy} NOSUPERUSER NOBYPASSRLS;` : ''}
+-- Storage, as Supabase has it: storage.objects is another role's, which the
+-- role running the file is a member of; RLS on; the bucket's three policies
+-- as production showed them (2026-08-09 storage-write-lockdown for the two).
+CREATE ROLE storage_admin NOSUPERUSER NOBYPASSRLS;
+${ownedBy ? `GRANT storage_admin TO ${ownedBy};` : ''}
+CREATE SCHEMA storage;
+GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role${ownedBy ? `, ${ownedBy}` : ''};
+CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text, owner uuid);
+ALTER TABLE storage.objects OWNER TO storage_admin;
+GRANT ALL ON storage.objects TO anon, authenticated, service_role;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 CREATE SCHEMA auth;
 GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role${ownedBy ? `, ${ownedBy}` : ''};
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
@@ -209,7 +242,9 @@ CREATE TABLE public.ets_emails (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- The four event tables, from what the site and the app read and write.
+-- The four event tables, from the columns the app saves (EventCreate:
+-- venue_address, and no address, timezone or require_phone) and the tier
+-- flags as production showed them.
 CREATE TABLE public.ets_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
@@ -219,10 +254,9 @@ CREATE TABLE public.ets_events (
   event_date DATE NOT NULL,
   start_time TIME,
   end_time TIME,
-  timezone TEXT,
   format TEXT DEFAULT 'in_person',
   venue_name TEXT,
-  address TEXT,
+  venue_address TEXT,
   city TEXT,
   state TEXT,
   virtual_link TEXT,
@@ -230,7 +264,6 @@ CREATE TABLE public.ets_events (
   cover_image TEXT,
   capacity INTEGER,
   registrations_count INTEGER NOT NULL DEFAULT 0,
-  require_phone BOOLEAN DEFAULT FALSE,
   status public.ets_event_status NOT NULL DEFAULT 'draft',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -240,11 +273,11 @@ CREATE TABLE public.ets_event_tiers (
   name TEXT NOT NULL,
   description TEXT,
   price NUMERIC(10,2) NOT NULL DEFAULT 0,
-  is_free BOOLEAN DEFAULT FALSE,
+  is_free BOOLEAN NOT NULL DEFAULT FALSE,
   quantity INTEGER,
   sold_count INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER DEFAULT 0,
-  is_visible BOOLEAN DEFAULT TRUE,
+  is_visible BOOLEAN NOT NULL DEFAULT TRUE,
   stripe_payment_link TEXT
 );
 CREATE TABLE public.ets_event_files (
@@ -276,15 +309,16 @@ CREATE TABLE public.ets_registrations (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- The three views, as ets-schema.sql makes them.
-CREATE VIEW public.ets_pipeline_summary AS
-SELECT status, COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total_value
-FROM public.ets_engagements WHERE status != 'cancelled' GROUP BY status;
-CREATE VIEW public.ets_revenue_summary AS
-SELECT
-  COALESCE(SUM(CASE WHEN deposit_paid THEN deposit_amount ELSE 0 END), 0) as total_deposits,
-  COALESCE(SUM(total_amount), 0) as total_pipeline_value
-FROM public.ets_engagements WHERE status != 'cancelled';
+-- Production's two views, no options: ets_event_summary a stand-in (its text
+-- was not read: every event column, the virtual link among them, and its
+-- registrations' totals and emails), ets_pending_agent_actions as
+-- ets-schema.sql makes it. And one that already runs as the caller.
+CREATE VIEW public.ets_event_summary AS
+SELECT e.*, count(r.id) AS reg_total, coalesce(sum(r.amount_paid), 0) AS revenue, string_agg(r.email, ',') AS emails
+  FROM public.ets_events e LEFT JOIN public.ets_registrations r ON r.event_id = e.id
+ GROUP BY e.id;
+CREATE VIEW public.${INVOKER_VIEW} WITH (security_invoker = true) AS
+SELECT t.id, t.name, t.price FROM public.ets_event_tiers t;
 CREATE VIEW public.ets_pending_agent_actions AS
 SELECT al.*, i.contact_name as inquiry_contact, i.organization_name as inquiry_org,
        e.organization_name as engagement_org, e.contact_name as engagement_contact
@@ -294,43 +328,33 @@ LEFT JOIN public.ets_engagements e ON al.engagement_id = e.id
 WHERE al.reviewed = FALSE
 ORDER BY al.created_at DESC;
 
--- The count triggers: stand-in bodies, invoker, no search_path, unqualified
--- table names, as production showed the functions.
+-- The count triggers, of the shape production showed: +1 on an insert, -1 on
+-- a delete, unqualified table names, plpgsql, invoker, no search_path.
 CREATE FUNCTION public.ets_update_registration_count() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP IN ('INSERT', 'UPDATE') THEN
-    UPDATE ets_events SET registrations_count = (
-      SELECT count(*) FROM ets_registrations r
-       WHERE r.event_id = NEW.event_id AND r.status IN ('pending', 'confirmed', 'checked_in'))
-     WHERE id = NEW.event_id;
-  END IF;
-  IF TG_OP IN ('UPDATE', 'DELETE') THEN
-    UPDATE ets_events SET registrations_count = (
-      SELECT count(*) FROM ets_registrations r
-       WHERE r.event_id = OLD.event_id AND r.status IN ('pending', 'confirmed', 'checked_in'))
-     WHERE id = OLD.event_id;
+  IF TG_OP = 'INSERT' THEN
+    UPDATE ets_events SET registrations_count = registrations_count + 1 WHERE id = NEW.event_id;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE ets_events SET registrations_count = registrations_count - 1 WHERE id = OLD.event_id;
+    RETURN OLD;
   END IF;
   RETURN NULL;
 END $$;
 CREATE FUNCTION public.ets_update_tier_sold_count() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP IN ('INSERT', 'UPDATE') AND NEW.tier_id IS NOT NULL THEN
-    UPDATE ets_event_tiers SET sold_count = (
-      SELECT count(*) FROM ets_registrations r
-       WHERE r.tier_id = NEW.tier_id AND r.status IN ('confirmed', 'checked_in'))
-     WHERE id = NEW.tier_id;
-  END IF;
-  IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.tier_id IS NOT NULL THEN
-    UPDATE ets_event_tiers SET sold_count = (
-      SELECT count(*) FROM ets_registrations r
-       WHERE r.tier_id = OLD.tier_id AND r.status IN ('confirmed', 'checked_in'))
-     WHERE id = OLD.tier_id;
+  IF TG_OP = 'INSERT' THEN
+    UPDATE ets_event_tiers SET sold_count = sold_count + 1 WHERE id = NEW.tier_id;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE ets_event_tiers SET sold_count = sold_count - 1 WHERE id = OLD.tier_id;
+    RETURN OLD;
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER ets_reg_count_trigger AFTER INSERT OR UPDATE OR DELETE ON public.ets_registrations
+CREATE TRIGGER ets_reg_count_trigger AFTER INSERT OR DELETE ON public.ets_registrations
   FOR EACH ROW EXECUTE FUNCTION public.ets_update_registration_count();
-CREATE TRIGGER ets_tier_sold_trigger AFTER INSERT OR UPDATE OR DELETE ON public.ets_registrations
+CREATE TRIGGER ets_tier_sold_trigger AFTER INSERT OR DELETE ON public.ets_registrations
   FOR EACH ROW EXECUTE FUNCTION public.ets_update_tier_sold_count();
 
 -- RLS and the 26 policies production showed on 2026-11-19 (all permissive, TO public).
@@ -359,11 +383,17 @@ CREATE POLICY ets_read_${x} ON public.${t} FOR SELECT USING (true);`).join('')}
 REVOKE ALL ON ${TABLES.map(t => `public.${t}`).join(', ')} FROM anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ${TABLES.map(t => `public.${t}`).join(', ')} TO anon;
 ${ownedBy ? 'RESET ROLE;' : ''}
+CREATE POLICY "Allow public read" ON storage.objects FOR SELECT USING (bucket_id = '${BUCKET}');
+CREATE POLICY "ets write: ets-event-files insert" ON storage.objects
+  FOR INSERT TO authenticated WITH CHECK (bucket_id = '${BUCKET}');
+CREATE POLICY "ets write: ets-event-files delete" ON storage.objects
+  FOR DELETE TO authenticated USING (bucket_id = '${BUCKET}');
 `;
 }
 
 const SEED = `
-INSERT INTO public.ets_events (id, slug, title, event_date, start_time, end_time, format, venue_name, address, city, state, virtual_link, confirmation_message, cover_image, status) VALUES
+INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'covers/cover.jpg'), ('${BUCKET}', 'files/agenda.pdf');
+INSERT INTO public.ets_events (id, slug, title, event_date, start_time, end_time, format, venue_name, venue_address, city, state, virtual_link, confirmation_message, cover_image, status) VALUES
   ('${E.pub}', 'money-basics', 'Money Basics Workshop', '2026-12-05', '10:00', '12:00', 'in_person', 'Fellowship Hall', '100 Main St', 'Springfield', 'IL', NULL, 'Bring a notebook.', NULL, 'published'),
   ('${E.virt}', 'online-budgeting', 'Online Budgeting Night', '2026-12-10', '19:00', '20:30', 'virtual', NULL, NULL, NULL, NULL, 'https://meet.example.test/room-1', NULL, NULL, 'published'),
   ('${E.sold}', 'full-house', 'Full House Seminar', '2026-12-12', '09:00', NULL, 'in_person', 'Main Hall', NULL, 'Springfield', 'IL', NULL, NULL, NULL, 'sold_out'),
@@ -427,9 +457,22 @@ async function as(db, who, q, params = [], { keep = false } = {}) {
 const su = async (db, q, params = []) => (await db.query(q, params)).rows;
 const ids = rows => rows.map(r => r.id).sort();
 
+// A check block's query, as the role that runs the file would run it.
+async function asRunner(db, ownedBy, q) {
+  if (ownedBy) await db.exec(`SET ROLE ${ownedBy}`);
+  try { return (await db.query(q)).rows; } finally { if (ownedBy) await db.exec('RESET ROLE'); }
+}
+
 async function runFile(db, text, ownedBy) {
   if (ownedBy) await db.exec(`SET ROLE ${ownedBy}`);
-  try { await db.exec(text); } finally { if (ownedBy) await db.exec('RESET ROLE'); }
+  try {
+    await db.exec(text);
+  } catch (e) {
+    await db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    if (ownedBy) await db.exec('RESET ROLE');
+  }
 }
 
 // The queries of a "-- Check ..." block, as written in the file's comments.
@@ -466,12 +509,19 @@ const registration = (n, tier, extra = {}) => {
 };
 const counts = async db => Object.fromEntries(await Promise.all(TABLES.map(async t =>
   [t, (await su(db, `SELECT count(*)::int AS n FROM public.${t}`))[0].n])));
+const grantsOf = role => `SELECT table_name, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
+    FROM information_schema.role_table_grants WHERE grantee = '${role}' AND table_schema = 'public'
+    AND table_name IN (${TABLES.map(t => `'${t}'`).join(', ')}) GROUP BY 1 ORDER BY 1`;
 const snapshot = async db => ({
   policies: await su(db, `SELECT tablename, policyname, cmd, roles::text AS roles, qual, with_check FROM pg_policies
     WHERE schemaname = 'public' AND tablename LIKE 'ets\\_%' ORDER BY 1, 2`),
-  grants: await su(db, `SELECT table_name, string_agg(privilege_type, ',' ORDER BY privilege_type) AS p
-    FROM information_schema.role_table_grants WHERE grantee = 'anon' AND table_schema = 'public'
-    AND table_name IN (${TABLES.map(t => `'${t}'`).join(', ')}) GROUP BY 1 ORDER BY 1`),
+  storage: await su(db, `SELECT policyname, cmd, roles::text AS roles, qual, with_check FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' ORDER BY 1`),
+  grants: await su(db, grantsOf('anon')),
+  authenticatedGrants: await su(db, grantsOf('authenticated')),
+  anonEventColumns: await su(db, `SELECT column_name FROM information_schema.column_privileges
+    WHERE grantee = 'anon' AND table_schema = 'public' AND table_name = 'ets_events' AND privilege_type = 'SELECT'
+    ORDER BY 1`),
   functions: await su(db, `SELECT proname, prosecdef, proconfig FROM pg_proc
     WHERE proname IN ('ets_update_registration_count', 'ets_update_tier_sold_count') ORDER BY 1`),
   views: await su(db, `SELECT relname, reloptions, has_table_privilege('anon', oid, 'select') AS anon_reads
@@ -501,6 +551,13 @@ async function scenario({ ownedBy }) {
   for (const view of VIEWS) {
     ok((await as(db, 'anon', `SELECT * FROM public.${view}`)).ok, `${label}: before, anon reads ${view}`);
   }
+  eq((await as(db, 'anon', `SELECT virtual_link FROM public.ets_events WHERE id = $1`, [E.virt])).rows,
+    [{ virtual_link: 'https://meet.example.test/room-1' }], `${label}: before, anon reads a virtual link`);
+  ok((await as(db, 'anon', 'SELECT * FROM public.ets_events')).ok, `${label}: before, the live site's "*" works`);
+  went(await as(db, 'stranger', `INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'x.png')`),
+    `${label}: before, any login uploads to the bucket`);
+  eq((await as(db, 'stranger', `DELETE FROM storage.objects WHERE bucket_id = '${BUCKET}'`)).n, 2,
+    `${label}: and deletes from it`);
   {
     const row = inquiry(0);
     const cols = Object.keys(row);
@@ -513,19 +570,35 @@ async function scenario({ ownedBy }) {
 
   // ─── 2. The file's own checks before, then the file, twice ─────────────
   const pre = checkBlock(APPLY, '-- Check before applying (read-only):');
-  eq(pre.length, 8, `${label}: eight checks before`);
+  eq(pre.length, 13, `${label}: thirteen checks before`);
   const preAnswers = [];
-  for (const q of pre) preAnswers.push(await su(db, q));
-  eq(preAnswers[0].length, 26, `${label}: check 1 lists the 26 policies`);
-  eq(preAnswers[1].length, 43, `${label}: check 2 finds the 43 columns`);
-  ok(preAnswers[2][0].registration_statuses.includes('pending') && preAnswers[2][0].event_statuses.includes('sold_out'),
-    `${label}: check 3 shows the statuses`);
-  eq(preAnswers[3].map(r => r.tgname), ['ets_reg_count_trigger', 'ets_tier_sold_trigger'], `${label}: check 4, the two triggers`);
-  eq(preAnswers[4].map(r => [r.security_definer, r.settings]), [[false, null], [false, null]], `${label}: check 5, invoker today`);
-  eq(preAnswers[5].map(r => [r.security_definer, r.authenticated_may_call]), [[true, true]], `${label}: check 6, the owner helper`);
-  eq(preAnswers[6].map(r => String(r.view)).sort(), VIEWS, `${label}: check 7, the three views`);
-  eq(preAnswers[7].map(r => r.table_name).sort(), [...TABLES, ...VIEWS].sort(), `${label}: check 8, anon on all ten and the views`);
-  for (const r of preAnswers[7].filter(r => TABLES.includes(r.table_name))) eq(r.anon_may, 'DELETE, INSERT, SELECT, UPDATE', `${label}: check 8, ${r.table_name}`);
+  for (const q of pre) preAnswers.push(await asRunner(db, ownedBy, q));
+  const [cPolicies, cColumns, cFlags, cHidden, cEnums, cAnonColumns, cTriggers, cFunctions, cHelper, cViews, cGrants,
+    cBucket, cLooseStorage] = preAnswers;
+  eq(cPolicies.length, 26, `${label}: check 1 lists the 26 policies`);
+  eq(cColumns.length, 55, `${label}: check 2 finds the 55 columns`);
+  eq(cFlags.map(r => [r.column_name, r.column_default, r.is_nullable]), [['is_free', 'false', 'NO'], ['is_visible', 'true', 'NO']],
+    `${label}: check 3, the tier flags`);
+  eq(Number(cHidden[0].tiers_that_disappear), 1, `${label}: check 4 counts the one hidden tier the fixture has on a live event (production: 0)`);
+  ok(cEnums[0].registration_statuses.includes('pending') && cEnums[0].event_statuses.includes('sold_out'),
+    `${label}: check 5 shows the statuses`);
+  const eventColumns = (await su(db, `SELECT attname FROM pg_attribute WHERE attrelid = 'public.ets_events'::regclass
+    AND attnum > 0 AND NOT attisdropped ORDER BY attnum`)).map(r => r.attname);
+  eq(cAnonColumns[0].anon_may_read.split(', '), eventColumns.filter(c => c !== 'virtual_link'),
+    `${label}: check 6 lists every event column but the virtual link`);
+  eq(cTriggers.map(r => r.tgname), ['ets_reg_count_trigger', 'ets_tier_sold_trigger'], `${label}: check 7, the two triggers`);
+  eq(cFunctions.map(r => [r.owner === r.running_as, r.security_definer, r.settings]), [[true, false, null], [true, false, null]],
+    `${label}: check 8, owned by the role running the file, invoker today`);
+  ok(cFunctions.every(r => /UPDATE ets_(events|event_tiers) SET (registrations_count|sold_count) = \2 \+ 1/.test(r.definition)),
+    `${label}: check 8 shows the bodies`);
+  eq(cHelper.map(r => [r.security_definer, r.authenticated_may_call]), [[true, true]], `${label}: check 9, the owner helper`);
+  eq(cViews.map(r => [String(r.view), r.reloptions]).sort(), [['ets_event_summary', null], ['ets_pending_agent_actions', null],
+    [INVOKER_VIEW, ['security_invoker=true']]], `${label}: check 10, the views`);
+  eq(cGrants.map(r => r.table_name).sort(), [...TABLES, ...VIEWS, INVOKER_VIEW].sort(), `${label}: check 11, anon on all ten and the views`);
+  for (const r of cGrants.filter(r => TABLES.includes(r.table_name))) eq(r.anon_may, 'DELETE, INSERT, SELECT, UPDATE', `${label}: check 11, ${r.table_name}`);
+  eq(cBucket.map(r => [r.policyname, r.cmd]), [['Allow public read', 'SELECT'], ['ets write: ets-event-files delete', 'DELETE'],
+    ['ets write: ets-event-files insert', 'INSERT']], `${label}: check 12, the bucket's three policies`);
+  eq(cLooseStorage, [], `${label}: check 13, no storage write policy without a bucket`);
 
   await runFile(db, APPLY, ownedBy);
   await runFile(db, APPLY, ownedBy);
@@ -533,23 +606,44 @@ async function scenario({ ownedBy }) {
 
   // ─── 3. The public site, after ─────────────────────────────────────────
   {
-    // EventsPage: events with their tiers and files, published or sold out.
-    const r = went(await as(db, 'anon', `SELECT e.id,
-        (SELECT coalesce(json_agg(t.id ORDER BY t.id), '[]') FROM public.ets_event_tiers t WHERE t.event_id = e.id) AS tiers,
-        (SELECT coalesce(json_agg(f.id ORDER BY f.id), '[]') FROM public.ets_event_files f WHERE f.event_id = e.id) AS files
-      FROM public.ets_events e WHERE e.status IN ('published', 'sold_out') ORDER BY e.id`), `${label}: the events list`);
-    eq(r.rows.map(x => [x.id, x.tiers, x.files]), [
+    // EventsPage, with exactly the columns the new site asks for, its tiers
+    // and files nested the way PostgREST embeds them, published or sold out.
+    const r = went(await as(db, 'anon', `SELECT ${LIST_COLUMNS.split(', ').map(c => `e.${c}`).join(', ')},
+        (SELECT coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'price', t.price, 'is_free', t.is_free,
+                 'quantity', t.quantity, 'sold_count', t.sold_count) ORDER BY t.id), '[]')
+           FROM public.ets_event_tiers t WHERE t.event_id = e.id) AS tiers,
+        (SELECT coalesce(json_agg(json_build_object('id', f.id, 'file_url', f.file_url, 'is_cover', f.is_cover) ORDER BY f.id), '[]')
+           FROM public.ets_event_files f WHERE f.event_id = e.id) AS files
+      FROM public.ets_events e WHERE e.status IN ('published', 'sold_out') ORDER BY e.event_date`), `${label}: the events list`);
+    eq(Object.keys(r.rows[0]).sort(), [...LIST_COLUMNS.split(', '), 'tiers', 'files'].sort(), `${label}: every column the list asks for`);
+    eq(r.rows.map(x => [x.id, x.tiers.map(t => t.id), x.files.map(f => f.id)]), [
       [E.pub, [T.free, T.paid].sort(), [F.pubCover, F.pubDoc].sort()],
       [E.virt, [T.vfree, T.vpaid].sort(), []],
       [E.sold, [T.sold], [F.sold]],
-    ].sort((a, b) => a[0].localeCompare(b[0])), `${label}: the events list has the live tiers and files, no hidden tier`);
+    ], `${label}: the events list has the live tiers and files, no hidden tier`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_events')).rows), LIVE_EVENTS, `${label}: anon sees no draft or cancelled event`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_event_tiers')).rows), LIVE_TIERS, `${label}: anon sees only live, visible tiers`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_event_files')).rows), LIVE_FILES, `${label}: anon sees only live events' files`);
-    // EventRegister: one event by slug, published.
-    const one = await as(db, 'anon', `SELECT id FROM public.ets_events WHERE slug = 'money-basics' AND status = 'published'`);
-    eq(ids(one.rows), [E.pub], `${label}: the register page finds its event`);
+    // EventRegister: one event by slug, published, with its page's columns.
+    const one = went(await as(db, 'anon', `SELECT ${PAGE_COLUMNS.split(', ').map(c => `e.${c}`).join(', ')},
+        (SELECT json_agg(json_build_object(${PAGE_TIER_COLUMNS.split(', ').map(c => `'${c}', t.${c}`).join(', ')}))
+           FROM public.ets_event_tiers t WHERE t.event_id = e.id) AS tiers,
+        (SELECT json_agg(json_build_object(${PAGE_FILE_COLUMNS.split(', ').map(c => `'${c}', f.${c}`).join(', ')}))
+           FROM public.ets_event_files f WHERE f.event_id = e.id) AS files
+      FROM public.ets_events e WHERE e.slug = 'money-basics' AND e.status = 'published'`), `${label}: the register page`);
+    eq([one.rows.length, one.rows[0].venue_address, one.rows[0].tiers.length, one.rows[0].files.length],
+      [1, '100 Main St', 2, 2], `${label}: the register page finds its event, its address, tiers and files`);
     eq((await as(db, 'anon', `SELECT id FROM public.ets_events WHERE slug = 'not-yet'`)).rows, [], `${label}: a draft's page is not found`);
+    // The virtual link is not the public's: by name, by "*", or by a view.
+    refused(await as(db, 'anon', `SELECT virtual_link FROM public.ets_events`), `${label}: anon cannot read a virtual link`);
+    refused(await as(db, 'anon', `SELECT * FROM public.ets_events`), `${label}: the live site's "*" on events is refused`);
+    refused(await as(db, 'anon', `SELECT id FROM public.ets_events WHERE virtual_link IS NOT NULL`), `${label}: nor filter by it`);
+    refused(await as(db, 'anon', `SELECT e FROM public.ets_events e`), `${label}: nor read the whole row`);
+    // The bucket: the public still reads it, and writes nothing.
+    eq((await as(db, 'anon', `SELECT name FROM storage.objects WHERE bucket_id = '${BUCKET}' ORDER BY 1`)).rows.map(r => r.name),
+      ['covers/cover.jpg', 'files/agenda.pdf'], `${label}: anon reads the bucket`);
+    refused(await as(db, 'anon', `INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'y.png')`), `${label}: anon uploads nothing`);
+    eq((await as(db, 'anon', `DELETE FROM storage.objects WHERE bucket_id = '${BUCKET}'`)).n, 0, `${label}: anon deletes nothing`);
   }
 
   // Inquiries.
@@ -603,14 +697,13 @@ async function scenario({ ownedBy }) {
     const [qp, pp] = minimal('ets_registrations', pendingFree);
     went(await as(db, 'anon', qp, pp), `${label}: a free tier may also be pending`);
 
-    // The counts moved, as the triggers count.
+    // The counts moved, as the triggers count (+1 a registration added).
     const evAfter = (await su(db, `SELECT registrations_count FROM public.ets_events WHERE id = $1`, [E.pub]))[0].registrations_count;
     eq(evAfter, evBefore + 2, `${label}: the event's count went up by the two added`);
-    const recount = (await su(db, `SELECT count(*)::int AS n FROM public.ets_registrations WHERE event_id = $1 AND status IN ('pending', 'confirmed', 'checked_in')`, [E.pub]))[0].n;
+    const recount = (await su(db, `SELECT count(*)::int AS n FROM public.ets_registrations WHERE event_id = $1`, [E.pub]))[0].n;
     eq(evAfter, recount, `${label}: and it is right`);
     const tiersAfter = await su(db, `SELECT id, sold_count FROM public.ets_event_tiers WHERE id IN ($1, $2) ORDER BY id`, [T.free, T.paid]);
-    eq(tiersAfter.map(t => t.sold_count), tiersBefore.map(t => t.sold_count + (t.id === T.free ? 1 : 0)),
-      `${label}: the free tier sold one more, the paid tier none until it is confirmed`);
+    eq(tiersAfter.map(t => t.sold_count), tiersBefore.map(t => t.sold_count + 1), `${label}: each tier counted its one`);
     eq((await su(db, `SELECT registrations_count FROM public.ets_events WHERE id = $1`, [E.virt]))[0].registrations_count, 3,
       `${label}: the virtual event's count too`);
 
@@ -643,7 +736,7 @@ async function scenario({ ownedBy }) {
   }
 
   // Nothing read, changed or removed past that.
-  for (const t of ['ets_inquiries', 'ets_registrations', ...STAFF, ...VIEWS]) {
+  for (const t of ['ets_inquiries', 'ets_registrations', ...STAFF, ...VIEWS, INVOKER_VIEW]) {
     refused(await as(db, 'anon', `SELECT * FROM public.${t}`), `${label}: anon reads no ${t}`);
   }
   for (const t of TABLES) {
@@ -667,8 +760,10 @@ async function scenario({ ownedBy }) {
     eq(Object.keys(c.ets_events).sort(), EVENT_KEYS, `${label}: and the event's`);
     eq([c.id, c.first_name, c.last_name, c.email, c.status, Number(c.amount_paid)],
       [R.pending, 'Avery', 'Stone', 'avery@example.test', 'pending', 49], `${label}: by id, the registration`);
-    eq([c.ets_events.title, c.ets_events.event_date, c.ets_events.start_time, c.ets_events.virtual_link],
-      ['Money Basics Workshop', '2026-12-05', '10:00:00', null], `${label}: its event`);
+    eq([c.ets_events.title, c.ets_events.event_date, c.ets_events.start_time, c.ets_events.virtual_link,
+      c.ets_events.address, c.ets_events.timezone],
+      ['Money Basics Workshop', '2026-12-05', '10:00:00', null, '100 Main St', null],
+      `${label}: its event, the venue address as its address, no timezone column and no failure`);
     eq(c.ets_events.ets_event_files, [{ file_url: 'https://files.example.test/cover.jpg', is_cover: true },
       { file_url: 'https://files.example.test/agenda.pdf', is_cover: false }], `${label}: its files, url and cover only`);
     eq([c.ets_event_tiers.name, Number(c.ets_event_tiers.price)], ['Workbook Included', 49], `${label}: its tier`);
@@ -694,18 +789,16 @@ async function scenario({ ownedBy }) {
 
   // ─── 5. A login that is not the owner; the owner ───────────────────────
   for (const who of ['stranger', 'noEmail']) {
-    eq(ids((await as(db, who, 'SELECT id FROM public.ets_events')).rows), LIVE_EVENTS, `${label}: ${who} sees the public's events`);
-    eq(ids((await as(db, who, 'SELECT id FROM public.ets_event_tiers')).rows), LIVE_TIERS, `${label}: ${who} sees the public's tiers`);
-    eq(ids((await as(db, who, 'SELECT id FROM public.ets_event_files')).rows), LIVE_FILES, `${label}: ${who} sees the public's files`);
-    for (const t of ['ets_inquiries', 'ets_registrations', ...STAFF, 'ets_pending_agent_actions', 'ets_pipeline_summary']) {
+    // The public reads are anon's: a login that is not the owner reads no row of the ten.
+    for (const t of [...TABLES, ...VIEWS, INVOKER_VIEW]) {
       const r = went(await as(db, who, `SELECT * FROM public.${t}`), `${label}: ${who} reads ${t}`);
       eq(r.rows.length, 0, `${label}: ${who} reads no ${t} row`);
     }
-    eq(Number((await as(db, who, 'SELECT total_pipeline_value FROM public.ets_revenue_summary')).rows[0].total_pipeline_value), 0,
-      `${label}: ${who} sees no revenue`);
+    eq((await as(db, who, 'SELECT virtual_link FROM public.ets_events')).rows, [], `${label}: ${who} reads no virtual link`);
     for (const t of TABLES) {
       eq((await as(db, who, `UPDATE public.${t} SET ${SOME_COLUMN[t]} = ${SOME_COLUMN[t]}`)).n, 0, `${label}: ${who} updates no ${t}`);
       eq((await as(db, who, `DELETE FROM public.${t}`)).n, 0, `${label}: ${who} deletes no ${t}`);
+      refused(await as(db, who, `TRUNCATE public.${t} CASCADE`), `${label}: ${who} truncates no ${t}`);
     }
     for (const t of STAFF) {
       refused(await as(db, who, `INSERT INTO public.${t} DEFAULT VALUES`), `${label}: ${who} adds no ${t} row`);
@@ -714,8 +807,14 @@ async function scenario({ ownedBy }) {
       `${label}: ${who} adds no event`);
     const [q, p] = minimal('ets_registrations', registration(40, T.paid, { status: 'confirmed' }));
     refused(await as(db, who, q, p), `${label}: ${who} may not mark a paid registration confirmed either`);
+    const [q1, p1] = minimal('ets_registrations', registration(42, T.free));
+    refused(await as(db, who, q1, p1), `${label}: ${who} sees no event, so registers for none`);
     const [q2, p2] = minimal('ets_inquiries', inquiry(41));
-    went(await as(db, who, q2, p2), `${label}: ${who} may use the public form like anyone`);
+    went(await as(db, who, q2, p2), `${label}: ${who} may still send the public form's inquiry`);
+    // The bucket: reads it like anyone, writes nothing.
+    eq((await as(db, who, `SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = '${BUCKET}'`)).rows[0].n, 2, `${label}: ${who} reads the bucket`);
+    refused(await as(db, who, `INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'z.png')`), `${label}: ${who} uploads nothing`);
+    eq((await as(db, who, `DELETE FROM storage.objects WHERE bucket_id = '${BUCKET}'`)).n, 0, `${label}: ${who} deletes nothing`);
   }
   eq(await counts(db), afterPublic, `${label}: the logins changed nothing`);
 
@@ -725,8 +824,16 @@ async function scenario({ ownedBy }) {
     eq(r.rows[0].n, all[t], `${label}: the owner reads every ${t} row`);
   }
   eq((await as(db, 'owner', 'SELECT * FROM public.ets_pending_agent_actions')).rows.length, 1, `${label}: the owner reads the agent's pending actions`);
-  eq(Number((await as(db, 'owner', 'SELECT total_pipeline_value FROM public.ets_revenue_summary')).rows[0].total_pipeline_value), 3000,
-    `${label}: and the revenue`);
+  eq((await as(db, 'owner', 'SELECT count(*)::int AS n FROM public.ets_event_summary')).rows[0].n, all.ets_events,
+    `${label}: and the event summary`);
+  eq((await as(db, 'owner', `SELECT virtual_link FROM public.ets_events WHERE id = $1`, [E.draft])).rows,
+    [{ virtual_link: 'https://meet.example.test/secret' }], `${label}: the owner reads a virtual link, a draft's too`);
+  for (const t of ['ets_events', 'ets_emails']) {
+    refused(await as(db, 'owner', `TRUNCATE public.${t} CASCADE`), `${label}: not even the owner truncates ${t} (no browser call needs it)`);
+  }
+  went(await as(db, 'owner', `INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'covers/new.jpg')`), `${label}: the owner uploads`);
+  eq((await as(db, 'owner', `DELETE FROM storage.objects WHERE bucket_id = '${BUCKET}' AND name = 'files/agenda.pdf'`)).n, 1,
+    `${label}: and deletes`);
   eq((await as(db, 'owner', `UPDATE public.ets_registrations SET status = 'confirmed', amount_paid = 25 WHERE id = $1`, [R.vpending], { keep: true })).n, 1,
     `${label}: the owner confirms a paid registration`);
   eq((await confirm(db, 'anon', R.vpending)).ets_events.virtual_link, 'https://meet.example.test/room-1',
@@ -739,20 +846,21 @@ async function scenario({ ownedBy }) {
 
   // ─── 6. The checks after; the rollback ─────────────────────────────────
   const post = checkBlock(APPLY, '-- Check after (read-only):');
-  eq(post.length, 6, `${label}: six checks after`);
+  eq(post.length, 9, `${label}: nine checks after`);
   const postAnswers = [];
-  for (const q of post) postAnswers.push(await su(db, q));
+  for (const q of post) postAnswers.push(await asRunner(db, ownedBy, q));
+  const [aPolicies, aOpen, aGrants, aEvents, aAuthenticated, aFunctions, aViews, aBucket, aAnswers] = postAnswers;
   const roles = r => Array.isArray(r) ? `{${r.join(',')}}` : String(r);
-  eq(postAnswers[0].map(r => `${r.tablename}.${r.policyname}.${r.cmd}.${roles(r.roles)}`), [
+  eq(aPolicies.map(r => `${r.tablename}.${r.policyname}.${r.cmd}.${roles(r.roles)}`), [
     'ets_agent_log.ets_owner_all.ALL.{authenticated}',
     'ets_emails.ets_owner_all.ALL.{authenticated}',
     'ets_engagements.ets_owner_all.ALL.{authenticated}',
     'ets_event_files.ets_owner_all.ALL.{authenticated}',
-    'ets_event_files.ets_public_read_live_files.SELECT.{anon,authenticated}',
+    'ets_event_files.ets_public_read_live_files.SELECT.{anon}',
     'ets_event_tiers.ets_owner_all.ALL.{authenticated}',
-    'ets_event_tiers.ets_public_read_live_tiers.SELECT.{anon,authenticated}',
+    'ets_event_tiers.ets_public_read_live_tiers.SELECT.{anon}',
     'ets_events.ets_owner_all.ALL.{authenticated}',
-    'ets_events.ets_public_read_events.SELECT.{public}',
+    'ets_events.ets_public_read_events.SELECT.{anon}',
     'ets_inquiries.ets_owner_all.ALL.{authenticated}',
     'ets_inquiries.ets_public_send_inquiry.INSERT.{anon,authenticated}',
     'ets_registrations.ets_owner_all.ALL.{authenticated}',
@@ -760,21 +868,33 @@ async function scenario({ ownedBy }) {
     'ets_sessions_log.ets_owner_all.ALL.{authenticated}',
     'ets_signatures.ets_owner_all.ALL.{authenticated}',
   ], `${label}: check after 1, the 15 policies`);
-  eq(Number(postAnswers[1][0].open_policies), 0, `${label}: check after 2, nothing open`);
-  eq(postAnswers[2].map(r => `${r.table_name}:${r.anon_may}`), ['ets_event_files:SELECT', 'ets_event_tiers:SELECT',
-    'ets_events:SELECT', 'ets_inquiries:INSERT', 'ets_registrations:INSERT'], `${label}: check after 3, anon's grants`);
-  eq(postAnswers[3].map(r => [r.security_definer, r.settings]), [[true, ['search_path=public']], [true, ['search_path=public']],
-    [true, ['search_path=public']]], `${label}: check after 4, the functions`);
-  eq(postAnswers[3].find(r => String(r.function).startsWith('ets_registration_confirmation')).anon_may_call, true,
-    `${label}: check after 4, anon may call the confirmation`);
-  eq(postAnswers[4].map(r => [String(r.view), r.reloptions, r.anon_may_read]).sort((a, b) => a[0].localeCompare(b[0])),
-    VIEWS.map(v => [v, ['security_invoker=true'], false]), `${label}: check after 5, the views`);
-  eq([postAnswers[5][0].empty_ref, postAnswers[5][0].finds_one], [true, true], `${label}: check after 6, the function answers`);
+  eq(Number(aOpen[0].open_policies), 0, `${label}: check after 2, nothing open`);
+  eq(aGrants.map(r => `${r.table_name}:${r.anon_may}`), ['ets_event_files:SELECT', 'ets_event_tiers:SELECT',
+    'ets_inquiries:INSERT', 'ets_registrations:INSERT'], `${label}: check after 3, anon's table grants`);
+  eq([aEvents[0].reads_virtual_link, aEvents[0].reads_table, aEvents[0].columns],
+    [false, false, eventColumns.filter(c => c !== 'virtual_link').sort().join(', ')], `${label}: check after 4, anon on ets_events`);
+  eq(Number(aAuthenticated[0].left_over), 0, `${label}: check after 5, authenticated truncates nothing`);
+  eq(aFunctions.map(r => [r.security_definer, r.settings]), [[true, ['search_path=public']], [true, ['search_path=public']],
+    [true, ['search_path=public']]], `${label}: check after 6, the functions`);
+  eq(aFunctions.find(r => String(r.function).startsWith('ets_registration_confirmation')).anon_may_call, true,
+    `${label}: check after 6, anon may call the confirmation`);
+  eq(aViews.map(r => [String(r.view), r.reloptions, r.anon_may_read]).sort((a, b) => a[0].localeCompare(b[0])),
+    [...VIEWS, INVOKER_VIEW].sort().map(v => [v, ['security_invoker=true'], false]), `${label}: check after 7, the views`);
+  eq(aBucket.map(r => [r.policyname, r.cmd, /is_platform_owner\(\)/.test(`${r.qual} ${r.with_check}`)]), [
+    ['Allow public read', 'SELECT', false], ['ets write: ets-event-files delete', 'DELETE', true],
+    ['ets write: ets-event-files insert', 'INSERT', true]], `${label}: check after 8, the bucket`);
+  eq([aAnswers[0].empty_ref, aAnswers[0].finds_one], [true, true], `${label}: check after 9, the function answers`);
 
   await runFile(db, ROLLBACK, ownedBy);
   await runFile(db, ROLLBACK, ownedBy);
   const back = await snapshot(db);
-  eq(back, before, `${label}: the rollback puts the policies, grants, functions and views back as they were`);
+  eq(back, before, `${label}: the rollback puts the policies (storage's too), grants, functions and views back as they were`);
+  eq((await su(db, `SELECT reloptions, has_table_privilege('anon', oid, 'select') AS anon_reads FROM pg_class WHERE relname = $1`, [INVOKER_VIEW])),
+    [{ reloptions: ['security_invoker=true'], anon_reads: false }], `${label}: a view that already ran as the caller still does`);
+  eq((await as(db, 'anon', `SELECT virtual_link FROM public.ets_events WHERE id = $1`, [E.virt])).rows.length, 1,
+    `${label}: the rollback gives anon the virtual link back`);
+  went(await as(db, 'stranger', `INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'x.png')`),
+    `${label}: and any login the bucket`);
   ok((await as(db, 'anon', 'SELECT * FROM public.ets_inquiries')).rows.length > 0, `${label}: and reopens the hole: anon reads inquiries`);
   went(await as(db, 'anon', 'DELETE FROM public.ets_emails'), `${label}: anon may delete again`);
   ok((await as(db, 'stranger', 'SELECT * FROM public.ets_engagements')).rows.length === 1, `${label}: any login reads again`);
@@ -793,6 +913,25 @@ async function scenario({ ownedBy }) {
   await db.close();
 }
 
+// If production's ets_events does have address and timezone columns: the
+// function answers them (the address over the venue address), and anon's
+// column list, read from the catalog, takes them in.
+async function addressColumns() {
+  const label = 'with address and timezone columns';
+  const db = await build({ ownedBy: null });
+  await db.exec(`ALTER TABLE public.ets_events ADD COLUMN address text, ADD COLUMN timezone text;
+    UPDATE public.ets_events SET address = '7 Hand Entered Way', timezone = 'CT' WHERE id = '${E.pub}';`);
+  await runFile(db, APPLY, null);
+  const c = await confirm(db, 'anon', R.pending);
+  eq([c.ets_events.address, c.ets_events.timezone], ['7 Hand Entered Way', 'CT'], `${label}: the event's own address and timezone`);
+  await db.exec(`UPDATE public.ets_events SET address = NULL WHERE id = '${E.pub}'`);
+  eq((await confirm(db, 'anon', R.pending)).ets_events.address, '100 Main St', `${label}: no address, the venue address`);
+  went(await as(db, 'anon', 'SELECT address, timezone FROM public.ets_events'), `${label}: anon reads the added columns`);
+  refused(await as(db, 'anon', 'SELECT virtual_link FROM public.ets_events'), `${label}: and still not the link`);
+  await db.close();
+}
+
 await scenario({ ownedBy: null });
 await scenario({ ownedBy: 'ets_admin' });
+await addressColumns();
 console.log(`ets_close_policies_db: ${checks} checks passed`);
