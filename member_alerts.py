@@ -695,5 +695,13 @@ def _render_recent(rows: List[Dict[str, Any]], zone, seen: Optional[str], now: O
             out.append(f'<li><a class="{cls}" href="{escape(link, quote=True)}">{inner}</a></li>' if link
                        else f'<li><div class="{cls}">{inner}</div></li>')
         items = f'<ul class="al-list">{"".join(out)}</ul>'
+    import member_lumen
+    if member_lumen.page():
+        # The new look's section heading (member_lumen_people), NEW while
+        # something here is new.
+        new = any(is_new(r, seen) for r in rows)
+        chip = ' <span class="lm-new" aria-hidden="true">NEW</span>' if new else ""
+        return (f'<style>{CSS}</style><section class="al" aria-labelledby="al-recent">'
+                f'<div class="lm-sec"><h2 id="al-recent" class="lm-h2">Recent{chip}</h2></div>{items}</section>')
     return (f'<style>{CSS}</style><section class="al" aria-labelledby="al-recent">'
             f'<h2 id="al-recent" class="mp-sect">Recent</h2>{items}</section>')

@@ -1173,6 +1173,10 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     record, and sign out. `pictures` (the owner in a preview, or someone
     the owner named) adds the app's pictures; `asks` (member_asks.entry)
     adds Ask the church."""
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_me(biz, site, me=me, people=people, year=year, gifts=gifts, give_url=give_url,
+                         this_year=this_year, flash=flash, pictures=pictures, serving=serving, asks=asks, inbox=inbox)
     import member_asks
     import member_portal_messaging as mpm
     import member_push
@@ -1260,6 +1264,98 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
 <form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>"""
     # On a computer: you and your giving beside your church life (band).
     return _shell(biz, site, "Me", band(you, life), tab="me", who=me, back=("/my", "Home"), script=script, wide=True)
+
+
+def _lumen_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
+              year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
+              this_year: int, flash: str = "", pictures: bool = False, serving: bool = False,
+              asks: Optional[List[str]] = None, inbox: bool = False) -> str:
+    """Me in the new look (member_lumen_people): your circle (tap it for a
+    photo: the same form and script), your name in the serif, your giving
+    on the church's soft band (the year's total and Give; the months, the
+    other years, each gift and the statement under it), then one plain list
+    of the same doors render_me shows, and sign out. Opened from the
+    picture at the top, it goes back to wherever it was opened."""
+    import member_asks
+    import member_messaging_rules as rules
+    import member_photos as ph
+    import member_portal_messaging as mpm
+    import member_push
+    import church_follow_up as cfu
+    import member_app_ui as ui
+    import member_lumen_people as lp
+    msgs_on = mpm.turned_on(biz)
+    notes_on = bool(member_push.church_kinds(biz.get("settings")) - set(member_push.OWN_PAGE_KINDS)) and member_push.ready()
+    has = bool(ph.of(me))
+    age = rules.age(me.get("birthdate"))
+    seen = ("Only your parents and the church staff see it." if age is not None and age < 18 else
+            "Members you message and the church staff see it." if age is not None else
+            "The church staff see it, so they know who you are.")
+    remove = ('<form method="post" action="/my/photo/remove" class="mp-noprint"><button class="lm-txtbtn" type="submit">'
+              'Remove photo</button></form>' if has else "")
+    photo = f"""<form class="mb-photo" method="post" action="/my/photo" enctype="multipart/form-data">
+  <label class="mb-photo-pick" for="mb-photo-in">{ph.avatar(me, show=True)}<span class="mb-photo-badge" aria-hidden="true">{ui.icon('camera', 15)}</span>
+  <span class="mp-sr">{'Change your photo' if has else 'Add a photo of you'}</span></label>
+  <input class="mp-sr" id="mb-photo-in" type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/*">
+  <noscript><button class="mp-link" type="submit">Save photo</button></noscript>
+</form>"""
+    script = """<script>(function(){var i=document.getElementById('mb-photo-in');if(!i)return;
+i.addEventListener('change',function(){if(!i.files||!i.files.length)return;var n=document.getElementById('mb-photo-note');
+if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>"""
+    church = biz.get("name") or "the church"
+    note = ("Tap your photo to change it. " if has else "Tap your circle to add a photo. ") + seen
+    you = (f'<div class="mb-profile lm-prof">{photo}<h1>{_e(me.get("name") or "Me")}</h1>'
+           f'<p class="lm-pmeta">{_e(church)}{" · " + _e(me.get("email")) if me.get("email") else ""}</p>'
+           f'<p class="mb-photo-note" id="mb-photo-note" role="status">{_e(note)}</p>{remove}</div>{flash}')
+    years = "".join(
+        f'<a href="/my/me?year={y}#mp-giving"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
+        for y in range(this_year, this_year - 4, -1))
+    give = f'<a class="lm-btn sm" href="{_e(give_url)}">Give</a>' if give_url else ""
+    extra = ""
+    if gifts is None:
+        total = ""
+        extra = lp.note("Your giving couldn't load just now. Your gifts are safe — please try again in a moment.", err=True)
+    elif not gifts:
+        total = f'<p class="lm-gnone">No gifts recorded for {year}.</p>'
+    else:
+        total = f'<p class="lm-total">{money(sum(g["amount"] for g in gifts))}</p>'
+        items = "".join(
+            f'<li><span>{_e(_day(g["date"]))} · {_e(g["fund"])}{" (refunded)" if g["refunded"] else ""}</span>'
+            f'<span>{money(g["amount"])}</span></li>' for g in gifts)
+        extra = (f'{_month_bars(gifts, year, this_year)}'
+                 f'<details class="mb-each"><summary>See each gift ({len(gifts)})</summary><ul class="mp-gifts">{items}</ul></details>'
+                 f'<a class="lm-more" href="/my/statement?year={year}" aria-label="{year} statement">{year} statement</a>')
+    giving = (f'<section class="lm-megive" aria-labelledby="mp-giving"><div class="lm-gtop"><div>'
+              f'<span class="lm-kicker" id="mp-giving">Your giving · {year}</span>{total}</div>{give}</div>'
+              f'{extra}<nav class="mp-years lm-years" aria-label="Year">{years}</nav></section>')
+
+    def door(href: str, title: str) -> str:
+        return f'<a class="lm-li" href="{href}"><b>{title}</b>{lp.ic("chevron", 18)}</a>'
+    doors = [door("/my/events", "Coming up")]
+    if serving:
+        doors.append(door("/my/serving", "My serving"))
+    doors.append(door("/my/groups", "My groups"))
+    if msgs_on or inbox:
+        doors.append(door("/my/messages", "Messages"))
+    doors.append(door("/my/prayer", "Prayer"))
+    if asks:
+        doors.append(door("/my/ask", "Ask the church"))
+    if give_url:
+        doors.append(door("/my/gifts", "Recurring gifts"))
+    if notes_on:
+        doors.append(door("/my/notifications", "Notifications"))
+    doors.append(door("/my/details", "My details"))
+    if cfu.is_church(biz):
+        doors.append(door("/my/me/celebrations", "Celebrations"))
+    if pictures:
+        doors.append(door("/my/pictures", "Pictures in the app"))
+    switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
+              '<button class="lm-txtbtn" type="submit">Not you? Choose someone else in your household</button></form>'
+              if len(people) > 1 else "")
+    life = (f'<div class="lm-lst">{"".join(doors)}</div>'
+            f'<div class="lm-out mp-noprint">{switch}<form method="post" action="/my/signout">'
+            f'<button class="lm-txtbtn" type="submit">Sign out</button></form></div>')
+    return _shell(biz, site, "Me", you + giving + life, tab="me", who=me, script=script)
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],

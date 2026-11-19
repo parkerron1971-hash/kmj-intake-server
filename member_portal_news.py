@@ -664,6 +664,13 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     head = ('<a class="mb-back" href="/my">Home</a>'
             f'<div class="nw-head"><div class="nw-headrow"><p class="nw-eb">From your church</p>{write}</div>'
             f'<h1 class="nw-lt">What\'s <em>happening.</em></h1></div>')
+    import member_lumen
+    lumen = member_lumen.page()
+    if lumen:
+        # The new look (member_lumen_people): the heading in the serif, the
+        # posts as plain stories between thin lines, the filters as chips.
+        head = (f'<header class="lm-mast lm-nwhead"><div class="lm-nwrow"><p class="lm-eyebrow">From your church</p>{write}</div>'
+                f'<h1 class="lm-disp">What&#x27;s <em>happening</em></h1></header>')
     if posts is None:
         body = f'{head}<p class="mp-err" role="alert">The news couldn\'t load just now. Please try again in a moment.</p>'
         return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me), 503
@@ -687,6 +694,8 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     import member_portal_share as mps
     body = (f'{head}<nav class="nw-filter" aria-label="Show">{chips}</nav>{_flash(request)}'
             f'<div class="nw-list">{cards}</div>{mps.share_card()}{foot}')
+    if lumen:
+        body = f'<div class="lm-nwpage">{body}</div>'
     return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me, script=RX_JS), 200
 
 
