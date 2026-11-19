@@ -94,6 +94,9 @@ def test_on_links_the_sheet_and_is_white(church, fake, monkeypatch):  # noqa: F8
     assert '<meta name="theme-color" content="#ffffff">' in html          # white whatever the base
     assert "--mbt-bg:#ffffff" in html
     head = html[:html.index("</head>")]
+    import member_lumen_motion
+    assert member_lumen_motion.JS in head                                 # listening before the first reveal
+    head = head.replace(member_lumen_motion.JS, "")
     assert "lm-ind" not in head and ".lm" not in head                     # CSS only in the file
 
 
@@ -109,13 +112,18 @@ def test_the_lumen_sheet_is_a_hashed_immutable_file():
     import custom_domain_cache
     assert custom_domain_cache.SHARED_SHEET_RE.match(ui.sheet_url("lumen"))
     # Every rule is under body.lm: the file draws nothing on another page.
+    # (The page moves hang off <html>: the direction member_lumen_motion's
+    # script sets on a Lumen page only, and the cinema's page colour, which
+    # asks for body.lm itself.)
     import member_lumen_ui as lm
     text = re.sub(r"/\*.*?\*/", "", lm.css(), flags=re.S)
-    rules = re.findall(r"(?:^|\})\s*([^{}@]+)\{", re.sub(r"@media[^{]*\{|@supports[^{]*\{|@keyframes[^{]*\{[^}]*\}[^}]*\}", "", text))
+    text = re.sub(r"@keyframes[^{]*\{(?:[^{}]*\{[^}]*\})*\s*\}", "", text)
+    rules = re.findall(r"(?:^|\})\s*([^{}@]+)\{", re.sub(r"@media[^{]*\{|@supports[^{]*\{", "", text))
     for sel in rules:
         for one in sel.split(","):
             one = one.strip()
-            if one and not one.startswith(("from", "to", "0%", "100%", "::view-transition", "html:active-view-transition")):
+            if one and not one.startswith(("::view-transition", "html:active-view-transition", "html[data-vt=",
+                                           "html:has(>body.lm")):
                 assert one.startswith((".lm", "body.lm")), one
 
 

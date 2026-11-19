@@ -393,6 +393,10 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
     if boxed:
         import member_lumen_give as mlg
         box_give = mlg.room_give(opens)
+    if lumen:
+        # Lumen Next: who's here with you, and Amen · a heart · Praying.
+        import member_lumen_give as mlg
+        here = mlg.room_watch(stack, here_n, boxed)
     p = pinned or {}
     if p.get("host"):
         p_cls, p_av, p_who = "lv-pin is-host", _HEART.format(s=12), (p["author"] if p["author"] not in ("", "Host") else church)
@@ -457,6 +461,10 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
            "church": church, "first": first, "poll": POLL_MS,
            "instant": mis.on(), "author": lr.author_for(me.get("name")), "offline": mis.OFFLINE}
     script = "<script>" + ROOM_JS.replace("__CFG__", json.dumps(cfg).replace("</", "<\\/")) + "</script>"
+    if lumen:
+        # Lumen Next: the hearts, Amens and praying hands rise over the video.
+        import member_lumen_motion
+        script += member_lumen_motion.ROOM_JS
     return _shell(biz, site, "Live", body, tab="live", who=me, script=script, back=("/my/sermons", "Watch"), wide=True)
 
 
