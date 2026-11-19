@@ -551,6 +551,19 @@ def _send(client: httpx.Client, method: str, url: str, headers: Dict[str, str],
 _LAST = threading.local()
 
 
+def failures() -> int:
+    """How many sync requests have failed in this thread so far, for any
+    reason (refused, or never reached the database). Read it before and after
+    work done in this one thread to tell "nothing there" from "a read
+    failed" when a helper answers both the same way (member_portal._leads
+    keeps a "no" only when nothing failed)."""
+    return getattr(_LAST, "failed", 0)
+
+
+def _failed() -> None:
+    _LAST.failed = getattr(_LAST, "failed", 0) + 1
+
+
 def last_error() -> Optional[Dict[str, Any]]:
     """Why this thread's last sync request (sb_get/patch/post_as_*) came back
     with nothing: {status, code, message} from PostgREST's error body (code
@@ -593,8 +606,10 @@ def _sync_request(
                            f"{type(e).__name__}")
         else:
             logger.warning(f"sb_clients sync {method} {path} transport error: {e}")
+        _failed()
         return None
     if resp.status_code >= 400:
+        _failed()
         _LAST.error = _refusal(resp)
         if redact:
             logger.warning(f"sb_clients sync {method} {redacted_path(path)}: {resp.status_code}")

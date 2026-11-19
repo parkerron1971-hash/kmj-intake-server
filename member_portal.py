@@ -1279,19 +1279,34 @@ async def _read_leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]
     known = roles is not None and led is not None
     if roles or led:
         return True, known
+    # The rest answer "nothing" for a failed read too (a task, a place on the
+    # schedule, a serving part): each runs where sb_clients can count its
+    # failed reads, so a "no" behind one of them is never kept.
     if biz is not None:
         import church_leader_tasks
-        if await asyncio.to_thread(church_leader_tasks.section, biz, me_id) is not None:
+        got, failed = await asyncio.to_thread(_counted, church_leader_tasks.section, biz, me_id)
+        known = known and not failed
+        if got is not None:
             return True, known
         import church_schedule
-        if await asyncio.to_thread(church_schedule.section, biz, me_id) is not None:
+        got, failed = await asyncio.to_thread(_counted, church_schedule.section, biz, me_id)
+        known = known and not failed
+        if got is not None:
             return True, known
     import member_app_ui
     if biz is None or not member_app_ui.serve_mode():
         return False, known
     import member_portal_lead
-    parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id, (me or {}).get("email"))
-    return bool(parts["serving"] or parts["kids"] or parts["team"]), known
+    parts, failed = await asyncio.to_thread(_counted, member_portal_lead.parts, biz, me_id, (me or {}).get("email"))
+    return bool(parts["serving"] or parts["kids"] or parts["team"]), known and not failed
+
+
+def _counted(fn, *args):
+    """(fn(*args), whether any database read inside it failed), in this one
+    thread (sb_clients.failures)."""
+    before = sb_clients.failures()
+    got = fn(*args)
+    return got, sb_clients.failures() != before
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
