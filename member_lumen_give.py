@@ -86,7 +86,7 @@ def give_form(biz: Dict[str, Any], me: Dict[str, Any], *, year: Optional[int] = 
     and drawing the same controls with the same ids, classes and names (the
     give script, unchanged, reads them), in the mock's order."""
     import giving_router as gr
-    import member_lumen_ui as lm
+    import member_lumen_moments as mlm
     import member_app_ui as ui
     from member_portal import first_name
     funds = gr.configured_funds(gr.giving_settings(biz.get("settings")))
@@ -146,7 +146,7 @@ def give_form(biz: Dict[str, Any], me: Dict[str, Any], *, year: Optional[int] = 
             f'<a class="lm-linkrow" href="/my/gifts"><span><b>Recurring gifts</b><span>Change, pause or stop one</span></span>'
             f'{_chev()}</a></section>'
             f'<dialog class="lm-gave" id="lm-gave" aria-labelledby="lm-gave-h"><div class="lm-grab" aria-hidden="true"></div>'
-            f'<span class="lm-okring" aria-hidden="true">{lm.ic("check", 30)}</span><h2 id="lm-gave-h" tabindex="-1" autofocus>{thanks_h}</h2>'
+            f'{mlm.check()}<h2 id="lm-gave-h" tabindex="-1" autofocus>{thanks_h}</h2>'
             '<div id="gv-thanks" class="gv-banner">Your gift has been received. If you shared your email, a receipt is on '
             'its way, and every gift lands on your year-end statement.</div>'
             '<form method="dialog"><button class="lm-btn lm-block" type="submit">Done</button></form></dialog>')
@@ -157,15 +157,25 @@ def give_form(biz: Dict[str, Any], me: Dict[str, Any], *, year: Optional[int] = 
 # script has filled the form from the link): the large amount and the line
 # under it follow the giver's picks; a fund chip sets the form's <select>
 # (the give script sends that); back from a gift, the thank-you sheet opens
-# and Done takes ?thanks off the address.
+# and Done takes ?thanks off the address. The large amount rolls like a
+# counter (member_lumen_moments): each digit a column of 0-9 that slides to
+# its number; a new shape of number (25 to 100, 50 to 1,250) starts its
+# columns at 0 and rolls them up.
 GIVE_JS = ("<script>(function(){var d=document,sel=d.getElementById('gv-fund'),"
            "chips=[].slice.call(d.querySelectorAll('.lm-fchip')),num=d.querySelector('[data-amt]'),"
            "sub=d.querySelector('[data-amt-sub]'),big=d.querySelector('.lm-amt'),"
            "EVERY={once:'one time',weekly:'every week',biweekly:'every 2 weeks',monthly:'every month'};"
            "function cents(){var on=d.querySelector('.gv-amt.on');if(on)return parseInt(on.getAttribute('data-cents'),10)||0;"
            "var c=d.getElementById('gv-custom');return Math.round(parseFloat((c&&c.value)||'0')*100)||0;}"
+           "function roll(t){if(!num)return;var shape=t.replace(/\\d/g,'0');if(big)big.setAttribute('data-n',Math.min(t.length,9));"
+           "if(num.getAttribute('data-shape')!==shape){num.textContent='';t.split('').forEach(function(ch){var o=d.createElement('span');"
+           "if(/\\d/.test(ch)){o.className='lm-od';var s=d.createElement('span');s.className='lm-os';"
+           "for(var i=0;i<10;i++){var x=d.createElement('span');x.textContent=i;s.appendChild(x);}o.appendChild(s);}"
+           "else{o.className='lm-odp';o.textContent=ch;}num.appendChild(o);});num.setAttribute('data-shape',shape);void num.offsetWidth;}"
+           "var ds=t.replace(/\\D/g,'');[].forEach.call(num.querySelectorAll('.lm-os'),function(s,i){"
+           "s.style.transform='translateY('+(-ds.charAt(i))+'em)';});}"
            "function sync(){var c=cents(),f=d.querySelector('.gv-freq button.on'),w=EVERY[f?f.getAttribute('data-freq'):'once']||'';"
-           "if(num)num.textContent=(c/100).toLocaleString(undefined,{minimumFractionDigits:c%100?2:0,maximumFractionDigits:2});"
+           "roll((c/100).toLocaleString(undefined,{minimumFractionDigits:c%100?2:0,maximumFractionDigits:2}));"
            "if(big)big.classList.toggle('is-empty',!c);"
            "var o=sel&&sel.selectedIndex>=0?sel.options[sel.selectedIndex].textContent:'';"
            "if(sub)sub.textContent=o?o+' \\u00b7 '+w:w.charAt(0).toUpperCase()+w.slice(1);"

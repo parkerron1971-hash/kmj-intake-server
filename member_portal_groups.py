@@ -1060,6 +1060,10 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             biz, g, data.get("prayer"), me_id=me_id, leader=leader, size=size,
             answered=request.query_params.get("view") == "answered", ic=_ic,
             face=lambda p: _face(p, "gs-av m", "first"), when=_when, esc=_e)
+        if lumen:
+            # The new look lights the request just prayed for (member_lumen_moments).
+            import member_lumen_moments as mlm
+            script = mlm.JS
     elif tab == "board":
         cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")

@@ -1053,8 +1053,10 @@ def _lumen_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]]) ->
     church = _e(biz.get("name") or "the church")
     q = request.query_params
     if q.get("done") == "prayer":
+        import member_lumen_moments as mlm
         line = PRAYED.get(q.get("s") or "", _e(DONE["prayer"]))
-        body = (f'<section class="lm-sent" aria-labelledby="lm-sent-h"><span class="lm-pring">{lp.ic("check", 30)}</span>'
+        # Sending lit the flame (member_lumen_moments): it kindles, then the words rise.
+        body = (f'<section class="lm-sent is-lit" aria-labelledby="lm-sent-h">{mlm.flame()}'
                 f'<h1 class="lm-disp s" id="lm-sent-h">Your pastors <em>have it.</em></h1><p>{line}</p>'
                 f'<a class="lm-btn ghost" href="/my">Done</a></section>')
         return _shell(biz, site, "Prayer", body, tab="prayer", who=who)

@@ -866,7 +866,9 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
             f'aria-label="{_e(label)}">{lm.ic("back", 24)}</a></div>{head}<span class="mb-top-right"></span></header>')
         names = re.findall(r'class="([^"]*)"', body_cls)
         cls = " ".join(["lm", "lm-push", "lm-thread"] + lmf.body_class(biz) + (names[0].split() if names else []))
-        return top, f' class="{cls}"', "", ("" if bare else lm.SCROLL_JS)
+        # The moments (member_lumen_moments): a sent bubble's flight, reactions in place.
+        import member_lumen_moments as mlm
+        return top, f' class="{cls}"', "", ("" if bare else lm.SCROLL_JS + mlm.JS)
     if main:
         if tab == "home" and msp.switcher(ctx, name):
             left = msp.switcher(ctx, name)
