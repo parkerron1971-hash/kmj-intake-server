@@ -43,9 +43,11 @@
 // The fixture: the six tables of the frontend's supabase/ets-schema.sql
 // (module-system), with the columns production's site writes to inquiries
 // (email, phone, org_type) and the internal ones the brief names
-// (processed_at, converted_to_engagement); the four event tables built from
-// the columns the app saves (venue_address, no address or timezone), the
-// tier flags as production showed them (is_visible default true, is_free
+// (processed_at, converted_to_engagement); ets_events with production's
+// columns in production's order (read from its catalog 2026-11-19: no
+// address column; every event has a timezone and require_phone set), the
+// other event tables from the columns the site and the app use, the tier
+// flags as production showed them (is_visible default true, is_free
 // default false, both not null), and the enums production has
 // (ets_event_status as production showed; the registration status labels
 // are those the site and the app use, a guess beyond pending and confirmed).
@@ -80,13 +82,16 @@ const STAFF = ['ets_engagements', 'ets_emails', 'ets_agent_log', 'ets_signatures
 // runs as the caller, which the rollback must leave so.
 const VIEWS = ['ets_event_summary', 'ets_pending_agent_actions'];
 const INVOKER_VIEW = 'ets_tier_overview';
-// The columns the new site build asks for (ets-web close-public-reads).
-const LIST_COLUMNS = 'id, slug, title, short_description, event_date, start_time, end_time, format, venue_name, city, '
-  + 'capacity, registrations_count, status, cover_image';
-const PAGE_COLUMNS = 'id, slug, title, short_description, description, event_date, start_time, end_time, format, '
-  + 'venue_name, venue_address, city, state, capacity, registrations_count, status, cover_image';
-const PAGE_TIER_COLUMNS = 'id, name, description, price, is_free, quantity, sold_count, sort_order, stripe_payment_link';
-const PAGE_FILE_COLUMNS = 'id, file_name, file_url, file_type, is_cover, sort_order';
+// The columns the new site build asks for (ets-web close-public-reads, each
+// page's fields as the deployed build reads them).
+const LIST_COLUMNS = 'id, slug, title, short_description, event_date, start_time, end_time, timezone, format, venue_name, '
+  + 'city, capacity, registrations_count, status, cover_image';
+const LIST_TIER_COLUMNS = 'price, is_free';
+const LIST_FILE_COLUMNS = 'file_url, is_cover';
+const PAGE_COLUMNS = 'id, title, short_description, description, event_date, start_time, end_time, timezone, format, '
+  + 'venue_name, venue_address, city, state, capacity, registrations_count, require_phone, cover_image';
+const PAGE_TIER_COLUMNS = 'id, name, description, price, is_free, quantity, sold_count, stripe_payment_link';
+const PAGE_FILE_COLUMNS = 'id, file_name, file_url, file_type, is_cover';
 const BUCKET = 'ets-event-files';
 // A column each table has, for "update it to itself".
 const SOME_COLUMN = {
@@ -242,30 +247,37 @@ CREATE TABLE public.ets_emails (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- The four event tables, from the columns the app saves (EventCreate:
--- venue_address, and no address, timezone or require_phone) and the tier
--- flags as production showed them.
+-- ets_events with production's columns in production's order (its catalog,
+-- 2026-11-19; the types beyond what the pages show are a guess). The other
+-- event tables from the columns the site and the app use, and the tier flags
+-- as production showed them.
 CREATE TABLE public.ets_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  slug TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
   title TEXT NOT NULL,
-  short_description TEXT,
+  slug TEXT UNIQUE NOT NULL,
   description TEXT,
-  event_date DATE NOT NULL,
-  start_time TIME,
-  end_time TIME,
+  short_description TEXT,
   format TEXT DEFAULT 'in_person',
   venue_name TEXT,
   venue_address TEXT,
   city TEXT,
   state TEXT,
   virtual_link TEXT,
-  confirmation_message TEXT,
+  event_date DATE NOT NULL,
+  start_time TIME,
+  end_time TIME,
+  timezone TEXT,
   cover_image TEXT,
   capacity INTEGER,
   registrations_count INTEGER NOT NULL DEFAULT 0,
   status public.ets_event_status NOT NULL DEFAULT 'draft',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  require_phone BOOLEAN DEFAULT FALSE,
+  allow_free_registration BOOLEAN DEFAULT FALSE,
+  confirmation_message TEXT,
+  tags TEXT[],
+  notes TEXT
 );
 CREATE TABLE public.ets_event_tiers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -393,12 +405,14 @@ CREATE POLICY "ets write: ets-event-files delete" ON storage.objects
 
 const SEED = `
 INSERT INTO storage.objects (bucket_id, name) VALUES ('${BUCKET}', 'covers/cover.jpg'), ('${BUCKET}', 'files/agenda.pdf');
-INSERT INTO public.ets_events (id, slug, title, event_date, start_time, end_time, format, venue_name, venue_address, city, state, virtual_link, confirmation_message, cover_image, status) VALUES
-  ('${E.pub}', 'money-basics', 'Money Basics Workshop', '2026-12-05', '10:00', '12:00', 'in_person', 'Fellowship Hall', '100 Main St', 'Springfield', 'IL', NULL, 'Bring a notebook.', NULL, 'published'),
-  ('${E.virt}', 'online-budgeting', 'Online Budgeting Night', '2026-12-10', '19:00', '20:30', 'virtual', NULL, NULL, NULL, NULL, 'https://meet.example.test/room-1', NULL, NULL, 'published'),
-  ('${E.sold}', 'full-house', 'Full House Seminar', '2026-12-12', '09:00', NULL, 'in_person', 'Main Hall', NULL, 'Springfield', 'IL', NULL, NULL, NULL, 'sold_out'),
-  ('${E.draft}', 'not-yet', 'Not Yet Announced', '2027-01-15', NULL, NULL, 'hybrid', NULL, NULL, NULL, NULL, 'https://meet.example.test/secret', NULL, NULL, 'draft'),
-  ('${E.canc}', 'called-off', 'Called Off', '2026-11-30', NULL, NULL, 'in_person', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'cancelled');
+-- Like production: every event has a time zone and asks for a phone (one
+-- here does not, so the page rule is seen both ways), and has staff notes.
+INSERT INTO public.ets_events (id, slug, title, event_date, start_time, end_time, format, venue_name, venue_address, city, state, virtual_link, confirmation_message, cover_image, status, timezone, require_phone, notes) VALUES
+  ('${E.pub}', 'money-basics', 'Money Basics Workshop', '2026-12-05', '10:00', '12:00', 'in_person', 'Fellowship Hall', '100 Main St', 'Springfield', 'IL', NULL, 'Bring a notebook.', NULL, 'published', 'CT', true, 'staff only'),
+  ('${E.virt}', 'online-budgeting', 'Online Budgeting Night', '2026-12-10', '19:00', '20:30', 'virtual', NULL, NULL, NULL, NULL, 'https://meet.example.test/room-1', NULL, NULL, 'published', 'ET', false, NULL),
+  ('${E.sold}', 'full-house', 'Full House Seminar', '2026-12-12', '09:00', NULL, 'in_person', 'Main Hall', NULL, 'Springfield', 'IL', NULL, NULL, NULL, 'sold_out', 'CT', true, NULL),
+  ('${E.draft}', 'not-yet', 'Not Yet Announced', '2027-01-15', NULL, NULL, 'hybrid', NULL, NULL, NULL, NULL, 'https://meet.example.test/secret', NULL, NULL, 'draft', 'CT', true, NULL),
+  ('${E.canc}', 'called-off', 'Called Off', '2026-11-30', NULL, NULL, 'in_person', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'cancelled', 'CT', true, NULL);
 INSERT INTO public.ets_event_tiers (id, event_id, name, price, is_free, is_visible, sort_order) VALUES
   ('${T.free}', '${E.pub}', 'Community', 0, true, true, 0),
   ('${T.paid}', '${E.pub}', 'Workbook Included', 49.00, false, true, 1),
@@ -576,7 +590,11 @@ async function scenario({ ownedBy }) {
   const [cPolicies, cColumns, cFlags, cHidden, cEnums, cAnonColumns, cTriggers, cFunctions, cHelper, cViews, cGrants,
     cBucket, cLooseStorage] = preAnswers;
   eq(cPolicies.length, 26, `${label}: check 1 lists the 26 policies`);
-  eq(cColumns.length, 55, `${label}: check 2 finds the 55 columns`);
+  eq(cColumns.length, 56, `${label}: check 2 finds the 56 columns`);
+  for (const col of ['timezone', 'require_phone', 'venue_address']) {
+    ok(cColumns.some(r => r.table_name === 'ets_events' && r.column_name === col), `${label}: check 2 lists ets_events.${col}`);
+  }
+  ok(!cColumns.some(r => r.column_name === 'address'), `${label}: check 2 asks for no address column (production has none)`);
   eq(cFlags.map(r => [r.column_name, r.column_default, r.is_nullable]), [['is_free', 'false', 'NO'], ['is_visible', 'true', 'NO']],
     `${label}: check 3, the tier flags`);
   eq(Number(cHidden[0].tiers_that_disappear), 1, `${label}: check 4 counts the one hidden tier the fixture has on a live event (production: 0)`);
@@ -584,8 +602,13 @@ async function scenario({ ownedBy }) {
     `${label}: check 5 shows the statuses`);
   const eventColumns = (await su(db, `SELECT attname FROM pg_attribute WHERE attrelid = 'public.ets_events'::regclass
     AND attnum > 0 AND NOT attisdropped ORDER BY attnum`)).map(r => r.attname);
-  eq(cAnonColumns[0].anon_may_read.split(', '), eventColumns.filter(c => c !== 'virtual_link'),
-    `${label}: check 6 lists every event column but the virtual link`);
+  const PRIVATE = ['virtual_link', 'notes'];
+  eq(cAnonColumns[0].anon_may_read.split(', '), eventColumns.filter(c => !PRIVATE.includes(c)),
+    `${label}: check 6 lists every event column but the virtual link and the notes`);
+  eq(cAnonColumns[0].anon_may_read, 'id, created_at, updated_at, title, slug, description, short_description, format, '
+    + 'venue_name, venue_address, city, state, event_date, start_time, end_time, timezone, cover_image, capacity, '
+    + 'registrations_count, status, require_phone, allow_free_registration, confirmation_message, tags',
+    `${label}: check 6, on production's columns, is the list the file says to expect`);
   eq(cTriggers.map(r => r.tgname), ['ets_reg_count_trigger', 'ets_tier_sold_trigger'], `${label}: check 7, the two triggers`);
   eq(cFunctions.map(r => [r.owner === r.running_as, r.security_definer, r.settings]), [[true, false, null], [true, false, null]],
     `${label}: check 8, owned by the role running the file, invoker today`);
@@ -608,19 +631,19 @@ async function scenario({ ownedBy }) {
   {
     // EventsPage, with exactly the columns the new site asks for, its tiers
     // and files nested the way PostgREST embeds them, published or sold out.
+    const nested = (cols, alias) => `json_build_object(${cols.split(', ').map(c => `'${c}', ${alias}.${c}`).join(', ')})`;
     const r = went(await as(db, 'anon', `SELECT ${LIST_COLUMNS.split(', ').map(c => `e.${c}`).join(', ')},
-        (SELECT coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'price', t.price, 'is_free', t.is_free,
-                 'quantity', t.quantity, 'sold_count', t.sold_count) ORDER BY t.id), '[]')
+        (SELECT coalesce(json_agg(${nested(LIST_TIER_COLUMNS, 't')} ORDER BY t.price), '[]')
            FROM public.ets_event_tiers t WHERE t.event_id = e.id) AS tiers,
-        (SELECT coalesce(json_agg(json_build_object('id', f.id, 'file_url', f.file_url, 'is_cover', f.is_cover) ORDER BY f.id), '[]')
+        (SELECT coalesce(json_agg(${nested(LIST_FILE_COLUMNS, 'f')} ORDER BY f.file_url), '[]')
            FROM public.ets_event_files f WHERE f.event_id = e.id) AS files
       FROM public.ets_events e WHERE e.status IN ('published', 'sold_out') ORDER BY e.event_date`), `${label}: the events list`);
     eq(Object.keys(r.rows[0]).sort(), [...LIST_COLUMNS.split(', '), 'tiers', 'files'].sort(), `${label}: every column the list asks for`);
-    eq(r.rows.map(x => [x.id, x.tiers.map(t => t.id), x.files.map(f => f.id)]), [
-      [E.pub, [T.free, T.paid].sort(), [F.pubCover, F.pubDoc].sort()],
-      [E.virt, [T.vfree, T.vpaid].sort(), []],
-      [E.sold, [T.sold], [F.sold]],
-    ], `${label}: the events list has the live tiers and files, no hidden tier`);
+    eq(r.rows.map(x => [x.id, x.timezone, x.tiers.map(t => Number(t.price)), x.files.length]), [
+      [E.pub, 'CT', [0, 49], 2],
+      [E.virt, 'ET', [0, 25], 0],
+      [E.sold, 'CT', [20], 1],
+    ], `${label}: the events list has each event's time zone and its live tiers and files, no hidden tier`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_events')).rows), LIVE_EVENTS, `${label}: anon sees no draft or cancelled event`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_event_tiers')).rows), LIVE_TIERS, `${label}: anon sees only live, visible tiers`);
     eq(ids((await as(db, 'anon', 'SELECT id FROM public.ets_event_files')).rows), LIVE_FILES, `${label}: anon sees only live events' files`);
@@ -631,8 +654,23 @@ async function scenario({ ownedBy }) {
         (SELECT json_agg(json_build_object(${PAGE_FILE_COLUMNS.split(', ').map(c => `'${c}', f.${c}`).join(', ')}))
            FROM public.ets_event_files f WHERE f.event_id = e.id) AS files
       FROM public.ets_events e WHERE e.slug = 'money-basics' AND e.status = 'published'`), `${label}: the register page`);
-    eq([one.rows.length, one.rows[0].venue_address, one.rows[0].tiers.length, one.rows[0].files.length],
-      [1, '100 Main St', 2, 2], `${label}: the register page finds its event, its address, tiers and files`);
+    eq(Object.keys(one.rows[0]).sort(), [...PAGE_COLUMNS.split(', '), 'tiers', 'files'].sort(), `${label}: every column the page asks for`);
+    eq([one.rows.length, one.rows[0].venue_address, one.rows[0].timezone, one.rows[0].require_phone,
+      one.rows[0].tiers.length, one.rows[0].files.length],
+      [1, '100 Main St', 'CT', true, 2, 2], `${label}: the register page gets its address, time zone, phone rule, tiers and files`);
+    // The register page's own rule, as the deployed build has it: the phone
+    // field is `required` when event.require_phone is set (ets-web
+    // EventRegister; its scripts/check-selects.mjs holds the page to it), so
+    // the browser refuses the form without a phone there and sends it
+    // without one elsewhere. The rule only works if the page gets the flag.
+    const pageRefuses = (ev, phone) => Boolean(ev.require_phone) && !String(phone || '').trim();
+    for (const slug of ['money-basics', 'online-budgeting']) {
+      const ev = (await as(db, 'anon', `SELECT require_phone FROM public.ets_events WHERE slug = $1`, [slug])).rows[0];
+      const expected = slug === 'money-basics';
+      eq([pageRefuses(ev, ''), pageRefuses(ev, '555-0100')], [expected, false],
+        `${label}: ${slug}: the page ${expected ? 'refuses' : 'accepts'} a registration with no phone, as the deployed build did`);
+    }
+    refused(await as(db, 'anon', `SELECT notes FROM public.ets_events`), `${label}: the staff notes are not the public's either`);
     eq((await as(db, 'anon', `SELECT id FROM public.ets_events WHERE slug = 'not-yet'`)).rows, [], `${label}: a draft's page is not found`);
     // The virtual link is not the public's: by name, by "*", or by a view.
     refused(await as(db, 'anon', `SELECT virtual_link FROM public.ets_events`), `${label}: anon cannot read a virtual link`);
@@ -762,8 +800,8 @@ async function scenario({ ownedBy }) {
       [R.pending, 'Avery', 'Stone', 'avery@example.test', 'pending', 49], `${label}: by id, the registration`);
     eq([c.ets_events.title, c.ets_events.event_date, c.ets_events.start_time, c.ets_events.virtual_link,
       c.ets_events.address, c.ets_events.timezone],
-      ['Money Basics Workshop', '2026-12-05', '10:00:00', null, '100 Main St', null],
-      `${label}: its event, the venue address as its address, no timezone column and no failure`);
+      ['Money Basics Workshop', '2026-12-05', '10:00:00', null, '100 Main St', 'CT'],
+      `${label}: its event, its time zone, the venue address as its address (no address column, no failure)`);
     eq(c.ets_events.ets_event_files, [{ file_url: 'https://files.example.test/cover.jpg', is_cover: true },
       { file_url: 'https://files.example.test/agenda.pdf', is_cover: false }], `${label}: its files, url and cover only`);
     eq([c.ets_event_tiers.name, Number(c.ets_event_tiers.price)], ['Workbook Included', 49], `${label}: its tier`);
@@ -871,8 +909,8 @@ async function scenario({ ownedBy }) {
   eq(Number(aOpen[0].open_policies), 0, `${label}: check after 2, nothing open`);
   eq(aGrants.map(r => `${r.table_name}:${r.anon_may}`), ['ets_event_files:SELECT', 'ets_event_tiers:SELECT',
     'ets_inquiries:INSERT', 'ets_registrations:INSERT'], `${label}: check after 3, anon's table grants`);
-  eq([aEvents[0].reads_virtual_link, aEvents[0].reads_table, aEvents[0].columns],
-    [false, false, eventColumns.filter(c => c !== 'virtual_link').sort().join(', ')], `${label}: check after 4, anon on ets_events`);
+  eq([aEvents[0].reads_virtual_link, aEvents[0].reads_notes, aEvents[0].reads_table, aEvents[0].columns],
+    [false, false, false, eventColumns.filter(c => !PRIVATE.includes(c)).sort().join(', ')], `${label}: check after 4, anon on ets_events`);
   eq(Number(aAuthenticated[0].left_over), 0, `${label}: check after 5, authenticated truncates nothing`);
   eq(aFunctions.map(r => [r.security_definer, r.settings]), [[true, ['search_path=public']], [true, ['search_path=public']],
     [true, ['search_path=public']]], `${label}: check after 6, the functions`);
@@ -913,20 +951,20 @@ async function scenario({ ownedBy }) {
   await db.close();
 }
 
-// If production's ets_events does have address and timezone columns: the
-// function answers them (the address over the venue address), and anon's
-// column list, read from the catalog, takes them in.
+// Production has no address column. If a database does: the function
+// answers it over the venue address, and anon's column list, read from the
+// catalog, takes it in.
 async function addressColumns() {
-  const label = 'with address and timezone columns';
+  const label = 'with an address column';
   const db = await build({ ownedBy: null });
-  await db.exec(`ALTER TABLE public.ets_events ADD COLUMN address text, ADD COLUMN timezone text;
-    UPDATE public.ets_events SET address = '7 Hand Entered Way', timezone = 'CT' WHERE id = '${E.pub}';`);
+  await db.exec(`ALTER TABLE public.ets_events ADD COLUMN address text;
+    UPDATE public.ets_events SET address = '7 Hand Entered Way' WHERE id = '${E.pub}';`);
   await runFile(db, APPLY, null);
   const c = await confirm(db, 'anon', R.pending);
-  eq([c.ets_events.address, c.ets_events.timezone], ['7 Hand Entered Way', 'CT'], `${label}: the event's own address and timezone`);
+  eq([c.ets_events.address, c.ets_events.timezone], ['7 Hand Entered Way', 'CT'], `${label}: the event's own address`);
   await db.exec(`UPDATE public.ets_events SET address = NULL WHERE id = '${E.pub}'`);
   eq((await confirm(db, 'anon', R.pending)).ets_events.address, '100 Main St', `${label}: no address, the venue address`);
-  went(await as(db, 'anon', 'SELECT address, timezone FROM public.ets_events'), `${label}: anon reads the added columns`);
+  went(await as(db, 'anon', 'SELECT address, timezone FROM public.ets_events'), `${label}: anon reads the added column`);
   refused(await as(db, 'anon', 'SELECT virtual_link FROM public.ets_events'), `${label}: and still not the link`);
   await db.close();
 }

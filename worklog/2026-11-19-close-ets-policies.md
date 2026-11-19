@@ -12,15 +12,17 @@ left_undone:
   - "Nothing confirms a paid registration (an existing gap, not built here): there is no Stripe webhook for these tables, and stripe_proxy makes the payment links with no return address (no after_completion). So a paid registration stays pending; a registrant who does come back with ?session_id= finds nothing, because nothing writes stripe_session_id, and sees Registration Not Found. The confirmation page's payment poll used to run for as long as the page was open; it now stops after 5 minutes and says plainly that the payment is not confirmed yet (ets-web close-public-reads)."
   - "No capacity or tier-quantity check on a public registration, on purpose (an existing gap): a WITH CHECK on capacity does not stop anyone filling an event with pending registrations (they count as soon as they are added), and once abandoned pending registrations pile up it would refuse real people. The site checks capacity on the page, as before."
   - "Who writes ets_agent_log and ets_emails (8 and 4 rows) was not found in either repo. If it is something outside them using the anon key, it stops working when the file is applied; with the service role it is unaffected."
-  - "Production's ets_events DDL was not in any repo. The site's new build asks only for columns the app saves on every event (EventCreate's payload: venue_address, not address; no timezone or require_phone). If production has address, timezone or require_phone columns with values typed in by hand, the event pages no longer show them (the confirmation function still answers address and timezone when the columns exist). Check 2 before lists the 55 columns the site and the policies need."
-  - "The fixture's four event tables follow the app's columns, the tier flags production showed and the count triggers' production shape; ets_event_summary's text was not read (a stand-in). The registration status labels beyond pending and confirmed are a guess."
+  - "The deployed confirmation page (94262f4) asked for ets_events.address, which production does not have, so its read has always failed and every registrant has seen Registration Not Found. The new build reads through the function (address = venue_address) and its fallback no longer asks for address."
+  - "The fixture's ets_events has production's columns in production's order (catalog read 2026-11-19); the other event tables follow the site's and the app's columns, the tier flags production showed and the count triggers' production shape; ets_event_summary's text was not read (a stand-in). The registration status labels beyond pending and confirmed are a guess."
+  - "The phone a require_phone event asks for is enforced by the page only (the browser's required field), as before; the database does not refuse a registration without one."
   - "The rollback keeps ets_registration_confirmation (the new site build reads it). Its last line, commented, drops it once the old build is back. It resets security_invoker only on production's two views, by name: if APPLY-2026-09-01-rls-advisor-errors.sql (pending, sets the same two) has been applied since, leave its section 4 out."
   - "The bucket client-images has the same 'any signed-in login' write policies (2026-08-09); not touched here."
 decisions:
   - "The confirmation function answers the registrant's email, because the page shows it back twice ('A confirmation has been sent to ...'). It never answers the phone, organization, notes, check-in or Stripe fields. Anyone holding the link (a random id, or a Stripe session id) sees the name and email on it."
-  - "The event's virtual link is the public's nowhere: anon may read every ets_events column but virtual_link (a column grant, the list read from the catalog as the file runs, so a later column is not silently missed), and the confirmation function answers it only once the registration is confirmed. Otherwise anyone could read it from the table, or add a pending registration for a paid virtual event and read it without paying. No production event has one today (0 of 3)."
+  - "The event's virtual link is the public's nowhere: anon may read every ets_events column but virtual_link and notes (a column grant, the list read from the catalog as the file runs, so a later column is not silently missed; notes are the staff's own notes on an event, which no page shows), and the confirmation function answers the link only once the registration is confirmed. Otherwise anyone could read it from the table, or add a pending registration for a paid virtual event and read it without paying. No production event has one today (0 of 3)."
+  - "Each site page asks for exactly the fields the deployed build (94262f4) reads, from production's columns: the events list id, slug, title, short_description, event_date, start_time, end_time, timezone, format, venue_name, city, capacity, registrations_count, status, cover_image, tiers (price, is_free), files (file_url, is_cover); the register page id, title, short_description, description, event_date, start_time, end_time, timezone, format, venue_name, venue_address (shown as the address), city, state, capacity, registrations_count, require_phone, cover_image, tiers (id, name, description, price, is_free, quantity, sold_count, stripe_payment_link), files (id, file_name, file_url, file_type, is_cover). ets-web's scripts/check-selects.mjs holds each list to its page. An earlier cut (4739bcc) took the lists from what the app saves and dropped timezone and require_phone, which every production event sets: that check fails on it."
   - "The public reads (events, tiers, files) are TO anon only: the site never signs in, and a signed-in login that is not the owner now reads no row of the ten. The two public inserts stay TO anon and authenticated; a non-owner login's registration is refused anyway, because it sees no event."
-  - "The confirmation function reads the event's fields through to_jsonb, so a column the page asks for that the table lacks (address, timezone) answers null instead of failing, and the address falls back to venue_address, the column the app saves."
+  - "The confirmation function reads the event's fields through to_jsonb, so a column the page asks for that the table lacks answers null instead of failing. Production has timezone (answered) and no address column, so the address is venue_address."
   - "A Stripe session id that two registrations share finds neither (the old page's .single() also failed on two). A reference must be a uuid's exact text or a session id: no pattern, at most 200 characters."
   - "Production's views ets_event_summary and ets_pending_agent_actions read past every policy as their owner, and anon could read them. Each view that reads the ten is set to run as the caller (security_invoker) and loses anon. No code reads them; none is dropped."
   - "anon's grants: REVOKE ALL then GRANT exactly what the site needs (end state), rather than only revoking UPDATE, DELETE and TRUNCATE. authenticated keeps SELECT, INSERT, UPDATE, DELETE (the policies decide) and loses TRUNCATE, TRIGGER and REFERENCES, which no browser call needs (TRUNCATE skips every policy)."
@@ -60,7 +62,8 @@ registration the site sends. The views that read the ten get
 ## The order
 
 1. The site: `ets-web` branch `close-public-reads`, deployed with the Vercel
-   CLI. It names the event columns it shows (never `virtual_link`), inserts
+   CLI. Each page asks for exactly the event fields it reads (time zone and
+   phone rule included, never `virtual_link` or `notes`), inserts
    with an id it made and does not read the row back; the confirmation page
    reads through the function, and the old way while the function is
    missing. Works before and after the file.
@@ -71,14 +74,23 @@ registration the site sends. The views that read the ten get
 ## Tests
 
 - `__tests__/ets_close_policies_db.mjs` (PGlite, as the superuser and as a
-  table owner without BYPASSRLS, plus a database with address and timezone
-  columns): 774 checks. The hole before; the file's Check blocks as written;
-  the file twice; every public path the new site uses, with its exact
-  column lists, and every refusal (the virtual link by name, by `*`, by the
-  whole row); the function's answers; a non-owner login; the owner; the
+  table owner without BYPASSRLS, plus a database with an address column;
+  ets_events with production's columns and production-like values): 792
+  checks. The hole before; the file's Check blocks as written (check 2's 56
+  columns, check 6's list on production's columns); the file twice; every
+  public path the new site uses, with its exact column lists (the time zone
+  and require_phone reach the register page, and the page's phone rule
+  refuses a registration without one where the event asks), and every
+  refusal (the virtual link by name, by `*`, by the whole row; the notes);
+  the function's answers (the time zone among them); a non-owner login; the owner; the
   bucket; the count triggers (and the same insert failing with them as the
   caller); the rollback restoring the catalog exactly (storage's policies
   and authenticated's grants too) while a view that already ran as the
   caller stays so, then the file again. 21 deliberate breaks of the file and
   the rollback each fail it.
 - `__tests__/test_close_ets_policies.py`: the files as text (13 tests).
+- ets-web `scripts/check-selects.mjs` (`npm run check`): 236 checks that each
+  page's select asks for every field the page reads and nothing more, only
+  production's columns, never `virtual_link`, `notes` or `*`, and that the
+  phone field is required exactly when `require_phone` is set. It fails on
+  4739bcc, and on each of five deliberate breaks.

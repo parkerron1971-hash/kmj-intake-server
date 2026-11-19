@@ -41,7 +41,7 @@
 --      the verified JWT's email against the platform owner's).
 --   3. The public site (TO anon only):
 --        read  ets_events       published or sold out, every column but
---                               virtual_link (section 7)
+--                               virtual_link and notes (section 7)
 --        read  ets_event_tiers  visible, of a published or sold-out event
 --        read  ets_event_files  of a published or sold-out event
 --        add   ets_inquiries    with none of the internal fields set
@@ -62,8 +62,9 @@
 --      production that is ets_event_summary and ets_pending_agent_actions
 --      (owner postgres, no options on 2026-11-19).
 --   7. Grants. anon: nothing on the five staff tables; SELECT on every
---      column of ets_events but virtual_link (the list is read from the
---      catalog as the file runs; check 6 before shows it); SELECT on tiers
+--      column of ets_events but virtual_link and notes (the staff's notes on
+--      an event; no page shows them) (the list is read from the catalog as
+--      the file runs; check 6 before shows it); SELECT on tiers
 --      and files; INSERT on inquiries and registrations. authenticated:
 --      loses TRUNCATE, TRIGGER and REFERENCES on the ten (the owner never
 --      needs them; the policies decide the rest). The grants are belt and
@@ -140,9 +141,13 @@
 --                        'ets_signatures', 'ets_sessions_log')
 --    order by 1, 2;
 --
---   -- 2. The columns the new site build selects and the new policies read.
---   --    Expect 55 rows, every one present (the site's select fails on a
---   --    missing one). processed, converted_to_engagement and checked_in:
+--   -- 2. The columns the new site build selects (each page asks for exactly
+--   --    the fields it reads: the events list, the register page, timezone
+--   --    and require_phone among them), the new policies read and the
+--   --    confirmation function answers. Expect 56 rows, every one present
+--   --    (the site's select fails on a missing one; production has no
+--   --    address column, and the site no longer asks for one). processed,
+--   --    converted_to_engagement and checked_in:
 --   --    boolean, default false or none. lead_score: default 'warm' or none.
 --   --    processed_at, agent_notes, checked_in_at, stripe_session_id,
 --   --    stripe_payment_intent, notes: no default. (The file checks those
@@ -153,14 +158,14 @@
 --      and (table_name, column_name) in (
 --        ('ets_events', 'id'), ('ets_events', 'slug'), ('ets_events', 'title'),
 --        ('ets_events', 'short_description'), ('ets_events', 'description'), ('ets_events', 'event_date'),
---        ('ets_events', 'start_time'), ('ets_events', 'end_time'), ('ets_events', 'format'),
---        ('ets_events', 'venue_name'), ('ets_events', 'venue_address'), ('ets_events', 'city'),
---        ('ets_events', 'state'), ('ets_events', 'capacity'), ('ets_events', 'registrations_count'),
---        ('ets_events', 'status'), ('ets_events', 'cover_image'), ('ets_events', 'confirmation_message'),
---        ('ets_events', 'virtual_link'),
+--        ('ets_events', 'start_time'), ('ets_events', 'end_time'), ('ets_events', 'timezone'),
+--        ('ets_events', 'format'), ('ets_events', 'venue_name'), ('ets_events', 'venue_address'),
+--        ('ets_events', 'city'), ('ets_events', 'state'), ('ets_events', 'capacity'),
+--        ('ets_events', 'registrations_count'), ('ets_events', 'require_phone'), ('ets_events', 'status'),
+--        ('ets_events', 'cover_image'), ('ets_events', 'confirmation_message'), ('ets_events', 'virtual_link'),
 --        ('ets_event_tiers', 'id'), ('ets_event_tiers', 'event_id'), ('ets_event_tiers', 'name'),
 --        ('ets_event_tiers', 'description'), ('ets_event_tiers', 'price'), ('ets_event_tiers', 'is_free'),
---        ('ets_event_tiers', 'quantity'), ('ets_event_tiers', 'sold_count'), ('ets_event_tiers', 'sort_order'),
+--        ('ets_event_tiers', 'quantity'), ('ets_event_tiers', 'sold_count'),
 --        ('ets_event_tiers', 'is_visible'), ('ets_event_tiers', 'stripe_payment_link'),
 --        ('ets_event_files', 'id'), ('ets_event_files', 'event_id'), ('ets_event_files', 'file_name'),
 --        ('ets_event_files', 'file_url'), ('ets_event_files', 'file_type'), ('ets_event_files', 'is_cover'),
@@ -197,12 +202,17 @@
 --          enum_range(null::public.ets_event_status) as event_statuses;
 --
 --   -- 6. The ets_events columns anon will be able to read: every column but
---   --    virtual_link, read from the catalog as section 7 reads it. Read the
---   --    list: it is what the public sees of an event from here on.
+--   --    virtual_link and notes, read from the catalog as section 7 reads
+--   --    it. Read the list: it is what the public sees of an event from here
+--   --    on. On production (2026-11-19) expect: id, created_at, updated_at,
+--   --    title, slug, description, short_description, format, venue_name,
+--   --    venue_address, city, state, event_date, start_time, end_time,
+--   --    timezone, cover_image, capacity, registrations_count, status,
+--   --    require_phone, allow_free_registration, confirmation_message, tags.
 --   select string_agg(quote_ident(attname), ', ' order by attnum) as anon_may_read
 --     from pg_attribute
 --    where attrelid = 'public.ets_events'::regclass and attnum > 0 and not attisdropped
---      and attname <> 'virtual_link';
+--      and attname not in ('virtual_link', 'notes');
 --
 --   -- 7. Triggers on the two tables the public writes to. Expect 2 rows, both
 --   --    on ets_registrations: ets_reg_count_trigger and ets_tier_sold_trigger.
@@ -520,9 +530,10 @@ create policy ets_public_register on public.ets_registrations for insert to anon
 -- registration is confirmed, as the page shows it: a pending (unpaid) one
 -- never carries it. Null when there is no such registration.
 -- The event's fields are taken from the row as JSON, so a column the page
--- asks for that this database does not have (address, timezone: the app
--- saves venue_address and no timezone) answers null instead of failing; the
--- address is the event's address when it has one, else its venue address.
+-- asks for that this database does not have answers null instead of
+-- failing. Production has timezone (every event sets it; the page shows it
+-- beside the times) and no address column: the address is the event's
+-- address if a database has one, else its venue address.
 -- SQL, not plpgsql, so a wrong table or registration column fails this file
 -- instead of the page.
 create or replace function public.ets_registration_confirmation(p_ref text)
@@ -641,8 +652,9 @@ $$;
 -- anon: REVOKE ALL (it takes the column grants with it) then GRANT, so the
 -- end state is the same whatever anon held before (on Postgres 17 that
 -- includes MAINTAIN). On ets_events, SELECT on every column but
--- virtual_link: a virtual event's access link is for confirmed registrants,
--- who get it from the confirmation function. The list is read from the
+-- virtual_link (a virtual event's access link is for confirmed registrants,
+-- who get it from the confirmation function) and notes (the staff's own
+-- notes on an event; no page shows them). The list is read from the
 -- catalog here, so a column added later is not silently left out of a
 -- second run; a select of "*" on events is refused from here on.
 revoke all on public.ets_engagements, public.ets_emails, public.ets_agent_log,
@@ -656,7 +668,7 @@ begin
   select string_agg(quote_ident(attname), ', ' order by attnum) into cols
     from pg_attribute
    where attrelid = 'public.ets_events'::regclass and attnum > 0 and not attisdropped
-     and attname <> 'virtual_link';
+     and attname not in ('virtual_link', 'notes');
   execute format('grant select (%s) on public.ets_events to anon', cols);
 end
 $$;
@@ -711,9 +723,11 @@ notify pgrst, 'reload schema';
 --    group by 1
 --    order by 1;
 --
---   -- 4. anon on ets_events. Expect reads_virtual_link false, reads_table
---   --    false, and columns = every column of check 6 before.
+--   -- 4. anon on ets_events. Expect reads_virtual_link false, reads_notes
+--   --    false, reads_table false, and columns = every column of check 6
+--   --    before.
 --   select has_column_privilege('anon', 'public.ets_events', 'virtual_link', 'select') as reads_virtual_link,
+--          has_column_privilege('anon', 'public.ets_events', 'notes', 'select') as reads_notes,
 --          has_table_privilege('anon', 'public.ets_events', 'select') as reads_table,
 --          (select string_agg(column_name, ', ' order by column_name)
 --             from information_schema.column_privileges

@@ -274,10 +274,10 @@ def test_anon_keeps_only_the_sites_reads_and_inserts_and_never_the_virtual_link(
     grants = re.findall(r"grant (\w+) on ((?:public\.\w+(?:, )?)+) to (\w+);", code)
     assert [(p, sorted(re.findall(r"public\.(\w+)", ts)), who) for p, ts, who in grants] == [
         ("select", ["ets_event_files", "ets_event_tiers"], "anon"), ("insert", sorted(PUBLIC_INSERTS), "anon")]
-    # ets_events column by column, every column but virtual_link, the list read from the catalog.
+    # ets_events column by column, every column but virtual_link and notes, the list read from the catalog.
     grant_block = code[code.index("cols text;"):code.index("grant select on public.ets_event_tiers")]
     assert "from pg_attribute where attrelid = 'public.ets_events'::regclass and attnum > 0 and not attisdropped" in grant_block
-    assert "and attname <> 'virtual_link';" in grant_block
+    assert "and attname not in ('virtual_link', 'notes');" in grant_block
     assert "execute format('grant select (%s) on public.ets_events to anon', cols);" in grant_block
     assert code.index("revoke all on public.ets_events,") < code.index("cols text;"), "revoke first, then the columns"
     assert " to public" not in code
@@ -314,6 +314,13 @@ def test_one_transaction_that_refuses_a_database_it_was_not_written_for():
         assert check in text, check
     for view in PRODUCTION_VIEWS:
         assert view in text, view
+    # Check 2 lists what the site's pages read, timezone and require_phone among them, and no address column.
+    check2 = text[text.index("--   -- 2."):text.index("--   -- 3.")]
+    assert "Expect 56 rows" in check2
+    for col in ("timezone", "require_phone", "venue_address", "virtual_link"):
+        assert f"('ets_events', '{col}')" in check2, col
+    assert "('ets_events', 'address')" not in check2
+    assert "has_column_privilege('anon', 'public.ets_events', 'notes', 'select')" in text
     # Applied before the new site build, the events list breaks too.
     assert 'the events list and every event page fail: they ask for "*"' in text
 
