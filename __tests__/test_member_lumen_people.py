@@ -88,6 +88,7 @@ def test_the_people_rules_are_in_the_lumen_file_under_body_lm():
     for cls in ("lm-irow", "lm-pinl", "lm-uchip", "lm-thead", "lm-cmp", "lm-cfield", "lm-send", "lm-day"):
         assert f".{cls}" in text, cls
     css = re.sub(r"/\*.*?\*/", "", lp.CSS_PEOPLE.template, flags=re.S)
+    css = re.sub(r"@keyframes[^{]*\{[^}]*\}[^}]*\}\s*\}?", "", css)
     css = re.sub(r"@media[^{]*\{", "", css)
     for sel in re.findall(r"(?:^|\})\s*([^{}]+)\{", css):
         for one in sel.split(","):
@@ -296,3 +297,104 @@ def test_runs_break_on_another_person_a_note_or_an_hour():
     seq = [("m", "a", t), ("m", "a", t + timedelta(minutes=2)), ("n", "", t + timedelta(minutes=3)),
            ("m", "a", t + timedelta(minutes=4)), ("m", "a", t + timedelta(hours=2)), ("m", "b", t + timedelta(hours=2))]
     assert mpg._runs(seq) == ["lm-c2", "lm-c1", "", "", "", ""]
+
+
+# ─── Coming up and Prayer ────────────────────────────────────────────
+
+
+def _occ(title, days, *, mine=None, roles=None, eid="00000000-0000-4000-8000-000000000301", full=False):
+    from datetime import date
+    d = date.today() + timedelta(days=days)
+    return {"entry_id": eid, "module_id": "m", "title": title, "date": d.isoformat(),
+            "date_label": f"{d.strftime('%A, %B')} {d.day}", "location": "Fellowship Hall", "capacity": None,
+            "attending": 3, "spots_left": None, "full": full, "occasion_noun": "event", "mine": mine,
+            "roles": roles or []}
+
+
+@pytest.fixture
+def calendar(fake, monkeypatch):  # noqa: F811
+    import member_portal_church as mpc
+    fake.person(tct.ANA, "Ana Rivera")
+    fake.biz[tct.BIZ]["name"] = "Grace Fellowship"
+    role = [{"id": "r1", "label": "Setup crew", "needed": 6, "filled": 3, "full": False}]
+    occ = [_occ("Community Food Drive", 3, roles=role),
+           _occ("Sunday Worship", 4, mine={"status": "yes", "role": None}, eid="00000000-0000-4000-8000-000000000302"),
+           _occ("Prayer Night", 6, mine={"status": "yes", "role": "r1"}, roles=role,
+                eid="00000000-0000-4000-8000-000000000303")]
+    monkeypatch.setattr(mpc, "upcoming_for", lambda b, me: [dict(o) for o in occ])
+    monkeypatch.setenv("MEMBER_LUMEN", "on")
+    return fake
+
+
+def _church_app(fake, monkeypatch):  # noqa: F811
+    import member_portal_church as mpc
+    c = tct._app(fake, monkeypatch, tct.ANA)
+    c.app.include_router(mpc.router)
+    return c
+
+
+def test_coming_up_is_a_list_with_each_day_in_the_margin(calendar, monkeypatch):
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/events").text
+    assert "Coming <em>up</em>" in html and "At Grace Fellowship" in html
+    rows = re.findall(r'<article class="lm-evc" aria-labelledby="(mp-occ-[^"]+)">', html)
+    assert len(rows) == 3
+    first = html[html.index(rows[0]):html.index(rows[1])]
+    assert '<div class="lm-evd" aria-hidden="true"><small>' in first and "Community Food Drive" in first
+    # The same forms today's cards post.
+    assert first.count('action="/my/rsvp"') == 3                             # coming, can't, serve
+    assert 'name="action" value="coming"' in first and 'name="action" value="cant"' in first
+    assert 'name="back" value="/my/events"' in first
+    assert '<details class="lm-serve"><summary>Sign up to serve' in first and 'name="role"' in first
+    second = html[html.index(rows[1]):html.index(rows[2])]
+    assert "You&#x27;re coming</span>" in second and 'value="coming"' not in second
+    third = html[html.index(rows[2]):]
+    assert "Serving: Setup crew" in third and "Just attend instead" in third
+
+
+def test_off_coming_up_is_todays(calendar, monkeypatch):
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/events").text
+    assert 'class="lm-' not in html and '<article class="mp-card mp-occ"' in html
+
+
+def test_prayer_keeps_the_flame_and_chooses_nothing_for_them(calendar, monkeypatch):
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/prayer").text
+    assert 'class="lm-eyebrow lm-flame"' in html and "How can we <em>pray</em> for you?" in html
+    form = html[html.index('<form class="lm-pform"'):]
+    form = form[:form.index("</form>")]
+    assert 'action="/my/prayer"' in form and 'name="request"' in form and 'name="then" value="prayer"' in form
+    assert 'name="share" value="team" required' in form and 'name="share" value="pastors"' in form
+    assert "checked" not in form                                             # still none chosen for them
+    assert 'name="wants_call" value="yes"' in form and "Send to the pastors" in form
+
+
+def test_the_new_prayer_page_answers_on_its_own_page(calendar, monkeypatch):
+    c = _church_app(calendar, monkeypatch)
+    r = c.post("/my/prayer", data={"request": "Pray for my mom", "share": "team", "then": "prayer"},
+               headers=tct.ORIGIN, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/my/prayer?done=prayer&s=team"
+    assert len(calendar.t["ministry_care_requests"]) == 1
+    page = c.get(r.headers["location"]).text
+    assert "Your pastors <em>have it.</em>" in page and "Our prayer team may pray over it with you too." in page
+    # Today's form (no then) still goes Home, as always.
+    r = c.post("/my/prayer", data={"request": "Again", "share": "pastors"}, headers=tct.ORIGIN, follow_redirects=False)
+    assert r.headers["location"] == "/my?done=prayer"
+
+
+def test_off_prayer_is_todays(calendar, monkeypatch):
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    html = tct._app(calendar, monkeypatch, tct.ANA).get("/my/prayer").text
+    assert 'class="lm-' not in html and 'name="then"' not in html and '<form class="mp-form" method="post" action="/my/prayer">' in html
+
+
+@pytest.mark.parametrize("path", ["/my/events", "/my/prayer"])
+def test_coming_up_and_prayer_read_what_todays_pages_read(calendar, monkeypatch, path):
+    c = tct._app(calendar, monkeypatch, tct.ANA)
+    got = {}
+    for mode in ("on", "off"):
+        monkeypatch.setenv("MEMBER_LUMEN", mode)
+        c.get(path)
+        calendar.gets.clear()
+        c.get(path)
+        got[mode] = Counter(r.split("?")[0] for r in calendar.gets)
+    assert got["on"] == got["off"]

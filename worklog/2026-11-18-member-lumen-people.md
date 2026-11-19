@@ -1,13 +1,13 @@
 ---
-title: "Member app new look (Lumen) — the people pages, step one: Messages (the inbox and a conversation)"
+title: "Member app new look (Lumen) — the people pages: Messages, then Prayer and Events"
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, on the approved "clean Lumen" mock (version 29, accent level 2): messages "look generic. it should feel like text messages area"; prayer, events and groups are "cool but there is no wow factor". Restyle Messages, Prayer, Events, a group''s page, Me (details, notifications) and News in the new look, in a few PRs.'
 status: in review
-prs: ["kmj-intake-server (Messages)"]
+prs: [kmj-intake-server#1962, "kmj-intake-server (Prayer and Events)"]
 migrations: []
 left_undone:
-  - "Next PRs, each from fresh main: Prayer and Events; then a group's page, Me (and My details), the notifications page and News."
+  - "Next PR, from fresh main: a group's page, Me (and My details), the notifications page and News."
   - "Not checked on a real phone: Playwright Chromium and WebKit at 390x844 with reduced motion. The keyboard over the box (sticky at the foot) is untested on iOS."
 decisions:
   - "Every page reads exactly what today's page reads (counted off and on, and against main, in the harness); off is byte for byte today's markup (81 page and scene dumps against main, all identical)."
@@ -19,6 +19,8 @@ decisions:
   - "Read state is today's: unread counts and bold rows in the inbox, 'Sending…' then 'Sent' under a message on its way, 'Held for review'. No read receipts: when another member read a message is something members can't see today (privacy rules stay)."
   - "No times under your own bubbles (the mock has none); the church's notes and replies keep theirs. A group's chat names a person once per run of their messages (a gap of an hour, another person or a note starts a new run) and shows their face at its foot; names take one of four inks."
   - "A group's chat in the new look drops the group's hero and tabs: two of the group's faces (as its page shows them; the group's mark when none has a photo) and 'N people' in the bar, Back to where they came from (history), else the group. The chat's notices, 'Kind words only' and how you hear about it sit at the top."
+  - "Coming up: each occasion a row with its day in the margin (weekday and month small in coral, the date in the serif), the same answers and forms as today's cards (I'm coming, You're coming, Serving: <role> with Just attend instead, Can't make it), Sign up to serve opening the open roles (a role is needed). An occasion has a day and no time: the line under it is where (and places left)."
+  - "Prayer: the flame over 'How can we pray for you?', the request in the serif's italic, who prays with you as two cards over the same radio buttons (none chosen for them, as today: the mock pre-selected the team), Send to the pastors. The page answers on its own page ('Your pastors have it.' and who will see it): its form sends then=prayer and the route redirects to /my/prayer?done=prayer&s=...; today's form, without then, still goes Home."
   - "The sheet: member_lumen_people.CSS_PEOPLE, a part of the hashed Lumen file through member_lumen_ui.templates() (member_app_ui.sheet builds the file from it), every rule under body.lm, nothing inline."
 related: [2026-11-18-member-lumen.md, 2026-11-18-member-instant-send.md, 2026-11-18-member-alerts-list.md]
 ---

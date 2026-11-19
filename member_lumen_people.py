@@ -211,7 +211,7 @@ body.lm .lm-gate .lm-reqt{flex:1 1 100%;margin:0;color:var(--fg2);}
 body.lm .lm-list .lm-av{width:40px;height:40px;font-size:13px;}
 body.lm .lm-cnote{margin:14px 0 0;font:400 13px/1.45 var(--mb-ui);color:var(--fg3);}
 body.lm .lm-cnote.err{color:var(--error,var(--fg2));}
-body.lm .lm-inbox+.lm-sec,body.lm .lm-req+.lm-inbox{margin-top:6px;}
+body.lm .lm-req+.lm-inbox{margin-top:6px;}
 body.lm .lm-irow:focus-visible,body.lm .lm-reqt:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 @media (prefers-reduced-motion:no-preference){
   body.lm .lm-irow{transition:background-color .2s;}
@@ -332,4 +332,60 @@ body.lm .lm-cmp .mb-request p{flex:1 1 100%;margin:0 4px;font:500 14px/1.35 var(
 body.lm .lm-cmp .lm-cnote{margin:4px;text-align:center;}
 body.lm .mis-notice{margin:10px 0;}
 body.lm .lm-send:focus-visible,body.lm .lm-cmp .gc-tray>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+
+/* Coming up: each occasion with its day in the margin */
+body.lm .lm-evs{margin-top:14px;border-top:1px solid var(--lm-line);}
+body.lm .lm-evc{display:grid;grid-template-columns:62px minmax(0,1fr);gap:14px;padding:20px 0;border-bottom:1px solid var(--lm-line);}
+body.lm .lm-evd small{display:block;font:700 10.5px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--lm-coral);}
+body.lm .lm-evd b{display:block;margin-top:4px;font:400 40px/.9 var(--mb-serif);letter-spacing:-.04em;color:var(--fg);}
+body.lm .lm-evt{min-width:0;}
+body.lm .lm-evt h2{margin:2px 0 4px;font:700 18px/1.25 var(--mb-ui);letter-spacing:-.015em;color:var(--fg);}
+body.lm .lm-evp{margin:0;font:400 14px/1.4 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-evst{margin:8px 0 0;font:500 13.5px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-evrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;}
+body.lm .lm-evrow .lm-btn.going .lm-ic{margin-left:-2px;}
+body.lm .lm-evt .mpe{margin-top:12px;}
+body.lm .lm-serve{margin-top:12px;}
+body.lm .lm-serve>summary{display:inline-flex;align-items:center;gap:6px;min-height:32px;list-style:none;cursor:pointer;
+  font:650 13.5px/1 var(--mb-ui);color:var(--lm-coral);}
+body.lm .lm-serve>summary::-webkit-details-marker{display:none;}
+body.lm .lm-serve[open]>summary .lm-ic{transform:rotate(90deg);}
+body.lm .lm-serveform{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
+body.lm .lm-serveform select{flex:1 1 180px;min-width:0;height:42px;padding:0 12px;border:0;border-radius:12px;background:var(--s1);color:var(--fg);
+  font:500 14.5px/1 var(--mb-ui);}
+body.lm .lm-serve>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+
+/* Prayer: the flame, the request in the serif's italic, who prays with you as two cards */
+body.lm .lm-flame i{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--lm-tint-10);color:var(--acc);
+  font-style:normal;}
+body.lm .lm-pform{margin:0;}
+body.lm .lm-ta{display:block;width:100%;min-height:170px;margin-top:22px;padding:18px;border:0;border-radius:16px;resize:vertical;background:var(--s1);
+  color:var(--fg);font:italic 400 20px/1.45 var(--mb-serif);outline:none;box-sizing:border-box;transition:box-shadow .25s;}
+body.lm .lm-ta:focus{box-shadow:inset 0 0 0 1.5px var(--lm-teal);}
+body.lm .lm-ta::placeholder{color:var(--fg3);}
+body.lm .lm-choice{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0 0;padding:0;border:0;min-width:0;}
+body.lm .lm-choice legend{grid-column:1 / -1;float:left;width:100%;margin:8px 0 10px;padding:0;}
+body.lm .lm-ch{position:relative;display:block;padding:14px 38px 14px 14px;border-radius:14px;background:var(--s1);color:var(--fg);cursor:pointer;
+  transition:box-shadow .25s;}
+body.lm .lm-ch input{position:absolute;top:13px;right:12px;width:18px;height:18px;margin:0;accent-color:var(--lm-teal);}
+body.lm .lm-ch:has(input:checked){box-shadow:inset 0 0 0 1.5px var(--lm-teal);}
+body.lm .lm-ch:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px;}
+body.lm .lm-ch b{display:block;font:650 14px/1.2 var(--mb-ui);}
+body.lm .lm-ch span{display:block;margin-top:5px;font:400 12px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-check{display:flex;align-items:center;gap:10px;margin:18px 0 20px;font:500 14.5px/1.3 var(--mb-ui);color:var(--fg);cursor:pointer;}
+body.lm .lm-check input{width:22px;height:22px;margin:0;flex:none;accent-color:var(--acc-fill);}
+body.lm .lm-pform .lm-btn.block{margin-top:18px;}
+body.lm .lm-check+.lm-btn.block{margin-top:0;}
+body.lm .lm-btn.block{display:flex;width:100%;height:56px;border-radius:18px;font-size:16px;}
+body.lm .lm-sent{padding:48px 10px 10px;text-align:center;}
+body.lm .lm-pring{width:84px;height:84px;margin:0 auto 24px;border-radius:50%;display:grid;place-items:center;color:var(--lm-teal);
+  box-shadow:inset 0 0 0 1.5px var(--lm-teal);}
+body.lm .lm-sent .lm-disp{margin:0 0 8px;}
+body.lm .lm-sent .lm-disp em{color:var(--lm-teal);}
+body.lm .lm-sent p{max-width:280px;margin:0 auto;font:400 15px/1.5 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-sent .lm-btn{margin-top:26px;}
+@media (prefers-reduced-motion:no-preference){
+  body.lm .lm-pring{animation:lmring .6s cubic-bezier(.2,1.2,.4,1) both;}
+}
+@keyframes lmring{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
 """)
