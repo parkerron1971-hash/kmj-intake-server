@@ -30,6 +30,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "business_marketing_engine": (int(os.environ.get("RL_BUSINESS_MARKETING_ENGINE_PER_HOUR", "6")), 3600),
     "business_learning": (int(os.environ.get("RL_BUSINESS_LEARNING_PER_HOUR", "24")), 3600),
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
+    # "Report" on a Chief reply (chief_reply_report.py), per login: each one
+    # files a support ticket, so a tap loop would flood Mission Control.
+    "chief_reply_report": (int(os.environ.get("RL_CHIEF_REPLY_REPORT_PER_HOUR", "20")), 3600),
     # Church mail from the Email room (church_mail_room.py), per login: a busy
     # office day is a few dozen; this stops a send loop or a stolen session.
     "church_mail_send": (int(os.environ.get("RL_CHURCH_MAIL_SEND_PER_HOUR", "60")), 3600),

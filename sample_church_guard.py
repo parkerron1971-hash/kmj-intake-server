@@ -12,6 +12,9 @@ before any route runs, unless it is one of:
   · sample_church.READ_POSTS (POSTs that only read: a search, a preview);
   · Chief's chat (/agents/chief/chat, …/stream) and its prewarm, which do
     nothing for a sample until the sample's own Chief lane (BE-4);
+  · "Report" on a Chief reply (/agents/chief/reply-report): the sample's
+    Chief is AI output too, and the report is filed under the visitor's
+    HOME church, never the sample (chief_reply_report.py);
   · /sample-church/* (the sample's own routes, BE-4).
 
 "Names a sample" means: a UUID anywhere in the path; a `business_id`,
@@ -57,6 +60,9 @@ EXEMPT_PATHS = frozenset({
     "/agents/chief/chat",
     "/agents/chief/chat/stream",
     "/agents/chief/prewarm",
+    # A report on one of the sample Chief's replies: filed under the home
+    # church, so nothing is saved on the sample (chief_reply_report.py).
+    "/agents/chief/reply-report",
 })
 EXEMPT_PREFIXES = ("/sample-church/",)
 

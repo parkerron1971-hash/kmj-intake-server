@@ -1093,6 +1093,10 @@ app.include_router(church_billing_router)
 # through /agents/chief/chat and /stream, which hand a sample over first.
 from sample_chief import router as sample_chief_router
 app.include_router(sample_chief_router)
+# "Report" on a Chief reply (chief_reply_report.py, 2026-11-19): POST
+# /agents/chief/reply-report files a support ticket Mission Control reads.
+from chief_reply_report import router as chief_reply_report_router
+app.include_router(chief_reply_report_router)
 from stripe_discounts import router as stripe_discounts_router
 app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
