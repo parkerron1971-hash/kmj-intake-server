@@ -112,11 +112,11 @@ def test_watch_is_a_cinema(church, fake, monkeypatch):  # noqa: F811
     assert '<meta name="theme-color" content="#050506">' in html
     home = _get(fake, monkeypatch, "/my")
     assert '<meta name="theme-color" content="#ffffff">' in home and "pg-watch" not in _body_class(home)
+    assert "lm-dark" in _body_class(html).split()                         # the new look's one dark switch
     sheet = ui.sheet("lumen")[0]
-    assert "body.lm.pg-watch{--bg:#050506;" in sheet and "--acc:var(--acc-lit)" in sheet
-    assert "html:has(>body.lm.pg-watch){background:#050506;" in sheet
-    assert mlm.theme_color("live", "#fff") == mlm.theme_color("sermons", "#fff") == "#050506"
-    assert mlm.theme_color("bible", "#fff") == "#fff"
+    assert "body.lm.lm-dark.pg-watch{--bg:#050506;" in sheet and "--acc:var(--acc-lit)" in sheet
+    assert "html:has(>body.lm.lm-dark.pg-watch){background:#050506;" in sheet
+    assert mlm.cine("live") and mlm.cine("sermons") and mlm.cine("watch") and not mlm.cine("bible")
 
 
 def test_the_room_has_reactions_over_the_video(church, fake, monkeypatch):  # noqa: F811

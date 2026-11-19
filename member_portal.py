@@ -749,12 +749,13 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
-        # Watch and Live are a cinema: the phone's own bar goes dark with them.
-        bar_colour = member_lumen_motion.theme_color(tab, bar_colour)
-        if lumen_dark:
+        # Every page under Watch is a cinema (member_lumen_motion): the same
+        # dark switch as the reader at night, in the cinema's black.
+        cine = member_lumen_motion.cine(tab)
+        if lumen_dark or cine:
             import member_lumen_bible
             body_cls = body_cls[:-1] + ' lm-dark"'
-            bar_colour = member_lumen_bible.NIGHT_BG
+            bar_colour = member_lumen_motion.CINE_BG if cine else member_lumen_bible.NIGHT_BG
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -25,7 +25,10 @@ THE MOVES (all CSS, in /my/lumen.<hash>.css; reduced motion gets none):
 
 THE CINEMA. Every page under the Watch tab (Watch, a series, a message,
 the live room and Live between services: body.pg-watch) goes dark,
-whatever base the church picked: the church's colour is its "lit" shade
+whatever base the church picked, through the new look's one dark switch
+(body.lm-dark, the reader at night's, set by member_portal._shell), in the
+cinema's neutral black instead of the reader's warm night: the church's
+colour is its "lit" shade
 (member_app_ui.palette, readable on black), the family inks their dark
 shades. Watch's latest message runs edge to edge under a serif title, the
 series are posters on a rail, the messages rows with wide thumbnails.
@@ -51,15 +54,12 @@ CINE_BG = "#050506"
 
 
 def cine(tab: Optional[str]) -> bool:
-    """Whether a page sits under the Watch tab, the cinema's pages."""
+    """Whether a page sits under the Watch tab, the cinema's pages. They
+    take the new look's one dark switch (member_portal._shell's lumen_dark,
+    the reader at night's), and this sheet makes that dark the cinema's
+    neutral black rather than the reader's warm night."""
     import member_app_ui as ui
     return ui.TAB_OF.get(tab or "", "") == "watch"
-
-
-def theme_color(tab: Optional[str], default: str) -> str:
-    """The <meta name="theme-color"> of a Lumen page: the cinema's black
-    under the Watch tab, else the page's own colour."""
-    return CINE_BG if cine(tab) else default
 
 
 # Which way a page change goes, and what travels. A click on one of our
@@ -244,17 +244,17 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
   ::view-transition-group(lm-t-board){animation-duration:.3s;}
 }
 
-/* the cinema: every page under Watch goes dark */
-body.lm.pg-watch{--bg:#050506;--s1:#151517;--s2:#1F1F22;--s3:#2C2C30;--line:rgba(255,255,255,.1);--fg:#F5F3EF;--fg2:#AAA7A2;--fg3:#8C8984;
+/* the cinema: every page under Watch takes the dark switch (lm-dark), in a neutral black */
+body.lm.lm-dark.pg-watch{--bg:#050506;--s1:#151517;--s2:#1F1F22;--s3:#2C2C30;--line:rgba(255,255,255,.1);--fg:#F5F3EF;--fg2:#AAA7A2;--fg3:#8C8984;
   --acc:var(--acc-lit);--accent:var(--acc-lit);--focus:var(--acc-lit);--bar:rgba(5,5,6,.82);--hair:rgba(245,243,239,.1);
   --surface:#050506;--input-surface:#151517;--text-primary:#F5F3EF;--text-secondary:#AAA7A2;--text-muted:#8C8984;
   --border:rgba(255,255,255,.1);--mb-surface:#151517;--mb-surface-2:#1F1F22;--mb-line:rgba(255,255,255,.1);--error:#FF6B5E;
   --gold-ink:var(--gold-lit);--teal-ink:var(--teal-lit);--violet-ink:var(--violet-lit);--coral-ink:var(--coral-lit);
   --gold-deep:var(--gold-night);--teal-deep:var(--teal-night);--violet-deep:var(--violet-night);--coral-deep:var(--coral-night);
   --acc-deep:var(--acc-night);--lm-line:rgba(255,255,255,.1);--lm-shadow:rgba(0,0,0,.7);color-scheme:dark;}
-@supports (color:color-mix(in oklab,red 50%,blue)){body.lm.pg-watch{--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);}}
+@supports (color:color-mix(in oklab,red 50%,blue)){body.lm.lm-dark.pg-watch{--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);}}
 .lm.lm-tab.pg-watch .mb-top::after{display:none;}
-html:has(>body.lm.pg-watch){background:#050506;color-scheme:dark;}
+html:has(>body.lm.lm-dark.pg-watch){background:#050506;color-scheme:dark;}
 @media (max-width:1099px){.lm.pg-watch .mb-nav.lm-nav{background:#161618;box-shadow:0 12px 32px -12px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08);}}
 .lm.pg-watch .lm-ind{background:var(--lm-tint-12);}
 @supports (background:color-mix(in srgb,red 50%,blue)){.lm.pg-watch .lm-ind{background:color-mix(in srgb,var(--acc-fill) 28%,#161618);}}
@@ -293,7 +293,8 @@ html:has(>body.lm.pg-watch){background:#050506;color-scheme:dark;}
 .lm.pg-watch.lm-push .mb-player{margin:0 -20px;border-radius:0;overflow:hidden;background:#000;}
 .lm.pg-watch.lm-push .mb-player .mb-video,.lm.pg-watch.lm-push .mb-player>.mb-art,.lm.pg-watch.lm-push .mb-player>.mb-ph,
 .lm.pg-watch.lm-push .mb-player>.mb-titled{border-radius:0;}
-.lm.pg-watch.lm-push .mp-shell>h1{font:400 34px/1.05 var(--mb-serif);letter-spacing:-.025em;}
+.lm.pg-watch.lm-push .mp-shell>h1{font:400 34px/1.05 var(--mb-serif);font-weight:var(--lm-dw,400);letter-spacing:var(--lm-dtr,-.025em);
+  font-variation-settings:var(--lm-dvar,normal);font-stretch:var(--lm-dst,100%);}
 
 /* Live: reactions rising over the video, who's here, Amen · heart · Praying */
 .lm .lm-rxl{position:absolute;z-index:2;right:10px;bottom:10px;top:52px;width:96px;overflow:hidden;pointer-events:none;}
@@ -313,7 +314,7 @@ html:has(>body.lm.pg-watch){background:#050506;color-scheme:dark;}
 .lm .lm-watching{flex-basis:100%;display:flex;align-items:center;gap:10px;margin:12px 0 0;font:500 13.5px/1.35 var(--mb-ui);color:var(--fg2);}
 .lm .lm-watching .lv-stack i{width:28px;height:28px;font-size:10px;box-shadow:0 0 0 2.5px var(--bg);}
 .lm .lm-watching .lv-stack i+i{margin-left:-8px;}
-.lm .lm-watching b{color:var(--fg);font-weight:650;font-variant-numeric:tabular-nums;}
+.lm .lm-watching b{color:var(--fg);font-weight:650;font-variant-numeric:var(--lm-nvn,tabular-nums);}
 .lm .lm-rxbar{flex-basis:100%;display:flex;gap:8px;margin:14px 0 2px;}
 .lm .lm-rxb{height:44px;padding:0 16px;border:0;border-radius:22px;background:var(--s1);color:var(--fg);font:700 14px/1 var(--mb-ui);
   display:inline-flex;align-items:center;gap:7px;cursor:pointer;}
