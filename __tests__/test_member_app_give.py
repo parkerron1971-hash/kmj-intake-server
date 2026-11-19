@@ -4,6 +4,7 @@ there comes back to the app on the church address the member is on."""
 import pytest
 
 import giving_router as gr
+import member_app_ui as ui
 import member_portal as mp
 
 
@@ -36,7 +37,8 @@ def test_a_gift_from_the_app_returns_only_to_the_churchs_own_addresses():
 def test_the_app_give_screen_is_the_same_form_in_the_apps_look():
     page = mp.render_give(BIZ, SITE, ME)
     assert 'id="gv-form"' in page and "/public/giving/" in page                       # the same payment path
-    assert 'href="/my"' in page and ">Give</h1>" in page and "--mb-fill:" in page        # the app's header and look
+    assert 'href="/my"' in page and ">Give</h1>" in page                                  # the app's header
+    assert ui.sheet_url("app") in page and "--mbt-fill:" in page                         # and look (member_app_ui.head)
     assert 'value="Ana &lt;Rivers&gt;"' in page and 'value="ana@example.com"' in page   # filled in, escaped
     assert "var APP = true, PREVIEW = false, SITE = false" in page
     assert "return_to: APP ? 'app' : (SITE ? 'site' : undefined)" in page

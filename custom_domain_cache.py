@@ -20,12 +20,31 @@ directives (public, s-maxage) and becomes private. The browser may still
 keep its own copy. Direct traffic (mysolutionist.app, platform
 subdomains, the API host) never carries the header and is untouched.
 
+One exception (2026-11-18): the member app's shared stylesheets
+(/my/app.<hash>.css and its siblings, member_app_ui.head). They are the
+same file for every church and every host, and the hash of what's in the
+file is in its address, so one cache entry under the Railway URL is right
+for every custom domain. Their answer (public, a year, immutable) passes
+through untouched; any other answer on those addresses (a hash from the
+other side of a deploy is no-store) gets the usual treatment.
+
 Pure ASGI, header-only (never touches a body), like sse_middleware.py:
 BaseHTTPMiddleware buffers streaming responses.
 """
 from __future__ import annotations
 
+import re
 from typing import List, Tuple
+
+# member_app_ui.SHEET_PATH_RE: the same addresses.
+SHARED_SHEET_RE = re.compile(r"^/my/(app|youth|kids|door)\.[0-9a-f]{12}\.css$")
+
+
+def _shared_sheet(scope, headers: List[Tuple[bytes, bytes]]) -> bool:
+    """The member app's shared stylesheet, answered as a forever file."""
+    if not SHARED_SHEET_RE.match(scope.get("path") or ""):
+        return False
+    return any(k.lower() == b"cache-control" and b"immutable" in v.lower() for k, v in headers)
 
 
 def _shared_free(cache_control: str) -> str:
@@ -76,7 +95,9 @@ class NoSharedCacheForCustomDomains:
 
         async def send_private(message):
             if message.get("type") == "http.response.start":
-                message = {**message, "headers": headers_for_custom_domain(list(message.get("headers") or []))}
+                headers = list(message.get("headers") or [])
+                if not _shared_sheet(scope, headers):
+                    message = {**message, "headers": headers_for_custom_domain(headers)}
             await send(message)
 
         await self.app(scope, receive, send_private)

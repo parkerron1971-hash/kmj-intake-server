@@ -105,13 +105,42 @@ def icon_png(biz: Dict[str, Any], site: Optional[Dict[str, Any]], size: int) -> 
                  pal["ground"], pal["accent"], pal["on_accent"])
 
 
-# Network-first for every request it handles; the only thing it keeps is
-# the offline page. Member pages are personal and change by the minute, so
-# nothing else is cached. A push shows title + body and opens its /my link
-# (member_push.py chooses the words; nothing private reaches a lock screen).
+# Network-first for every request it handles; the only thing it keeps on
+# disk is the offline page. Member pages are personal and change by the
+# minute, so nothing else is cached. A push shows title + body and opens its
+# /my link (member_push.py chooses the words; nothing private reaches a lock
+# screen).
+#
+# The next tab, early (2026-11-18, member_app_ui.EARLY_JS): on Safari and
+# Firefox, a touch or hover on the tab bar asks this worker for that tab,
+# and the answer waits here, in memory only, for the tap that follows: used
+# once, for at most EARLY_MS, and only for the same address. Any request
+# that isn't a GET (a form, sign-out, a message sent) and any other page
+# opened drops whatever is waiting, so a page after a change is always
+# fresh. Nothing about it touches the HTTP cache: every member page stays
+# no-store. Chrome loads early by itself (speculation rules) and never asks.
 SW_JS = """// The member app's service worker (member_app_install.py).
 const OFFLINE = '/my/offline';
 const CACHE = 'member-offline-v1';
+const EARLY_MS = 10000;
+const early = new Map();
+function mine(url) {
+  try {
+    const u = new URL(url);
+    return u.origin === self.location.origin && !u.search && !u.hash &&
+      (u.pathname === '/my' || u.pathname.indexOf('/my/') === 0) ? u.href : '';
+  } catch (err) { return ''; }
+}
+self.addEventListener('message', (e) => {
+  const d = e.data || {};
+  if (d.t !== 'early') return;
+  const url = mine(d.url);
+  if (!url || early.has(url)) return;
+  const res = fetch(url, {credentials: 'same-origin', redirect: 'manual',
+                          headers: {'X-Member-Prefetch': '1'}}).catch(() => null);
+  early.set(url, {at: Date.now(), res: res});
+  e.waitUntil(res);
+});
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.add(new Request(OFFLINE, {cache: 'reload'}))));
   self.skipWaiting();
@@ -121,8 +150,15 @@ self.addEventListener('activate', (e) => {
     keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', (e) => {
+  if (e.request.method !== 'GET') early.clear();
   if (e.request.mode !== 'navigate') return;
-  e.respondWith(fetch(e.request).catch(() => caches.match(OFFLINE)));
+  const got = e.request.method === 'GET' ? early.get(e.request.url) : null;
+  early.clear();
+  const net = () => fetch(e.request).catch(() => caches.match(OFFLINE));
+  if (!got || Date.now() - got.at > EARLY_MS) { e.respondWith(net()); return; }
+  // Only a plain 200 from this site; a redirect (signed out) or an error
+  // asks again the usual way.
+  e.respondWith(got.res.then((r) => (r && r.ok && r.type === 'basic' && !r.redirected) ? r : net(), net));
 });
 self.addEventListener('push', (e) => {
   let d = {};
@@ -162,6 +198,24 @@ def serve_asset(biz: Dict[str, Any], site: Optional[Dict[str, Any]], path: str) 
         if path == f"/my/icon-{s}.png":
             return Response(icon_png(biz, site, s), media_type="image/png", headers=_CACHE_A_DAY)
     return None
+
+
+def serve_sheet(path: str) -> Optional[Response]:
+    """One of the member app's shared stylesheets (member_app_ui.head), or
+    None if `path` isn't one's address. The same file for every church and
+    every host, so a browser and Cloudflare keep it a year and never ask
+    again: its hash is in its address. An address with another hash (a
+    page from just before or after a deploy, while the replicas differ)
+    still gets today's file, so the page keeps its look, but nobody keeps
+    that answer."""
+    import member_app_ui as ui
+    m = ui.SHEET_PATH_RE.match(path or "")
+    if not m:
+        return None
+    text, digest, _ = ui.sheet(m.group(1))
+    keep = "public, max-age=31536000, immutable" if m.group(2) == digest else "no-store"
+    return Response(text, media_type="text/css; charset=utf-8",
+                    headers={"Cache-Control": keep, "X-Content-Type-Options": "nosniff"})
 
 
 def head_tags(biz: Dict[str, Any]) -> str:
@@ -223,7 +277,9 @@ def install_card(church_name: str) -> str:
 
 def render_offline(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> str:
     from member_portal import _shell
-    return _shell(biz, site, "Offline", """
+    # The whole look inline: with no connection, the stylesheet file may
+    # not be there to fetch (member_app_ui.head).
+    return _shell(biz, site, "Offline", inline_css=True, body="""
 <div class="mp-card"><h1>You're offline</h1>
 <p class="mp-muted">This page needs a connection. Check your signal or Wi-Fi, then try again.</p>
 <button class="mp-go" type="button" onclick="location.reload()">Try again</button></div>""")

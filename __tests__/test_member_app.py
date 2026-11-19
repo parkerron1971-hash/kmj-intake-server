@@ -131,12 +131,15 @@ def test_home_on_a_computer_reads_in_rows_in_the_phones_order():
     assert 'class="hm-band hm-lead"' in body and 'class="hm-band hm-cards"' in body
     assert (body.index('class="mb-hero"') < body.index('class="mb-quick"') < body.index('id="mb-today-h"')
             < body.index('id="mb-latest"'))
-    assert ".hm-band,.hm-col,.hm-grid,.hm-txt,.oc-row{display:contents;}" in page   # a phone: no rows
-    assert ".hm-only,.mb-side,.oc-day,.oc-cal{display:none;}" in page              # nor what's a computer's
+    # The rules live in the shared stylesheet file the page links (member_app_ui.head).
+    assert ui.sheet_url("app") in page
+    look = ui.sheet("app")[0]
+    assert ".hm-band,.hm-col,.hm-grid,.hm-txt,.oc-row{display:contents;}" in look   # a phone: no rows
+    assert ".hm-only,.mb-side,.oc-day,.oc-cal{display:none;}" in look              # nor what's a computer's
     # The next messages under the latest, on a computer only.
     more = body[body.index('id="mb-latest"'):]
     assert 'class="mb-list mb-cards hm-only hm-more"' in more and "Deliverance" in more
-    assert "body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}" in page
+    assert "body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}" in look
     # A row leaves out what's empty; nothing at all is no row.
     assert mp.band("", "  ") == ""
     assert mp.band("<p>a</p>", "", cls="hm-pair") == '<div class="hm-band hm-pair"><div class="hm-col"><p>a</p></div></div>'

@@ -650,7 +650,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
-           wide: bool = False) -> str:
+           wide: bool = False, inline_css: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -664,11 +664,12 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     right, with how many posts are new (member_portal_news). `wide` lays
     the page out for a computer (member_app_ui: 1180px beside the sidebar,
     its rows side by side, see band()); a phone never sees a difference.
-    The look is member_app_ui's."""
+    The look is member_app_ui's: the shared stylesheet file and the
+    church's colours (member_app_ui.head); `inline_css` puts the whole
+    sheet in the page instead (the offline page, kept for no connection)."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
-    import member_app_signin as sg
     from public_form_theme import resolve_theme, css_vars
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
@@ -742,8 +743,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <title>{_e(title)} — {_e(name)}</title>
 {ui.FONTS}
 <style>{css_vars(theme)}</style>
-<style>{ui.css(biz, theme, space)}</style>
-{f'<style>{sg.css(biz, theme)}</style>' if door else ''}
+{ui.head(biz, theme, space, door=door, inline=inline_css or None)}
 </head>
 <body{_body_class(door, space, tab, wide)}>
 {top}
@@ -755,6 +755,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         board=bool(ctx.get("board")),
         side=_side(biz, tab, space, brand, who, mine, board=bool(ctx.get("board") and ctx.get("lead"))))
   if signed_in and bar else ''}
+{ui.early() if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -816,11 +817,11 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
            f'{ui.icon("chevron", 18)}</a>')
     if preview:
         top += '<p class="mp-flash mp-ok" role="status">This is a preview, so Give won\'t charge anything.</p>'
-    head = (ui.FONTS + f"<style>{css_vars(theme)}</style><style>{ui.css(biz, theme)}</style><style>{GIVE_CSS}</style>")
+    head = (ui.FONTS + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme)}<style>{GIVE_CSS}</style>")
     return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
                             app={"head": head, "top": top, "name": me.get("name") or "",
                                  "email": me.get("email") or "", "preview": preview,
-                                 "foot": ui.nav("give", biz=biz)})
+                                 "foot": ui.nav("give", biz=biz) + ui.early()})
 
 
 def _door_page(biz: Dict[str, Any], site, title: str, *, icon: str, heading: str, body: str,
@@ -1919,6 +1920,18 @@ async def choose_person(request: Request):
     if cid and not any(str(p["id"]) == cid for p in sess["people"]):
         return resp
     _set_session(resp, mint_session(church["business"]["id"], sess["claims"]["em"], cid))
+    return resp
+
+
+@router.get("/my/{file}.css", include_in_schema=False)
+async def member_app_sheet(file: str):
+    """The member app's shared stylesheets (member_app_install.serve_sheet,
+    member_app_ui.head): the same file for every church, so it answers on
+    any church's address without looking the church up."""
+    import member_app_install as mai
+    resp = mai.serve_sheet(f"/my/{file}.css")
+    if resp is None:
+        raise HTTPException(404, "Not found")
     return resp
 
 
