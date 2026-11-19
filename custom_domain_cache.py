@@ -26,7 +26,9 @@ same file for every church and every host, and the hash of what's in the
 file is in its address, so one cache entry under the Railway URL is right
 for every custom domain. Their answer (public, a year, immutable) passes
 through untouched; any other answer on those addresses (a hash from the
-other side of a deploy is no-store) gets the usual treatment.
+other side of a deploy is no-store) gets the usual treatment. The new
+look's fonts (/my/fonts/<face>.<hash>.woff2, member_lumen_fonts, 2026-11-19)
+are the same kind of file and pass the same way.
 
 Pure ASGI, header-only (never touches a body), like sse_middleware.py:
 BaseHTTPMiddleware buffers streaming responses.
@@ -38,11 +40,15 @@ from typing import List, Tuple
 
 # member_app_ui.SHEET_PATH_RE: the same addresses.
 SHARED_SHEET_RE = re.compile(r"^/my/(app|youth|kids|door|lumen)\.[0-9a-f]{12}\.css$")
+# member_lumen_fonts.FONT_PATH_RE: the same addresses.
+SHARED_FONT_RE = re.compile(r"^/my/fonts/[a-z0-9-]+\.[0-9a-f]{12}\.woff2$")
 
 
 def _shared_sheet(scope, headers: List[Tuple[bytes, bytes]]) -> bool:
-    """The member app's shared stylesheet, answered as a forever file."""
-    if not SHARED_SHEET_RE.match(scope.get("path") or ""):
+    """The member app's shared stylesheet or font, answered as a forever
+    file."""
+    path = scope.get("path") or ""
+    if not (SHARED_SHEET_RE.match(path) or SHARED_FONT_RE.match(path)):
         return False
     return any(k.lower() == b"cache-control" and b"immutable" in v.lower() for k, v in headers)
 
