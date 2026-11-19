@@ -190,13 +190,21 @@ def test_the_owners_preview_never_uses_it(db, monkeypatch):
 # ── 3. the Lead and Board tabs ────────────────────────────────────────
 
 def _lead_reads(monkeypatch, roles, led):
+    """Every read behind the Lead tab answers here. The leaders schedule and
+    the serving parts are pinned too: left real, whether they read, and
+    whether that read failed, hung on what other test files had left in
+    place, and a failed read there rightly keeps no "no"."""
     import church_follow_up as cfu
     import church_leader_tasks
+    import church_schedule
     import group_lead
+    import member_app_ui
     calls = []
     monkeypatch.setattr(cfu, "roles_for", lambda b, m: calls.append("roles") or roles)
     monkeypatch.setattr(group_lead, "led_groups", lambda b, m: calls.append("led") or led)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: calls.append("tasks") or None)
+    monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    monkeypatch.setattr(member_app_ui, "serve_mode", lambda: False)
     return calls
 
 
