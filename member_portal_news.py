@@ -615,7 +615,7 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
     with no news yet sees where the news will go."""
     import member_app_ui as ui
     if not posts:
-        return home_first(biz, rights, title=title) if posts == [] else ""
+        return home_first(biz, rights, heading=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
     rows = "".join(_row(biz, p) for p in rest)
     return (f'<section aria-labelledby="nw-home-h">{ui.section(title, "/my/news", more, hid="nw-home-h")}'
@@ -623,7 +623,7 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
             f'{f"<div class=nw-rows>{rows}</div>" if rows else ""}</section>')
 
 
-def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]], *, title: str = "From the church") -> str:
+def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]], *, heading: str = "From the church") -> str:
     """Home's 'From the church' before anything reaches me: for a poster,
     the way to Post, drawn as one of the section's rows."""
     import member_app_ui as ui
@@ -637,7 +637,7 @@ def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]], *, title: 
         return ""
     row = (f'<a class="nw-row" href="/my/news/write"><span class="nw-thumb gold">{_ic("megaphone", 22)}</span>'
            f'<span class="nw-t"><b>{_e(title)}</b><span>{_e(sub)}</span></span>{_ic("chevron", 18)}</a>')
-    return (f'<section aria-labelledby="nw-home-h">{ui.section(title, hid="nw-home-h")}'
+    return (f'<section aria-labelledby="nw-home-h">{ui.section(heading, hid="nw-home-h")}'
             f'<div class="nw-rows">{row}</div></section>')
 
 
