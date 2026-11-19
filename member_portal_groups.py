@@ -984,6 +984,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     back = _base(g["id"], tab)
     size = len(people)
     script = ""
+    import member_lumen
+    if tab == "chat" and member_lumen.page():
+        return _lumen_chat_page(biz, site, request, me, g, data, leader)
     if tab == "chat":
         cvd = data.get("chat") or {"state": "error"}
         content, script = _chat_body(biz, request, me, g, cvd, leader)
@@ -1139,6 +1142,42 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                   tab="connect", who=me, script=script), 200
 
 
+def _chat_css() -> str:
+    import chat_photos
+    import chat_polls
+    import group_chat_notify
+    return f"{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{chat_photos.PHOTO_CSS}{group_chat_notify.CONTROL_CSS}"
+
+
+def _lumen_chat_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], g: Dict[str, Any],
+                     data: Dict[str, Any], leader: bool) -> Tuple[str, int]:
+    """A group's chat in the new look (member_lumen_people): two of the
+    group's faces (as its page shows them) and its name in the bar with how
+    many are in it, the chat filling the screen, the box at the foot, no
+    tab bar. Back goes to where they came from (Messages or the group)."""
+    import member_lumen_people as lp
+    from member_portal import _shell
+    cvd = data.get("chat") or {"state": "error"}
+    content, script = _chat_body(biz, request, me, g, cvd, leader, lumen=True)
+    if cvd.get("state") in ("gate", "guidelines") and cvd.get("notes"):
+        import member_portal_threads as mpt
+        content += mpt.notes_section(cvd["notes"], cvd.get("notes_tz") or timezone.utc, g.get("name") or "")
+    people, leaders = data.get("people") or [], data.get("leaders") or []
+    mode = g.get("name_display") or "full"
+    me_id = str(me["id"])
+    shown = [p for p in leaders + [p for p in people if p.get("role") != "leader"] if str(p.get("id")) != me_id][:2]
+    marks = [_face(p, "gs-av", mode) for p in shown]
+    name = g.get("name") or "Group"
+    # Faces as the group's page shows them (photos members may see); with
+    # no photo among them, the group's own mark reads better than initials.
+    av = lp.faces(marks) if any("has-photo" in m for m in marks) else lp.group_mark(name)
+    n = len(people)
+    head = lp.thead(av, name, f"{n} {'person' if n == 1 else 'people'}")
+    page = f'{_flash(request)}{content}'
+    return _shell(biz, site, name, f"<style>{_chat_css()}</style>{page}", tab="connect", who=me, script=script,
+                  bar=False, back=(_base(g["id"]), name), lumen_head=head), 200
+
+
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
     """GET /my/groups/<id>[/board|/people]."""
     import asyncio
@@ -1278,6 +1317,14 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
             f'<span class="gs-kind">For leaders</span><h1 id="gs-name">All group leaders</h1>'
             f'<p>Everyone who leads a group or a ministry at {church}, and its pastors</p>'
             f'<p class="gs-who">{faces}<span>{n} {"person" if n == 1 else "people"}</span></p></div></section>')
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_people as lp
+        content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders", lumen=True)
+        head = lp.thead(lp.group_mark("All group leaders"), "All group leaders", f"{n} {'person' if n == 1 else 'people'}")
+        return _shell(biz, site, "All group leaders", f"<style>{_chat_css()}</style>{_flash(request)}{content}",
+                      tab="connect", who=me, script=script, bar=False, back=("/my/messages", "Messages"),
+                      lumen_head=head), 503 if cv.get("state") == "error" else 200
     content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders")
     page = f'{back}{hero}{_flash(request)}<div style="margin-top:16px">{content}</div>'
     status = 503 if cv.get("state") == "error" else 200
@@ -1359,10 +1406,14 @@ RX_NAMES = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen
 
 def _chat_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]], mode: str,
                by_id: Dict[str, Dict[str, Any]], rx: Dict[str, Dict[str, Any]], tid: str, here: str, leader: bool,
-               photos: Dict[str, Any], polls: Dict[str, Any], now: datetime, tz=None) -> str:
+               photos: Dict[str, Any], polls: Dict[str, Any], now: datetime, tz=None,
+               lumen: Optional[str] = None) -> str:
     """One message in a group's chat: the page draws every message with
     it, and member_instant_send draws a message just sent with it (sent_item),
-    so the two never differ."""
+    so the two never differ. `lumen` (the new look) is the message's place
+    in a run of one person's messages ("lm-c1": not the first, "lm-c2": not
+    the last); the new look also colours the name and keeps the time for
+    the chat's day lines (member_lumen_people.days_script)."""
     import chat_photos
     import chat_polls
     from member_portal import _e
@@ -1372,6 +1423,9 @@ def _chat_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]
     name = display_name(person, mode) if person else "Someone"
     face = "" if mine else _face(person, "gs-av m", mode)
     who = "" if mine else f'<span class="gc-who">{_e(name)}</span>'
+    if lumen is not None and not mine:
+        import member_lumen_people as lp
+        who = f'<span class="gc-who {lp.ink(sid)}">{_e(name)}</span>'
     quote = ""
     if m.get("reply_to"):
         q = by_id.get(str(m["reply_to"]))
@@ -1428,6 +1482,10 @@ def _chat_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]
         bubble = chat_polls.card(poll, question_html=q, tid=tid, mid=str(m["id"]), here=here, esc=_e, now=now,
                                  tz=tz, can_vote=m.get("status") == "delivered")
     rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
+    if lumen is not None:
+        stamp = f' data-at="{_e(m.get("created_at"))}"' if m.get("created_at") else ""
+        return (f'<li class="gc-m{" mine" if mine else ""}{" " + lumen if lumen else ""}" id="m-{_e(m["id"])}"{stamp}>{face}'
+                f'<div class="gc-col">{who}{quote}{bubble}{rang}{held}{chips_html}</div></li>')
     return (f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
             f'{bubble}{rang}{held}{chips_html}</div></li>')
 
@@ -1442,9 +1500,31 @@ def sent_item(m: Dict[str, Any], *, me_id: str, folks: Dict[str, Dict[str, Any]]
                       leader=False, photos={}, polls={}, now=datetime.now(timezone.utc))
 
 
+def _runs(entries: List[Tuple[str, str, Any]]) -> List[str]:
+    """Each message's place in a run of one person's messages, for the new
+    look: entries are (kind, sender, at) in the order shown ("m" a message,
+    anything else breaks a run); a gap of an hour starts a new one."""
+    out = []
+    for i, (kind, who, at) in enumerate(entries):
+        if kind != "m":
+            out.append("")
+            continue
+
+        def same(j: int) -> bool:
+            if j < 0 or j >= len(entries) or entries[j][0] != "m" or entries[j][1] != who:
+                return False
+            a, b = entries[j][2], at
+            return a is not None and b is not None and abs((a - b).total_seconds()) < 3600
+        out.append(" ".join(c for c, yes in (("lm-c1", same(i - 1)), ("lm-c2", same(i + 1))) if yes))
+    return out
+
+
 def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dict[str, Any], cv: Dict[str, Any],
-               leader: bool, *, here: str = ""):
-    """(html, script) for the Chat tab (and the leaders' room, `here`)."""
+               leader: bool, *, here: str = "", lumen: bool = False):
+    """(html, script) for the Chat tab (and the leaders' room, `here`).
+    `lumen` (the new look, member_lumen_people): the chat as a texting
+    screen, its notes and how you hear about it at the top, the box at the
+    foot; the same messages, rules, forms and ids."""
     import member_portal_messaging as mpm
     import member_messaging_rules as rules
     from member_portal import _e
@@ -1500,14 +1580,28 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     now = datetime.now(timezone.utc)
     items = []
     stamps = []
-    for m in msgs:
-        items.append(_chat_item(m, me_id=me_id, folks=folks, mode=mode, by_id=by_id, rx=rx, tid=tid, here=here,
-                                leader=leader, photos=photos, polls=polls, now=now, tz=cv.get("tz")))
-        stamps.append(str(m.get("created_at") or ""))
+    gnotes = cv.get("notes") or []
+    if lumen:
+        # The new look: messages and notes in time order, each message
+        # knowing its run (no name inside a run, its face at the foot).
+        import member_portal_threads as mpt
+        ntz = cv.get("notes_tz") or timezone.utc
+        seq = sorted([(mpt._at(m.get("created_at"), timezone.utc) or now, 1, "m", m) for m in msgs] +
+                     [(mpt._at(n.get("created_at"), timezone.utc) or now, 0, "n", n) for n in gnotes],
+                     key=lambda x: (x[0], x[1]))
+        runs = _runs([(k, str(x.get("sender_contact_id") or "") if k == "m" else "", at) for at, _, k, x in seq])
+        for (at, _, k, x), run in zip(seq, runs):
+            items.append(_chat_item(x, me_id=me_id, folks=folks, mode=mode, by_id=by_id, rx=rx, tid=tid, here=here,
+                                    leader=leader, photos=photos, polls=polls, now=now, tz=cv.get("tz"), lumen=run)
+                         if k == "m" else mpt.note_card(x, ntz, g.get("name") or "", lumen=True))
+    else:
+        for m in msgs:
+            items.append(_chat_item(m, me_id=me_id, folks=folks, mode=mode, by_id=by_id, rx=rx, tid=tid, here=here,
+                                    leader=leader, photos=photos, polls=polls, now=now, tz=cv.get("tz")))
+            stamps.append(str(m.get("created_at") or ""))
     # The group's notes (a leader's Board post, a prayer-wall request) at
     # their time among the messages, each a small card with its button.
-    gnotes = cv.get("notes") or []
-    if gnotes:
+    if gnotes and not lumen:
         import member_portal_threads as mpt
         merged = sorted([(st, 1, h) for st, h in zip(stamps, items)] +
                         [(str(n.get("created_at") or ""), 0, mpt.note_card(n, cv.get("notes_tz") or timezone.utc,
@@ -1537,14 +1631,23 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         said = "Add a photo, poll or prayer" if pics_ok else "Add a poll or a prayer" if cv.get("extras") else "Add a prayer"
         plus = (f'<details class="gc-tray"><summary aria-label="{said}">{_ic("plus", 20)}</summary>'
                 f'<div class="gc-tray-in">{"".join(tray)}</div></details>' if tray else "")
-        compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
-                   f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
-                   f'<div class="gc-row">{plus}<label class="mp-sr" for="gc-say">Message the group</label>'
-                   f'<input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
-                   f'placeholder="Message {_e(g.get("name") or "the group")}">'
-                   f'<button class="gc-send" type="submit" aria-label="Send">{_ic("send", 18)}</button></div>'
-                   f'<p class="gc-safe">{_ic("shield", 13)}<span>Kind words only. Every message is checked before it’s delivered.</span></p>'
-                   f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
+        if lumen:
+            import member_lumen_people as lp
+            compose = (f'<form class="gc-compose lm-cmp" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
+                       f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
+                       f'<div class="gc-row">{plus}<label class="mp-sr" for="gc-say">Message the group</label>'
+                       f'<span class="lm-cfield"><input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
+                       f'placeholder="Message {_e(g.get("name") or "the group")}">{lp.send_button("gc-send")}</span></div>'
+                       f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
+        else:
+            compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
+                       f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
+                       f'<div class="gc-row">{plus}<label class="mp-sr" for="gc-say">Message the group</label>'
+                       f'<input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
+                       f'placeholder="Message {_e(g.get("name") or "the group")}">'
+                       f'<button class="gc-send" type="submit" aria-label="Send">{_ic("send", 18)}</button></div>'
+                       f'<p class="gc-safe">{_ic("shield", 13)}<span>Kind words only. Every message is checked before it’s delivered.</span></p>'
+                       f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
         if cv.get("extras") and request.query_params.get("make") == "poll":
             compose = chat_polls.form(tid, here, g.get("name") or "the group", _alert_toggle(cv), esc=_e, ic=_ic)
         if pics_ok and request.query_params.get("make") == "photo":
@@ -1556,6 +1659,8 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                   "no_birthdate": "Messaging needs your birthdate on your record.",
                   "not_enabled": "Ask the church office to turn on messaging for you."}.get(acc.get("why"), "You can’t post here right now.")
         compose = f'<p class="gs-note">{_e(reason)}</p>'
+    if lumen and not compose.startswith("<form"):
+        compose = f'<div class="lm-cmp">{compose}</div>'
     # New messages show up for everyone, readers of a leaders-only chat too.
     script = chat_script(tid, msgs, len(gnotes), compose_open=can_write and 'id="gc-compose"' in compose)
     # How you hear about it (group_chat_notify), when the church sends notes about messages.
@@ -1565,6 +1670,13 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     if gnotes:
         import member_portal_threads as mpt
         style = f"<style>{mpt.NOTE_CSS}</style>"
+    if lumen:
+        import member_lumen_people as lp
+        safe = (f'<p class="gc-note">{_ic("shield", 14)}<span>Kind words only. Every message is checked before it’s '
+                f'delivered.</span></p>' if can_write else "")
+        return (f'{style}<section class="gc lm-gthread" aria-label="Group chat"><div class="gc-notes lm-tnotes">{notes_html}'
+                f'{safe}{hear}</div><ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>'
+                f'{compose}</section>'), script + lp.days_script("gc-list", "gc-compose")
     return (f'{style}<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
             f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}{hear}</section>'), script
 

@@ -545,6 +545,20 @@ def render_guidelines(biz, site, me) -> str:
 
 
 def render_inbox(biz, site, request, me, rows, requests, family, groups_open) -> str:
+    import member_lumen
+    if member_lumen.page():
+        # The new look (member_lumen_people): one list, newest first, each
+        # with its unread count (no church conversation while church
+        # threads are closed here, and no clock: today's inbox reads none).
+        import member_lumen_people as lp
+        import member_portal_threads as mpt
+
+        def lrow(r):
+            av = lp.group_mark(r["title"]) if r["kind"] != "direct" else lp.face(r.get("photo") or "", r["title"])
+            return lp.inbox_row(f"/my/messages/{r['id']}", av, r["title"], r["preview"], "", r["unread"])
+        return mpt.lumen_inbox_page(biz, site, request, me, rows=[lrow(r) for r in rows], requests=requests,
+                                    start=groups_open, family=family,
+                                    empty="No chats yet. Open one from a group, or start one with someone below.")
     import member_app_ui as ui
     import member_portal_church as mpc
     from member_portal import _e, _shell
@@ -581,11 +595,15 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
 
 
 def _bubble(m: Dict[str, Any], me_id: str, names: Dict[str, str], *, reportable: bool,
-            folks: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+            folks: Optional[Dict[str, Dict[str, Any]]] = None, lumen: bool = False) -> str:
+    """One message. `lumen` (the new look): no name over a private chat's
+    bubbles (the bar says who), and the message's time for the chat's day
+    lines (member_lumen_people.days_script)."""
     from member_portal import _e
     import member_photos as ph
     mine = str(m.get("sender_contact_id")) == str(me_id)
-    who = "" if mine else f'<span class="mb-msg-who">{_e(names.get(str(m.get("sender_contact_id")), "Someone"))}</span>'
+    who = "" if mine or (lumen and folks is None) else \
+        f'<span class="mb-msg-who">{_e(names.get(str(m.get("sender_contact_id")), "Someone"))}</span>'
     if not mine and folks is not None:
         sender = folks.get(str(m.get("sender_contact_id"))) or {}
         who = ph.avatar(sender, show=ph.shown_to_members(sender), cls="mb-msg-av") + who
@@ -593,11 +611,15 @@ def _bubble(m: Dict[str, Any], me_id: str, names: Dict[str, str], *, reportable:
     report = (f'<form method="post" action="/my/messages/report" class="mb-report"><input type="hidden" name="message_id" '
               f'value="{_e(m["id"])}"><button type="submit" class="mb-report-btn">Report</button></form>'
               if reportable and not mine and m["status"] == "delivered" else "")
-    return (f'<li class="mb-msg{" mb-mine" if mine else ""}{" has-av" if not mine and folks is not None else ""}" data-id="{_e(m["id"])}">{who}'
+    stamp = f' data-at="{_e(m.get("created_at"))}"' if lumen and m.get("created_at") else ""
+    return (f'<li class="mb-msg{" mb-mine" if mine else ""}{" has-av" if not mine and folks is not None else ""}" data-id="{_e(m["id"])}"{stamp}>{who}'
             f'<span class="mb-msg-body">{_e(m["body"])}</span>{held}{report}</li>')
 
 
 def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, viewing_as: str = "") -> str:
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_chat(biz, site, request, me, t, acc, msgs, looks, title=title, viewing_as=viewing_as)
     import member_app_ui as ui
     import member_portal_church as mpc
     from member_portal import _e, _shell
@@ -649,6 +671,72 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
 {mpc._flash(request)}{note}
 <ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Messages">{body_msgs}</ul>
 {actions}{compose}</div>""", tab="messages", who=me, script=script, bar=False, back=("/my/messages", "Messages"))
+
+
+CANT_SEND = {"two_adults": "This chat opens once two adult leaders of the group can message.",
+             "teen_adult": "Private messages between a teen and an adult who isn't their parent aren't allowed. Talk in your group chat instead.",
+             "recipient_off": "You can't message this person right now.",
+             "declined": "You ignored this request.",
+             "no_birthdate": "Messaging needs your birthdate on your record.",
+             "not_enabled": "Ask the church office to turn on messaging for you."}
+
+
+def _lumen_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, viewing_as: str = "") -> str:
+    """A chat in the new look (member_lumen_people): the person's face and
+    name in the bar, bubbles (yours on the right), a line for each day, and
+    the box at the foot. Same notices, same rules, same reads as
+    render_chat; the form, list, box and error ids are instant send's."""
+    import member_lumen_people as lp
+    import member_photos as ph
+    import member_portal_church as mpc
+    from member_portal import _e, _shell
+    folks = acc["people"]
+    names = {i: first_and_initial(p.get("name")) for i, p in folks.items()}
+    parent = acc["role"] == "parent"
+    notices = []
+    if parent:
+        notices.append(f"You're reading {_e(viewing_as)}'s chat as their parent. You can't post here.")
+    elif rules.is_teen(folks.get(str(me["id"]), {})):
+        notices.append("Your linked parents can read this chat.")
+    elif acc.get("teen_in_chat"):
+        notices.append("A teen is in this chat; their linked parents can read it.")
+    if looks:
+        notices.append("A church safety officer reviewed this chat on " + _days(x["created_at"] for x in looks) + ".")
+    tools = ""
+    if not parent and t["kind"] == "direct" and acc.get("other"):
+        tools = (f'<form method="post" action="/my/messages/{_e(t["id"])}/block">'
+                 f'<button class="mp-link" type="submit">Block {_e(first_and_initial(acc["other"]["name"]))}</button></form>')
+    top = (f'<div class="lm-tnotes">{"".join(f"<p>{n}</p>" for n in notices)}{tools}</div>' if notices or tools else "")
+    group = t["kind"] == "group"
+    body_msgs = "".join(_bubble(m, me["id"], names, reportable=not parent, folks=folks if group else None, lumen=True)
+                        for m in msgs) or '<li class="mb-chat-empty mp-muted">No messages yet.</li>'
+    compose = ""
+    if not parent:
+        if acc.get("me_state") == "requested":
+            compose = (f'<div class="lm-cmp"><div class="mb-request"><p>{_e(title)} wants to message you.</p>'
+                       f'<form method="post" action="/my/messages/{_e(t["id"])}/accept"><button class="lm-btn sm" type="submit">Accept</button></form>'
+                       f'<form method="post" action="/my/messages/{_e(t["id"])}/decline"><button class="lm-txtbtn" type="submit">Ignore</button></form>'
+                       f'</div></div>')
+        elif acc["can_send"]:
+            compose = (f'<form class="lm-cmp" method="post" action="/my/messages/{_e(t["id"])}/send" id="mb-compose">'
+                       '<label class="mp-sr" for="mb-say">Message</label>'
+                       f'<span class="lm-cbox"><span class="lm-cfield"><input id="mb-say" name="body" maxlength="{BODY_MAX}" '
+                       f'autocomplete="off" placeholder="Message {_e(title)}" required'
+                       f' value="{_e(str(request.query_params.get("say") or "")[:BODY_MAX])}">{lp.send_button()}</span></span>'
+                       '<p class="mb-chat-err mp-err" id="mb-chat-err" role="alert" hidden></p></form>')
+        else:
+            reason = CANT_SEND.get(acc["why"], "You can't post here right now.")
+            compose = f'<div class="lm-cmp">{lp.note(reason)}</div>'
+    other = acc.get("other") or {}
+    if group:
+        av = lp.group_mark(title)
+    else:
+        av = lp.face(ph.src(other) if other and ph.shown_to_members(other) else "", title)
+    script = (chat_script(t["id"], msgs) if not parent else "") + lp.days_script("mb-chat", "mb-compose")
+    return _shell(biz, site, title, f"""<div class="mb-thread">{mpc._flash(request)}{top}
+<ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Messages">{body_msgs}</ul>
+{compose}</div>""", tab="messages", who=me, script=script, bar=False, back=("/my/messages", "Messages"),
+                  lumen_head=lp.thead(av, title, "Read only" if parent else ""))
 
 
 def _poll_script(tid: str, count: int) -> str:

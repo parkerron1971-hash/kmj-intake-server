@@ -650,7 +650,8 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
-           wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", "")) -> str:
+           wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
+           lumen_head: str = "") -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -668,7 +669,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     church's colours (member_app_ui.head); `inline_css` puts the whole
     sheet in the page instead (the offline page, kept for no connection).
     `lumen_bar` = (middle, right): more in a pushed page's bar under the
-    new look (the reader's chapter and Aa); today's look ignores it."""
+    new look (the reader's chapter and Aa); today's look ignores it.
+    `lumen_head` (a conversation in the new look: member_lumen_people.thead)
+    is its face and name in the bar at the top; today's look ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
     from public_form_theme import resolve_theme, css_vars
@@ -732,7 +735,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     if signed_in and member_lumen.page():
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
-            word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar)
+            word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -810,7 +813,7 @@ def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Option
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
                  who: Optional[Dict[str, Any]], back: Optional[Tuple[str, str]], bare: bool, bar: bool,
                  ctx: Dict[str, Any], name: str, logo: str, word: str, avatar: str, side: Tuple[str, str],
-                 body_cls: str, extra: Tuple[str, str] = ("", "")) -> Tuple[str, str, str, str]:
+                 body_cls: str, extra: Tuple[str, str] = ("", ""), head: str = "") -> Tuple[str, str, str, str]:
     """The new look's frame for one page (member_lumen_ui): (top bar, body
     class attribute, tab bar, scroll script).
 
@@ -822,13 +825,24 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
     pushed: a plain back bar, its own back link or, with none, Back to the
     tab it was opened over (the browser's history; Home without it).
     `extra` = (middle, right) puts more in a pushed page's bar: the reader's
-    chapter in the middle (instead of the title that slides in) and its Aa."""
+    chapter in the middle (instead of the title that slides in) and its Aa.
+    A conversation (`head`: member_lumen_people.thead) has its face and name
+    in the middle of the bar and a plain back arrow, which goes back in the
+    browser's history when the page before was ours (else to its link)."""
     import member_lumen
     import member_lumen_ui as lm
     import member_portal_messaging as mpm
     import member_portal_threads as mpt
     import member_spaces as msp
-    main = tab in lm.MAIN and not back
+    main = tab in lm.MAIN and not back and not head
+    if head:
+        href, label = back or ("/my/messages", "Messages")
+        top = "" if bare else (
+            f'<header class="mb-top lm-tbar"><div class="mb-top-l"><a class="mb-back" href="{_e(href)}" data-back '
+            f'aria-label="{_e(label)}">{lm.ic("back", 24)}</a></div>{head}<span class="mb-top-right"></span></header>')
+        names = re.findall(r'class="([^"]*)"', body_cls)
+        cls = " ".join(["lm", "lm-push", "lm-thread"] + (names[0].split() if names else []))
+        return top, f' class="{cls}"', "", ("" if bare else lm.SCROLL_JS)
     if main:
         if tab == "home" and msp.switcher(ctx, name):
             left = msp.switcher(ctx, name)

@@ -352,13 +352,17 @@ def home_card(biz: Dict[str, Any], got: Optional[Dict[str, Any]]) -> str:
 # ─── Pages ────────────────────────────────────────────────────────────
 
 
-def _church_av(biz: Dict[str, Any], site) -> str:
-    import member_app_ui as ui
+def _logo(biz: Dict[str, Any], site) -> str:
     try:
         from public_form_theme import resolve_theme
-        logo = resolve_theme(biz, site).get("logo_url") or ""
+        return resolve_theme(biz, site).get("logo_url") or ""
     except Exception:
-        logo = ""
+        return ""
+
+
+def _church_av(biz: Dict[str, Any], site) -> str:
+    import member_app_ui as ui
+    logo = _logo(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
     inner = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
     return f'<span class="ct-av is-church" aria-hidden="true">{inner}</span>'
@@ -394,6 +398,10 @@ def render_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
     count), then private chats. `gate`: why the member's chats aren't open
     ('off' when the church's chats are off); then only the church and the
     groups, each group opening its notes."""
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_messages(biz, site, request, me, got=got, groups=groups, zone=zone, gate=gate, chats=chats,
+                               requests=requests, start=start, family=family)
     import member_app_ui as ui
     import member_portal_church as mpc
     import member_portal_messaging as mpm
@@ -472,6 +480,99 @@ def render_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
     return _shell(biz, site, "Messages", "".join(body), tab="messages", who=me)
 
 
+def _group_line(g: Dict[str, Any], chat: Dict[str, Any], note: Dict[str, Any], zone) -> Tuple[str, Optional[datetime]]:
+    """A group's row: its chat's last line or its notes' newest, whichever
+    came last, and when."""
+    gname = str(g.get("name") or "Your group")
+    nl = note.get("last")
+    chat_at = _at(chat.get("at"), zone) if chat.get("at") else None
+    note_at = _at(nl.get("created_at"), zone) if nl else None
+    if chat_at and (not note_at or chat_at >= note_at):
+        return str(chat.get("preview") or ""), chat_at
+    if note_at:
+        return preview(nl, gname), note_at
+    return "No messages yet", None
+
+
+def _lumen_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], *,
+                    got: Dict[str, Dict[str, Any]], groups: List[Dict[str, Any]], zone, gate: Optional[str],
+                    chats: Optional[List[Dict[str, Any]]], requests: Optional[List[Dict[str, Any]]],
+                    start: Optional[List[Dict[str, Any]]], family: Optional[List[Dict[str, Any]]]) -> str:
+    """Messages in the new look (member_lumen_people): the church's
+    conversation pinned first, then every chat newest first (the groups,
+    the leaders' room, private chats), each with its unread count; the same
+    rows and the same doors as render_messages, read the same way."""
+    import member_lumen_people as lp
+    name = (biz.get("name") or "").strip() or "Your church"
+    church = got.get(ct.CHURCH) or {"last": None, "unread": 0}
+    last = church.get("last")
+    pinned = lp.inbox_row(CHURCH_PAGE, lp.church_mark(name, _logo(biz, site)), name,
+                          preview(last, name) or "Write to the church office",
+                          when_short((last or {}).get("created_at"), zone) if last else "", church["unread"],
+                          pin="From your church")
+    open_chats = gate is None
+    chat_rows = (chats or []) if open_chats else []
+    by_group = {str(r.get("group_id") or "").lower(): r for r in chat_rows if r.get("kind") == "group"}
+
+    def when(at: Optional[datetime]) -> str:
+        return when_short(at.isoformat(), zone) if at else ""
+    items: List[Tuple[Optional[datetime], str, str]] = []
+    for g in groups:
+        gid = str(g["id"]).lower()
+        gname = str(g.get("name") or "Your group")
+        chat = by_group.get(gid) or {}
+        note = got.get(f"group:{gid}") or {}
+        line, at = _group_line(g, chat, note, zone)
+        href = (f"/my/groups/{gid}/chat" if open_chats and g.get("chat_on") is not False
+                else f"/my/inbox/group/{gid}")
+        unread = int(chat.get("unread") or 0) + int(note.get("unread") or 0)
+        items.append((at, gname, lp.inbox_row(href, lp.group_mark(gname), gname, line, when(at), unread)))
+    for r in chat_rows:
+        at = _at(r.get("at"), zone) if r.get("at") else None
+        if r.get("kind") == "leaders":
+            items.append((at, r["title"], lp.inbox_row("/my/groups/leaders", lp.group_mark(r["title"]), r["title"],
+                                                       str(r.get("preview") or ""), when(at), int(r.get("unread") or 0))))
+        elif r.get("kind") == "direct":
+            items.append((at, r["title"], lp.inbox_row(f"/my/messages/{r['id']}", lp.face(r.get("photo") or "", r["title"]),
+                                                       r["title"], str(r.get("preview") or ""), when(at),
+                                                       int(r.get("unread") or 0))))
+    asked = (requests or []) if open_chats else []
+    return lumen_inbox_page(biz, site, request, me, rows=[pinned] + _newest_first(items), requests=asked,
+                            gate=gate, start=start if open_chats else None, family=family if open_chats else None)
+
+
+def lumen_inbox_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], *, rows: List[str],
+                     requests: List[Dict[str, Any]], gate: Optional[str] = None,
+                     start: Optional[List[Dict[str, Any]]] = None,
+                     family: Optional[List[Dict[str, Any]]] = None, empty: str = "") -> str:
+    """The inbox page in the new look, from its rows (member_lumen_people
+    .inbox_row): the heading, chat requests, the rows (or `empty`), then
+    Start a chat and Your teens. member_portal_messaging.render_inbox uses
+    it too."""
+    import member_lumen_people as lp
+    import member_lumen_ui as lm
+    import member_photos as ph
+    import member_portal_church as mpc
+    import member_portal_messaging as mpm
+    from member_portal import _shell
+    body = [mpc.connect_head(biz, "messages"), mpc._flash(request)]
+    if gate and gate != "off":
+        words = GATE_WORDS.get(gate, "Chats aren't open to you right now.")
+        go = ('<a class="lm-btn sm" href="/my/messages?join=1">Read the guidelines</a>' if gate == "guidelines" else "")
+        body.append(f'<div class="lm-req lm-gate"><p class="lm-reqt">{_e(words)}</p>{go}</div>')
+    body.extend(lp.request_row(r["id"], lp.face(r.get("photo") or "", r["title"]), r["title"]) for r in requests)
+    body.append(lp.inbox(rows) if rows else lp.note(empty))
+    if start:
+        body.append(lm.section("Start a chat") + '<div class="lm-list">' + "".join(
+            lm.row(f"/my/messages/to/{p['id']}", lp.face("", p["name"]), mpm.first_and_initial(p["name"]), p["why"])
+            for p in start) + '</div>')
+    if family:
+        body.append(lm.section("Your teens") + '<div class="lm-list">' + "".join(
+            lm.row(f"/my/messages/family/{t['id']}", lp.face(ph.src(t), t["name"]), t["name"], "Read their chats")
+            for t in family) + '</div>')
+    return _shell(biz, site, "Messages", "".join(body), tab="messages", who=me)
+
+
 def _active_groups(business_id: str, group_ids: List[str]) -> Optional[List[Dict[str, Any]]]:
     if not group_ids:
         return []
@@ -540,9 +641,10 @@ def chat_notes(biz: Dict[str, Any], me_id: str, group_id: str, msgs: Optional[Li
         return []
 
 
-def note_card(r: Dict[str, Any], zone, group_name: str = "") -> str:
+def note_card(r: Dict[str, Any], zone, group_name: str = "", *, lumen: bool = False) -> str:
     """One of the group's notes as a small card in its chat, at its time,
-    with the button to what it's about."""
+    with the button to what it's about. `lumen` (the new look) gives it its
+    time for the chat's day lines (member_lumen_people.days_script)."""
     import member_app_ui as ui
     url = str(r.get("url") or "")
     path = re.split(r"[?#]", url, maxsplit=1)[0]
@@ -556,7 +658,8 @@ def note_card(r: Dict[str, Any], zone, group_name: str = "") -> str:
             if url.startswith("/my/") and not ct.is_inbox_url(url) else "")
     title = f'<strong>{_e(t)}</strong>' if t else ""
     body = f'<p>{_e(r.get("body") or "")}</p>' if r.get("body") else ""
-    return (f'<li class="gc-nc" id="n-{_e(r.get("id"))}"><div class="gc-nc-in"><span class="gc-nc-k"><span>{_e(kind)}</span>{at}</span>'
+    stamp = f' data-at="{_e(r.get("created_at"))}"' if lumen and r.get("created_at") else ""
+    return (f'<li class="gc-nc" id="n-{_e(r.get("id"))}"{stamp}><div class="gc-nc-in"><span class="gc-nc-k"><span>{_e(kind)}</span>{at}</span>'
             f'{title}{body}{link}</div></li>')
 
 
@@ -584,7 +687,10 @@ def notes_section(rows: List[Dict[str, Any]], zone, group_name: str) -> str:
     return (f'<style>{NOTE_CSS}</style><section aria-label="Group news" style="margin-top:16px">'
             f'<ul class="gc-list">{cards}</ul></section>')
 
-def _bubble(r: Dict[str, Any], zone, said_by: str = "") -> str:
+def _bubble(r: Dict[str, Any], zone, said_by: str = "", av: str = "") -> str:
+    """One message in the conversation. `av` (the new look) is the face
+    the church's notes and the office's replies sit beside; a member's own
+    message is drawn the same either way (instant send draws it too)."""
     import member_app_ui as ui
     d = _at(r.get("created_at"), zone)
     at = f'<span class="ct-at">{_e(_clock(d))}</span>' if d else ""
@@ -594,6 +700,9 @@ def _bubble(r: Dict[str, Any], zone, said_by: str = "") -> str:
         return f'<li class="mb-msg mb-mine"><span class="mb-msg-body">{body}</span>{held}{at}</li>'
     if r.get("kind") == "reply":
         who = _e(r.get("author_name") or "The office")
+        if av:
+            return (f'<li class="mb-msg lm-them">{av}<div class="lm-note"><span class="lm-who">{who}</span>'
+                    f'<span class="mb-msg-body">{body}</span>{at}</div></li>')
         return (f'<li class="mb-msg"><span class="mb-msg-who">{who}</span>'
                 f'<span class="mb-msg-body">{body}</span>{at}</li>')
     t = str(r.get("title") or "")
@@ -605,17 +714,19 @@ def _bubble(r: Dict[str, Any], zone, said_by: str = "") -> str:
     if url.startswith("/my/") and not ct.is_inbox_url(url):
         link = f'<a class="ct-open" href="{_e(url)}">{_e(link_word(url))}{ui.icon("chevron", 14)}</a>'
     text = f'<span class="mb-msg-body">{body}</span>' if body else ""
+    if av:
+        return f'<li class="mb-msg ct-note lm-them">{av}<div class="lm-note">{title}{text}{link}{at}</div></li>'
     return f'<li class="mb-msg ct-note">{title}{text}{link}{at}</li>'
 
 
-def _bubbles(rows: List[Dict[str, Any]], zone, empty: str, said_by: str = "") -> str:
+def _bubbles(rows: List[Dict[str, Any]], zone, empty: str, said_by: str = "", av: str = "") -> str:
     out, day = [], None
     for r in rows:
         d = _at(r.get("created_at"), zone)
         if d is not None and d.date() != day:
             day = d.date()
             out.append(f'<li class="mb-msg ct-day" role="separator">{_e(day_label(d))}</li>')
-        out.append(_bubble(r, zone, said_by))
+        out.append(_bubble(r, zone, said_by, av))
     return "".join(out) or f'<li class="mb-chat-empty mp-muted">{_e(empty)}</li>'
 
 
@@ -655,6 +766,9 @@ def church_script() -> str:
 
 def render_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                   rows: List[Dict[str, Any]], zone) -> str:
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_church(biz, site, request, me, rows, zone)
     import member_app_ui as ui
     from member_portal import _shell
     name = (biz.get("name") or "").strip() or "Your church"
@@ -671,8 +785,55 @@ def render_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any
                   script=church_script())
 
 
+def _lumen_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
+                  rows: List[Dict[str, Any]], zone) -> str:
+    """The church's conversation in the new look (member_lumen_people): the
+    church's mark and name in the bar ("The church office"), its notes and
+    the office's replies as cards beside its mark, yours on the right, a
+    line for each day, and the box at the foot. The form, list, box and
+    error ids are instant send's (church_script)."""
+    import member_lumen_people as lp
+    from member_portal import _shell
+    name = (biz.get("name") or "").strip() or "Your church"
+    logo = _logo(biz, site)
+    chat = _bubbles(rows, zone, f"Notes from {name} show up here. You can write to the church office below.", name,
+                    av=lp.church_mark(name, logo))
+    compose = (f'<form class="ct-compose lm-cmp" method="post" action="{CHURCH_PAGE}/send" id="ct-compose">'
+               '<label class="mp-sr" for="ct-say">Message the church office</label>'
+               f'<span class="lm-cbox"><span class="lm-cfield"><textarea id="ct-say" name="body" rows="1" '
+               f'maxlength="{ct.BODY_MAX}" required placeholder="Message the church office"></textarea>'
+               f'{lp.send_button()}</span></span>'
+               '<p class="lm-cfine">Goes to the church office. It isn&#x27;t posted anywhere.</p></form>')
+    body = (f'<div class="mb-thread">{_flash(request)}<ul class="mb-chat ct-chat" id="ct-chat" aria-label="Messages">'
+            f'{chat}</ul>{compose}</div>')
+    return _shell(biz, site, name, body, tab="messages", who=me, bar=False, back=("/my/messages", "Messages"),
+                  script=church_script() + lp.BOTTOM_JS,
+                  lumen_head=lp.thead(lp.church_mark(name, logo), name, "The church office"))
+
+
+def _lumen_group_notes(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any], rows: List[Dict[str, Any]],
+                       zone, chat_open: bool) -> str:
+    """A group's notes in the new look (while its chat isn't open to the
+    member): the group's mark and name in the bar, its notes as cards
+    beside the mark, and the door to its chat when it opens to them."""
+    import member_lumen_people as lp
+    from member_portal import _shell
+    name = g.get("name") or "Your group"
+    chat = _bubbles(rows, zone, "Your group's news shows up here: a leader's posts and prayer requests.", name,
+                    av=lp.group_mark(name))
+    link = (f'<div class="lm-cmp lm-cdoor"><a class="lm-btn" href="/my/groups/{_e(g["id"])}/chat">Open the group chat</a></div>'
+            if chat_open else "")
+    body = (f'<div class="mb-thread"><ul class="mb-chat ct-chat ct-group" id="ct-chat" aria-label="Notes">{chat}</ul>'
+            f'{link}</div>')
+    return _shell(biz, site, name, body, tab="messages", who=me, bar=False, back=("/my/messages", "Messages"),
+                  script=SCROLL_JS, lumen_head=lp.thead(lp.group_mark(name), name, "Group news"))
+
+
 def render_group(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any], rows: List[Dict[str, Any]],
                  zone, chat_open: bool) -> str:
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_group_notes(biz, site, me, g, rows, zone, chat_open)
     import member_app_ui as ui
     from member_portal import _shell
     name = g.get("name") or "Your group"
