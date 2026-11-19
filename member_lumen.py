@@ -162,13 +162,19 @@ BELL: contextvars.ContextVar[bool] = contextvars.ContextVar("member_lumen_bell",
 
 
 def bell_dot(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> bool:
-    """Whether the bell at the top shows a dot: something new in the
-    member's alerts. No dot until the bell's recent-alerts list lands: its
-    alerts_unseen(biz, me) answers here. serve() runs it in a thread beside
-    the church, session and unread reads, for a member who sees the new look
-    only; still, keep its answer a short while (member_cache style) so it
-    isn't a read on every page."""
-    return False
+    """Whether the bell at the top shows a dot: something arrived in the
+    member's alerts since they last opened them (member_alerts.alerts_unseen:
+    kept 45 s per member, so it isn't a read on every page; False while
+    MEMBER_ALERTS_LIST is off or the last look can't be kept). serve() runs
+    it in a thread beside the church, session and unread reads, for a member
+    who sees the new look only. Never raises."""
+    if not me or not me.get("id"):
+        return False
+    try:
+        import member_alerts
+        return bool(member_alerts.alerts_unseen(dict(biz or {}), me["id"]))
+    except Exception:
+        return False
 
 
 def new_here_card(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> str:
