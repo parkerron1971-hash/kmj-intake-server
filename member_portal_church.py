@@ -832,6 +832,9 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
 
 def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str, Any]]],
                   who: Optional[Dict[str, Any]] = None) -> str:
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_events(biz, site, request, occasions, who)
     import member_app_ui as ui
     from member_portal import _shell
     if occasions is None:
@@ -854,6 +857,102 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
 {_flash(request)}
 {body}""", tab="events", who=who, back=("/my", "Home"), wide=True)
+
+
+def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str, Any]]],
+                  who: Optional[Dict[str, Any]]) -> str:
+    """Coming up in the new look (member_lumen_people): "Coming up" in the
+    serif, then each occasion as a row with its day in the margin, the same
+    answers and the same forms as today's cards (_lumen_occasion)."""
+    import member_app_ui as ui
+    import member_lumen_people as lp
+    import member_lumen_ui as lm
+    from member_portal import _shell
+    church = (biz.get("name") or "").strip() or "your church"
+    if occasions is None:
+        body = lp.note("What's coming up couldn't load just now. Please try again in a moment.", err=True)
+    elif not occasions:
+        body = lp.note("Nothing is on the calendar yet. Check back soon.")
+    else:
+        import member_app_samples as samples
+        hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
+        body = hint + '<div class="lm-evs">' + "".join(_lumen_occasion(o) for o in occasions) + "</div>"
+        if any(o.get("signup") for o in occasions):
+            import church_event_signups
+            body = church_event_signups.MEMBER_CSS + body
+    head = lm.mast(f"At {church}", "Coming <em>up</em>", "Let the church know you're coming, or sign up to serve.")
+    return _shell(biz, site, "Coming up", f"{head}{_flash(request)}{body}", tab="events", who=who)
+
+
+def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events") -> str:
+    """One occasion in the new look: its day in the margin (the weekday and
+    month small in coral, the date in the serif), what and where, then what
+    fits this person's answer, posting the same forms occasion_card posts
+    (I'm coming, You're coming, Just attend instead, Can't make it), and
+    "Sign up to serve" opening the roles still open. Nothing offered can
+    only fail, as there: a full occasion offers neither."""
+    import member_app_samples as samples
+    import member_app_ui as ui
+    import member_lumen_people as lp
+    from member_portal import _e
+    eid = _e(o.get("entry_id"))
+    title_id = f"mp-occ-{eid}"
+    d = _day(o.get("date") or "")
+    when = (f'<div class="lm-evd" aria-hidden="true"><small>{d.strftime("%a")} · {d.strftime("%b")}</small>'
+            f'<b>{d.day}</b></div>') if d else '<div class="lm-evd" aria-hidden="true"></div>'
+    facts = [o.get("location") or ""]
+    if o.get("capacity") is not None and not o.get("signup"):
+        facts.append("Full" if o.get("full") else f"{o.get('spots_left')} places left")
+    facts_html = " · ".join(_e(x) for x in facts if x)
+    label = _e(o.get("date_label") or "")
+    line = (f'<p class="lm-evp"><span class="mp-sr">{label}{" · " if facts_html else ""}</span>{facts_html}</p>'
+            if facts_html or label else "")
+    mine = o.get("mine") or {}
+    coming = bool(mine) and mine.get("status") == "yes"
+    serving_role = mine.get("role") if coming else None
+    can_join = coming or not o.get("full")
+    hidden = f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="back" value="{_e(back)}">'
+    about = f'aria-describedby="{title_id}"'
+
+    def act(action: str, text: str, cls: str) -> str:
+        return (f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="{action}">'
+                f'<button class="{cls}" type="submit" {about}>{text}</button></form>')
+    signup = ""
+    if o.get("signup"):
+        import church_event_signups
+        signup = church_event_signups.member_block(o, _e)
+        coming = True
+    row = []
+    if serving_role:
+        role = next((r["label"] for r in o.get("roles") or [] if r.get("id") == serving_role), "serving")
+        row.append(f'<span class="lm-btn sm going">{lp.ic("check", 15)}Serving: {_e(role)}</span>')
+        if can_join:
+            row.append(act("coming", "Just attend instead", "lm-txtbtn"))
+    elif coming and not signup:
+        row.append(f'<span class="lm-btn sm going">{lp.ic("check", 15)}You&#x27;re coming</span>')
+    elif not coming and can_join:
+        row.append(act("coming", "I&#x27;m coming", "lm-btn sm"))
+    elif not coming:
+        row.append('<span class="lm-btn sm going">Full</span>')
+    if mine.get("status") != "no" and (not signup or serving_role):
+        row.append(act("cant", "Can&#x27;t make it", "lm-txtbtn"))
+    said = {"no": "You said you can&#x27;t make it.", "maybe": "You said maybe."}.get(mine.get("status") or "", "")
+    serve = ""
+    open_roles = [r for r in o.get("roles") or [] if not r.get("full") and r.get("id") != serving_role]
+    if open_roles and can_join:
+        opts = "".join(f'<option value="{_e(r["id"])}">{_e(r["label"])} — {r["needed"] - r["filled"]} needed</option>'
+                       for r in open_roles)
+        serve = (f'<details class="lm-serve"><summary>Sign up to serve{lp.ic("chevron", 15)}</summary>'
+                 f'<form method="post" action="/my/rsvp" class="lm-serveform">{hidden}<input type="hidden" name="action" value="serve">'
+                 f'<label class="mp-sr" for="mp-role-{eid}">Role to serve in</label>'
+                 f'<select id="mp-role-{eid}" name="role">{opts}</select>'
+                 f'<button class="lm-btn sm" type="submit" {about}>Serve</button></form></details>')
+    sample = ui.sample_tag() if samples.is_sample(o) else ""
+    said_html = f'<p class="lm-evst">{said}</p>' if said else ""
+    row_html = f'<div class="lm-evrow">{"".join(row)}</div>' if row else ""
+    return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt">'
+            f'<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
+            f'{row_html}{serve}</div></article>')
 
 
 def _agenda_row(o: Dict[str, Any]) -> str:
@@ -909,6 +1008,9 @@ def month_card(occasions: List[Dict[str, Any]], today: Optional[date] = None) ->
 
 
 def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:
+    import member_lumen
+    if member_lumen.page():
+        return _lumen_prayer(biz, site, request, who)
     from member_portal import _e, _shell
     church = _e(biz.get("name") or "the church")
     youth = request.query_params.get("for") == "youth"
@@ -929,6 +1031,55 @@ def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = N
   <label class="mp-check" style="margin:6px 0 8px"><input type="checkbox" name="wants_call" value="yes"> I’d like someone to call me</label>'''}
   <button class="mp-go" type="submit">Send</button>
 </form>""", tab="prayer", who=who, back=("/my", "Home"))
+
+
+# The new look's word once a request is in (the prayer page's own answer,
+# ?done=prayer&s=...): who will see it, nothing more.
+PRAYED = {"team": "Our prayer team may pray over it with you too. Nothing is ever posted.",
+          "pastors": "Only your pastors will see it. Nothing is ever posted.",
+          "youth": "It went privately to the pastors. It isn&#x27;t posted anywhere."}
+
+
+def _lumen_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]]) -> str:
+    """Prayer in the new look (member_lumen_people): the flame, "How can we
+    pray for you?" in the serif, the request written in the serif's italic,
+    who prays with you as two cards (the same radio buttons, still none
+    chosen for them), the call box, and Send to the pastors. Once sent the
+    page itself answers ("Your pastors have it."): its form asks for that
+    (then=prayer); the route still saves exactly as before."""
+    import member_lumen_people as lp
+    import member_lumen_ui as lm
+    from member_portal import _e, _shell
+    church = _e(biz.get("name") or "the church")
+    q = request.query_params
+    if q.get("done") == "prayer":
+        line = PRAYED.get(q.get("s") or "", _e(DONE["prayer"]))
+        body = (f'<section class="lm-sent" aria-labelledby="lm-sent-h"><span class="lm-pring">{lp.ic("check", 30)}</span>'
+                f'<h1 class="lm-disp s" id="lm-sent-h">Your pastors <em>have it.</em></h1><p>{line}</p>'
+                f'<a class="lm-btn ghost" href="/my">Done</a></section>')
+        return _shell(biz, site, "Prayer", body, tab="prayer", who=who)
+    youth = q.get("for") == "youth"
+    title = "Talk to a youth <em>leader</em>" if youth else "How can we <em>pray</em> for you?"
+    sub = (f"Your request goes privately to the pastors at {church}. It isn’t posted anywhere or shared with other members."
+           if youth else f"The pastors at {church} see every request. If you choose, our prayer team prays over it with "
+           "you too. Nothing is ever posted.")
+    choice = ('' if youth else
+              '<fieldset class="lm-choice"><legend class="lm-kicker">Who prays with you?</legend>'
+              '<label class="lm-ch"><input type="radio" name="share" value="team" required>'
+              '<b>Prayer team too</b><span>Our prayer team may pray over this with you</span></label>'
+              '<label class="lm-ch"><input type="radio" name="share" value="pastors">'
+              '<b>Pastors only</b><span>Keep this with the pastors</span></label></fieldset>'
+              '<label class="lm-check"><input type="checkbox" name="wants_call" value="yes">I’d like someone to call me</label>')
+    for_youth = '<input type="hidden" name="for" value="youth">' if youth else ""
+    body = (f'<header class="lm-mast"><p class="lm-eyebrow lm-flame"><i>{lm.ic("flame", 15)}</i>Prayer</p>'
+            f'<h1 class="lm-disp m">{title}</h1><p class="lm-sub">{sub}</p></header>{_flash(request)}'
+            f'<form class="lm-pform" method="post" action="/my/prayer">{for_youth}'
+            f'<input type="hidden" name="then" value="prayer">'
+            f'<label class="mp-sr" for="mp-prayer">Your prayer request</label>'
+            f'<textarea class="lm-ta" id="mp-prayer" name="request" rows="7" maxlength="{PRAYER_MAX}" '
+            f'placeholder="Write it the way you’d say it…" required></textarea>{choice}'
+            f'<button class="lm-btn block" type="submit">{"Send" if youth else "Send to the pastors"}</button></form>')
+    return _shell(biz, site, "Prayer", body, tab="prayer", who=who)
 
 
 def render_details(biz, site, request: Request, me: Dict[str, Any], directory: str = "") -> str:
@@ -1229,6 +1380,11 @@ async def prayer(request: Request):
     ok = await asyncio.to_thread(save_prayer, church["business"]["id"], full, text,
                                  str(form.get("share") or "") != "team", str(form.get("for") or "") == "youth",
                                  str(form.get("wants_call") or "") == "yes")
+    if ok and not as_json and str(form.get("then") or "") == "prayer":
+        # The new look's prayer page answers on its own page (_lumen_prayer).
+        said = ("youth" if str(form.get("for") or "") == "youth"
+                else "team" if str(form.get("share") or "") == "team" else "pastors")
+        return _back("/my/prayer", done="prayer", s=said)
     return answer(True, "prayer") if ok else answer(False, "error", 503)
 
 
