@@ -101,6 +101,12 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
     if not cur:
         # Between services: a designed screen (the church's photo or its
         # art), then what's next, the latest message, the verse, prayer.
+        import member_lumen
+        if member_lumen.page():
+            import member_lumen_give as mlg
+            import member_portal_bible as mpb
+            return mlg.between(biz, site, me, flash=flash, occasions=occasions, library=library,
+                               bible=mpb.prefs(request)[0])
         import member_app_photos as photos
         import member_portal as mp
         import member_portal_bible as mpb
@@ -343,8 +349,12 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
     `pinned` is pinned_row(): the message the team pinned, or None."""
     import live_router as lr
     import member_app_ui as ui
+    import member_lumen
     import member_portal_church as mpc
     from member_portal import _e, _shell
+    # The new look (member_lumen_give): Back and Live · N here on the video,
+    # the count out of the title row, Give in the box beside the heart.
+    lumen = member_lumen.page()
     church = (biz.get("name") or "").strip() or "Your church"
     src = lr.stream_embed(cur.get("stream_url") or "")
     if src:
@@ -370,13 +380,19 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
     if stack:
         stack = f'<span class="lv-stack" aria-hidden="true">{stack}</span>'
     here = (f'<p class="lv-here" id="lv-herewrap"{" hidden" if here_n is None else ""}>'
-            f'{stack}<span><b data-here-n>{here_n or 0}</b> here</span></p>')
+            f'{stack}<span><b data-here-n>{here_n or 0}</b> here</span></p>') if not lumen else ""
     you_are_here = f'<span class="lv-pill is-here" id="lv-here">{ui.icon("check", 17)}You&#x27;re here</span>'
     im_here = (you_are_here if here_me else
                f'<form method="post" action="/my/live/here" id="lv-here"><button class="lv-pill is-go" type="submit">'
                f'{ui.icon("user", 17)}I&#x27;m here</button></form>')
     opens = ' data-sheet="lv-give" aria-haspopup="dialog"' if give else ""
     give_pill = f'<a class="lv-pill" href="/my/give"{opens}>{ui.icon("give", 17)}Give</a>'
+    # In the new look Give sits in the box, beside the heart, while there is one.
+    boxed = lumen and bool(cur.get("chat_open")) and not muted_me
+    box_give = ""
+    if boxed:
+        import member_lumen_give as mlg
+        box_give = mlg.room_give(opens)
     p = pinned or {}
     if p.get("host"):
         p_cls, p_av, p_who = "lv-pin is-host", _HEART.format(s=12), (p["author"] if p["author"] not in ("", "Host") else church)
@@ -403,19 +419,24 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
                 f'placeholder="Say something kind…" required>'
                 f'<button class="lv-send" id="lv-send" type="submit" aria-label="Send a heart">'
                 f'<span class="lv-i-heart">{_HEART.format(s=19)}</span><span class="lv-i-send">{ui.icon("send", 19)}</span></button>'
+                f'{box_give}'
                 f'<div class="lv-hearts" id="lv-hearts" aria-hidden="true"></div></form>'
                 f'<p class="mp-err lv-err" id="mb-chat-err" role="alert" hidden></p></div>')
     empty = '' if rows else '<li class="lv-empty">No messages yet. Say hello.</li>'
     flash = mpc._flash(request)
+    over = ('<div class="lv-over" aria-hidden="true"><span class="lv-live"><i></i>LIVE</span>\n'
+            '<span class="lv-clock" id="lv-clock" hidden></span></div>')
+    if lumen:
+        import member_lumen_give as mlg
+        over = mlg.room_top(here_n)
     body = f"""<style>{ROOM_CSS}</style>
 <div class="lv-room" id="lv-room">
-<div class="lv-stage">{video}<div class="lv-over" aria-hidden="true"><span class="lv-live"><i></i>LIVE</span>
-<span class="lv-clock" id="lv-clock" hidden></span></div></div>
+<div class="lv-stage">{video}{over}</div>
 <div class="lv-info"><div class="lv-t"><h1>{_e(cur.get('title'))}</h1>
 <p>{_e(church)} · <span id="lv-started">Live now</span></p></div>{here}</div>
 <div class="lv-acts">{im_here}
 <a class="lv-pill" href="/my/prayer" data-sheet="lv-prayer" aria-haspopup="dialog">{ui.icon("pray", 17)}Prayer</a>
-{give_pill}</div>
+{"" if boxed else give_pill}</div>
 {_upcoming(occasions)}
 <section class="lv-chat" aria-labelledby="lv-chat-h">
 <h2 class="lv-chat-h" id="lv-chat-h">Live chat<span{" hidden" if here_n is None else ""}>· <b data-here-n>{here_n or 0}</b> here</span></h2>

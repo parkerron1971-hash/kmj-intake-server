@@ -1263,7 +1263,11 @@ def render_give_page(
     phone design 2026-10-14): {"head": the app's fonts and stylesheet,
     "top": its header, "name"/"email": the signed-in member's (the app's
     pages are never cached), "preview": the owner's preview, where Give
-    is refused}. The payment itself is unchanged."""
+    is refused}. The payment itself is unchanged. The member app's new
+    look (member_lumen_give) also passes "form" (its own markup for the
+    form, called like _give_body, with every id and class the script
+    reads), "body" (the body tag's attributes) and "bar" (its top bar,
+    before <main>); without them the page is as it was."""
     name = (business.get("name") or "").strip() or "Give"
     cfg = giving_settings(business.get("settings"))
     funds = configured_funds(cfg)
@@ -1320,9 +1324,9 @@ def render_give_page(
                          f'<link rel="icon" href="{_esc(logo_url)}">')
 
     pay_block, ways_block, ways_css = _ways_blocks(business)
-    body_html = _give_body(preset_btns, fund_block, pay_note,
-                           (app or {}).get("name") or "", (app or {}).get("email") or "",
-                           pay_block=pay_block, ways_block=ways_block)
+    body_html = ((app or {}).get("form") or _give_body)(
+        preset_btns, fund_block, pay_note, (app or {}).get("name") or "", (app or {}).get("email") or "",
+        pay_block=pay_block, ways_block=ways_block)
     script_html = _give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, app=bool(app),
                                preview=bool((app or {}).get("preview")))
     return f"""<!DOCTYPE html>
@@ -1391,8 +1395,8 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
 </style>
 {app["head"] if app else ""}
 </head>
-<body>
-<main class="gv-shell">
+<body{(app or {}).get("body", "")}>
+{(app or {}).get("bar", "")}<main class="gv-shell">
   {header_html}
 {body_html}  <footer class="gv-footer">
     Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
