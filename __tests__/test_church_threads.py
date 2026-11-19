@@ -532,6 +532,11 @@ def test_the_old_inbox_is_messages_now_with_the_church_first_then_my_groups(fake
 def test_the_church_conversation(fake, monkeypatch):
     _seed_conversation(fake)
     c = _app(fake, monkeypatch, ANA)
+    # The church's clock reads mid-afternoon whatever the hour here, so the
+    # notes from three to five hours ago are always "Today" and the one from
+    # a day ago "Yesterday" (on UTC they fell on yesterday after midnight).
+    offset = (14 - NOW.hour + 12) % 24 - 12
+    monkeypatch.setattr(mpt, "_zone", lambda biz: timezone(timedelta(hours=offset)))
     html = c.get("/my/inbox/church").text
     # In time order, with day separators.
     order = [html.index(s) for s in ("Love City Church is live", "Tomorrow: Picnic", "Can I bring my sister?",
