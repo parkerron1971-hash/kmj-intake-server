@@ -119,6 +119,13 @@ def test_the_lumen_sheet_is_a_hashed_immutable_file():
                 assert one.startswith((".lm", "body.lm")), one
 
 
+def test_the_sheet_leaves_headings_their_own_colour():
+    """Today's pages under the new look keep their headings' colours: a
+    title on a dark card (Give before online giving) stays white."""
+    import member_lumen_ui as lm
+    assert not re.search(r"\.lm\s+h[1-6]\s*[,{][^}]*?color", lm.css())
+
+
 def test_the_top_bar_of_a_main_tab(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     top = html[html.index('<header class="mb-top">'):html.index("</header>")]
