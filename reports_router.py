@@ -91,6 +91,15 @@ def _bank_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
     require_ministry_finance(biz, user, biz_row, part="bank")
 
 
+def _pay_records_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
+    """A contractor read (the 1099 summary, the drafts with a taxpayer
+    number's last four): with the giving tick switched on, a login let in
+    only by its tick must hold Work, as on Contractors itself (Kevin,
+    2026-11-19). Switched off this asks nothing new."""
+    import church_money_gate
+    church_money_gate.require_pay_records(biz, user, biz_row)
+
+
 def _givers_hidden(biz: str, user: AuthedUser, data: Dict[str, Any]) -> Dict[str, Any]:
     """Revenue and profitability keep their totals behind the Giving lock;
     only the per-giver rows (by_customer) are left out."""
@@ -366,7 +375,7 @@ def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
 @router.get("/1099-summary")
 def summary_1099(biz: str, year: Optional[int] = None,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_or_reader(biz, user)
+    _pay_records_wall(biz, user, _owner_or_reader(biz, user))
     billing_limits.require_feature(biz, "contractor_payments")
     from datetime import datetime as _dt, timezone as _tz
     y = year or _dt.now(_tz.utc).year
@@ -391,12 +400,13 @@ def drafts_1099(biz: str, year: Optional[int] = None,
     W-9 profile, who's missing one, and whether the payer block is
     filled in. Stripe-managed rows are excluded — Stripe files those."""
     b = _owner_or_reader(biz, user)
+    _pay_records_wall(biz, user, b)
     billing_limits.require_feature(biz, "contractor_payments")
     from datetime import datetime as _dt, timezone as _tz
     y = year or _dt.now(_tz.utc).year
     summary = _summary_1099(biz, y)
 
-    manual = [r for r in summary["rows"]
+    manual =[r for r in summary["rows"]
               if not r.get("stripe_managed") and r.get("reaches_threshold")]
     cids = [r["contractor_id"] for r in manual if r.get("contractor_id")]
     profiles: Dict[str, Dict[str, Any]] = {}
@@ -1075,6 +1085,8 @@ def export(biz: str, report: str, format: str = "csv",
         _bank_wall(biz, user, biz_row)
     if report in ("general_ledger", "audit_trail"):
         _names_wall(biz, user)   # as their screens: the lines can name a giver
+    if report == "summary_1099":
+        _pay_records_wall(biz, user, biz_row)   # as its screen
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     # Exports gate exactly like their screens; Starter reports (P&L,

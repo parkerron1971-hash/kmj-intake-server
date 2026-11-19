@@ -74,11 +74,12 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     row = rows[0]
     # A church's or nonprofit's payroll, contractors and period closes are its
     # books: the money wall is asked first, as the ledger asks it (gl_router).
-    # Any other business isn't asked here.
-    from giving_records import require_ministry_finance
-    # A door asked for more than reading (min_role above "viewer") is about
-    # to change something: a login let in only by a giving tick must hold Work.
-    require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")
+    # Any other business isn't asked here. Contractors carry what was paid and
+    # a taxpayer number's last four, so a login let in only by its giving tick
+    # must hold Work to READ them as well as to change them (Kevin,
+    # 2026-11-19; church_money_gate.require_pay_records).
+    import church_money_gate
+    church_money_gate.require_pay_records(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
     from business_users_router import require_role

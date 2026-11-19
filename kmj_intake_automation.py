@@ -1956,6 +1956,17 @@ async def startup():
                           id="church_money_asks", max_instances=1)
     except Exception as e:
         print(f"   [warn] giving requests sweep not scheduled: {e}")
+    # Payroll reminders (payroll_reminders.py, Payroll the free version):
+    # hourly, three days before an approve-by day, a tax deposit or a form
+    # date that is still open, one alert to whoever works payroll; the day
+    # before, one to the owner. Each is claimed in payroll_reminders_sent
+    # first, so nobody hears it twice. PAYROLL_REMINDERS=off: reads nothing.
+    try:
+        import payroll_reminders as _payroll_reminders
+        scheduler.add_job(g("payroll_reminders", _payroll_reminders.tick), "interval", hours=1,
+                          id="payroll_reminders", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] payroll reminders not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in

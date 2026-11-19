@@ -464,6 +464,26 @@ def require_church_wall(business_id: Any, user: Any, need: str = "see", part: st
     return p
 
 
+PAY_RECORDS_403 = ("Pay and tax records are kept for the owner, an admin, the accountant, or a login the owner gave "
+                   "giving at Work.")
+
+
+def require_pay_records(business_id: Any, user: Any, business: Optional[Dict[str, Any]] = None) -> Pass:
+    """The church wall in front of payroll and contractors, whose pages show
+    pay, Social Security and taxpayer numbers' last four (Kevin, 2026-11-19:
+    "payroll and contractor reads need Work, never See"). It is
+    require_church_wall at "books", except that a login let through only by
+    its giving tick must hold Work there to READ as well as to change. The
+    owner, an Admin and the accountant pass as they always did; any business
+    that is not a church or nonprofit is not asked (by == NOT_ASKED) and the
+    door's own seat ladder decides. With the switch off no tick is ever a
+    standing, so this is exactly the wall as before."""
+    p = require_money(business_id, user, "see", "books", business=business)
+    if p.by in TICKS and not _Facts(business_id, user, None, False, None).ticked(TICK_WORK):
+        raise HTTPException(403, PAY_RECORDS_403)
+    return p
+
+
 def _rule(need: str, part: str) -> Rule:
     rule = RULES.get((part, need))
     if rule is None:
