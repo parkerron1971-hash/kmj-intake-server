@@ -1206,6 +1206,9 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     if sub == "/my/offline":
         return _page(mai.render_offline(biz, site))
     sess = await asyncio.to_thread(_session_for, request, church)
+    # The new look (member_lumen: MEMBER_LUMEN), decided once for this page.
+    import member_lumen
+    await member_lumen.decide(request, {"business": biz, "session": sess})
     if sess and sess.get("me") and not sess.get("unavailable"):
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.
