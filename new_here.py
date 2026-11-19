@@ -724,21 +724,55 @@ def _uuid(v: Any) -> str:
         raise HTTPException(404, "Church not found")
 
 
+def _app_of(person: Dict[str, Any]) -> Dict[str, Any]:
+    """What a member told the church in the member app's "I'm new here"
+    (member_im_new: contacts.metadata.new_here.app), or {}."""
+    app = ((person.get("metadata") or {}).get("new_here") or {}).get("app")
+    return app if isinstance(app, dict) and app.get("at") else {}
+
+
+def _app_card(app: Dict[str, Any]) -> Dict[str, Any]:
+    """The member app's answers in the shape the room reads a card in (kids
+    "None" when they have none, as the card's list says it)."""
+    kids = (app.get("ages") or "Yes") if app.get("kids") == "yes" else "None"
+    return {"first_time": bool(app.get("first_time")), "heard": app.get("heard") or "", "kids": kids,
+            "prayer": bool(app.get("prayer")), "wants": list(app.get("wants") or [])}
+
+
 def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[List[Dict[str, Any]]]:
-    """This week's guests, newest first, with where each one stands. None
-    when it couldn't be read."""
+    """This week's guests, newest first, with where each one stands: the
+    ones who texted the word, and (since 2026-11-19) members who said "I'm
+    new here" in the member app (member_im_new), each with `from` ("text" or
+    "app") and `app_at`. None when it couldn't be read."""
+    import member_im_new
     biz = str(business["id"])
-    since = _iso(_now() - timedelta(days=days))
+    since_dt = _now() - timedelta(days=days)
+    since = _iso(since_dt)
     people = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>texted_at=gte.{_q(since)}"
                    "&select=id,name,phone,metadata&order=updated_at.desc&limit=100")
     if people is None:
         return None
+    # The member app's: a failed read leaves them out, never the list.
+    told = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->app->>at=gte.{_q(since)}"
+                 "&select=id,name,phone,metadata&order=updated_at.desc&limit=100") or []
+    texted_ids = {str(p["id"]) for p in people}
+    app_only = [p for p in told if str(p.get("id")) not in texted_ids
+                and (_parse(_app_of(p).get("at")) or since_dt) > since_dt]
+    people = people + app_only
     if not people:
         return []
     ids = ",".join(_q(p["id"]) for p in people)
     follows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({ids})"
                     f"&card_key=eq.{_q(CARD_KEY)}&select=contact_id,status,step,leader_contact_id,created_at"
                     "&order=created_at.desc") or []
+    if app_only:
+        # The member app's own follow-up first (someone who texted long ago
+        # and has that one open got a note on it instead: it shows then).
+        app_ids = ",".join(_q(p["id"]) for p in app_only)
+        follows = (_rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({app_ids})"
+                         f"&card_key=eq.{_q(member_im_new.CARD_KEY)}"
+                         "&select=contact_id,status,step,leader_contact_id,created_at"
+                         "&order=created_at.desc") or []) + follows
     by_contact: Dict[str, Dict[str, Any]] = {}
     for f in follows:
         by_contact.setdefault(str(f.get("contact_id")), f)
@@ -753,6 +787,8 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
     for p in people:
         mine = (p.get("metadata") or {}).get("new_here") or {}
         card = mine.get("card") if isinstance(mine.get("card"), dict) else None
+        app = _app_of(p)
+        texted = bool(mine.get("texted_at"))
         f = by_contact.get(str(p["id"]))
         reached = bool(f and (f.get("status") == "done" or int(f.get("step") or 0) >= 1))
         out.append({
@@ -760,13 +796,16 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
             "name": "" if text_room.nameless(p.get("name")) else str(p.get("name") or ""),
             "phone_last4": re.sub(r"\D", "", str(p.get("phone") or ""))[-4:],
             "texted_at": mine.get("texted_at"),
-            "card_at": mine.get("card_at"),
-            "card": card,
+            # A member who told the church in the app: their answers are the card.
+            "card_at": mine.get("card_at") or (None if texted else app.get("at")),
+            "card": card or (_app_card(app) if app else None),
+            "from": "text" if texted else "app",
+            "app_at": app.get("at"),
             "follow_up": None if not f else {
                 "leader": leaders.get(str(f.get("leader_contact_id") or ""), ""),
                 "status": f.get("status"), "reached": reached},
         })
-    out.sort(key=lambda g: str(g.get("texted_at") or ""), reverse=True)
+    out.sort(key=lambda g: str(g.get("texted_at") or g.get("app_at") or ""), reverse=True)
     return out
 
 
@@ -774,6 +813,9 @@ def counts_of(business: Dict[str, Any], guests: List[Dict[str, Any]]) -> Dict[st
     tz = tz_of(business)
     today = _now().astimezone(tz).date()
     sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+    # The texts' numbers: a member who told the church in the app is listed,
+    # never counted as a text.
+    guests = [g for g in guests if g.get("texted_at")]
     on_sunday = [g for g in guests if (_parse(g.get("texted_at")) or _now()).astimezone(tz).date() == sunday]
     month_start = datetime.combine(today.replace(day=1), time(0, 0), tzinfo=tz)
     month = _rows(f"/contacts?business_id=eq.{_q(business['id'])}"
