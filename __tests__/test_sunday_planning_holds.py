@@ -615,6 +615,58 @@ def test_a_volunteers_my_serving_is_the_same_page_open_or_closed_byte_for_byte(d
     assert LINE in leader_open and leader_open.replace(LINE, "") == leader_off
 
 
+def test_at_an_open_church_with_numbers_set_a_free_away_is_byte_for_byte_what_it_was(db, shell, monkeypatch):
+    """S2-5 (the volunteers' rules): step 2's tables there, and the Welcome
+    Team hung from a department that may have one away at once. A
+    volunteer's Away on a free date (no service that week, nothing of
+    theirs to serve) is saved at once: the same write, and the same page
+    before and after, byte for byte, as with the leaders schedule off. The
+    reads it adds only look (the teams, the numbers, the places); nothing
+    else is written, asked or told."""
+    import church_schedule_limits as csl
+    db.limits = True
+    for t in ("church_schedule_department_limits", "church_protected_days", "church_away_pairs"):
+        db.t[t] = []
+    monkeypatch.setattr(csl, "_FORCE", True)
+    kids = next(d for d in db.t["church_departments"] if d["business_id"] == HOPE and d["name"] == "Kids")
+    db.t["church_department_units"].append({
+        "id": db.nid("church_department_units"), "business_id": HOPE, "department_id": kids["id"],
+        "kind": "serve_option", "group_id": None, "role_id": None, "board_id": None, "worship_ministry_id": None,
+        "label": "Welcome Team"})
+    db.t["church_schedule_department_limits"].append({"department_id": kids["id"], "business_id": HOPE, "at_most": 1,
+                                                      "set_by_user_id": None, "set_by_contact_id": None,
+                                                      "updated_at": fake.NOW.isoformat()})
+    _rich(db)
+    told, rpcs = len(db.later), len(db.rpcs)
+    before_open = page(db, "n024")
+    seen = _calls(monkeypatch)
+    got = ss.add_away(biz(db), cid(db, "n024"), "2026-12-01", "2026-12-03")
+    open_writes, open_reads = [c for c in seen if c[0] != "get"], [c[1] for c in seen if c[0] == "get"]
+    assert got.get("id") and "asked" not in got, "the saved row, as it always answered"
+    after_open = page(db, "n024", b"done=away")
+    assert len(db.later) == told and len(db.rpcs) == rpcs and len(asks(db)) == 1, "nothing asked, nothing told"
+    db.t["serve_away"] = [f for f in db.t["serve_away"] if f["id"] != got["id"]]
+    monkeypatch.setenv("CHURCH_SCHEDULE", "off")
+    assert page(db, "n024") == before_open, "the page before: the same bytes"
+    seen.clear()
+    got = ss.add_away(biz(db), cid(db, "n024"), "2026-12-01", "2026-12-03")
+    off_writes, off_reads = [c for c in seen if c[0] != "get"], [c[1] for c in seen if c[0] == "get"]
+    after_off = page(db, "n024", b"done=away")
+    assert open_writes == off_writes and [c[0] for c in off_writes] == ["post"], "the same one write"
+    assert UUID.sub("<id>", after_open) == UUID.sub("<id>", after_off), "the page after: the same bytes but its id"
+    assert open_reads[-len(off_reads):] == off_reads, "its own reads, as they were, last"
+    looked = open_reads[:-len(off_reads)]
+    assert looked and all("reason" not in p for p in looked)
+    assert any(p.startswith("/church_schedule_department_limits") for p in looked), "the numbers were looked at"
+    assert {p.split("?")[0] for p in looked} <= {"/serve_teams", "/groups", "/group_members", "/worship_services",
+                                                 "/church_schedule_department_limits", "/church_role_defs",
+                                                 "/church_leader_roles", "/church_role_settings", "/church_departments",
+                                                 "/church_department_units", "/business_users", "/contacts",
+                                                 "/church_schedule_people", "/church_schedule_settings",
+                                                 "/church_protected_days", "/serve_away", "/serve_assignments",
+                                                 "/businesses", "/church_duty_holders", "/church_duty_moves"}, looked
+
+
 def _at_base(name):
     """One module as it was on origin/main when this was cut, or None where
     that commit isn't in the clone (CI checks out a single commit)."""

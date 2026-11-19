@@ -196,6 +196,27 @@ def test_away_days_and_how_often(church):
     assert {p["name"]: p["often"] for p in team["people"]}["Kendra Lane"] == "one"
 
 
+def test_away_on_a_sunday_they_said_yes_to_is_saved_at_once_where_the_volunteers_rules_dont_reach(church, monkeypatch):
+    """The volunteers' rules (S2-5) reach only a church the leaders schedule
+    is open for, with its step 2 tables: here (every church, in this suite)
+    Kendra's Away on a Sunday she said yes to is saved at once, as it always
+    was, and the rules are never even asked."""
+    import church_schedule_volunteers as csv
+    db, as_, (s1, s2, s3), sound, _ = church
+    aid = ask(as_, s2, sound, KENDRA).json()["assignment"]["id"]
+    ss.answer(CHURCH, KENDRA, aid, "yes")
+
+    def never(*a, **k):
+        raise AssertionError("the volunteers' rules were asked where they don't reach")
+    monkeypatch.setattr(csv, "volunteer_plan", never)
+    monkeypatch.setattr(csv, "ask", never)
+    assert csv.here(CHURCH) is False
+    got = ss.add_away(CHURCH, KENDRA, "2026-10-31", "2026-11-02")
+    assert got.get("id") and "asked" not in got
+    assert [(a["contact_id"], a["starts_on"]) for a in db.t["serve_away"]] == [(KENDRA, "2026-10-31")]
+    assert row(db, aid)["status"] == "yes", "nothing opened: there was no yes on the leaders schedule"
+
+
 def test_the_switch_hides_it(church, monkeypatch):
     db, as_, (s1, s2, s3), sound, _ = church
     ask(as_, s1, sound, KENDRA)

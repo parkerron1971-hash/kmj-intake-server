@@ -1315,3 +1315,57 @@ def test_the_words_for_a_full_or_protected_day_have_no_ids_office_words_or_title
     for words in said:
         for rule in (UUID, OFFICE_WORDS, TITLE_WORDS, KEYS):
             assert not rule.search(words.replace("{up}", "Owen Diaz")), (words, rule.search(words))
+    # A volunteer's card: the day and the department, never a count, however many days.
+    vol = mpd._vol_full_lines([{"flag": "over_limit", "of": "department", "name": "Kids", "away": 3, "day": day(n)}
+                               for n in range(32, 39)], today, "their team")
+    assert vol[0] == "Sun, Dec 20 is full for Kids." and vol[-1] == "And 4 more days like these."
+    assert not any(re.search(r"\d+ (?:from|of)|already away|three", v) for v in vol), vol
+
+
+# ─── A volunteer's ask (S2-5) ─────────────────────────────────────────
+
+@pytest.mark.parametrize("db", [True], indirect=True)
+def test_a_volunteers_ask_waits_for_their_teams_leader_with_why_it_came(app, db, shell):
+    """A volunteer on Kids Check-in asked from My serving for a Sunday that
+    is full for Kids (church_schedule_volunteers): it waits on the Dates
+    page of the team's own leader, whose card says why it came to them (a
+    count and the day, never who), whose Yes is a plain yes (nothing shown
+    to except), and whose yes lands with no exception. The volunteer, who
+    followed a link to Dates, reads their own card and that it is on My
+    serving too."""
+    import church_schedule_volunteers as csv
+    from datetime import date
+    w = db.who[HOPE]
+    kids = next(d["id"] for d in db.t["church_departments"] if d["business_id"] == HOPE and d["name"] == "Kids")
+    team = "5d000000-0000-4000-8000-0000000000a1"
+    db.t["groups"].append({"id": team, "business_id": HOPE, "name": "Kids Check-in", "kind": "team", "active": True})
+    db.t.setdefault("serve_teams", []).append({"group_id": team, "business_id": HOPE, "owner": "volunteers", "sort": 0})
+    for h, role in (("n040", "leader"), ("n041", "member"), ("n042", "member")):
+        db.t["group_members"].append({"group_id": team, "business_id": HOPE, "contact_id": w[h], "role": role})
+    db.t["church_schedule_department_limits"].append({"department_id": kids, "business_id": HOPE, "at_most": 1,
+                                                      "set_by_user_id": None, "set_by_contact_id": None,
+                                                      "updated_at": fake.NOW.isoformat()})
+    db.t["serve_away"].append({"id": db.nid("serve_away"), "business_id": HOPE, "contact_id": w["n042"],
+                               "starts_on": SUNDAY, "ends_on": SUNDAY, "note": "", "ask_id": None, "kind": None})
+    a = csv.ask(church(db), w["n041"], date(2026, 12, 20), date(2026, 12, 20),
+                {"flags": ["over_limit"], "to": {"kind": co.PERSON, "id": w["n040"], "name": "N040 Member"},
+                 "team_group_id": team, "department_id": kids})
+    html, status = page(db, "n040")
+    words = text(html)
+    assert status == 200 and "Waiting for your yes" in words
+    assert "Why it came to you Sun, Dec 20 is full for Kids. Your yes is all it needs." in words
+    assert "N042" not in words, "never who"
+    assert "already away" not in words and "one from" not in words, "never a count: a department's numbers are the office's"
+    assert 'name="shown"' not in html, "a plain yes: nothing to except"
+    for rule in (UUID, OFFICE_WORDS, KEYS):
+        assert not rule.search(words), rule.search(words)
+    mine_, _status = page(db, "n041")
+    mine_words = text(mine_)
+    assert "Why it went to N040 Member Sun, Dec 20 is full for Kids. With a yes" in mine_words
+    assert "already away" not in mine_words, "never a count, to the volunteer either"
+    assert "These are the away days you asked your team’s leader for. They’re on My serving too." in mine_words
+    as_(app, "n040")
+    assert went(post(app, f"/my/lead/dates/{a['id']}/answer", ans="yes")).endswith("done=dt_yes")
+    row = asks(db)[-1]
+    assert row["state"] == "yes" and row["excepted"] == [] and db.rpcs[-1]["p_by_contact"] == w["n040"]
+    assert [p for p, _r in db.posts if p.startswith("/rpc/")] == ["/rpc/church_away_settle"], "no exception"

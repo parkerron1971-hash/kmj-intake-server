@@ -135,7 +135,13 @@ the service days and the protected days, and its own "are its tables there"):
 With step 2's tables absent (step2() says no) none of that runs and nothing
 of step 2 is read: everything above is exactly step 1.
 
-Not here yet (its own PR): things that repeat, the volunteers' rules.
+The volunteers' rules (S2-5) are church_schedule_volunteers.py: a volunteer's
+Away on a full day, or on a day they said yes to serve, is an ask (grp
+volunteers) to their team's leader. Such an ask is never "flagged" here
+(volunteer()): it never goes up, the one it went to answers it with a plain
+yes, and the yes is never rechecked.
+
+Not here yet (its own PR): things that repeat.
 """
 from __future__ import annotations
 
@@ -513,10 +519,20 @@ def needs_no_yes(ch: co.Church, ask: Dict[str, Any]) -> bool:
         bool(ch.owner_person) and str(ask.get("contact_id") or "") == ch.owner_person)
 
 
+def volunteer(ask: Dict[str, Any]) -> bool:
+    """A volunteer's ask (S2-5, church_schedule_volunteers): it went to their
+    team's leader. Read from the row (`grp`) or from an ask as shape() gives
+    it (`group`)."""
+    return (ask.get("grp") or ask.get("group")) == "volunteers"
+
+
 def flagged(ask: Dict[str, Any]) -> bool:
     """Whether an ask went up for an exception: it carries a flag that says
-    so (over the limit, a protected day, a pair). Read from the row alone."""
-    return bool(set(ask.get("flags") or []) & set(UP_FLAGS))
+    so (over the limit, a protected day, a pair). Read from the row alone.
+    A volunteer's ask never went up: its `over_limit` says the day was full
+    for their department when they asked, and their team's leader answers it
+    (docs/CHURCH_SCHEDULE.md 7.11)."""
+    return bool(set(ask.get("flags") or []) & set(UP_FLAGS)) and not volunteer(ask)
 
 
 def gives_exception(ch: co.Church, uid: Any, asker_cid: Any) -> bool:
@@ -1560,7 +1576,12 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
     tables are there (step2() says no) is a 503 with nothing saved: it
     would otherwise land as a plain yes, over a full day, with no exception
     on record. Flagged asks exist only where step 2 is applied, so a
-    database with step 1's file alone never meets this."""
+    database with step 1's file alone never meets this.
+
+    A volunteer's ask (S2-5) is never flagged: whoever it went to (their
+    team's leader) says a plain yes, over their department's number too,
+    with no recheck and no exception; the yes opens their places as any
+    yes does."""
     if not isinstance(yes, bool):
         raise HTTPException(400, "Say yes, or not this one")
     note = _note(note)
@@ -1575,7 +1596,9 @@ def answer(ch: co.Church, me: Dict[str, Any], ask_id: Any, yes: Any, note: Any =
             raise HTTPException(409, NO_YES)
         excepted: List[str] = []
         moved: Optional[Dict[str, Any]] = None
-        if yes and step2():
+        # A volunteer's ask (S2-5) is their team leader's to say yes to, over
+        # the department's number too: never rechecked, never an exception.
+        if yes and step2() and not volunteer(row):
             excepted, moved = _recheck(ch, me, row)
             unseen = set(excepted) - _shown(shown)
             if not moved and unseen:
@@ -1633,13 +1656,23 @@ def withdraw_fact(biz: Any, cid: Any, away_id: Any) -> bool:
     aren't there (no read is made then), there is no such date of theirs, it
     is a plain away date (no ask), or its ask is gone or already settled (a
     date left behind by one is a plain date now). A read or a write that
-    fails is a 503 with nothing removed: never the date without its ask."""
+    fails is a 503 with nothing removed: never the date without its ask.
+
+    S2-5: with no away date of theirs by that id, the id may be a
+    volunteer's ask still waiting (My serving shows those beside their away
+    dates, with the same x): it is taken back (church_schedule_volunteers.
+    take_back, True). Only where step 2's tables are there is that read."""
     if not _here(biz):
         return False
     b = str(biz.get("id") if isinstance(biz, dict) else biz)
     cid = str(cid or "")
     rows = _need(f"/serve_away?id=eq.{_q(away_id)}&business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}"
                  f"&select=id,ask_id&limit=1")
+    if not rows:
+        # No away date of theirs by that id: it may be a volunteer's ask
+        # still waiting (S2-5), which My serving shows under Away beside them.
+        import church_schedule_volunteers
+        return church_schedule_volunteers.take_back(biz, cid, away_id)
     ask_id = rows[0].get("ask_id") if rows else None
     if not ask_id:
         return False
