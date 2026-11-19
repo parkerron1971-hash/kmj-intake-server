@@ -35,7 +35,8 @@ The Lumen sheet grows 12.5 KB (1.6 KB with brotli), once. A Lumen page's HTML is
 smaller (the Google link is longer than the two preloads).
 
 Measured locally (the Give/Watch harness over the test fake, so database time is ~0;
-median of 30 Server-Timing totals, main / this branch): with the switch on, Home 6.4 / 5.6 ms,
-Bible 3.2 / 2.8, a chapter 2.1 / 2.8, Give 1.6 / 1.6, a group chat 3.6 / 3.1, Connect 2.7 / 2.3,
-Watch 2.3 / 1.8; off is the same spread. Reads per page are identical on main and this branch,
+median of 30 Server-Timing totals, main / this branch, fresh harnesses): with the switch on,
+Home 4.0 / 4.3 ms, Bible 2.2 / 2.3, a chapter 2.0 / 2.0, Give 1.7 / 2.1, a group chat 3.8 / 4.5,
+Connect 2.7 / 2.8, Watch 2.2 / 2.2; off is the same spread (medians move a millisecond or two
+run to run). Reads per page are identical on main and this branch,
 off and on.
