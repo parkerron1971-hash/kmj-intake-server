@@ -732,6 +732,19 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
         f'<span class="mb-top-right">{chat}{avatar}</span></header>')
     pal = ui.palette(biz, theme, space)
+    body_cls = _body_class(door, space, tab, wide)
+    side = _side(biz, tab, space, brand, who, mine, board=bool(ctx.get("board") and ctx.get("lead")))
+    tabbar = (ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz,
+                     board=bool(ctx.get("board")), side=side) if signed_in and bar else '')
+    scroll = '' if bare or door else ui.SCROLL_JS
+    # The new look (member_lumen, MEMBER_LUMEN): a Church page for a signed-in
+    # member, when the switch shows it to them. Off, nothing below runs and
+    # every page is byte for byte what it was.
+    import member_lumen
+    if signed_in and member_lumen.page():
+        top, body_cls, tabbar, scroll = _lumen_frame(
+            biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
+            word=word, avatar=avatar, side=side, body_cls=body_cls)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -743,25 +756,69 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <title>{_e(title)} — {_e(name)}</title>
 {ui.FONTS}
 <style>{css_vars(theme)}</style>
-{ui.head(biz, theme, space, door=door, inline=inline_css or None)}
+{ui.head(biz, theme, space, door=door, inline=inline_css or None, lumen=signed_in and member_lumen.page())}
 </head>
-<body{_body_class(door, space, tab, wide)}>
+<body{body_cls}>
 {top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz,
-        board=bool(ctx.get("board")),
-        side=_side(biz, tab, space, brand, who, mine, board=bool(ctx.get("board") and ctx.get("lead"))))
-  if signed_in and bar else ''}
+{tabbar}
 {ui.early() if signed_in and bar else ''}
-{'' if bare or door else ui.SCROLL_JS}
+{scroll}
 {script}
 {mai.REGISTER_JS}
 {_phone_timing() if signed_in else ''}
 </body>
 </html>"""
+
+
+def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
+                 who: Optional[Dict[str, Any]], back: Optional[Tuple[str, str]], bare: bool, bar: bool,
+                 ctx: Dict[str, Any], name: str, logo: str, word: str, avatar: str, side: Tuple[str, str],
+                 body_cls: str) -> Tuple[str, str, str, str]:
+    """The new look's frame for one page (member_lumen_ui): (top bar, body
+    class attribute, tab bar, scroll script).
+
+    A main tab (Home, Watch, Bible, Connect, Give) with no way back gets the
+    full bar: the church's logo and name on the left (Home keeps the space
+    switcher for someone with more than one space); on the right the message
+    bubble with the unread count (member_portal_threads' count, already read
+    for this page), the bell and the profile picture. Every other page is
+    pushed: a plain back bar, its own back link or, with none, Back to the
+    tab it was opened over (the browser's history; Home without it)."""
+    import member_lumen
+    import member_lumen_ui as lm
+    import member_portal_messaging as mpm
+    import member_portal_threads as mpt
+    import member_spaces as msp
+    main = tab in lm.MAIN and not back
+    if main:
+        if tab == "home" and msp.switcher(ctx, name):
+            left = msp.switcher(ctx, name)
+        elif word and not logo:
+            left = f'<a class="mb-brand lm-brand" href="/my"><img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}"></a>'
+        else:
+            left = lm.brand(name, logo)
+        right = ((lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else "")
+                 + lm.bell(member_lumen.BELL.get()) + avatar)
+    else:
+        href, label = back or ("/my", "Back")
+        mark = "" if back else " data-back"
+        left = f'<a class="mb-back" href="{_e(href)}"{mark}>{lm.ic("back", 24)}{_e(label)}</a>'
+        right = ""
+    top = "" if bare else (
+        f'<header class="mb-top"><div class="mb-top-l">{left}</div>'
+        f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
+        f'<span class="mb-top-right">{right}</span></header>')
+    names = re.findall(r'class="([^"]*)"', body_cls)
+    cls = " ".join(["lm", "lm-tab" if main else "lm-push"] + (names[0].split() if names else []))
+    import member_app_ui as ui
+    lead = bool(ctx.get("lead"))
+    tabbar = (lm.nav(tab, lead=lead, board=bool(ctx.get("board")), serve=lead and ui.serve_mode(), side=side)
+              if bar else "")
+    return top, f' class="{cls}"', tabbar, ("" if bare else lm.SCROLL_JS)
 
 
 def _phone_timing() -> str:
@@ -1224,11 +1281,16 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # threads; never for a chat's or the live page's poll).
         import member_portal_threads as mpt
         counted = "/feed" not in sub and not sub.startswith("/my/photo/")
-        ctx, lead, board, unread = await asyncio.gather(
+        # The new look's bell (member_lumen.bell_dot), read alongside the rest
+        # and only for someone who sees the new look.
+        lumen_bell = counted and member_lumen.here()
+        ctx, lead, board, unread, bell = await asyncio.gather(
             msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
             _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"], kept=True) if may_lead else _nothing(),
             mpb.on_board(biz, sess["me"], kept=True) if may_lead else _nothing(),
-            mpt.counts(biz, sess["me"]) if counted else _nothing())
+            mpt.counts(biz, sess["me"]) if counted else _nothing(),
+            asyncio.to_thread(member_lumen.bell_dot, biz, sess["me"]) if lumen_bell else _nothing())
+        member_lumen.BELL.set(bool(bell))
         if may_lead and ctx.get("space", "church") == "church":
             ctx = dict(ctx, lead=lead, board=board)
         msp.CURRENT.set(ctx)
@@ -1643,6 +1705,16 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/board" or sub.startswith("/my/board/"):
         import member_portal_board as mpb
         return await mpb.serve(request, church, me, sub, preview=preview)
+    # Connect, the people hub, in the new look (member_portal_lumen); today's
+    # look has Groups there instead.
+    if sub == "/my/connect":
+        import member_lumen
+        if not member_lumen.page():
+            return RedirectResponse("/my/groups", status_code=303, headers=_SECURE_HEADERS)
+        import member_portal_lumen as mlp
+        data, new_card = await asyncio.gather(mlp.connect_data(biz, me, preview=preview),
+                                              asyncio.to_thread(member_lumen.new_here_card, biz, me))
+        return _page(mlp.render_connect(biz, site, request, me, data, new_card=new_card or ""))
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
@@ -1658,6 +1730,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         import church_checkin as cc
         import member_portal_checkin as mpk
         try:
+            import member_lumen
+            if member_lumen.page():
+                return mpk.lumen_card(await asyncio.to_thread(cc.card, biz, me), request)
             return mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
         except Exception:
             logger.warning("member home: check-in card skipped", exc_info=True)
@@ -1711,12 +1786,37 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_posts, news_n = news if news else (None, 0)
     # No news reaches me yet: if I post, Home shows where it will go.
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
-    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights)
+    import member_lumen
+    lumen_home = member_lumen.page()
+    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
+                               **({"title": "What's happening", "more": "News"} if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
     import member_portal_serving as mpsv
     serving = mpsv.home_card(serve_asks or [])
     import member_asks
+    if lumen_home:
+        # Home in the new look (member_portal_lumen): the same reads, laid out
+        # as approved; the news block is titled What's happening.
+        import member_portal_lumen as mlp
+        import member_app_install as mai
+        import member_push
+        import member_app_ui as _ui
+        edit = can_picture and request.query_params.get("edit") == "pictures"
+        church_name = (biz.get("name") or "").strip() or "Your church"
+        editbar = ""
+        if edit:
+            editbar = (f'<div class="mb-editbar" role="status"><span class="mb-editbar-ic">{_ui.icon("camera", 18)}</span>'
+                       f'<span class="mb-editbar-t"><strong>Changing pictures</strong><span>Only you see these buttons.</span></span>'
+                       f'<a class="mb-editbar-a" href="/my/pictures">All</a><a class="mp-go mb-editbar-done" href="/my">Done</a></div>')
+        return _page(mlp.render_home(
+            biz, site, me=me, occasions=occ, groups=groups, library=lib, live=live, bible=bible, where=where,
+            plan_today=today, plan_done=done, devotional=devotional, checkin=checkin, serving=serving,
+            celebrate=celebrate, flash=mpc._flash(request) or mpr._flash(request),
+            news=news_html,
+            news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
+            cards=(mai.install_card(church_name), member_push.home_card(biz),
+                   member_asks.home_row(await _ask_entry(biz, me)))))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,

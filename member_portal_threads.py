@@ -445,7 +445,7 @@ def render_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
     asked = [person(r) for r in (requests or [])] if open_chats else []
     youth = (msp.CURRENT.get() or {}).get("youth")
     head = ('<div class="mb-lt"><h1>Chats</h1></div>' + msp.safety_banner() if youth else
-            f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}')
+            mpc.connect_head(biz, "messages"))
     lists = '<ul class="mb-list mb-cards ct-list" style="--inset:76px">{}</ul>'
     body = [f"<style>{THREAD_CSS}</style>{head}{mpc._flash(request)}", lists.format(pinned)]
     if gate and gate != "off":

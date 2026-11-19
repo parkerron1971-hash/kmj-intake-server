@@ -37,7 +37,7 @@ import re
 from typing import List, Tuple
 
 # member_app_ui.SHEET_PATH_RE: the same addresses.
-SHARED_SHEET_RE = re.compile(r"^/my/(app|youth|kids|door)\.[0-9a-f]{12}\.css$")
+SHARED_SHEET_RE = re.compile(r"^/my/(app|youth|kids|door|lumen)\.[0-9a-f]{12}\.css$")
 
 
 def _shared_sheet(scope, headers: List[Tuple[bytes, bytes]]) -> bool:

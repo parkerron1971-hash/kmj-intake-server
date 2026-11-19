@@ -606,7 +606,8 @@ def _row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
 
 
 def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: Optional[List[Dict[str, Any]]],
-               open_: bool, rights: Optional[Dict[str, Any]] = None) -> str:
+               open_: bool, rights: Optional[Dict[str, Any]] = None, *, title: str = "From the church",
+               more: str = "All news") -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
     never says "nothing yet"), except to someone who posts (`rights`,
@@ -614,15 +615,15 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
     with no news yet sees where the news will go."""
     import member_app_ui as ui
     if not posts:
-        return home_first(biz, rights) if posts == [] else ""
+        return home_first(biz, rights, title=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
     rows = "".join(_row(biz, p) for p in rest)
-    return (f'<section aria-labelledby="nw-home-h">{ui.section("From the church", "/my/news", "All news", hid="nw-home-h")}'
+    return (f'<section aria-labelledby="nw-home-h">{ui.section(title, "/my/news", more, hid="nw-home-h")}'
             f'{card(biz, lead, _occasions(occ), back="/my", open_=open_)}'
             f'{f"<div class=nw-rows>{rows}</div>" if rows else ""}</section>')
 
 
-def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]]) -> str:
+def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]], *, title: str = "From the church") -> str:
     """Home's 'From the church' before anything reaches me: for a poster,
     the way to Post, drawn as one of the section's rows."""
     import member_app_ui as ui
@@ -636,7 +637,7 @@ def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]]) -> str:
         return ""
     row = (f'<a class="nw-row" href="/my/news/write"><span class="nw-thumb gold">{_ic("megaphone", 22)}</span>'
            f'<span class="nw-t"><b>{_e(title)}</b><span>{_e(sub)}</span></span>{_ic("chevron", 18)}</a>')
-    return (f'<section aria-labelledby="nw-home-h">{ui.section("From the church", hid="nw-home-h")}'
+    return (f'<section aria-labelledby="nw-home-h">{ui.section(title, hid="nw-home-h")}'
             f'<div class="nw-rows">{row}</div></section>')
 
 

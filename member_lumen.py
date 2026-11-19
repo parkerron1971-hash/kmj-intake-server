@@ -139,3 +139,40 @@ async def decide(request: Any, ctx: Optional[Mapping[str, Any]]) -> bool:
         yes = visible(request, ctx)
     CURRENT.set(bool(yes))
     return bool(yes)
+
+
+def page() -> bool:
+    """Whether the page being drawn wears the new look: here(), for a
+    signed-in member in Church. Youth and Kids keep their own looks, and the
+    pages before sign-in keep today's."""
+    if not here():
+        return False
+    import member_spaces as msp
+    ctx = msp.CURRENT.get() or {}
+    return bool(ctx) and (ctx.get("space") or "church") == "church"
+
+
+# ─── Hooks other pieces fill in ────────────────────────────────────────
+
+
+# Whether the bell on the page being drawn shows its dot: member_portal.serve
+# asks bell_dot (in a thread, alongside the page's other first reads) and
+# keeps the answer here for the top bar.
+BELL: contextvars.ContextVar[bool] = contextvars.ContextVar("member_lumen_bell", default=False)
+
+
+def bell_dot(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> bool:
+    """Whether the bell at the top shows a dot: something new in the
+    member's alerts. No dot until the bell's recent-alerts list lands: its
+    alerts_unseen(biz, me) answers here. serve() runs it in a thread beside
+    the church, session and unread reads, for a member who sees the new look
+    only; still, keep its answer a short while (member_cache style) so it
+    isn't a read on every page."""
+    return False
+
+
+def new_here_card(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> str:
+    """Connect's "Your next step" leads with the "I'm new here" card (and its
+    page, /my/new) once that lands: its new_here_card(biz, me) answers here
+    with the card's markup, '' for someone it isn't for. Nothing until then."""
+    return ""

@@ -733,6 +733,9 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
         from member_portal import band
         body = band(f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>{lead}',
                     f'<section aria-labelledby="mp-open-h">{ui.section("Find a group", hid="mp-open-h")}{open_}</section>')
+    import member_lumen
+    if member_lumen.page():
+        return _shell(biz, site, "Groups", f"{connect_head(biz, 'groups')}{_flash(request)}{body}", tab="groups", who=who)
     return _shell(biz, site, "Connect", f"""
 <div class="mb-lt"><h1>Connect</h1></div>
 {connect_tabs(biz, "groups") or '<p class="mb-sub">Smaller circles to belong to: small groups, serving teams and classes.</p>'}
@@ -1324,12 +1327,35 @@ async def groups(request: Request):
     return _back("/my/groups", **({"done": code} if ok else {"err": code}))
 
 
+def connect_head(biz, current: str) -> str:
+    """The top of a page under Connect. Today's look: the Connect title and
+    its tabs. The new look (member_lumen): Connect is a tab of its own
+    (/my/connect), so its pages are pushed from it, each with its own
+    heading and a way back; Messages opens from the bubble at the top and
+    goes back to wherever it was opened."""
+    import member_lumen
+    if not member_lumen.page():
+        return f'<div class="mb-lt"><h1>Connect</h1></div>{connect_tabs(biz, current)}'
+    import member_lumen_ui as lm
+    heads = {"groups": ("Connect", "Find a <em>group</em>", "Smaller circles to belong to: small groups, serving teams and classes."),
+             "classes": ("Classes", "Keep <em>growing</em>", ""),
+             "directory": ("Connect", "The <em>directory</em>", ""),
+             "messages": ("Your church, your groups, your people", "<em>Messages</em>", "")}
+    eb, title, sub = heads.get(current, heads["groups"])
+    back = "" if current == "messages" else '<a class="mb-back" href="/my/connect">Connect</a>'
+    return back + lm.mast(eb, title, sub, crest=current == "classes")
+
+
 def connect_tabs(biz, current: str) -> str:
     """Connect's pages under one title: Groups; Classes when the church has
     a published class (member_portal_classes.TAB, set for this request);
     Messages when the church has messaging (or church threads) on; Directory when the church has
     its member directory on, in Church (never in Youth or Kids). '' when
-    Groups is alone."""
+    Groups is alone, and in the new look (member_lumen), where Connect is a
+    page of its own (connect_head)."""
+    import member_lumen
+    if member_lumen.page():
+        return ""
     import member_app_ui as ui
     import member_directory
     import member_portal_classes as mcl

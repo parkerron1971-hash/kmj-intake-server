@@ -369,6 +369,10 @@ def render_classes(biz, site, request: Request, data: Optional[Dict[str, Any]], 
                          f'{cards}<p class="mp-muted mb-cfoot">Joining puts the class here, '
                          f'and your teacher sees you on the list.</p></section>')
         body = "".join(parts)
+    import member_lumen
+    if member_lumen.page():
+        return _shell(biz, site, "Classes", f"{mpc.connect_head(biz, 'classes')}{mpc._flash(request)}{body}",
+                      tab="classes", who=who)
     return _shell(biz, site, "Classes", f"""
 <div class="mb-lt"><h1>Connect</h1></div>
 {mpc.connect_tabs(biz, "classes")}
