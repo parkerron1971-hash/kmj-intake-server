@@ -732,7 +732,12 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     # member, when the switch shows it to them. Off, nothing below runs and
     # every page is byte for byte what it was.
     import member_lumen
+    # Its type is the church's pairing (member_lumen_fonts), from our own
+    # address, in place of today's Google Fonts link.
+    fonts = ui.FONTS
     if signed_in and member_lumen.page():
+        import member_lumen_fonts
+        fonts = member_lumen_fonts.head(biz)
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
@@ -745,7 +750,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <meta name="theme-color" content="{pal['bg']}">
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
-{ui.FONTS}
+{fonts}
 <style>{css_vars(theme)}</style>
 {ui.head(biz, theme, space, door=door, inline=inline_css or None, lumen=signed_in and member_lumen.page())}
 </head>
@@ -830,6 +835,7 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
     in the middle of the bar and a plain back arrow, which goes back in the
     browser's history when the page before was ours (else to its link)."""
     import member_lumen
+    import member_lumen_fonts as lmf
     import member_lumen_ui as lm
     import member_portal_messaging as mpm
     import member_portal_threads as mpt
@@ -841,7 +847,7 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
             f'<header class="mb-top lm-tbar"><div class="mb-top-l"><a class="mb-back" href="{_e(href)}" data-back '
             f'aria-label="{_e(label)}">{lm.ic("back", 24)}</a></div>{head}<span class="mb-top-right"></span></header>')
         names = re.findall(r'class="([^"]*)"', body_cls)
-        cls = " ".join(["lm", "lm-push", "lm-thread"] + (names[0].split() if names else []))
+        cls = " ".join(["lm", "lm-push", "lm-thread"] + lmf.body_class(biz) + (names[0].split() if names else []))
         return top, f' class="{cls}"', "", ("" if bare else lm.SCROLL_JS)
     if main:
         if tab == "home" and msp.switcher(ctx, name):
@@ -863,7 +869,7 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
         + (f'<div class="lm-barmid">{mid}</div>' if mid else f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>')
         + f'<span class="mb-top-right">{right}{more}</span></header>')
     names = re.findall(r'class="([^"]*)"', body_cls)
-    cls = " ".join(["lm", "lm-tab" if main else "lm-push"] + (names[0].split() if names else []))
+    cls = " ".join(["lm", "lm-tab" if main else "lm-push"] + lmf.body_class(biz) + (names[0].split() if names else []))
     import member_app_ui as ui
     lead = bool(ctx.get("lead"))
     tabbar = (lm.nav(tab, lead=lead, board=bool(ctx.get("board")), serve=lead and ui.serve_mode(), side=side)
@@ -929,12 +935,13 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
         # The new look (member_lumen_give): the same page, payment and
         # script, in the Lumen frame with the form in the mock's layout.
         import giving_router as gr
+        import member_lumen_fonts
         import member_lumen_give as mlg
         bar, body, nav, scroll = lumen_chrome(biz, site, "Give", tab="give", who=me, theme=theme)
         funds = gr.configured_funds(gr.giving_settings(biz.get("settings")))
         return render_give_page(
             biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
-            app={"head": (ui.FONTS + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme, lumen=True)}"
+            app={"head": (member_lumen_fonts.head(biz) + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme, lumen=True)}"
                           f"<style>{GIVE_CSS}</style>"),
                  "top": mlg.give_top(name, funds, preview=preview), "name": me.get("name") or "",
                  "email": me.get("email") or "", "preview": preview, "form": mlg.give_form(biz, me),
@@ -2247,6 +2254,18 @@ async def member_app_sheet(file: str):
     return resp
 
 
+@router.get("/my/fonts/{file}", include_in_schema=False)
+async def member_app_font(file: str):
+    """The new look's fonts (member_lumen_fonts): the same file for every
+    church, kept a year, so it answers on any church's address without
+    looking the church up."""
+    import member_lumen_fonts
+    resp = member_lumen_fonts.serve(f"/my/fonts/{file}")
+    if resp is None:
+        raise HTTPException(404, "Not found")
+    return resp
+
+
 @router.post("/my/signout", include_in_schema=False)
 async def sign_out(request: Request):
     import member_portal_preview as pv
@@ -2323,7 +2342,16 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
         # Tabs your members see (member_app_ui.church_tabs, 2026-10-27): the
         # church's bar in order, every tab it can pick, and how many fit.
         **_tabs_payload(biz),
+        # The new look's type (member_lumen_fonts, 2026-11-19): the church's
+        # pairing, the three to pick from, and whether the pick shows yet.
+        **_fonts_payload(biz, user),
     }
+
+
+def _fonts_payload(biz: Dict[str, Any], user: Optional[AuthedUser]) -> Dict[str, Any]:
+    import member_lumen_fonts as lmf
+    return {"fonts": lmf.pick(biz), "font_choices": lmf.choices(), "fonts_default": lmf.DEFAULT,
+            "font_faces": lmf.faces(), "fonts_open": user is not None and lmf.picker_open(biz, user)}
 
 
 def _tabs_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
@@ -2429,7 +2457,7 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
     tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "",
     colours?: "family"|"church", photo_editors?: [contact id],
-    tabs?: [tab key] | null }
+    tabs?: [tab key] | null, fonts?: "a"|"b"|"c" }
     (the kinds are member_push.KINDS;
     tiles are checked by member_portal_church.clean_tiles; tabs by
     member_app_ui.clean_tab_keys: unknown keys are dropped, Home stays
@@ -2471,6 +2499,12 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     if "notifications" in body:
         import member_push
         switches = member_push.clean_switches(body.get("notifications"))
+    fonts_key = None
+    if "fonts" in body:
+        import member_lumen_fonts
+        fonts_key = member_lumen_fonts.clean(body.get("fonts"))
+        if fonts_key is None:
+            raise HTTPException(400, "fonts must be a, b or c")
     tab_keys = None
     if "tabs" in body and body.get("tabs") is not None:
         tab_keys = ui.clean_tab_keys(body.get("tabs"))
@@ -2480,7 +2514,7 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     site, _ = ensure_business_site(biz)
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
             or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None
-            or "tabs" in body):
+            or "tabs" in body or fonts_key is not None):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -2517,6 +2551,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["colours"] = body["colours"]
         if editors_list is not None:
             cfg["photo_editors"] = editors_list
+        if fonts_key is not None:
+            cfg["fonts"] = fonts_key
         if "tabs" in body:
             # The directory is a tab only while the church has it on.
             if tab_keys is not None and "directory" in tab_keys:
