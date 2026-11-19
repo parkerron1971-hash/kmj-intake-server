@@ -2176,7 +2176,10 @@ taken, and the one that blocks nobody.
   it, by `shape()`'s rule). A yes is an away date like any other there, and taking it off takes
   the ask back (S1-6).
 - **One bounded read more on My serving** where the rules reach (their own asks, 50 at most,
-  through `shape()` as that person); none where they don't. With no such ask the page is what it
+  through `shape()` as that person), and the church's whole row when there is one to show (the
+  member app's church row, from `member_portal`'s site row, carries no owner, so an ask that went
+  to the owner would otherwise read as "waiting for a yes"); none where they don't. With no such
+  ask the page is what it
   always was, byte for byte (pinned open against closed at a church with numbers set, and against
   main's own page where that commit is in the clone).
 - **The Lead tab's own serve-only page** (`/my/lead` for someone whose only part is serving) shows
@@ -2222,8 +2225,9 @@ taken, and the one that blocks nobody.
 
 - **`test_church_schedule_volunteers.py`** at New Hope, with three made-up Sunday teams (Kids
   Check-in hung from Kids by name, with a leader of its own; the Worship Team with none; the
-  Parking Team with no department); Kids may have one away at once. The byte-for-byte pin at an
-  open church with numbers set is in `test_sunday_planning_holds.py`, beside S1-6's.
+  Parking Team with no department); Kids may have one away at once. Its member-app pages and
+  routes are handed the church row as the member app has it (no owner on it). The byte-for-byte
+  pin at an open church with numbers set is in `test_sunday_planning_holds.py`, beside S1-6's.
 
 **Open for the lead session or the owner**
 
@@ -2235,3 +2239,16 @@ taken, and the one that blocks nobody.
 - The office app has no screen for an ask yet (decision 21): an ask that went to whoever keeps Who
   serves when, or to the owner, is answered in the member app by that login's own person, or
   through the office routes.
+- **Found while building, not changed here (S1-5 and S1-6's code):** the member app hands the
+  engine the church row from `member_portal._site_row`, which embeds the business without
+  `owner_id`, and `member_portal_dates._ch_me` builds `church_over.Church` from it, so
+  `ch.owner` is empty on every Dates page and write, and in the Serve page's ask for a leader
+  (`sunday_serving._ask_away`). Where an answer depends on the owner it comes out as if there
+  were none: an ask whose `to` is the owner's login is not "theirs" to the owner's own person on
+  Dates (the Lead tab's count, which reads the whole row, can still say one waits); `nearest` and
+  `goes_up` can't fall back to the owner; `owner_person` is unknown there, so the owner's own
+  time away from the member app is not instant. Every earlier test builds the church from the
+  whole row, so none sees it. S2-5's own reads take the whole row (`away`, `mine`, `take_back`),
+  and a volunteer's ask reaches the owner only at its chain's last step. The likely fix is one
+  line in `_ch_me` (the whole row from `church_schedule._own_row` when `owner_id` is missing):
+  its own PR, with a test on the member app's row.

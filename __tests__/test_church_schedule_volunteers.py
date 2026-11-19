@@ -175,7 +175,7 @@ def app(db, monkeypatch):
     state = {"me": None}
 
     async def signed_in(request):
-        return {"business": c3.church(db, HOPE), "site": {}}, state["me"], False
+        return {"business": member(db), "site": {}}, state["me"], False
     monkeypatch.setattr(mpc, "_signed_in", signed_in)
     c = TestClient(a)
     c.state, c.db = state, db
@@ -190,6 +190,13 @@ def dept(db, name):
 
 def biz(db):
     return c3.church(db, HOPE)
+
+
+def member(db):
+    """The church as the member app has it: member_portal's site row embeds
+    the business without its owner, and every page and route of the member
+    app hands that row on."""
+    return {k: v for k, v in c3.church(db, HOPE).items() if k != "owner_id"}
 
 
 def church(db):
@@ -251,13 +258,13 @@ def serving(db, handle, query=b""):
     """My serving, through its own route, as it renders."""
     from starlette.requests import Request
     req = Request({"type": "http", "query_string": query, "headers": []})
-    out = asyncio.run(mps.serve(req, {"business": biz(db), "site": {}}, me(db, handle), "/my/serving"))
+    out = asyncio.run(mps.serve(req, {"business": member(db), "site": {}}, me(db, handle), "/my/serving"))
     assert out.status_code == 200, out.status_code
     return out.body.decode()
 
 
 def dates(db, handle, **q):
-    html, status = asyncio.run(mpl.serve(SimpleNamespace(query_params=q), biz(db), {}, me(db, handle),
+    html, status = asyncio.run(mpl.serve(SimpleNamespace(query_params=q), member(db), {}, me(db, handle),
                                          "/my/lead/dates"))
     return html, status
 
@@ -293,7 +300,7 @@ def phone(db, handle):
 
 def vol_ask(db, handle="n041", start=day(30), end=day(37)):
     """A volunteer's Away through the Serve page's own function: its row."""
-    got = ss.add_away(biz(db), cid(db, handle), start, end)
+    got = ss.add_away(member(db), cid(db, handle), start, end)
     assert got.get("volunteer") is True, got
     return next(r for r in asks(db) if r["contact_id"] == cid(db, handle) and r["starts_on"] == start)
 
@@ -335,11 +342,11 @@ def test_a_waiting_ask_never_makes_a_day_full_only_an_away_date_that_was_agreed(
     isn't full that day; once N042 has an away date that was agreed, it is."""
     on_for(db, "n042")
     vol_ask(db, "n042", DEC20, DEC20)
-    got = ss.add_away(biz(db), cid(db, "n041"), DEC20, DEC20)
+    got = ss.add_away(member(db), cid(db, "n041"), DEC20, DEC20)
     assert got.get("id") and "asked" not in got, "free: saved at once"
     db.t["serve_away"].clear()
     away(db, "n043")
-    got = ss.add_away(biz(db), cid(db, "n041"), DEC20, DEC20)
+    got = ss.add_away(member(db), cid(db, "n041"), DEC20, DEC20)
     assert got.get("volunteer") is True and asks(db)[-1]["flags"] == ["over_limit"]
 
 
@@ -350,8 +357,8 @@ def test_closed_or_before_step_twos_tables_nothing_here_reads(db, monkeypatch):
         monkeypatch.setattr(csl, "_FORCE", off != "step1")
         monkeypatch.setattr(cs, "_FORCE", off != "before")
         n = len(db.reads)
-        assert csv.away(biz(db), cid(db, "n041"), DEC20, DEC20) is None
-        assert csv.mine(biz(db), cid(db, "n041")) is None and mps._vol(biz(db), cid(db, "n041")) is None
+        assert csv.away(member(db), cid(db, "n041"), DEC20, DEC20) is None
+        assert csv.mine(member(db), cid(db, "n041")) is None and mps._vol(member(db), cid(db, "n041")) is None
         assert len(db.reads) == n, off
 
 
@@ -484,8 +491,26 @@ def test_the_worship_volunteer_and_the_parking_volunteer_each_go_where_their_cha
     want = csv.leader_of(church(db), BAND, but=cid(db, "n045"))
     assert (a["to_contact_id"] or a["to_user_id"]) == want["id"] and a["department_id"] == dept(db, "Worship")
     # The Parking Team's volunteer said yes to nothing and no department counts them: free, saved at once.
-    got = ss.add_away(biz(db), cid(db, "n046"), DEC20, DEC20)
+    got = ss.add_away(member(db), cid(db, "n046"), DEC20, DEC20)
     assert got.get("id") and "asked" not in got
+
+
+def test_an_ask_that_went_to_the_owner_says_their_name_on_my_serving(db, shell, monkeypatch):
+    """The chain's last step is the owner. The member app's church row has
+    no owner on it, so My serving reads the whole row for its asks: the
+    page names them by the church's own name for them."""
+    lot_place = "5d000000-0000-4000-8000-0000000000c2"
+    db.t["serve_positions"].append({"id": lot_place, "business_id": HOPE, "group_id": LOT, "name": "Lot", "needed": 2,
+                                    "note": "", "sort": 0, "active": True, "created_at": "2026-11-01T00:00:00+00:00"})
+    db.t["serve_trained"].append({"business_id": HOPE, "position_id": lot_place, "contact_id": cid(db, "n046"),
+                                  "level": "trained"})
+    on_for(db, "n046", S[4], lot_place)
+    monkeypatch.setattr(csv, "_keepers", lambda ch, but: [])
+    a = vol_ask(db, "n046", DEC20, DEC20)
+    assert (a["to_user_id"], a["to_contact_id"], a["department_id"], a["team_group_id"]) == (c3.NH_OWNER, None, None, LOT)
+    words = text(serving(db, "n046", b"done=vol_asked"))
+    assert "Sent to Pastor Nathan, because you're on the schedule that day." in words
+    assert "Dec 20 · waiting for Pastor Nathan" in words
 
 
 def test_someone_on_the_leaders_schedule_is_never_a_volunteer_here(db):
@@ -496,7 +521,7 @@ def test_someone_on_the_leaders_schedule_is_never_a_volunteer_here(db):
     db.t["serve_trained"].append({"business_id": HOPE, "position_id": CHECKIN, "contact_id": cid(db, "elena"),
                                   "level": "trained"})
     on_for(db, "elena")
-    got = ss.add_away(biz(db), cid(db, "elena"), day(30), day(37))
+    got = ss.add_away(member(db), cid(db, "elena"), day(30), day(37))
     assert "volunteer" not in got and got["to"] == "Amara Stone"
     [a] = asks(db)
     assert a["grp"] == "leaders" and a["to_contact_id"] == cid(db, "amara") and "serving" in a["flags"]
@@ -568,10 +593,10 @@ def test_not_this_one_with_a_note_is_theirs_and_the_team_leaders_only(app, db, s
 def test_the_dates_entry_is_the_team_leaders_while_it_waits_on_the_schedule_or_not(db):
     db.t["church_schedule_people"].append({"business_id": HOPE, "contact_id": cid(db, "n040"), "listed": "remove",
                                            "grp": None})
-    assert cs.section(biz(db), cid(db, "n040")) is None, "off the schedule, nothing waiting: no entry"
+    assert cs.section(member(db), cid(db, "n040")) is None, "off the schedule, nothing waiting: no entry"
     on_for(db, "n041")
     vol_ask(db)
-    assert cs.section(biz(db), cid(db, "n040")) == {"waiting": 1}
+    assert cs.section(member(db), cid(db, "n040")) == {"waiting": 1}
     html, status = dates(db, "n040")
     assert status == 200 and "Waiting for your yes" in text(html) and "Ask for time off" not in text(html)
 
@@ -722,7 +747,7 @@ def test_every_value_in_an_address_is_quoted_and_every_read_is_this_churchs(db):
     away(db, "n042")
     db.reads.clear()
     vol_ask(db, start=DEC20, end=DEC20)
-    csv.mine(biz(db), cid(db, "n041"))
+    csv.mine(member(db), cid(db, "n041"))
     mine = [p for p in db.reads if p.startswith(("/serve_", "/group_members", "/groups?", "/worship_services",
                                                  "/church_away_asks", "/church_schedule"))]
     assert len(mine) > 8

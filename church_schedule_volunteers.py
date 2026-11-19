@@ -392,6 +392,12 @@ def mine(biz: Dict[str, Any], cid: Any, now: Optional[datetime] = None) -> Optio
                 and r.get("grp") == GRP and r.get("state") in ("asked", "no")]
         if not rows:
             return []
+        # The member app's church row carries no owner (member_portal's site
+        # row): the whole row, so an ask that went to the owner says their name.
+        whole = cs._own_row(biz)
+        if whole is None:
+            return None
+        ch = co.Church(whole)
         rows.sort(key=lambda r: (str(r.get("starts_on") or ""), str(r.get("id"))))
         import church_map
         with church_map.once():
