@@ -3,11 +3,10 @@ title: The member app's bell list — "Your alerts" on /my/notifications, and th
 date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-18 night, on the approved Lumen member app redesign (v29, accent level 2): "level 2 and yes build the bell list and the i''m new here build it."'
-status: shipped behind MEMBER_LUMEN (preview by default)
-prs: [kmj-intake-server (this PR)]
+status: shipped behind MEMBER_LUMEN (preview by default); the dot wired into the Lumen top bar
+prs: [kmj-intake-server#1954, "kmj-intake-server (the dot in the top bar)"]
 migrations: []
 left_undone:
-  - "The bell's dot is not wired into the top bar: the Lumen top bar wasn't on main when this shipped. member_alerts.alerts_unseen(business, contact_id) -> bool is ready for it (cached 45 s per member; call it off the event loop, e.g. in serve()'s gather, and keep the answer for the bar like member_portal_threads.BADGE)."
   - "While church threads are closed for a church (CHURCH_THREADS), the list only has what member_push_sends can name a person for: announcements, live, new sermons, 'Someone prayed for you', plus chats. Event reminders, class nights, kids, groups, news and serving need threads open (church_thread_notes is the only per-member record of them)."
   - "Not in the list: youth posts (their room is their place; church_threads leaves them out too), a group chat set to Evening summary or Off (its evening note isn't kept), the leaders room before the member has a participant row in it."
   - "Checked with tests and a rendered screenshot only; not seen live (Lumen is preview-only)."
@@ -18,6 +17,7 @@ decisions:
   - "Privacy is the lock screen's: rows show the words member_push chose for the lock screen (title and line). A chat says 'New message' / 'New message in <group>'; an office reply says 'New message from the church', never its text"
   - "Who sees it: member_lumen.here() (serve() decides MEMBER_LUMEN once per page) and MEMBER_ALERTS_LIST=off as this list's own way back; off, the page is the old settings page and nothing is read"
   - "Opening the page marks seen off the page's path (the dot goes at once on that server copy); never in the owner's preview, never when the list failed to load"
+  - "The dot: member_lumen.bell_dot asks member_alerts.alerts_unseen (serve() runs it in a thread for Lumen viewers only and keeps it in member_lumen.BELL); the alerts page clears BELL once it marks seen"
   - "Times on the church's clock (group_gatherings.zone, else PLATFORM_DEFAULT_TZ): clock time today, Yesterday, a short weekday this week, else the date"
 related: [2026-11-17-church-threads.md, 2026-11-18-member-lumen.md, 2026-11-18-member-app-cache.md]
 ---

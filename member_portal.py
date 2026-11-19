@@ -1592,6 +1592,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             # never writes, and a list that couldn't load wasn't seen.
             if rows is not None and not preview:
                 member_alerts.mark_seen_later(biz, me["id"])
+                # ...so the bell on this very page has no dot either.
+                import member_lumen
+                member_lumen.BELL.set(False)
         return _page(member_push.render_page(biz, site, request, me, off, quiet, chats, recent=recent))
     from giving_router import giving_is_active
     # Giving opens inside the app (2026-10-14): /my/give is the give

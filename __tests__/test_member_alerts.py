@@ -60,8 +60,8 @@ class FakeSB:
 
     def __init__(self, **tables):
         self.t = {"church_thread_notes": [], "church_thread_reads": [], "member_push_prefs": [{"off": []}],
-                  "member_push_sends": [], "ministry_care_requests": [], "msg_members": [{"enabled": True}],
-                  "msg_participants": [], "group_members": [{"group_id": G1, "role": "member"}],
+                  "member_push_sends": [], "ministry_care_requests": [], "msg_members": [{"contact_id": ME, "enabled": True}],
+                  "msg_participants": [], "group_members": [{"group_id": G1, "contact_id": ME, "role": "member"}],
                   "msg_threads": [], "msg_messages": [], "groups": [{"id": G1, "name": "Young Adults"}],
                   "businesses": []}
         self.t.update(tables)
@@ -519,3 +519,44 @@ def test_no_other_page_reads_for_the_list_or_the_dot(page, monkeypatch):
     for path in ("/my/prayer", "/my/events", "/my/me"):
         assert _get(path).status_code == 200
     assert page["lists"] == []
+
+
+# ── 6. the bell's dot in the new look's top bar (member_lumen.bell_dot) ──
+
+def test_bell_dot_answers_with_alerts_unseen(monkeypatch):
+    import member_lumen
+    asked = []
+    monkeypatch.setattr(ma, "alerts_unseen", lambda biz, cid: asked.append((biz["id"], cid)) or True)
+    assert member_lumen.bell_dot({"id": BIZ}, {"id": ME}) is True
+    assert asked == [(BIZ, ME)]
+    assert member_lumen.bell_dot({"id": BIZ}, None) is False and member_lumen.bell_dot({"id": BIZ}, {}) is False
+    assert asked == [(BIZ, ME)]                                       # nobody signed in: nothing asked
+    monkeypatch.setattr(ma, "alerts_unseen", lambda biz, cid: (_ for _ in ()).throw(RuntimeError("down")))
+    assert member_lumen.bell_dot({"id": BIZ}, {"id": ME}) is False
+
+
+def test_the_bell_has_its_dot_until_the_alerts_are_opened(page, monkeypatch):
+    import member_lumen
+    monkeypatch.setenv("MEMBER_LUMEN", "on")
+    # The page fixture only records the mark: let the real one run, inline.
+    monkeypatch.setattr(ma, "mark_seen_later", _REAL_MARK_LATER)
+    monkeypatch.setattr(member_push, "_later", lambda fn, *a, **k: fn(*a, **k))
+    home = _get("/my").body.decode()
+    assert 'class="lm-bdot"' in home and "Alerts, something new" in home
+    alerts = _get().body.decode()
+    assert "Tomorrow: Fall Picnic" in alerts and 'class="lm-bdot"' not in alerts
+    assert member_lumen.BELL.get() is False
+    home = _get("/my").body.decode()
+    assert 'class="lm-bdot"' not in home and 'aria-label="Alerts"' in home
+
+
+def test_under_the_old_look_the_bell_is_never_asked(page, monkeypatch):
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+
+    def never(*a, **k):
+        raise AssertionError("asked for the dot under the old look")
+    monkeypatch.setattr(ma, "alerts_unseen", never)
+    assert _get("/my").status_code == 200
+
+
+_REAL_MARK_LATER = ma.mark_seen_later
