@@ -4,7 +4,7 @@ date: 2026-11-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin on the member app Bible: it "seems all over the place and doesn''t feel like a bible app ... needs more organization and feel of a top tier bible app"; on Classes: it "doesn''t feel like an academy feel". He approved the "clean Lumen" mock (version 29, accent level 2): its BIBLE, READER and CLASSES views.'
 status: shipped
-prs: ["kmj-intake-server (this PR)"]
+prs: [kmj-intake-server#1960]
 migrations: []
 left_undone:
   - "A devotional's page and its day keep today's markup under Lumen, made quieter by CSS only (lists instead of cards, the ivory scripture card); the mock has no view for them."
