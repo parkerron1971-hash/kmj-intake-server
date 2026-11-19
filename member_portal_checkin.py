@@ -161,6 +161,30 @@ def home_card(c: Dict[str, Any], request: Request) -> str:
     return f"<style>{CHECKIN_CSS}</style>{body}"
 
 
+def lumen_card(c: Dict[str, Any], request: Request) -> str:
+    """Home's check-in card in the new look (member_lumen): one tap counts
+    the member and their family as here or watching online, the same POST
+    as the full card (all of the family, as the full card starts ticked);
+    "Choose who" opens the full card. Once they've checked in, or after an
+    error, the full card as today."""
+    if c.get("state") != "open":
+        return ""
+    if c["marks"] or ERRS.get(str(request.query_params.get("ck") or "")):
+        return home_card(c, request)
+    people = "".join(f'<input type="hidden" name="people" value="{_e(p["id"])}">' for p in c["family"])
+    many = len(c["family"]) > 1
+
+    def one(where: str, label: str, cls: str) -> str:
+        return (f'<form method="post" action="/my/here"><input type="hidden" name="back" value="/my">'
+                f'<input type="hidden" name="where" value="{where}">{people}'
+                f'<button class="lm-btn sm{cls}" type="submit">{label}</button></form>')
+    choose = '<a class="lm-txtbtn" href="/my/here?from=home">Choose who</a>' if many else ""
+    return (f'<section aria-labelledby="lm-ck-h"><span class="lm-kicker" style="color:var(--acc)">{_kicker(c)}</span>'
+            f'<b class="lm-ckt" id="lm-ck-h">Here today? Let the church know.</b>'
+            f'<div class="lm-crow">{one("in", "I&#x27;m here", "")}{one("online", "Watching online", " ghost")}{choose}</div>'
+            f'<span class="lm-ckm">{"One tap counts you and your family." if many else "One tap counts you."}</span></section>')
+
+
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], c: Dict[str, Any]) -> str:
     from member_portal import _shell
     church = (biz.get("name") or "").strip() or "your church"

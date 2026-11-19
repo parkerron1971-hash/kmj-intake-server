@@ -694,7 +694,9 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     import member_portal_church as mpc
     from member_portal import _e, _shell
     church = (biz.get("name") or "").strip() or "your church"
-    top = f'<div class="mb-lt"><h1>Directory</h1></div>{mpc.connect_tabs(biz, "directory")}{mpc._flash(request)}'
+    import member_lumen
+    top = (f'{mpc.connect_head(biz, "directory")}{mpc._flash(request)}' if member_lumen.page() else
+           f'<div class="mb-lt"><h1>Directory</h1></div>{mpc.connect_tabs(biz, "directory")}{mpc._flash(request)}')
     state = v.get("state")
     if state != "ok":
         if state == "minor":

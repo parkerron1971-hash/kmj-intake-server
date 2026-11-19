@@ -337,7 +337,12 @@ def _rgba(hex_: str, a: float) -> str:
 
 
 def base_of(biz: Dict[str, Any]) -> str:
-    """The church's base (settings.member_portal.base), black by default."""
+    """The church's base (settings.member_portal.base), black by default.
+    The new look (member_lumen) is always white: the church's base keeps
+    applying to today's look only."""
+    import member_lumen
+    if member_lumen.page():
+        return "white"
     cfg = ((biz or {}).get("settings") or {}).get("member_portal") or {}
     b = cfg.get("base") if isinstance(cfg, dict) else None
     return b if b in BASES else DEFAULT_BASE
@@ -2082,10 +2087,10 @@ body.k-mode .mp-foot{display:none;}
 # MEMBER_APP_FAST=off is the way back for all three: the whole sheet
 # inline, nothing loaded early, no cross-fade.
 
-SHEETS = ("app", "youth", "kids", "door")
+SHEETS = ("app", "youth", "kids", "door", "lumen")
 # What a sheet's address looks like (custom_domain_cache keeps the same
 # pattern, so Cloudflare may keep the file for every custom domain).
-SHEET_PATH_RE = re.compile(r"^/my/(app|youth|kids|door)\.([0-9a-f]{12})\.css$")
+SHEET_PATH_RE = re.compile(r"^/my/(app|youth|kids|door|lumen)\.([0-9a-f]{12})\.css$")
 _TOKEN_RE = re.compile(r"\$(?:(\$)|\{([_a-z][_a-z0-9]*)\}|([_a-z][_a-z0-9]*))", re.I | re.A)
 
 
@@ -2180,6 +2185,9 @@ def _templates(name: str) -> Tuple[Template, ...]:
         return (_YOUTH_CSS,)
     if name == "kids":
         return (_KIDS_CSS,)
+    if name == "lumen":
+        import member_lumen_ui
+        return (member_lumen_ui._CSS,)
     import member_app_signin as sg
     return (sg._CSS,)
 
@@ -2213,22 +2221,24 @@ def sheet_url(name: str) -> str:
     return f"/my/{name}.{sheet(name)[1]}.css"
 
 
-def _sheets_for(space: str, door: bool) -> Tuple[str, ...]:
-    return ("app",) + ((space,) if space in ("youth", "kids") else ()) + (("door",) if door else ())
+def _sheets_for(space: str, door: bool, lumen: bool = False) -> Tuple[str, ...]:
+    return (("app",) + ((space,) if space in ("youth", "kids") else ()) + (("door",) if door else ())
+            + (("lumen",) if lumen else ()))
 
 
-def colours(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, door: bool = False) -> str:
+def colours(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, door: bool = False,
+            lumen: bool = False) -> str:
     """The one church's part of the look: every --mbt-<token> the page's
     sheets read, as a :root block (about 2 KB). A sign-in page (`door`) is
     always the church's own space, the space member_app_signin's sheet
     was written for."""
     tokens = _tokens(biz, theme, space)
-    names = dict.fromkeys(n for s in _sheets_for(space, door) for n in sheet(s)[2])
+    names = dict.fromkeys(n for s in _sheets_for(space, door, lumen) for n in sheet(s)[2])
     return ":root{" + "".join(f"--mbt-{n}:{tokens[n]};" for n in names) + "}"
 
 
 def head(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, door: bool = False,
-         inline: Optional[bool] = None) -> str:
+         inline: Optional[bool] = None, lumen: bool = False) -> str:
     """The look, for one page's <head>: links to the shared sheets, then
     the church's colours. `inline` (the offline page, which must draw with
     no connection; MEMBER_APP_FAST=off) is the whole sheet in the page, as
@@ -2240,6 +2250,9 @@ def head(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, d
         if door:
             import member_app_signin as sg
             out += f"<style>{sg.css(biz, theme)}</style>"
+        if lumen:
+            import member_lumen_ui
+            out += f"<style>{member_lumen_ui.css()}</style>"
         return out
-    links = "".join(f'<link rel="stylesheet" href="{sheet_url(n)}">' for n in _sheets_for(space, door))
-    return links + f"<style>{colours(biz, theme, space, door=door)}</style>"
+    links = "".join(f'<link rel="stylesheet" href="{sheet_url(n)}">' for n in _sheets_for(space, door, lumen))
+    return links + f"<style>{colours(biz, theme, space, door=door, lumen=lumen)}</style>"

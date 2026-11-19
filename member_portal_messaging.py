@@ -520,7 +520,7 @@ def _gate(biz, site, me, why: str) -> str:
         "not_enabled": "Ask the church office to turn on messaging for you.",
     }.get(why, "Messaging isn't available to you right now.")
     import member_portal_church as mpc
-    return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}
+    return _shell(biz, site, "Messages", f"""{mpc.connect_head(biz, "messages")}
 <div class="mp-card" style="margin-top:16px"><p class="mp-muted" style="margin:0">{text}</p></div>""", tab="connect", who=me)
 
 
@@ -559,7 +559,7 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
     import member_spaces as msp
     youth = (msp.CURRENT.get() or {}).get("youth")
     head = ('<div class="mb-lt"><h1>Chats</h1></div>' + msp.safety_banner() if youth else
-            f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}')
+            mpc.connect_head(biz, "messages"))
     body = [f'{head}{mpc._flash(request)}']
     if req:
         body.append(f'{ui.section("Requests")}<ul class="mb-list mb-cards">{req}</ul>')
