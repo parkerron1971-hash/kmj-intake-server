@@ -436,11 +436,14 @@ def templates() -> Tuple[Template, ...]:
     """The sheet's parts, in order: the foundation's rules, then each page's
     own block (member_lumen_bible.CSS: the Bible, its reader and plans;
     member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give, Watch and
-    Live). member_app_ui.sheet("lumen") serves them as one file."""
+    Live; member_lumen_people.CSS_PEOPLE: Messages and the people pages).
+    member_app_ui.sheet("lumen") serves them as one file."""
     import member_lumen_bible
     import member_lumen_classes
     import member_lumen_give
-    return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS)
+    import member_lumen_people
+    return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
+            member_lumen_people.CSS_PEOPLE)
 
 
 def css() -> str:
