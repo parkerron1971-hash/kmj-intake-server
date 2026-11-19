@@ -349,10 +349,17 @@ def _vol_why(a: Dict[str, Any]) -> str:
     return VOL_WHY[(kind, one)].replace("{dept}", dept)
 
 
-def _vol_to(a: Dict[str, Any]) -> str:
+def _vol_named(name: Any) -> str:
+    """A name a volunteer may read, or '': never a stand-in ("The owner",
+    "An office login", "Someone"), as church_schedule_tell._NO_NAME keeps
+    them out of notices."""
     import church_schedule as cs
-    to = str((a.get("to") or {}).get("name") or "")
-    return "" if to in ("", cs.LEFT, "Someone") else to
+    name = str(name or "").strip()
+    return "" if name in ("", cs.LEFT, "Someone", "The owner", "An office login") else name
+
+
+def _vol_to(a: Dict[str, Any]) -> str:
+    return _vol_named((a.get("to") or {}).get("name"))
 
 
 def _vol_flash(request: Request, m: Dict[str, Any]) -> str:
@@ -403,7 +410,7 @@ def _vol_lines(m: Dict[str, Any]) -> str:
     for a in (m.get("vol") or {}).get("asks") or []:
         if a.get("state") != "no":
             continue
-        by = str((a.get("decided") or {}).get("by") or "").strip() or "Your team's leader"
+        by = _vol_named((a.get("decided") or {}).get("by")) or "Your team's leader"
         out += f'<p class="sv-lede" style="padding:10px 0 0">{_e(by)} said not this one to {_e(_range(a))}.</p>'
         note = (a.get("decided") or {}).get("note")
         if note:

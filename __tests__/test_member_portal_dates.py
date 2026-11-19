@@ -1315,6 +1315,11 @@ def test_the_words_for_a_full_or_protected_day_have_no_ids_office_words_or_title
     for words in said:
         for rule in (UUID, OFFICE_WORDS, TITLE_WORDS, KEYS):
             assert not rule.search(words.replace("{up}", "Owen Diaz")), (words, rule.search(words))
+    # A volunteer's card: the day and the department, never a count, however many days.
+    vol = mpd._vol_full_lines([{"flag": "over_limit", "of": "department", "name": "Kids", "away": 3, "day": day(n)}
+                               for n in range(32, 39)], today, "their team")
+    assert vol[0] == "Sun, Dec 20 is full for Kids." and vol[-1] == "And 4 more days like these."
+    assert not any(re.search(r"\d+ (?:from|of)|already away|three", v) for v in vol), vol
 
 
 # ─── A volunteer's ask (S2-5) ─────────────────────────────────────────
@@ -1348,15 +1353,16 @@ def test_a_volunteers_ask_waits_for_their_teams_leader_with_why_it_came(app, db,
     html, status = page(db, "n040")
     words = text(html)
     assert status == 200 and "Waiting for your yes" in words
-    assert ("Why it came to you Sun, Dec 20 is full: one from Kids is already away, and that’s as many as can be "
-            "away at once. Your yes is all it needs.") in words
-    assert "N042" not in words, "a count, never who"
+    assert "Why it came to you Sun, Dec 20 is full for Kids. Your yes is all it needs." in words
+    assert "N042" not in words, "never who"
+    assert "already away" not in words and "one from" not in words, "never a count: a department's numbers are the office's"
     assert 'name="shown"' not in html, "a plain yes: nothing to except"
     for rule in (UUID, OFFICE_WORDS, KEYS):
         assert not rule.search(words), rule.search(words)
     mine_, _status = page(db, "n041")
     mine_words = text(mine_)
-    assert "Why it went to N040 Member Sun, Dec 20 is full" in mine_words
+    assert "Why it went to N040 Member Sun, Dec 20 is full for Kids. With a yes" in mine_words
+    assert "already away" not in mine_words, "never a count, to the volunteer either"
     assert "These are the away days you asked your team’s leader for. They’re on My serving too." in mine_words
     as_(app, "n040")
     assert went(post(app, f"/my/lead/dates/{a['id']}/answer", ans="yes")).endswith("done=dt_yes")

@@ -265,9 +265,23 @@ def _ch_me(biz: Dict[str, Any], me: Dict[str, Any]):
     """The church, and `me` as the engine takes it. ALWAYS A PERSON: this is
     the member app, and nobody here carries a login's standing, whoever
     they are (the owner's own person, the person of whoever oversees the
-    office). Everything on this page and every write goes through here."""
+    office). Everything on this page and every write goes through here.
+
+    The church is its WHOLE row (church_schedule._own_row): the member app's
+    own row (member_portal's site row) embeds the business without its
+    owner, and with no owner the engine could not tell that an ask which
+    went to the owner is the owner's own person's to answer, nor fall back
+    to the owner when nobody nearer is left (found in S2-5; every test until
+    then handed the whole row). Knowing the owner gives this session nothing
+    more: it is still a person, reading and answering only what went to
+    them. A read that fails keeps the row as handed in."""
     import church_over as co
-    return co.Church(biz), co.who(co.PERSON, str(me["id"]))
+    import church_schedule as cs
+    try:
+        row = cs._own_row(biz) or biz
+    except Exception:  # noqa: BLE001 — the page stands on the row it was handed
+        row = biz
+    return co.Church(row), co.who(co.PERSON, str(me["id"]))
 
 
 def _pick(ch, roster, cid: str) -> List[Dict[str, str]]:
@@ -480,6 +494,19 @@ def _why_lines(why: List[Dict[str, Any]], today: date, theirs: bool = False) -> 
     return said + ([_why_said(pair[0], today, theirs)] if pair else [])
 
 
+def _vol_full_lines(why: List[Dict[str, Any]], today: date, dept: str) -> List[str]:
+    """A volunteer's ask (S2-5): which days are full for their department,
+    by the day and the department's name. NEVER A COUNT: a department's
+    numbers are read only by the office (church_schedule_limits gives them to
+    office logins alone), and with a small number a count says who is away.
+    My serving and the notices say it the same way."""
+    said = [f"{_day(w.get('day'), today)} is full for {w.get('name') or dept}." for w in why[:WHY_MAX]]
+    more = len({w.get("day") for w in why[WHY_MAX:]} - {w.get("day") for w in why[:WHY_MAX]})
+    if len(why) > WHY_MAX:
+        said.append(f"And {more} more day{'s' if more != 1 else ''} like these." if more else "And more on those days.")
+    return said
+
+
 def _open_said(open_: Dict[str, Any], today: date) -> str:
     """The nearest open service days either side, when there are any."""
     days = [_day(d, today) for d in ((open_ or {}).get("before"), (open_ or {}).get("after")) if d]
@@ -540,8 +567,8 @@ def _up_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
 def _vol_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
     """Said while a volunteer's ask waits (S2-5): why it went to their
     team's leader. They are on the schedule to serve on one of these days,
-    and/or one of them is full for their department, as a count and the day
-    (never who is away). To the one it came to, that their yes is all it
+    and/or one of them is full for their department, by the day and the
+    department's name (never a count, never who is away: _vol_full_lines). To the one it came to, that their yes is all it
     needs; to the volunteer, who it is waiting on. '' for any other ask."""
     import church_schedule as cs
     if a.get("state") != "asked" or not cs.volunteer(a):
@@ -553,9 +580,9 @@ def _vol_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
                      else f"{_first(a.get('name'))} is on the schedule to serve on one of these days.")
     if "over_limit" in flags:
         why = a.get("why")
-        dept = (a.get("department") or {}).get("name") or "their team"
+        dept = (a.get("department") or {}).get("name") or ("your team" if theirs else "their team")
         if why:
-            lines += _why_lines(why, today)
+            lines += _vol_full_lines(why, today, dept)
         elif why is None:
             lines.append(f"One of these days was full for {dept} when {'you' if theirs else 'they'} asked.")
         else:
@@ -565,7 +592,7 @@ def _vol_line(a: Dict[str, Any], theirs: bool, today: date) -> str:
         return ""
     if theirs:
         to = (a.get("to") or {}).get("name") or ""
-        to = "" if to == cs.LEFT else to
+        to = "" if to in (cs.LEFT, "Someone", "The owner", "An office login") else to     # never a stand-in
         head = f"Why it went to {to}" if to else "Why it went to your team’s leader"
         end = "With a yes these days go on your away days."
     else:

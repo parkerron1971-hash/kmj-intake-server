@@ -2193,10 +2193,11 @@ taken, and the one that blocks nobody.
 
 - **On Dates**, under Waiting for your yes (the entry is theirs while it waits, on the leaders
   schedule or not, from the kept count): "Why it came to you": "{first name} is on the schedule to
-  serve on one of these days." and/or the full day as a count and the day ("Sun, Dec 20 is full:
-  one from Kids is already away, and that's as many as can be away at once."), worked out when the
-  page is read, never who is away; then "Your yes is all it needs." S1-6's line about the place
-  that opens stands beside it.
+  serve on one of these days." and/or the full day by the day and the department's name ("Sun,
+  Dec 20 is full for Kids."), worked out when the page is read, never a count and never who is
+  away (changed in review: a department's numbers are read only by office logins, and with a
+  number of one a count says who); then "Your yes is all it needs." S1-6's line about the place
+  that opens stands beside it. The volunteer's own card on Dates says it the same way.
 
 **Who is told**
 
@@ -2216,7 +2217,10 @@ taken, and the one that blocks nobody.
   those at the first step of its team's chain, and sends it on only along that chain (when `to`
   is empty, a login that has left the office, or no longer one of them); never to the leaders
   map's step over the volunteer, never round the same step. The sweep's read of waiting asks names
-  `team_group_id` only where step 2 is there.
+  `team_group_id` only where step 2 is there, and a volunteer's ask read without that column is
+  left where it is (added in review: a replica whose first look at step 2 blips would otherwise
+  skip the team's own leaders, move the ask to the department's head, and move it back the next
+  hour, telling each).
 - **The hold is unchanged**: it already holds everyone with an ask still waiting, so a volunteer
   is not asked to serve those days, the board says "away" in its own words, and they are never in
   `/planning/schedule`'s list of who is away.
@@ -2236,19 +2240,49 @@ taken, and the one that blocks nobody.
 - A volunteer's ask filed under no department is in no department's `GET volunteers` list.
 - A "not this one" leaves them on the place they had said yes to; nothing more tells their team's
   leader to find a sub (the leader can, from the team's Sundays).
-- The office app has no screen for an ask yet (decision 21): an ask that went to whoever keeps Who
-  serves when, or to the owner, is answered in the member app by that login's own person, or
-  through the office routes.
-- **Found while building, not changed here (S1-5 and S1-6's code):** the member app hands the
-  engine the church row from `member_portal._site_row`, which embeds the business without
-  `owner_id`, and `member_portal_dates._ch_me` builds `church_over.Church` from it, so
-  `ch.owner` is empty on every Dates page and write, and in the Serve page's ask for a leader
-  (`sunday_serving._ask_away`). Where an answer depends on the owner it comes out as if there
-  were none: an ask whose `to` is the owner's login is not "theirs" to the owner's own person on
-  Dates (the Lead tab's count, which reads the whole row, can still say one waits); `nearest` and
-  `goes_up` can't fall back to the owner; `owner_person` is unknown there, so the owner's own
-  time away from the member app is not instant. Every earlier test builds the church from the
-  whole row, so none sees it. S2-5's own reads take the whole row (`away`, `mine`, `take_back`),
-  and a volunteer's ask reaches the owner only at its chain's last step. The likely fix is one
-  line in `_ch_me` (the whole row from `church_schedule._own_row` when `owner_id` is missing):
-  its own PR, with a test on the member app's row.
+- The office app's Leaders' dates screen (FE #1639) lists the leaders' asks: an ask that went to
+  whoever keeps Who serves when, or to the owner, is answered in the member app by that login's
+  own person (on Dates), or through the office routes.
+- **Found while building, FIXED in this PR from review (S1-5 and S1-6's code):** the member app
+  hands the engine the church row from `member_portal._site_row`, which embeds the business
+  without `owner_id`, and `member_portal_dates._ch_me` built `church_over.Church` from it, so
+  `ch.owner` was empty on every Dates page and write, and in the Serve page's ask for a leader
+  (`sunday_serving._ask_away`): an ask whose `to` is the owner's login was not "theirs" to the
+  owner's own person on Dates, `nearest` and `goes_up` couldn't fall back to the owner, and the
+  owner's own time away from the member app was not instant. Every earlier test built the church
+  from the whole row, so none saw it. `_ch_me` now takes the whole row
+  (`church_schedule._own_row`, one read when the row handed in has no owner; a read that fails
+  keeps the row as handed in). The session is still a person: it reads and answers only what
+  went to it (the person-session tests now run on the member app's row and still hold).
+
+**From the review of #1951**
+
+An independent review found no leak and no way for a volunteer's Away to fail. Fixed, each with a
+test that goes red when the fix is taken out:
+
+1. The sweep leaves a volunteer's ask read without `team_group_id` where it is (above).
+2. Dates takes the church's whole row, so an ask at the chain's last step (the owner) can be
+   answered: before, nobody could answer it in any screen, and it held the volunteer until its
+   days passed (above).
+3. A volunteer's card on Dates, theirs and their team leader's, names the full day and the
+   department, never a count (above).
+4. An Away for days ending today stays instant, whatever they said yes to later today: the code
+   now matches the decision table's "Volunteer, sick today". Before, a place at 7 PM made a
+   morning's sick day an ask, and at night its notice waited out quiet hours.
+5. My serving never shows a volunteer a stand-in for a name ("The owner", "An office login"); it
+   says "your team's leader" instead (`member_portal_serving._vol_named`, the same stand-ins
+   `church_schedule_tell._NO_NAME` keeps out of notices).
+
+Seen and left as they are:
+
+- A login with no person and no seat name is still named by its email's part before the @
+  (`Church.login_name`), on My serving as everywhere: seats are made with names, so this needs a
+  seat with none.
+- The double-press check matches the person's waiting ask in any group. The unique index
+  (`church_away_asks_one_open`) ignores the group too, so matching only volunteers' asks would
+  only turn the same case into a refused write and an instant save. Someone moved off the
+  leaders schedule while their leaders' ask for the same days waits gets "sent" with that ask.
+- If the ask's write lands but its answer is lost, `away()` falls back and saves at once too; a
+  later yes adds a second away row for the same days. That comes with the never-fail rule.
+- A leader's yes opens the volunteer's places (S1-6's `open_places`), which clears a cover
+  request still waiting for an answer; a cover already accepted is safe (the place has moved).

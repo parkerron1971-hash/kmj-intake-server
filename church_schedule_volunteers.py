@@ -351,7 +351,9 @@ def away(biz: Dict[str, Any], cid: Any, start: Any, end: Any) -> Optional[Dict[s
         if row is None:
             return None
         ch = co.Church(row)
-        if z < a or z < cs._today(ch) or (z - a).days > cs.MAX_DAYS:
+        # Days ending today or before stay instant, whatever they are on later today and however full: an away
+        # date for today is sickness's path, never blocked (docs/CHURCH_SCHEDULE.md, "Volunteer, sick today").
+        if z < a or z <= cs._today(ch) or (z - a).days > cs.MAX_DAYS:
             return None
         import church_map
         with church_map.once():
@@ -450,7 +452,15 @@ def stale(ch: co.Church, ask_row: Dict[str, Any]) -> Optional[Dict[str, str]]:
     them, when `to` is empty, a login that has left the office, or no longer
     one of them. Never round the same step, never to the asker, and never to
     the nearest step over the asker on the leaders map: a volunteer's ask is
-    their team's."""
+    their team's.
+
+    A row read without its team (the sweep names `team_group_id` only while
+    step 2 reads as there, and a replica's first look can blip) is LEFT
+    WHERE IT IS: without the team the chain would skip its first step and
+    move the ask off the team's leader, then back the next hour, telling
+    each (found in review of S2-5)."""
+    if "team_group_id" not in ask_row:
+        return None
     cid = str(ask_row.get("contact_id") or "")
     step = team_step(ch, ask_row.get("team_group_id"), ask_row.get("department_id"), but=cid)
     if not step:

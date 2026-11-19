@@ -495,10 +495,12 @@ def test_the_worship_volunteer_and_the_parking_volunteer_each_go_where_their_cha
     assert got.get("id") and "asked" not in got
 
 
-def test_an_ask_that_went_to_the_owner_says_their_name_on_my_serving(db, shell, monkeypatch):
+def test_an_ask_that_went_to_the_owner_says_their_name_on_my_serving(app, db, shell, monkeypatch):
     """The chain's last step is the owner. The member app's church row has
     no owner on it, so My serving reads the whole row for its asks: the
-    page names them by the church's own name for them."""
+    page names them by the church's own name for them. And Dates reads the
+    whole row too (member_portal_dates._ch_me), so the owner's own person
+    has it and answers it there: nobody else can, as a person."""
     lot_place = "5d000000-0000-4000-8000-0000000000c2"
     db.t["serve_positions"].append({"id": lot_place, "business_id": HOPE, "group_id": LOT, "name": "Lot", "needed": 2,
                                     "note": "", "sort": 0, "active": True, "created_at": "2026-11-01T00:00:00+00:00"})
@@ -511,6 +513,43 @@ def test_an_ask_that_went_to_the_owner_says_their_name_on_my_serving(db, shell, 
     words = text(serving(db, "n046", b"done=vol_asked"))
     assert "Sent to Pastor Nathan, because you're on the schedule that day." in words
     assert "Dec 20 · waiting for Pastor Nathan" in words
+    for h in ("owen", "kara", "n040"):
+        as_(app, h)
+        assert post(app, f"/my/lead/dates/{a['id']}/answer", ans="yes").endswith("err=dt_not_yours"), h
+    html, status = dates(db, "nathan")
+    assert status == 200 and f'/my/lead/dates/{a["id"]}/answer' in html and "Waiting for your yes" in text(html)
+    as_(app, "nathan")
+    assert post(app, f"/my/lead/dates/{a['id']}/answer", ans="yes").endswith("done=dt_yes")
+    assert a["state"] == "yes" and a["decided_by_contact_id"] == cid(db, "nathan") and len(facts(db)) == 1
+
+
+def test_an_away_for_today_is_saved_at_once_with_a_place_later_today_and_the_day_full(db):
+    """Sick today (docs/CHURCH_SCHEDULE.md, the decision table): an away
+    date for today stays instant, whatever they said yes to later today and
+    however full the day is; they use Can't make it on the place itself.
+    Found in review of S2-5."""
+    tonight = "5e000000-0000-4000-8000-000000000099"
+    db.t["worship_services"].append(_service(tonight, date(2026, 11, 18), hour=19, minute=0))
+    on_for(db, "n041", tonight)
+    away(db, "n042", day(0))                      # Kids is full today too
+    got = ss.add_away(member(db), cid(db, "n041"), day(0), day(0))
+    assert got.get("id") and "asked" not in got and asks(db) == []
+    assert [(f["starts_on"], f.get("ask_id")) for f in facts(db) if f["contact_id"] == cid(db, "n041")] == [(day(0), None)]
+    # Tomorrow on, it is looked at as ever: Sunday full for Kids is an ask.
+    away(db, "n042", day(4))
+    assert ss.add_away(member(db), cid(db, "n043"), day(4), day(4)).get("volunteer") is True
+
+
+def test_a_stand_in_name_is_never_what_a_volunteer_reads():
+    """No name to say (a church with no name for its owner, an office login
+    with no person or seat name): My serving says "your team's leader",
+    never "The owner" or "An office login". Found in review of S2-5."""
+    for stand_in in ("", "Someone", "The owner", "An office login", cs.LEFT):
+        assert mps._vol_to({"to": {"name": stand_in}}) == "", stand_in
+    assert mps._vol_to({"to": {"name": "Pastor Nathan"}}) == "Pastor Nathan"
+    said = mps._vol_lines({"vol": {"asks": [{"state": "no", "starts_on": DEC20, "ends_on": DEC20,
+                                             "decided": {"by": "The owner", "note": ""}}]}})
+    assert "The owner" not in said and "leader said not this one to Dec 20" in said
 
 
 def test_someone_on_the_leaders_schedule_is_never_a_volunteer_here(db):
@@ -683,6 +722,10 @@ def test_the_sweep_keeps_it_with_the_team_and_moves_it_when_the_team_leader_does
     fake.later(db)
     assert tell.sweep_tick(NOW + timedelta(hours=1))["moved"] == 0
     assert a["to_contact_id"] == cid(db, "n040"), "never sent to the leaders map's step over them"
+    # Read without its team (step 2 blipped on a replica's first look: the sweep doesn't name the column, and
+    # PostgREST returns only what is named; the fake returns every column): left where it is, never sent on to
+    # the department's head and back.
+    assert csv.stale(church(db), {k: v for k, v in a.items() if k != "team_group_id"}) is None
     # The team has a new leader: it goes to them, and they hear.
     for r in db.t["group_members"]:
         if r["group_id"] == KIDS_TEAM and r["contact_id"] == cid(db, "n040"):
