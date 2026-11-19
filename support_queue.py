@@ -146,6 +146,19 @@ def _keywords(text: str, take: int = 3) -> List[str]:
     return sorted(kept)
 
 
+# Tickets of these kinds (context.kind) each stand alone: they get no
+# problem key, so they are never counted as repeats of each other or
+# clustered. A "Report" on a Chief reply (chief_reply_report.py) has the
+# same subject for every report with one reason, so the key below would
+# merge unrelated replies into one "repeated problem" and rank them up.
+STANDALONE_KINDS = frozenset({"chief_reply_report"})
+
+
+def stands_alone(context: Optional[Dict[str, Any]]) -> bool:
+    """True for a ticket that must never share a problem key."""
+    return isinstance(context, dict) and context.get("kind") in STANDALONE_KINDS
+
+
 def problem_key(category: str, subject: str, message: str,
                 context: Optional[Dict[str, Any]] = None) -> str:
     """A key two reports of the SAME problem are likely to share.
