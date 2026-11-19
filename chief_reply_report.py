@@ -21,7 +21,10 @@ question at a glance and in a query.
 best effort): the queue's keyword guess would rank it "normal", and a report
 under that policy should be read first. If that row can't be written the
 queue seeds its own guess the first time it reads the ticket, as it always
-has; the report itself is never lost over it.
+has; the report itself is never lost over it. Either way a report has NO
+problem_key (support_queue.stands_alone): every report has the same subject
+for its reason, so a key would count unrelated replies as one repeated
+problem and rank them up.
 
 WHO MAY REPORT: whoever may talk to Chief in the business. The chat turn
 authorizes by reading the business under the caller's own token, and the
@@ -29,8 +32,9 @@ businesses policies let three kinds of login read it: the owner
 (businesses.owner_id), an active seat of any role (business_users,
 is_business_member) and an active collaborator such as an accountant
 (business_collaborators, is_business_collaborator). This route writes as the
-service role, so it asks the same question explicitly, and fails CLOSED: an
-unreadable answer is a refusal, and a stranger gets the same 404 as a
+service role, so it asks the same question explicitly, and fails CLOSED: a
+read that fails (sb_get_as_service's None) is a 503 the app can retry, never
+a "not found" for a real team member, and a stranger gets the same 404 as a
 business that doesn't exist.
 
 What a ticket holds is readable by the business's owner (tickets_tenant_select),
@@ -108,16 +112,44 @@ def _clip(text: Any, limit: int) -> str:
     return s[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _collaborator(business_id: str, user_id: str) -> bool:
-    """An active business_collaborators row (is_business_collaborator)."""
+class _Unreadable(RuntimeError):
+    """A read the access check needed came back as no answer at all."""
+
+
+def _rows(path: str) -> list:
+    """sb_get_as_service, where None means the read FAILED. It answers None
+    on any error and a list (maybe empty) on success, so `or []` here would
+    turn "the database didn't answer" into "you have no seat"."""
+    rows = sb_clients.sb_get_as_service(path)
+    if not isinstance(rows, list):
+        raise _Unreadable(path.split("?", 1)[0])
+    return rows
+
+
+def _role_of_caller(business_id: str, user_id: str) -> Optional[str]:
+    """'owner', the active seat's role, 'collaborator', or None (no standing,
+    or no such business). Raises _Unreadable when a read fails.
+
+    The same questions as business_users_router.role_of plus
+    is_business_collaborator, read here rather than through role_of because
+    role_of folds a failed read into "no role", and a team member must not
+    hear "business not found" because the database blinked."""
     from business_users_router import safe_id
     if not safe_id(str(business_id or "")) or not safe_id(str(user_id or "")):
-        return False
+        return None
     b, u = quote(str(business_id), safe=""), quote(str(user_id), safe="")
-    rows = sb_clients.sb_get_as_service(
-        f"/business_collaborators?business_id=eq.{b}&user_id=eq.{u}"
-        f"&status=eq.active&select=id&limit=1") or []
-    return bool(rows)
+    biz = _rows(f"/businesses?id=eq.{b}&select=id,owner_id&limit=1")
+    if not biz:
+        return None
+    if str(biz[0].get("owner_id")) == str(user_id):
+        return "owner"
+    seat = _rows(f"/business_users?business_id=eq.{b}&user_id=eq.{u}"
+                 f"&status=eq.active&select=role&limit=1")
+    if seat:
+        return str(seat[0].get("role") or "member")
+    collab = _rows(f"/business_collaborators?business_id=eq.{b}&user_id=eq.{u}"
+                   f"&status=eq.active&select=id&limit=1")
+    return "collaborator" if collab else None
 
 
 def require_reporter(business_id: str, user: AuthedUser) -> str:
@@ -127,13 +159,11 @@ def require_reporter(business_id: str, user: AuthedUser) -> str:
     allows), or 'collaborator' for an active business_collaborators row (as
     is_business_collaborator allows). Anyone else gets 404, the same answer
     as a business that doesn't exist (business_access's rule). Fails
-    CLOSED: an access check that can't run is a 503, not a yes."""
-    from business_users_router import role_of
-    uid = str(user.id)
+    CLOSED and retryable: a read that fails or doesn't answer is a 503,
+    never a yes and never a "not found"."""
     try:
-        role = role_of(business_id, uid) or (
-            "collaborator" if _collaborator(business_id, uid) else None)
-    except Exception as e:  # noqa: BLE001
+        role = _role_of_caller(business_id, str(user.id))
+    except Exception as e:  # noqa: BLE001 - _Unreadable, or a read that raised
         logger.error("[reply-report] access check failed for %s: %s", business_id, e)
         raise HTTPException(status_code=503, detail="access check unavailable") from e
     if not role:
@@ -179,16 +209,20 @@ def compose(reason_key: str, reply: str, asked: str, note: str,
 
 
 def _seed_triage(ticket: Dict[str, Any], reason_key: str) -> None:
-    """Best effort: rank the ticket by its reason, not the keyword guess."""
+    """Best effort: rank the ticket by its reason, not the keyword guess.
+
+    No problem_key: every report stands alone. The key the queue would work
+    out comes from the subject, which is the same for every report with one
+    reason, so two unrelated replies would count as one repeated problem and
+    rank each other up. support_queue.stands_alone tells the queue's own
+    seeding (support_router._seed_triage) the same thing when this write
+    doesn't land."""
     try:
-        import support_queue as sq
         sb_clients.sb_post_as_service("/support_triage", {
             "ticket_id": ticket["id"],
             "severity": REASONS[reason_key]["severity"],
             "fix_state": "new",
-            "problem_key": sq.problem_key(
-                ticket.get("category") or "", ticket.get("subject") or "",
-                ticket.get("message") or "", ticket.get("context") or {}),
+            "problem_key": None,
             "triaged_by": "auto",
         }, prefer="return=minimal", redact=True)
     except Exception as e:  # noqa: BLE001 - the queue seeds its own guess on read

@@ -51,19 +51,24 @@ STRANGER = "00000000-0000-0000-0000-0000000000d1"
 
 class FakeDB:
     """sb_get_as_service / sb_post_as_service by table name, filtered by
-    the id, user and status in the path so the real role_of runs."""
+    the id, user and status in the path. `none_on` answers None for a
+    table, which is what sb_get_as_service really does when a read fails
+    (it never raises); `raise_on` raises, for a client that does."""
 
-    def __init__(self, tables, fail_insert=(), raise_on=()):
+    def __init__(self, tables, fail_insert=(), raise_on=(), none_on=()):
         self.tables = tables
         self.inserts = []
         self.fail_insert = set(fail_insert)
         self.raise_on = set(raise_on)
+        self.none_on = set(none_on)
 
     def get(self, path):
         table, _, query = path.partition("?")
         table = table.strip("/")
         if table in self.raise_on:
             raise RuntimeError(f"{table} unreadable")
+        if table in self.none_on:
+            return None
         rows = [dict(r) for r in self.tables.get(table, [])]
         for key, values in parse_qs(query).items():
             if values and values[0].startswith("eq."):
@@ -87,7 +92,7 @@ def api(monkeypatch):
     rate_limit._buckets.clear()
     who = {"user": OWNER}
 
-    def install(fail_insert=(), raise_on=(), **tables):
+    def install(fail_insert=(), raise_on=(), none_on=(), **tables):
         tables.setdefault("businesses", [
             {"id": BIZ, "owner_id": OWNER, "name": "Grace Church"},
             {"id": HOME, "owner_id": OWNER, "name": "Home Church"},
@@ -99,7 +104,7 @@ def api(monkeypatch):
         tables.setdefault("business_collaborators", [
             {"id": "col-1", "business_id": BIZ, "user_id": ACCOUNTANT,
              "role": "accountant", "status": "active"}])
-        db = FakeDB(tables, fail_insert=fail_insert, raise_on=raise_on)
+        db = FakeDB(tables, fail_insert=fail_insert, raise_on=raise_on, none_on=none_on)
         monkeypatch.setattr(sb_clients, "sb_get_as_service", db.get)
         monkeypatch.setattr(sb_clients, "sb_post_as_service", db.post)
         monkeypatch.setattr(sample_church, "is_sample", lambda bid: str(bid) == SAMPLE)
@@ -186,6 +191,35 @@ def test_an_access_check_that_cannot_run_refuses(api):
     assert post.db.inserts == []
 
 
+# sb_get_as_service answers None, not an exception, when a read fails. A real
+# team member must hear "try again" (503), never "business not found" (404).
+@pytest.mark.parametrize("table,user", [
+    ("businesses", OWNER),
+    ("businesses", SEATS["member"]),
+    ("business_users", SEATS["member"]),
+    ("business_collaborators", ACCOUNTANT),
+], ids=["owner-business-read", "member-business-read", "member-seat-read",
+        "collaborator-read"])
+def test_a_read_that_answers_none_is_a_503_not_a_404(api, table, user):
+    post = api(none_on=(table,))
+    r = post(user)
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == "access check unavailable"
+    assert post.db.inserts == []
+
+
+def test_an_owner_is_known_before_the_seat_read(api):
+    """The owner is answered from the businesses row; a seat read that
+    would fail is never needed for them."""
+    post = api(none_on=("business_users", "business_collaborators"))
+    assert post(OWNER).status_code == 200
+
+
+def test_a_stranger_after_every_read_answered_is_still_404(api):
+    post = api(business_collaborators=[])
+    assert post(STRANGER).status_code == 404
+
+
 def test_a_malformed_business_id_names_no_business(api):
     post = api()
     assert post(business_id="abc#&user_id=eq.x").status_code == 404
@@ -248,8 +282,34 @@ def test_offensive_is_triaged_high_on_arrival(api):
     assert tri["fix_state"] == "new"
     assert tri["triaged_by"] == "auto"
     assert tri["ticket_id"].startswith("support_tickets-row-")
-    assert tri["problem_key"].startswith("general:chief:")
+    assert tri["problem_key"] is None
     assert t  # the ticket is there too
+
+
+def test_two_different_reports_with_one_reason_never_share_a_key(api):
+    """The subject is the same for every report with one reason, so a key
+    built from it would make unrelated replies one 'repeated problem' and
+    rank them up (support_router counts repeats by key). Each stands alone,
+    in this route's triage row and in the queue's own seeding."""
+    import support_queue as sq
+    import support_router
+    post = api()
+    post(reply="Your Tuesday class is full.")
+    post(reply="Here is the invoice for Dana.", asked="Bill Dana")
+    tickets = post.db.rows("support_tickets")
+    keys = [t["problem_key"] for t in post.db.rows("support_triage")]
+    assert len(tickets) == 2 and tickets[0]["subject"] == tickets[1]["subject"]
+    assert keys == [None, None]
+    # The queue's fallback, when this route's triage write didn't land.
+    seeded = [support_router._seed_triage({**t, "id": f"t{i}"}) for i, t in enumerate(tickets)]
+    assert [s["problem_key"] for s in seeded] == [None, None]
+    assert all(sq.stands_alone(t["context"]) for t in tickets)
+    # An ordinary ticket is keyed exactly as before.
+    plain = support_router._seed_triage({"id": "p", "category": "bug",
+                                         "subject": "Booking cancel button broken",
+                                         "message": "x", "context": {"screen": "booking"}})
+    assert plain["problem_key"] == sq.problem_key("bug", "Booking cancel button broken",
+                                                  "x", {"screen": "booking"})
 
 
 def test_other_reasons_are_triaged_normal(api):

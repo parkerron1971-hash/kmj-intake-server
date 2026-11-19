@@ -131,7 +131,9 @@ def _seed_triage(ticket: Dict[str, Any]) -> Dict[str, Any]:
         "ticket_id": ticket["id"],
         "severity": severity,
         "fix_state": fix_state,
-        "problem_key": sq.problem_key(
+        # A ticket that stands alone (a Chief reply report) gets none:
+        # the key would make unrelated ones count as repeats.
+        "problem_key": None if sq.stands_alone(ticket.get("context")) else sq.problem_key(
             ticket.get("category") or "", ticket.get("subject") or "",
             ticket.get("message") or "", ticket.get("context") or {}),
         "triaged_by": "auto",
