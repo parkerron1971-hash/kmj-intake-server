@@ -167,6 +167,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # one member can't flood it. An hour's budget and a day's.
     "member_ask": (int(os.environ.get("RL_MEMBER_ASK_PER_HOUR", "6")), 3600),
     "member_ask_day": (int(os.environ.get("RL_MEMBER_ASK_PER_DAY", "15")), 86400),
+    # I'm new here (member_im_new.py), per member, on top of member_action:
+    # one save per member is the rule; this stops a tap loop.
+    "member_im_new": (int(os.environ.get("RL_MEMBER_IM_NEW_PER_HOUR", "6")), 3600),
     # The member app's Bible, per member: highlights, notes and saved verses
     # (a chapter can be many taps), and word searches (each reads a whole
     # translation).

@@ -1134,7 +1134,11 @@ def render_care(biz, site, request: Request, me, kind: str, youth: bool) -> str:
                    f"Tell the {church} office what you're planning. They'll reach out to plan it with you.")
         legend, label, ph, need = "What are you planning?", "Anything we should know? (optional)", \
             "Names, the place, anything you'd like", False
-    radios = "".join(f'<label><input type="radio" name="pick" value="{_e(k)}" required> {_e(v)}</label>'
+    # A way in can say which (I'm new here's "Get baptized" opens Plan a
+    # life event on A baptism: ?pick=baptism). Only one of this ask's own.
+    chosen = str(request.query_params.get("pick") or "")
+    radios = "".join(f'<label><input type="radio" name="pick" value="{_e(k)}" required'
+                     f'{" checked" if k == chosen else ""}> {_e(v)}</label>'
                      for k, v in picks.items())
     date_row = ""
     if kind == KIND_HELP:

@@ -178,7 +178,13 @@ def bell_dot(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> bool:
 
 
 def new_here_card(biz: Mapping[str, Any], me: Optional[Mapping[str, Any]]) -> str:
-    """Connect's "Your next step" leads with the "I'm new here" card (and its
-    page, /my/new) once that lands: its new_here_card(biz, me) answers here
-    with the card's markup, '' for someone it isn't for. Nothing until then."""
-    return ""
+    """Connect's "Your next step" leads with the "I'm new here" card
+    (member_im_new: Start before the member has told the church, Your path
+    after; its page is /my/new). '' for someone it isn't for: MEMBER_IM_NEW
+    off, not a church, Youth or Kids, a teen. member_portal runs this in a
+    thread, which carries this page's look and space across."""
+    try:
+        import member_im_new
+        return member_im_new.new_here_card(biz, {"me": me}, None) or ""
+    except Exception:
+        return ""

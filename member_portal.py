@@ -1473,6 +1473,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         if isinstance(out, tuple):
             return _page(out[0], out[1])
         return out
+    # I'm new here (member_im_new.py): the redesign's Connect "Your next
+    # step", behind MEMBER_LUMEN and MEMBER_IM_NEW.
+    if sub == "/my/new":
+        import member_im_new
+        out = await member_im_new.serve(request, church, sess, me)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
     # The church's conversation and a group's notes (member_portal_threads,
     # church_threads), inside Messages; /my/inbox itself goes to Messages.
     # Only while CHURCH_THREADS is open here.

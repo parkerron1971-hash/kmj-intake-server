@@ -581,6 +581,10 @@ app.include_router(member_directory_router)
 # and pledge asks, and the office's choices. Before the site catch-all.
 from member_asks import router as member_asks_router
 app.include_router(member_asks_router)
+# I'm new here (member_im_new.py): POST /my/new (GET is member_portal.serve's),
+# behind MEMBER_LUMEN and MEMBER_IM_NEW. Before the site catch-all.
+from member_im_new import router as member_im_new_router
+app.include_router(member_im_new_router)
 # Church threads (church_threads.py, CHURCH_THREADS off | owner | on): the
 # office's side of From your church (/church-threads/...), and the member's
 # message to the office (POST /my/inbox/church/send; the pages are
