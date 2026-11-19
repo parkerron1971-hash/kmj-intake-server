@@ -14,6 +14,11 @@
 #   - plans, a reading plan, search, the book picker, highlights & notes;
 #   - Classes: the next class night, the path, your classes, classes to join,
 #     from the same read;
+#   - Lumen Next: night reading (a cookie the server reads: the page arrives
+#     dark, the phone's bar with it; today's reader ignores it), the line of
+#     how far you've read, the ink sweep, Make a card (the church's photo and
+#     logo, nothing sent), the certificate moment on a finished course; no
+#     new reads;
 #   - the CSS lives in its own blocks, in the served sheet, under body.lm.
 
 import pathlib
@@ -183,6 +188,86 @@ def test_the_preview_reader_keeps_the_translation_without_aa(bible, fake, monkey
     assert 'class="lm-trfoot"' in html and 'href="/my/bible/john/1?t=asv"' in html
 
 
+# ─── Lumen Next: the reader at night, the ink, Make a card ────────────
+
+
+def test_night_reading_arrives_dark_from_its_cookie(bible, fake, monkeypatch):  # noqa: F811
+    import member_lumen_bible as mlb
+    c = _client(fake, monkeypatch)
+    day = c.get("/my/bible/john/1").text
+    assert "lm-dark" not in _body_class(day).split()
+    assert '<meta name="theme-color" content="#ffffff">' in day
+    top = day[day.index('<header class="mb-top lm-mid">'):day.index("</header>")]
+    assert 'id="lm-moon"' in top and 'aria-pressed="false"' in top and 'aria-label="Night reading"' in top
+    assert f'data-night="{mlb.NIGHT_BG}"' in top and 'data-day="#ffffff"' in top
+    assert '<span class="lm-rprog" aria-hidden="true"></span>' in top                 # how far you've read
+    assert mlb.READER_MORE_JS in day and "lm_night=" in mlb.READER_MORE_JS and "Path=/my" in mlb.READER_MORE_JS
+    c.cookies.set(mlb.NIGHT_COOKIE, "1")
+    night = c.get("/my/bible/john/1").text
+    assert _body_class(night).split()[:2] == ["lm", "lm-push"] and "lm-dark" in _body_class(night).split()
+    assert f'<meta name="theme-color" content="{mlb.NIGHT_BG}">' in night
+    assert 'id="lm-moon" aria-pressed="true"' in night
+    # only the reader reads it: the Bible tab and Home stay white
+    assert "lm-dark" not in _body_class(c.get("/my/bible").text).split()
+    assert "lm-dark" not in _body_class(c.get("/my").text).split()
+    # a reader that can't edit (a preview, marks down) keeps the moon
+    fake.down.add("bible_marks")
+    assert 'id="lm-moon"' in c.get("/my/bible/john/1").text
+
+
+def test_night_reading_reads_nothing_new_and_today_ignores_it(bible, fake, monkeypatch):  # noqa: F811
+    import member_lumen_bible as mlb
+    c = _client(fake, monkeypatch)
+    c.cookies.set(mlb.NIGHT_COOKIE, "1")
+    _, reads_on = _reads(fake, c, "/my/bible/john/1")
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    off_night, reads_off = _reads(fake, c, "/my/bible/john/1")
+    assert reads_on == reads_off
+    c.cookies.clear()
+    assert c.get("/my/bible/john/1").text == off_night                                 # byte for byte
+    assert "lm-moon" not in off_night and "lm-vc" not in off_night and "lm-dark" not in off_night
+
+
+def test_make_a_card_from_a_verse(bible, fake, monkeypatch):  # noqa: F811
+    import member_app_photos as photos
+    import member_lumen_bible as mlb
+    monkeypatch.setattr(photos, "photos", lambda b, site, limit=None: ["/public/site-assets/grace/sanctuary.jpg"])
+    html = _client(fake, monkeypatch).get("/my/bible/john/1").text
+    dock = html[html.index('id="bb-dock"'):html.index('id="bb-note"')]
+    assert 'data-act="card" aria-haspopup="dialog"' in dock and "Make a card" in dock
+    sheet = html[html.index('<div class="lm-vc" id="lm-vc" hidden'):]
+    sheet = sheet[:sheet.index('<script type="application/json" id="bb-marks">')]
+    assert 'data-church="Grace Fellowship"' in sheet and 'data-mark="GF"' in sheet
+    assert 'data-photo="/public/site-assets/grace/sanctuary.jpg"' in sheet
+    assert 'role="dialog" aria-modal="true" aria-labelledby="lm-vc-t"' in sheet
+    assert '<canvas class="lm-vc-cv" width="1080" height="1350"' in sheet
+    assert re.findall(r'data-look="(\w+)"', sheet) == ["ivory", "photo", "night", "church"]
+    assert 'aria-checked="true" data-look="ivory"' in sheet
+    assert "Nothing is sent anywhere" in sheet and 'data-vc="share"' in sheet and 'data-vc="save"' in sheet
+    # the card is drawn on the phone: no address to send it to, no form
+    js = mlb.READER_MORE_JS
+    assert "fetch(" not in js and "XMLHttpRequest" not in js and "navigator.share" in js and "toBlob" in js
+    assert "crossOrigin='anonymous'" in js and "getImageData" in js                    # a picture that won't be read is left out
+    # no church photo: no Photo look
+    monkeypatch.setattr(photos, "photos", lambda b, site, limit=None: [])
+    html = _client(fake, monkeypatch).get("/my/bible/john/1").text
+    sheet = html[html.index('id="lm-vc"'):]
+    assert 'data-photo=""' in sheet and 'data-look="photo"' not in sheet
+    # a reader that can't edit has no verse to pick, so no card
+    fake.down.add("bible_marks")
+    assert 'id="lm-vc"' not in _client(fake, monkeypatch).get("/my/bible/john/1").text
+
+
+def test_the_ink_sweeps_and_rests_when_motion_is_reduced():
+    import member_lumen_bible as mlb
+    css = mlb.CSS
+    assert "body.lm .lm-read .bb-v{--hlc:transparent;" in css and "background-size:0% 100%;" in css
+    assert "body.lm .lm-read .bb-v.hl-gold{--hlc:" in css
+    motion = css[css.index("@media (prefers-reduced-motion:no-preference){\n  body.lm .lm-read .bb-v{"):]
+    assert "transition:background-size .9s" in motion[:200]
+    assert "body.lm.lm-dark{" in css and "color-scheme:dark" in css
+
+
 # ─── plans, a reading plan, search, books, notes ─────────────────────
 
 
@@ -276,6 +361,39 @@ def test_classes_failed_and_empty(church, fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(mcl, "classes_for", lambda b, me: {"tz": "UTC", "mine": [], "programs": [], "open": []})
     html = _client(fake, monkeypatch).get("/my/classes").text
     assert "No classes to join <em>right now</em>" in html
+    assert 'id="lm-cert"' not in html and "lm-certs" not in html
+
+
+def test_a_finished_course_has_its_certificate_moment(classes, fake, monkeypatch):  # noqa: F811
+    import json
+    import member_lumen_classes as mlc
+    on, off = _same_reads(fake, monkeypatch, "/my/classes")
+    # the finished course on the path keeps Open and gains Certificate
+    path = on[on.index('class="lm-path"'):]
+    path = path[:path.index("</ol>")]
+    done = path[path.index('class="lm-step is-done"'):path.index('class="lm-step is-now"')]
+    assert 'class="lm-stepacts"' in done and ">Open<" in done
+    assert 'data-cert="c0" aria-haspopup="dialog" aria-describedby="lm-step-c0"' in done and "Certificate</button>" in done
+    assert "data-cert=" not in path[path.index('class="lm-step is-now"'):]           # only finished ones
+    # what the moment needs, from the same read
+    data = json.loads(on.split('<script type="application/json" id="lm-certs">', 1)[1].split("</script>", 1)[0])
+    assert data["done"] == [{"id": "c0", "title": "Foundations Path: Welcome", "total": 3, "code": ""}]
+    assert data["active"] == ["c1", "c9"] and data["church"] == "Grace Fellowship" and data["who"]
+    box = on[on.index('<div class="lm-cert" id="lm-cert" hidden>'):]
+    assert 'role="dialog" aria-modal="true" aria-labelledby="lm-cert-t"' in box and "Course complete" in box
+    assert 'href="#lm-copen-h" data-cert-x>Next course</a>' in box                     # there are classes to join
+    assert mlc.CERT_JS in on and "localStorage" in mlc.CERT_JS and "Academy" not in on
+    assert "lm-cert" not in off and "data-cert" not in off
+    # a real certificate code shows; a course off the path gets the button in Your classes
+    classes["mine"][0]["certificate"] = "GF-2026-0042"
+    classes["mine"][2].update(status="completed", done=6)
+    classes["open"] = []
+    html = _client(fake, monkeypatch).get("/my/classes").text
+    data = json.loads(html.split('id="lm-certs">', 1)[1].split("</script>", 1)[0])
+    assert [c["code"] for c in data["done"]] == ["GF-2026-0042", ""] and data["active"] == ["c1"]
+    mine = html[html.index('id="lm-mine-h"'):]
+    assert 'data-cert="c9"' in mine[:mine.index("</section>")]
+    assert '<button type="button" class="lm-btn" data-cert-x>Done</button>' in html  # nothing to join
 
 
 # ─── the look ────────────────────────────────────────────────────────
@@ -290,6 +408,10 @@ def test_the_pages_css_is_in_the_served_sheet_in_its_own_blocks():
     assert lm.css().startswith(lm._CSS.template)
     for block in (mlb.CSS, mlc.CSS):
         body = re.sub(r"/\*.*?\*/", "", block, flags=re.S)
+        # a motion's steps are named, not selected (lm- names, each block its own)
+        names = re.findall(r"@keyframes\s+([\w-]+)", body)
+        assert all(n.startswith("lm-") for n in names), names
+        body = re.sub(r"@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", body)
         body = re.sub(r"@media[^{]*\{|@supports[^{]*\{", "", body)
         for sel in re.findall(r"(?:^|\})\s*([^{}]+)\{", body):
             for one in sel.split(","):

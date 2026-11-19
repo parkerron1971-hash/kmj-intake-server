@@ -651,7 +651,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
            wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
-           lumen_head: str = "") -> str:
+           lumen_head: str = "", lumen_dark: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -671,7 +671,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     `lumen_bar` = (middle, right): more in a pushed page's bar under the
     new look (the reader's chapter and Aa); today's look ignores it.
     `lumen_head` (a conversation in the new look: member_lumen_people.thead)
-    is its face and name in the bar at the top; today's look ignores it."""
+    is its face and name in the bar at the top; today's look ignores it.
+    `lumen_dark` (the Bible reader at night, member_lumen_bible) draws the
+    page dark under the new look, the phone's bar with it; today's look
+    ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
     from public_form_theme import resolve_theme, css_vars
@@ -728,6 +731,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     tabbar = (ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz,
                      board=bool(ctx.get("board")), side=side) if signed_in and bar else '')
     scroll = '' if bare or door else ui.SCROLL_JS
+    bar_colour = pal['bg']
     # The new look (member_lumen, MEMBER_LUMEN): a Church page for a signed-in
     # member, when the switch shows it to them. Off, nothing below runs and
     # every page is byte for byte what it was.
@@ -736,13 +740,17 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
+        if lumen_dark:
+            import member_lumen_bible
+            body_cls = body_cls[:-1] + ' lm-dark"'
+            bar_colour = member_lumen_bible.NIGHT_BG
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="{pal['bg']}">
+<meta name="theme-color" content="{bar_colour}">
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
 {ui.FONTS}

@@ -24,6 +24,14 @@ member_portal_reading, member_bible_marks). Who sees it: member_lumen.py
   /my/bible/plans ... plans and devotionals, in the same cards.
   /my/reading ....... a reading plan: how far, this week, catch up.
 
+Lumen Next (Kevin approved every moment of the Lumen Next mock, 2026-11-19)
+adds to the reader: night reading (the moon beside Aa: dark and full-bleed,
+kept in a cookie on the member's phone that the server reads, so the next
+chapter arrives dark), a thin gold line of how far through the chapter you
+are, a highlight that sweeps across the verse like ink, and Make a card
+(the verse drawn on the phone in four looks, shared or saved; nothing is
+sent anywhere). See READER_MORE_JS.
+
 The mock's "Listen to this chapter" is not built (Kevin never approved
 it). Nothing here is made up: a block with nothing real in it is left out.
 
@@ -311,19 +319,69 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
 
 SWATCHES = ("gold", "pink", "teal", "violet", "coral")
 
+# Lumen Next (Kevin approved every moment of the Lumen Next mock, 2026-11-19):
+# the reader at night (dark and full-bleed; the phone keeps the choice in a
+# cookie the server reads, so the page arrives dark with no flash), a thin
+# line of how far through the chapter you are, a highlight that sweeps
+# across the verse like ink, and a verse made into a card to share.
+NIGHT_BG = "#100E0B"
+NIGHT_COOKIE = "lm_night"
+# the card's looks, in the mock's order: (key, label)
+LOOKS = (("ivory", "Ivory"), ("photo", "Photo"), ("night", "Night"), ("church", "Church"))
+_GLYPHS = {
+    "moon": '<path d="M20.5 13.4A8.5 8.5 0 1 1 10.6 3.5a6.6 6.6 0 0 0 9.9 9.9z"/>',
+    "card": '<rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8.5 8.5c1.2-1.4 2.6-1.4 3.5 0s2.3 1.4 3.5 0"/>'
+            '<path d="M8.5 15.5h7"/>',
+}
+
+
+def _glyph(name: str, size: int = 20) -> str:
+    return (f'<svg class="lm-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+            f'{_GLYPHS[name]}</svg>')
+
+
+def card_sheet(biz: Dict[str, Any], site, photo: str, logo: str) -> str:
+    """The "Make a card" sheet: the phone draws the verse on a canvas in one
+    of four looks (ivory, a church photo, night, the church's colour) and
+    shares or saves the picture. Nothing is sent anywhere. `photo` is the
+    church's first photo ('' leaves the Photo look out); `logo` its logo
+    ('' draws its initials)."""
+    import member_app_ui as ui
+    name = (biz.get("name") or "").strip() or "Your church"
+    looks = "".join(
+        f'<button type="button" role="radio" aria-checked="{"true" if k == "ivory" else "false"}" data-look="{k}">{label}</button>'
+        for k, label in LOOKS if k != "photo" or photo)
+    return f"""<div class="lm-vc" id="lm-vc" hidden data-church="{_e(name)}" data-mark="{_e(ui.initials(name))}" data-logo="{_e(logo)}" data-photo="{_e(photo)}">
+  <div class="lm-vc-scrim" data-vc="close"></div>
+  <div class="lm-vc-sheet" role="dialog" aria-modal="true" aria-labelledby="lm-vc-t">
+    <span class="lm-vc-grab" aria-hidden="true"></span>
+    <div class="lm-vc-h"><b id="lm-vc-t">Make a card</b><button type="button" class="bb-x" data-vc="close" aria-label="Close">{ui.icon('plus', 18)}</button></div>
+    <canvas class="lm-vc-cv" width="1080" height="1350" role="img" aria-label="Your verse card"></canvas>
+    <div class="lm-vc-looks" role="radiogroup" aria-label="How the card looks">{looks}</div>
+    <div class="lm-vc-go"><button type="button" class="lm-btn ghost" data-vc="save">Save image</button><button type="button" class="lm-btn" data-vc="share">Share</button></div>
+    <p class="lm-vc-priv">Made on your phone. Nothing is sent anywhere until you share it.</p>
+  </div>
+</div>"""
+
 
 def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
-                   marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False) -> str:
+                   marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False,
+                   night: bool = False) -> str:
     """Reading a chapter: the same reader (member_portal_bible.READER_JS:
     tap a verse to highlight it, add a note, copy, share or save it; Aa),
     laid out calm: no tab bar, the chapter's number large, the chapters
-    before and after floating at the foot."""
+    before and after floating at the foot. Lumen Next adds the moon in the
+    bar (night reading, `night` its cookie), the line of how far you've
+    read, the ink sweep and Make a card (READER_MORE_JS)."""
     import json
     import bible_text as bt
+    import member_app_photos as photos
     import member_app_ui as ui
     import member_lumen_ui as lm
     import member_portal_bible as mpb
     from member_portal import _shell
+    from public_form_theme import resolve_theme
     prev, nxt = bt.neighbours(code, ch, tr)
     name = "Psalm" if code == "PSA" else bt.NAME[code]
     here = f"/my/bible/{bt.slug(code)}/{ch}"
@@ -341,6 +399,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
       <button type="button" data-act="copy">{lm.ic('share', 16)}<span>Copy</span></button>
       <button type="button" data-act="share">{lm.ic('out', 16)}<span>Share</span></button>
       <button type="button" data-act="bookmark" aria-pressed="false">{lm.ic('star', 16)}<span>Save</span></button>
+      <button type="button" data-act="card" aria-haspopup="dialog">{_glyph('card', 16)}<span>Make a card</span></button>
     </div>
   </div>
   <div class="bb-note" id="bb-note" hidden>
@@ -352,6 +411,13 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
   </div>
 </div>
 <p class="bb-toast" id="bb-toast" role="status" hidden></p>"""
+    theme = resolve_theme(biz, site)
+    pool = photos.photos(biz, site)
+    sheet = card_sheet(biz, site, pool[0] if pool else "", theme.get("logo_url") or "") if editable else ""
+    day = ui.palette(biz, theme)["bg"]
+    moon = (f'<button type="button" class="lm-aa lm-moon" id="lm-moon" aria-pressed="{"true" if night else "false"}" '
+            f'aria-label="Night reading" data-day="{_e(day)}" data-night="{NIGHT_BG}">{_glyph("moon", 19)}</button>')
+    prog = '<span class="lm-rprog" aria-hidden="true"></span>'
     note = ('<p class="mp-muted bb-pv">Highlights and notes are private, so a preview doesn\'t show them.</p>'
             if preview else ('<p class="mp-err" role="alert">Your highlights couldn\'t load just now. Reading still works.</p>'
                              if marks is None else ""))
@@ -390,9 +456,112 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 {foot}
 <nav class="lm-chnav" aria-label="Chapters">{step(prev, "prev")}{step(nxt, "next")}</nav>
 {dock}
+{sheet}
 <script type="application/json" id="bb-marks">{data}</script>"""
-    return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, bar=False, lumen_bar=(pill, aa),
-                  script=mpb.READER_JS if editable else "")
+    return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, bar=False,
+                  lumen_bar=(pill, aa + moon + prog), lumen_dark=night,
+                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS)
+
+
+# The reader's Lumen Next moments, beside today's reader script (which it
+# leaves alone): the moon (night reading: the body's class, the phone's bar
+# colour, and a cookie on /my the server reads next time), the line of how
+# far you've read, and Make a card (the selected verse drawn on a canvas,
+# 1080×1350, in one of four looks; Share hands the picture to the phone,
+# Save downloads it; a picture from another site that won't let the canvas
+# read it is left out rather than spoiling the card).
+READER_MORE_JS = r"""<script>(function(){
+var B=document.body,moon=document.getElementById('lm-moon'),meta=document.querySelector('meta[name="theme-color"]');
+function night(on){B.classList.toggle('lm-dark',on);
+ if(moon){moon.setAttribute('aria-pressed',on?'true':'false');if(meta)meta.setAttribute('content',moon.getAttribute(on?'data-night':'data-day'));}
+ try{document.cookie='lm_night='+(on?'1; Max-Age=31536000':'; Max-Age=0')+'; Path=/my; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'');}catch(e){}}
+if(moon)moon.addEventListener('click',function(){night(!B.classList.contains('lm-dark'));});
+var line=document.querySelector('.lm-rprog'),queued=false;
+function far(){queued=false;var h=document.documentElement.scrollHeight-window.innerHeight;
+ line.style.transform='scaleX('+(h>0?Math.max(0,Math.min(1,window.scrollY/h)):0).toFixed(4)+')';}
+if(line){window.addEventListener('scroll',function(){if(!queued){queued=true;requestAnimationFrame(far);}},{passive:true});
+ window.addEventListener('resize',far);far();}
+var vc=document.getElementById('lm-vc'),read=document.querySelector('.bb-read');if(!vc||!read)return;
+// out of the page's layer, above the verse dock and the bar
+document.body.appendChild(vc);
+var cv=vc.querySelector('canvas'),cx=cv.getContext('2d'),W=1080,H=1350,P=96;
+var look='ivory',verse='',ref='',back=null,blob=null,photo=null,logo=null,asked=false,gen=0;
+var tr=(read.getAttribute('data-tr')||'').toUpperCase(),church=vc.getAttribute('data-church')||'',mark=vc.getAttribute('data-mark')||'';
+var toast=document.getElementById('bb-toast'),tt=null;
+function say(t){if(!toast)return;toast.textContent=t;toast.hidden=false;clearTimeout(tt);tt=setTimeout(function(){toast.hidden=true;},1800);}
+function prop(n,d){var v=getComputedStyle(B).getPropertyValue(n).trim();return v||d;}
+function load(src,done){if(!src){done(null);return;}var i=new Image();i.crossOrigin='anonymous';
+ i.onload=function(){done(i);};i.onerror=function(){done(null);};i.src=src;}
+function pick(){vc.querySelectorAll('[data-look]').forEach(function(b){b.setAttribute('aria-checked',b.getAttribute('data-look')===look?'true':'false');});}
+function drop(k){var b=vc.querySelector('[data-look="'+k+'"]');if(!b)return;if(look===k){look='ivory';}b.remove();pick();}
+function art(){if(asked)return;asked=true;
+ load(vc.getAttribute('data-photo'),function(i){photo=i;if(!i)drop('photo');if(!vc.hidden)draw();});
+ load(vc.getAttribute('data-logo'),function(i){logo=i;if(!vc.hidden)draw();});}
+function textOf(s){var c=s.cloneNode(true);c.querySelectorAll('sup,.bb-nm,.bb-bm').forEach(function(x){x.remove();});
+ return c.textContent.replace(/\s+/g,' ').trim();}
+function wrap(t,max){var w=t.split(' '),out=[],ln='';
+ for(var i=0;i<w.length;i++){var s=ln?ln+' '+w[i]:w[i];if(ln&&cx.measureText(s).width>max){out.push(ln);ln=w[i];}else{ln=s;}}
+ if(ln)out.push(ln);return out;}
+function tracked(t,x,y,sp){for(var i=0;i<t.length;i++){cx.fillText(t[i],x,y);x+=cx.measureText(t[i]).width+sp;}}
+function fit(t,max){if(cx.measureText(t).width<=max)return t;while(t.length>1&&cx.measureText(t+'…').width>max)t=t.slice(0,-1);return t+'…';}
+function cover(img){var r=Math.max(W/img.naturalWidth,H/img.naturalHeight),w=img.naturalWidth*r,h=img.naturalHeight*r;
+ cx.drawImage(img,(W-w)/2,(H-h)*0.35,w,h);}
+function draw(){var serif=prop('--mb-serif','Georgia,serif'),ui=prop('--mb-ui','system-ui,sans-serif');
+ var acc=prop('--acc-fill','#333333'),on=prop('--on-acc','#FFFFFF'),bg='#F7F0E1',fg='#22190B',sub='#6A5426';
+ if(look==='night'){bg='#0F0E12';fg='#EFE7D6';sub='rgba(239,231,214,.66)';}
+ else if(look==='church'){bg=acc;fg=on;sub=on;}
+ else if(look==='photo'){bg='#120D08';fg='#FFFFFF';sub='rgba(255,255,255,.8)';}
+ cx.setTransform(1,0,0,1,0,0);cx.globalCompositeOperation='source-over';cx.globalAlpha=1;cx.textAlign='left';cx.textBaseline='alphabetic';
+ cx.fillStyle=bg;cx.fillRect(0,0,W,H);
+ if(look==='photo'&&photo){cover(photo);
+  cx.globalCompositeOperation='saturation';cx.fillStyle='#000';cx.fillRect(0,0,W,H);
+  cx.globalCompositeOperation='multiply';cx.globalAlpha=.35;cx.fillStyle='#C99A4A';cx.fillRect(0,0,W,H);
+  cx.globalAlpha=1;cx.globalCompositeOperation='source-over';
+  var g=cx.createLinearGradient(0,0,0,H);g.addColorStop(0,'rgba(18,13,8,.64)');g.addColorStop(.5,'rgba(18,13,8,.46)');g.addColorStop(1,'rgba(18,13,8,.88)');
+  cx.fillStyle=g;cx.fillRect(0,0,W,H);}
+ if(look==='church'){cx.globalAlpha=.08;cx.fillStyle=on;cx.beginPath();cx.arc(W*.96,H*.02,300,0,Math.PI*2);cx.fill();cx.globalAlpha=1;}
+ var size=96,lines=[],lh=0,room=H-2*P-230,max=W-2*P;
+ for(;size>=34;size-=2){cx.font='italic 400 '+size+'px '+serif;lines=wrap(verse,max);lh=Math.round(size*1.3);if(lines.length*lh<=room)break;}
+ cx.fillStyle=fg;var y=P+size;for(var i=0;i<lines.length;i++){cx.fillText(lines[i],P,y);y+=lh;}
+ var r=48,mx=W-P-r,my=H-P-r+4,fy=H-P-56;
+ cx.font='700 30px '+ui;tracked((ref+(tr?'  ·  '+tr:'')).toUpperCase(),P,fy,4.2);
+ cx.fillStyle=sub;cx.font='500 28px '+ui;cx.fillText(fit(church,mx-r-32-P),P,fy+48);
+ cx.save();cx.beginPath();cx.arc(mx,my,r,0,Math.PI*2);cx.closePath();
+ if(logo){cx.fillStyle='#FFFFFF';cx.fill();cx.clip();var s=Math.min(r*1.45/logo.naturalWidth,r*1.45/logo.naturalHeight);
+  cx.drawImage(logo,mx-logo.naturalWidth*s/2,my-logo.naturalHeight*s/2,logo.naturalWidth*s,logo.naturalHeight*s);}
+ else{cx.fillStyle=look==='church'?'#FFFFFF':acc;cx.fill();cx.fillStyle=look==='church'?acc:on;cx.font='700 34px '+ui;
+  cx.textAlign='center';cx.textBaseline='middle';cx.fillText(mark,mx,my+2);}
+ cx.restore();
+ var mine=++gen;blob=null;
+ try{cx.getImageData(0,0,1,1);}catch(e){if(look==='photo'&&photo){photo=null;drop('photo');}else{logo=null;}draw();return;}
+ try{cv.toBlob(function(b){if(mine===gen)blob=b;},'image/png');}catch(e){}}
+function pop(){cv.classList.remove('is-pop');void cv.offsetWidth;cv.classList.add('is-pop');}
+function open(){var s=read.querySelector('.bb-v.is-sel');if(!s)return;
+ verse=textOf(s);ref=(read.getAttribute('data-label')||'')+':'+s.getAttribute('data-v');back=document.activeElement;
+ vc.hidden=false;B.classList.add('lm-vc-on');art();draw();pop();
+ var f=vc.querySelector('[data-look][aria-checked="true"]');if(f)f.focus();
+ if(document.fonts&&document.fonts.load){Promise.all([document.fonts.load('italic 400 60px '+prop('--mb-serif','serif')),
+  document.fonts.load('700 30px '+prop('--mb-ui','sans-serif'))]).then(function(){if(!vc.hidden)draw();},function(){});}}
+function close(){vc.hidden=true;B.classList.remove('lm-vc-on');if(back&&back.focus)back.focus();}
+function file(){return(ref.replace(/[^A-Za-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'verse')+'.png';}
+function save(){if(!blob){say('One moment…');return;}var u=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=u;a.download=file();document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u);},4000);say('Saved');}
+function share(){var f=null;try{f=blob?new File([blob],file(),{type:'image/png'}):null;}catch(e){}
+ if(f&&navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f],title:ref}).catch(function(){});}
+ else if(navigator.share){navigator.share({text:'“'+verse+'” '+ref}).catch(function(){});}
+ else{save();}}
+document.addEventListener('click',function(e){var t=e.target.closest?e.target.closest('[data-act="card"]'):null;if(t)open();});
+vc.addEventListener('click',function(e){var t=e.target.closest('[data-vc],[data-look]');if(!t)return;
+ var l=t.getAttribute('data-look'),a=t.getAttribute('data-vc');
+ if(l){if(l!==look){look=l;pick();draw();pop();}}else if(a==='close'){close();}else if(a==='save'){save();}else if(a==='share'){share();}});
+document.addEventListener('keydown',function(e){if(!vc.hidden&&e.key==='Escape'){e.preventDefault();close();}});
+vc.addEventListener('keydown',function(e){
+ var ls=[].slice.call(vc.querySelectorAll('[data-look]')),i=ls.indexOf(e.target);
+ if(i>=0&&(e.key==='ArrowRight'||e.key==='ArrowLeft')){e.preventDefault();i=(i+(e.key==='ArrowRight'?1:ls.length-1))%ls.length;ls[i].focus();ls[i].click();return;}
+ if(e.key==='Tab'){var f=[].slice.call(vc.querySelectorAll('button')).filter(function(b){return b.offsetParent!==null;});if(!f.length)return;
+  if(e.shiftKey&&document.activeElement===f[0]){e.preventDefault();f[f.length-1].focus();}
+  else if(!e.shiftKey&&document.activeElement===f[f.length-1]){e.preventDefault();f[0].focus();}}});
+})();</script>"""
 
 
 # ─── the book picker, search, highlights & notes ─────────────────────
@@ -851,4 +1020,62 @@ body.lm .lm-trs a:focus-visible,body.lm .lm-cont:focus-visible,body.lm .lm-dev:f
 body.lm .lm-book:focus-visible,body.lm .lm-marks:focus-visible,body.lm .lm-pill:focus-visible,body.lm .lm-aa:focus-visible,
 body.lm .lm-chstep:focus-visible,body.lm .lm-dfeat:focus-visible,body.lm .lm-drow:focus-visible,body.lm .lm-field-go:focus-visible,
 body.lm .lm-chips a:focus-visible,body.lm .lm-catch>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+/* Lumen Next, the reader: how far you've read, the moon, the ink, night, the card */
+body.lm .lm-rprog{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--lm-gold);transform:scaleX(0);
+  transform-origin:0 50%;pointer-events:none;}
+body.lm .lm-moon{display:grid;place-items:center;color:var(--fg);}
+body.lm .lm-moon[aria-pressed=true]{background:var(--lm-gold-9);color:var(--lm-gold);}
+body.lm .lm-read .bb-v{--hlc:transparent;background-color:transparent;background-image:linear-gradient(var(--hlc),var(--hlc));
+  background-repeat:no-repeat;background-position:0 0;background-size:0% 100%;}
+body.lm .lm-read .bb-v.hl-gold,body.lm .lm-read .bb-v.hl-pink,body.lm .lm-read .bb-v.hl-teal,body.lm .lm-read .bb-v.hl-violet,
+body.lm .lm-read .bb-v.hl-coral{background-color:transparent;background-size:100% 100%;}
+body.lm .lm-read .bb-v.hl-gold{--hlc:rgba(227,169,43,.32);}
+body.lm .lm-read .bb-v.hl-pink{--hlc:rgba(236,72,153,.22);}
+body.lm .lm-read .bb-v.hl-teal{--hlc:rgba(23,168,148,.24);}
+body.lm .lm-read .bb-v.hl-violet{--hlc:rgba(109,87,232,.22);}
+body.lm .lm-read .bb-v.hl-coral{--hlc:rgba(240,122,67,.26);}
+body.lm.lm-dark{overscroll-behavior-y:none;--bg:#100E0B;--fg:#E8DFCC;--fg2:#A79E8E;--fg3:#80786B;--s1:#1C1914;--s2:#27231C;--s3:#3A342B;
+  --line:rgba(255,255,255,.1);--lm-line:rgba(255,255,255,.08);--lm-shadow:rgba(0,0,0,.55);--gold:#E9B65A;--gold-ink:#E9B65A;
+  --lm-gold:#E9B65A;--lm-gold-9:rgba(233,182,90,.15);color-scheme:dark;background:var(--bg);color:var(--fg);}
+@supports (background:color-mix(in srgb,red 50%,blue)){
+  body.lm.lm-dark{--acc:color-mix(in srgb,var(--acc-fill) 58%,#fff);}
+}
+body.lm.lm-dark .lm-read .bb-v.hl-gold{--hlc:rgba(233,182,90,.3);}
+body.lm.lm-dark .lm-read .bb-v.hl-pink{--hlc:rgba(246,112,150,.3);}
+body.lm.lm-dark .lm-read .bb-v.hl-teal{--hlc:rgba(46,196,160,.28);}
+body.lm.lm-dark .lm-read .bb-v.hl-violet{--hlc:rgba(150,135,255,.3);}
+body.lm.lm-dark .lm-read .bb-v.hl-coral{--hlc:rgba(255,140,90,.3);}
+body.lm.lm-dark .lm-chstep,body.lm.lm-dark .bb-dock,body.lm.lm-dark .lm-aapanel{box-shadow:0 0 0 1px var(--lm-line),0 14px 36px rgba(0,0,0,.6);}
+body.lm.lm-vc-on{overflow:hidden;}
+body.lm.lm-vc-on .bb-toast{z-index:70;}
+body.lm .lm-vc{position:fixed;inset:0;z-index:60;}
+body.lm .lm-vc[hidden]{display:none;}
+body.lm .lm-vc-scrim{position:absolute;inset:0;background:rgba(10,8,6,.46);}
+body.lm .lm-vc-sheet{position:absolute;left:0;right:0;bottom:0;max-width:600px;max-height:calc(100% - 24px);overflow:auto;margin:0 auto;
+  padding:10px 20px calc(20px + env(safe-area-inset-bottom,0px));border-radius:28px 28px 0 0;background:var(--bg);color:var(--fg);
+  box-shadow:0 -10px 40px rgba(0,0,0,.2);}
+body.lm .lm-vc-grab{display:block;width:38px;height:5px;margin:0 auto 12px;border-radius:3px;background:var(--s3);}
+body.lm .lm-vc-h{display:flex;align-items:center;justify-content:space-between;}
+body.lm .lm-vc-h b{font:700 17px/1.2 var(--mb-ui);}
+body.lm .lm-vc-cv{display:block;width:min(268px,62vw);height:auto;aspect-ratio:4/5;margin:16px auto 0;border-radius:22px;
+  box-shadow:0 22px 44px -20px rgba(0,0,0,.45);}
+body.lm .lm-vc-looks{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin-top:18px;}
+body.lm .lm-vc-looks button{height:36px;padding:0 14px;border:0;border-radius:18px;background:var(--s1);color:var(--fg2);
+  font:650 13px/1 var(--mb-ui);cursor:pointer;}
+body.lm .lm-vc-looks button[aria-checked=true]{background:var(--fg);color:var(--bg);}
+body.lm .lm-vc-go{display:flex;gap:8px;margin-top:18px;}
+body.lm .lm-vc-go .lm-btn{flex:1;}
+body.lm .lm-vc-priv{margin:12px 0 0;text-align:center;font:500 12px/1.4 var(--mb-ui);color:var(--fg3);}
+body.lm .lm-vc-looks button:focus-visible,body.lm .lm-vc-go .lm-btn:focus-visible,body.lm .lm-moon:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+@media (prefers-reduced-motion:no-preference){
+  body.lm .lm-read .bb-v{transition:background-size .9s cubic-bezier(.2,.8,.2,1);}
+  body.lm:has(.lm-read),body.lm:has(.lm-read) .mb-top,body.lm .lm-pill{transition:background-color .5s ease,color .5s ease;}
+  body.lm .lm-chstep{transition:background-color .5s ease,color .5s ease,transform .15s ease;}
+  body.lm .lm-vc:not([hidden]) .lm-vc-scrim{animation:lm-vcfade .3s both;}
+  body.lm .lm-vc:not([hidden]) .lm-vc-sheet{animation:lm-vcup .55s cubic-bezier(.2,.8,.2,1) both;}
+  body.lm .lm-vc-cv.is-pop{animation:lm-vcpop .6s cubic-bezier(.34,1.56,.64,1) both;}
+}
+@keyframes lm-vcfade{from{opacity:0}to{opacity:1}}
+@keyframes lm-vcup{from{transform:translateY(100%)}to{transform:none}}
+@keyframes lm-vcpop{from{transform:scale(.92);opacity:.5}to{transform:none;opacity:1}}
 """

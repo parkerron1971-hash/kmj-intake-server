@@ -401,15 +401,18 @@ var hash=location.hash.match(/^#v(\\d+)$/);if(hash){var s=span(+hash[1]);if(s)s.
 
 
 def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
-                   marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False) -> str:
+                   marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False,
+                   night: bool = False) -> str:
     """Reading a chapter (approved board 8): the chapter's name opens the
     book picker; tap a verse to highlight it in one of five colours, add a
     private note, copy, share or save it; Aa sets the text size and font.
-    `marks` None = they couldn't load (or a preview): the text, no editing."""
+    `marks` None = they couldn't load (or a preview): the text, no editing.
+    `night` (the member's night reading, a cookie on their phone) is the new
+    look's dark reader; today's reader ignores it."""
     import member_lumen
     if member_lumen.page():
         import member_lumen_bible as mlb
-        return mlb.render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview)
+        return mlb.render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night)
     import json
     import member_app_ui as ui
     from member_portal import _e, _shell
@@ -723,4 +726,6 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
         return RedirectResponse(f"/my/bible/{bt.slug(code)}", status_code=303, headers=_SECURE_HEADERS)
     rng = _range(str(request.query_params.get("v") or ""), verses[-1][0])
     marks = None if preview else await asyncio.to_thread(mbm.chapter_marks, biz["id"], str(me["id"]), code, ch)
-    return page(render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview), at=(code, ch))
+    night = request.cookies.get("lm_night") == "1"
+    return page(render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night),
+                at=(code, ch))
