@@ -230,7 +230,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 /* the top bar: logo and name; the bubble, the bell, you. White, no glow, a thin rule in the church's colour */
 .lm .mb-top{min-height:62px;max-width:600px;padding-top:calc(6px + env(safe-area-inset-top,0px));padding-bottom:6px;background:var(--bg);}
 .lm.lm-tab .mb-top::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--acc-fill);}
-.lm .mb-top.is-solid{background:var(--bar);}
+.lm .mb-top.is-solid{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;}
 .lm.lm-tab .mb-top.is-solid{box-shadow:none;}
 .lm-brand{gap:10px;}
 .lm-logo{width:36px;height:36px;flex:none;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--acc-fill);
@@ -395,9 +395,11 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-rooms{margin-top:34px;border-top:1px solid var(--lm-line);}
 .lm-room .lm-aic{color:var(--k,var(--acc));}
 
-/* the tab bar: a crisp white bar, the church colour on the tab you're on, a line that slides */
+/* the tab bar: a solid white bar with a thin line on top (nothing shows through it, in any engine),
+   the church colour on the tab you're on, a line that slides */
 .lm .mb-nav.lm-nav{grid-template-columns:repeat(var(--n),minmax(0,1fr));left:0;right:0;bottom:0;width:auto;margin-left:0;border-radius:0;
-  padding:0 8px env(safe-area-inset-bottom,0px);background:var(--bar);box-shadow:0 -1px 0 var(--lm-line);}
+  padding:0 8px env(safe-area-inset-bottom,0px);background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;
+  border-top:1px solid var(--lm-line);box-shadow:none;}
 .lm .lm-nav .mb-tab{min-height:64px;justify-content:center;gap:5px;padding-top:0;color:var(--fg3);font:600 10.5px/1 var(--mb-ui);letter-spacing:0;
   transition:color .25s;}
 .lm .lm-nav .mb-tab[aria-current],.lm .lm-nav .mb-tab[aria-current][data-hue]{color:var(--acc);}
@@ -411,7 +413,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 }
 @media (min-width:1100px){
   .lm .mb-nav.lm-nav{top:0;bottom:0;left:0;right:auto;width:92px;display:flex;flex-direction:column;justify-content:center;align-items:center;
-    gap:6px;padding:24px 8px;box-shadow:1px 0 0 var(--lm-line);}
+    gap:6px;padding:24px 8px;border-top:0;box-shadow:1px 0 0 var(--lm-line);}
   .lm .lm-nav .mb-tab{width:76px;min-height:60px;border-radius:16px;}
   .lm .lm-nav .mb-tab[aria-current]{background:var(--lm-tint);}
   .lm-ind{display:none;}
@@ -433,11 +435,12 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 def templates() -> Tuple[Template, ...]:
     """The sheet's parts, in order: the foundation's rules, then each page's
     own block (member_lumen_bible.CSS: the Bible, its reader and plans;
-    member_lumen_classes.CSS: Classes). member_app_ui.sheet("lumen") serves
-    them as one file."""
+    member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give, Watch and
+    Live). member_app_ui.sheet("lumen") serves them as one file."""
     import member_lumen_bible
     import member_lumen_classes
-    return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS))
+    import member_lumen_give
+    return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS)
 
 
 def css() -> str:

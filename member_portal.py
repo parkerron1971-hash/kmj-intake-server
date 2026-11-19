@@ -671,23 +671,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     new look (the reader's chapter and Aa); today's look ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
-    import member_app_photos as photos
     from public_form_theme import resolve_theme, css_vars
     theme = resolve_theme(biz, site)
-    name = (biz.get("name") or "").strip() or "Your church"
-    logo = theme.get("logo_url") or ""
-    mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
-    word = "" if logo else photos.wordmark(site, light=ui.palette(biz, theme)["dark"])
-    brand = (f'<img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}">' if word else
-             f'<span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p>')
-    # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
-    here = ' aria-current="page"' if tab == "me" else ""
-    import member_photos as ph
-    mine = ph.src(who) if who else ""
-    avatar = ((f'<a class="mb-avatar has-photo mp-noprint" href="/my/me" aria-label="Me"{here}>'
-               f'<img src="{_e(mine)}" alt=""></a>') if mine else
-              (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>')
-              ) if who else ""
+    name, logo, word, brand, mine, avatar = _marks(biz, site, theme, tab, who)
     signed_in = tab is not None
     if back is None and not (bare or door):
         # A page's own back link moves up into the bar.
@@ -774,6 +760,51 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 {_phone_timing() if signed_in else ''}
 </body>
 </html>"""
+
+
+def _marks(biz: Dict[str, Any], site, theme: Dict[str, Any], tab: Optional[str],
+           who: Optional[Dict[str, Any]]) -> Tuple[str, str, str, str, str, str]:
+    """The church's and the member's marks at the top of a page: (name,
+    logo, the site's wordmark, the brand markup, the member's picture, the
+    picture's link to Me)."""
+    import member_app_ui as ui
+    import member_app_photos as photos
+    name = (biz.get("name") or "").strip() or "Your church"
+    logo = theme.get("logo_url") or ""
+    mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
+    word = "" if logo else photos.wordmark(site, light=ui.palette(biz, theme)["dark"])
+    brand = (f'<img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}">' if word else
+             f'<span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p>')
+    # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
+    here = ' aria-current="page"' if tab == "me" else ""
+    import member_photos as ph
+    mine = ph.src(who) if who else ""
+    avatar = ((f'<a class="mb-avatar has-photo mp-noprint" href="/my/me" aria-label="Me"{here}>'
+               f'<img src="{_e(mine)}" alt=""></a>') if mine else
+              (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>')
+              ) if who else ""
+    return name, logo, word, brand, mine, avatar
+
+
+def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Optional[Dict[str, Any]],
+                 theme: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, str]:
+    """The new look's frame for a member page that draws its own document
+    (Give with online giving on: giving_router.render_give_page): (the top
+    bar, the body tag's class attribute, the tab bar with the early loading,
+    the scroll script), as _shell draws them around a Lumen page. `theme`:
+    the page's resolve_theme answer, when it has one already."""
+    import member_app_ui as ui
+    import member_spaces as msp
+    from public_form_theme import resolve_theme
+    theme = theme or resolve_theme(biz, site)
+    name, logo, word, brand, mine, avatar = _marks(biz, site, theme, tab, who)
+    ctx = msp.CURRENT.get() or {}
+    space = ctx.get("space") or "church"
+    side = _side(biz, tab, space, brand, who, mine, board=bool(ctx.get("board") and ctx.get("lead")))
+    top, cls, tabbar, scroll = _lumen_frame(
+        biz, theme, title, tab=tab, who=who, back=None, bare=False, bar=True, ctx=ctx, name=name, logo=logo,
+        word=word, avatar=avatar, side=side, body_cls=_body_class(False, space, tab, False))
+    return top, cls, tabbar + ui.early(), scroll
 
 
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
@@ -879,6 +910,21 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
            f'{ui.icon("chevron", 18)}</a>')
     if preview:
         top += '<p class="mp-flash mp-ok" role="status">This is a preview, so Give won\'t charge anything.</p>'
+    import member_lumen
+    if member_lumen.page():
+        # The new look (member_lumen_give): the same page, payment and
+        # script, in the Lumen frame with the form in the mock's layout.
+        import giving_router as gr
+        import member_lumen_give as mlg
+        bar, body, nav, scroll = lumen_chrome(biz, site, "Give", tab="give", who=me, theme=theme)
+        funds = gr.configured_funds(gr.giving_settings(biz.get("settings")))
+        return render_give_page(
+            biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
+            app={"head": (ui.FONTS + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme, lumen=True)}"
+                          f"<style>{GIVE_CSS}</style>"),
+                 "top": mlg.give_top(name, funds, preview=preview), "name": me.get("name") or "",
+                 "email": me.get("email") or "", "preview": preview, "form": mlg.give_form(biz, me),
+                 "body": body, "bar": bar, "foot": nav + scroll + mlg.GIVE_JS})
     head = (ui.FONTS + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme)}<style>{GIVE_CSS}</style>")
     return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
                             app={"head": head, "top": top, "name": me.get("name") or "",
@@ -951,6 +997,10 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     Love City's still holds its Subsplash form), giving in person, and the
     member's own giving so far (gifts imported or recorded by the office).
     The owner's preview says where online giving is switched on."""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_give as mlg
+        return mlg.give_off(biz, site, me, preview=preview)
     import member_app_ui as ui
     import member_app_photos as photos
     church = (biz.get("name") or "").strip() or "the church"

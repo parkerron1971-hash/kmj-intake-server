@@ -123,7 +123,13 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
 def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str = "", bible: str = "kjv",
                    live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None) -> str:
     """Watch (the Subsplash app's Messages and On Demand, together): live
-    or the next gathering, the latest message, the series, every message."""
+    or the next gathering, the latest message, the series, every message.
+    In the new look (member_lumen) Watch is member_lumen_give.watch; a
+    series keeps this page."""
+    import member_lumen
+    if member_lumen.page() and not (series_id and lib and series_id in _titles(lib)):
+        import member_lumen_give as mlg
+        return mlg.watch(biz, site, who, lib, live=live, next_occ=next_occ, bible=bible)
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e, _shell, palette_for
