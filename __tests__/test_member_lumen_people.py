@@ -166,7 +166,7 @@ def test_the_church_conversation_is_a_texting_screen(threads, monkeypatch):
     assert '<li class="mb-msg mb-mine"><span class="mb-msg-body">Can my teens help?</span>' in html
     # The church's notes and the office's replies beside its mark; a line for each day.
     assert html.count('class="mb-msg ct-note lm-them"') == 1 and html.count('class="mb-msg lm-them"') == 1
-    assert '<span class="lm-who">Maria</span>' in html
+    assert '<span class="lm-nwho">Maria</span>' in html
     assert 'class="mb-msg ct-day" role="separator"' in html
     assert 'class="lm-send" type="submit" aria-label="Send"' in html
 

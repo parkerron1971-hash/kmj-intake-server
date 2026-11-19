@@ -701,7 +701,7 @@ def _bubble(r: Dict[str, Any], zone, said_by: str = "", av: str = "") -> str:
     if r.get("kind") == "reply":
         who = _e(r.get("author_name") or "The office")
         if av:
-            return (f'<li class="mb-msg lm-them">{av}<div class="lm-note"><span class="lm-who">{who}</span>'
+            return (f'<li class="mb-msg lm-them">{av}<div class="lm-note"><span class="lm-nwho">{who}</span>'
                     f'<span class="mb-msg-body">{body}</span>{at}</div></li>')
         return (f'<li class="mb-msg"><span class="mb-msg-who">{who}</span>'
                 f'<span class="mb-msg-body">{body}</span>{at}</li>')
