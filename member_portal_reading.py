@@ -109,6 +109,10 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                 done: Optional[set], today: Optional[date] = None, *, plan: Optional[Dict[str, Any]] = None) -> str:
     """The church's plan, or `plan`: one the member started on their own
     (member_portal_devotionals.own_plan), which has a Stop."""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        return mlb.render_reading(biz, site, request, me, done, today, plan=plan)
     import member_app_ui as ui
     from member_portal import _e, _shell
     own = bool(plan and plan.get("own"))

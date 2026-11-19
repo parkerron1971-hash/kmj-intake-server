@@ -319,6 +319,10 @@ if(o){o.scrollIntoView({block:'center'});}
 if(!q)return;q.addEventListener('input',function(){var t=q.value.trim().toLowerCase();
 document.querySelectorAll('details.bk').forEach(function(d){d.hidden=!!t&&d.getAttribute('data-name').indexOf(t)<0;});
 document.querySelectorAll('.bk-group').forEach(function(g){g.hidden=!g.querySelector('details.bk:not([hidden])');});});})();</script>"""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        return mlb.render_books(biz, site, me, groups="".join(out), seg=seg, chips=_chips(places or []), script=script)
     return _shell(biz, site, "Choose a book", f"""<a class="mb-back" href="/my/bible">{ui.icon('back', 16)}Bible</a>
 <div class="mb-lt"><h1>Choose a book</h1></div>
 {seg}
@@ -402,6 +406,10 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     book picker; tap a verse to highlight it in one of five colours, add a
     private note, copy, share or save it; Aa sets the text size and font.
     `marks` None = they couldn't load (or a preview): the text, no editing."""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        return mlb.render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview)
     import json
     import member_app_ui as ui
     from member_portal import _e, _shell
@@ -485,6 +493,10 @@ def render_search(biz, site, me, tr: str, query: str, hits, total: int) -> str:
         f'<span>{lit(text)}</span></a></li>' for c, ch, v, text in hits)
     more = (f'<p class="mp-muted">Showing the first {len(hits)} of {total}. Add a word to narrow it down.</p>'
             if total > len(hits) else "")
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        return mlb.render_search(biz, site, me, tr, query, rows, total, more)
     return _shell(biz, site, "Search", f"""<a class="mb-back" href="/my/bible">{ui.icon('back', 16)}Bible</a>
 <form class="bb-go" method="get" action="/my/bible" role="search">
   <label class="mp-sr" for="bb-q">Find a passage or a word</label>
@@ -508,6 +520,10 @@ def render_notes(biz, site, me, tr: str, rows: Optional[List[Dict[str, Any]]], *
     from member_portal import _e, _shell
     today = today or date.today()
     head = f'<a class="mb-back" href="/my/bible">{ui.icon("back", 16)}Bible</a><div class="mb-lt"><h1>Highlights <em>&amp; notes</em></h1></div>'
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_bible as mlb
+        head = mlb.notes_head()
     if preview:
         return _shell(biz, site, "Highlights & notes", head + '<p class="mp-muted">These are private to each member, '
                       'so a preview doesn\'t show them.</p>', tab="bible", who=me)
@@ -598,6 +614,26 @@ def passage_card(text: str, tr: str) -> str:
             f'{"".join(parts)}<p class="mp-muted bb-src">{_e(bt.TRANSLATIONS[tr]["short"])}</p></section>')
 
 
+async def _lumen_home(biz, site, me, tr: str, where, q: str, preview: bool) -> str:
+    """The Bible tab in the new look (member_lumen_bible): the same reads as
+    today's tab, the devotionals and plans as data instead of markup."""
+    import asyncio
+    import member_bible_marks as mbm
+    import member_lumen_bible as mlb
+    import member_portal_devotionals as mpd
+    data, marks = await asyncio.gather(
+        mpd.bible_home_data(biz, me, preview=preview),
+        asyncio.to_thread(lambda: None if preview else mbm.all_marks(biz["id"], str(me["id"]))))
+    church_today, church_done = None, None
+    if data is None:
+        import reading_plans as rp
+        plan = rp.current(biz)
+        church_done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan and not preview else set()
+        church_today = rp.today_for(biz) if plan else None
+    return mlb.render_home(biz, site, me, tr, where, query=q, missed=bool(q), data=data, church_today=church_today,
+                           church_done=church_done, marks=marks, preview=preview)
+
+
 async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = False):
     """GET /my/bible* → a response (sets the reading cookie). `preview`:
     the owner's Preview as a member, which never shows the member's own
@@ -629,6 +665,12 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
                 return resp
             import rate_limit
             if not rate_limit.allow("bible_search", f"{biz['id']}|{me['id']}"):
+                import member_lumen
+                if member_lumen.page():
+                    import member_lumen_bible as mlb
+                    return page(mlb.render_home(
+                        biz, site, me, tr, where, query=q, slow=True, preview=preview,
+                        marks=() if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"]))))
                 return page(render_home(biz, site, me, tr, where, query=q, places=places, slow=True,
                                         marks=() if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"])),
                                         preview=preview))
@@ -636,6 +678,9 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
             if hits:
                 return page(render_search(biz, site, me, tr, q, hits, total))
         import member_portal_devotionals as mpd
+        import member_lumen
+        if member_lumen.page():
+            return page(await _lumen_home(biz, site, me, tr, where, q, preview))
         plans, marks = await asyncio.gather(
             mpd.bible_home(biz, site, me, preview=preview),
             asyncio.to_thread(lambda: None if preview else mbm.all_marks(biz["id"], str(me["id"]))))

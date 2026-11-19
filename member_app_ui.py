@@ -2187,7 +2187,7 @@ def _templates(name: str) -> Tuple[Template, ...]:
         return (_KIDS_CSS,)
     if name == "lumen":
         import member_lumen_ui
-        return (member_lumen_ui._CSS,)
+        return member_lumen_ui.templates()
     import member_app_signin as sg
     return (sg._CSS,)
 
