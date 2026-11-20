@@ -665,6 +665,10 @@ app.include_router(member_photos_router)
 # public_site_router.
 from member_app_pictures import router as member_app_pictures_router
 app.include_router(member_app_pictures_router)
+# Meet the pastor (member_pastor.py): POST /my/pastor/note, the pastor's
+# welcome note, for the same people as the pictures. BEFORE public_site_router.
+from member_pastor import router as member_pastor_router
+app.include_router(member_pastor_router)
 # A member's own highlights, notes and bookmarks in the Bible
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router

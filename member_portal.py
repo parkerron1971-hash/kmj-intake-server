@@ -1765,6 +1765,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         spot = mapic.find_spot(biz, str(request.query_params.get("key") or ""), occ_all, groups_all, devs_all)
         if not spot:
             return RedirectResponse("/my/pictures", status_code=303, headers=_SECURE_HEADERS)
+        if spot["key"] == "pastor":
+            # Meet the pastor's spot: with nothing chosen, their own photo or their initials (member_pastor).
+            import member_pastor
+            p = await asyncio.to_thread(member_pastor.who, biz)
+            if p:
+                spot = {**spot, "own": member_pastor.spot_default(p)}
         return _page(mapic.render_spot(biz, site, request, me, spot))
     if sub == "/my/details":
         import member_directory as mdir
@@ -1931,6 +1937,18 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/board" or sub.startswith("/my/board/"):
         import member_portal_board as mpb
         return await mpb.serve(request, church, me, sub, preview=preview)
+    # Meet the pastor (member_pastor), in the new look: whoever holds the
+    # church's senior role. Today's look has no such page (to Home, as any
+    # page it doesn't know).
+    if sub == "/my/pastor":
+        import member_lumen
+        import member_pastor
+        p = await asyncio.to_thread(member_pastor.who, biz) if member_lumen.page() else None
+        if not p:
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        write = await asyncio.to_thread(member_pastor.may_message, biz, me, p["id"])
+        return _page(member_pastor.render_page(biz, site, request, me, p, can_edit=can_picture, write=write,
+                                               edit=request.query_params.get("edit") == "pictures"))
     # Connect, the people hub, in the new look (member_portal_lumen); today's
     # look has Groups there instead.
     if sub == "/my/connect":
@@ -2007,9 +2025,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(ssv.home if lumen_home else ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
         # Messages, while something there is unread (member_portal_threads).
         _inbox_card(biz, me) if church_home else _nothing(),
-        asyncio.to_thread(mlp.told, biz, me) if lumen_home and church_home else _nothing())
-    gnext, serving_info, ck = None, None, None
+        mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing())
+    gnext, serving_info, ck, pastor = None, None, None, None
     if lumen_home:
+        told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
         groups, gnext = groups if isinstance(groups, tuple) else (groups, None)
         serving_info, serve_asks = serve_asks, (serve_asks or {}).get("asks") or []
         checkin, ck = checkin if isinstance(checkin, tuple) else (checkin, None)
@@ -2067,7 +2086,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             cards=(mai.install_card(church_name), member_push.home_card(biz),
                    member_asks.home_row(await _ask_entry(biz, me))),
             ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
-            devo=devo_info, gnext=gnext, told_us=told_us))
+            devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,

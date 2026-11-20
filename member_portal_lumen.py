@@ -11,7 +11,8 @@ the greeting by the church's clock and one sentence from the records; Up next,
 one card featured by the data (live, Sunday's service with check-in, someone
 new's first Sunday, their group's next gathering or the next event) with its
 main button; Also for you, two picture tiles (the devotional, prayer, serving,
-the latest message, groups to join); then what's happening (the news block,
+the latest message, groups to join, and Meet the pastor for someone new:
+member_pastor); then what's happening (the news block,
 member_portal_news.home_block) and the rest of Home below it: Coming up,
 Today (the verse of the day on the ivory card, the reading plan or where they
 left off), the latest message, the church's own tiles, the groups not on the
@@ -22,7 +23,8 @@ Up next. The Messages card is gone: the bubble at the top carries the count.
 CONNECT (/my/connect), the people hub: your group, serving (your next date,
 with Can't make it), prayer, events, classes (with how far you've come),
 your next step (the "I'm new here" card leads it once that lands:
-member_lumen.new_here_card), find a group, the directory and news. Read at
+member_lumen.new_here_card), find a group, the pastor (member_pastor), the
+directory and news. Read at
 once from the readers today's pages use (member_portal_church.groups_for and
 upcoming_for, member_portal_classes.classes_for, sunday_serving.mine,
 member_asks.entry).
@@ -251,13 +253,26 @@ def told(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def told_and_pastor(biz: Dict[str, Any], me: Dict[str, Any]):
+    """(told(), the pastor or None): the church's pastor (member_pastor.who,
+    kept five minutes) only for someone new, the one person Home shows Meet
+    the pastor to, after what they told the church; everyone else's Home
+    reads nothing more."""
+    said = await asyncio.to_thread(told, biz, me)
+    if not said:
+        return said, None
+    import member_pastor
+    return said, await asyncio.to_thread(member_pastor.who, biz)
+
+
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library, live,
                 bible: str, where, plan_today, plan_done, devotional: str = "", checkin: str = "",
                 serving: str = "", celebrate: str = "", flash: str = "", news: str = "", news_n: Optional[int] = None,
                 cards: Tuple[str, ...] = (), edit: bool = False, editbar: str = "", today: Optional[date] = None,
                 ck: Optional[Dict[str, Any]] = None, ck_err: bool = False, serving_info: Optional[Dict[str, Any]] = None,
                 devo: Optional[Dict[str, Any]] = None, gnext: Optional[Dict[str, Any]] = None,
-                told_us: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, dark: bool = False) -> str:
+                told_us: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, dark: bool = False,
+                pastor: Optional[Dict[str, Any]] = None) -> str:
     """Home in the new look (Look 4.1, member_lumen_home): the greeting and
     its sentence, Up next and its card, Also for you, then `news` (the news
     block, member_portal_news.home_block) and the rest of Home below it.
@@ -269,7 +284,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     under Up next; `serving_info` My serving (sunday_serving.home); `devo`
     today's devotional (member_portal_devotionals.home_extras' info);
     `gnext` the next group gathering (next_gathering); `told_us` what a
-    brand-new person told the church (told()). `cards` are the small cards
+    brand-new person told the church (told()); `pastor` the church's pastor
+    (member_pastor.who, for someone new: Meet the pastor). `cards` are the small cards
     at the foot (installing the app, phone alerts, Ask the church), each ''
     to leave it out. `dark` draws it on the look's dark switch (nothing
     sets it yet: the new look is always white)."""
@@ -467,6 +483,13 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         return lh.tile(f"/my/sermons/{_e(s['id'])}", mps._art(library, s, pal, site, pool, used), "playfill", label,
                        s.get("title") or "", meta, tag=ui.sample_tag() if samples.is_sample(s) else "")
 
+    def t_pastor() -> str:
+        # Meet the pastor (member_pastor): someone new, at a church with someone in the senior role.
+        if not pastor or not pastor.get("id"):
+            return ""
+        import member_pastor
+        return member_pastor.tile(biz, pastor, href=to_spot("pastor", "/my/pastor"), edit=edit)
+
     def t_groups() -> str:
         open_ = [g for g in (groups or {}).get("open") or [] if g.get("name")]
         if not open_:
@@ -478,7 +501,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                        "Groups to join", " · ".join(x["name"] for x in open_[:3]), pin=edit)
 
     if new:
-        order = [t_groups, t_prayer, t_devo, t_message]
+        order = [t_groups, t_pastor, t_prayer, t_devo, t_message]
     elif service and service["day"] == now.date():
         order = [lambda: t_serving(True), t_message, t_devo, t_prayer]
     else:
@@ -555,16 +578,19 @@ async def connect_data(biz: Dict[str, Any], me: Dict[str, Any], *, preview: bool
     import sunday_serving as ssv
     from member_portal import _ask_entry
     bid = biz["id"]
+    import member_pastor
     tab = preview or await asyncio.to_thread(_quiet, mcl.tab_on, bid, me)
-    groups, occ, classes, serving, asks = await asyncio.gather(
+    groups, occ, classes, serving, asks, pastor = await asyncio.gather(
         asyncio.to_thread(mpc.groups_for, bid, me),
         asyncio.to_thread(mpc.upcoming_for, bid, me),
         asyncio.to_thread(_quiet, mcl.classes_for, bid, me) if tab else _nothing(),
         asyncio.to_thread(_quiet, ssv.mine, biz, str(me["id"])) if ssv.on() and not preview else _nothing(),
-        _ask_entry(biz, me))
+        _ask_entry(biz, me),
+        # Meet the pastor's row (member_pastor.who: kept five minutes).
+        asyncio.to_thread(member_pastor.who, biz))
     return {"groups": samples.fill(groups, "groups", preview), "occasions": samples.fill(occ, "occasions", preview),
             "classes": samples.fill(classes, "classes", preview) if tab else None, "serving": serving,
-            "asks": asks or []}
+            "asks": asks or [], "pastor": pastor}
 
 
 def _group_art(biz: Dict[str, Any], g: Dict[str, Any], pool, used, *, big: bool = True) -> str:
@@ -721,6 +747,10 @@ def render_connect(biz: Dict[str, Any], site, request, me: Dict[str, Any], data:
                      f'<div class="lm-rail">{cards}</div></section>')
     ctx = msp.CURRENT.get() or {}
     rooms = []
+    pastor = data.get("pastor")
+    if pastor and pastor.get("id"):
+        import member_pastor
+        rooms.append(member_pastor.row(biz, pastor))
     if member_directory.church_on(biz) and (ctx.get("space") or "church") == "church" and not ctx.get("youth"):
         rooms.append(lm.row("/my/directory", lm.round_icon("person", "var(--lm-teal)"), "Directory",
                             "Members who chose to be listed", cls="lm-room"))
