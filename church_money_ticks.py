@@ -26,6 +26,17 @@ giver) and "bank and payouts".
                      or lowering it (a login revoked, made a Viewer, moved
                      down from Admin) runs WHATEVER the switch says, while
                      the tables are there: rows outlive a switch turned off
+    OFF IS NOT A STOP  the database (church_money_tick, ministry_finance_guard,
+                     ministry_finance_bank_guard) reads church_money_holders
+                     itself and knows nothing of the switch, so a login's
+                     own reads through PostgREST keep what its row gives
+                     after the switch goes off. Off, a sheet still shows a
+                     tick a login holds, and the owner (or an Admin, as when
+                     on) may lower it or take it away; nothing is raised.
+                     THE INSTANT STOP for one church is the row itself, in
+                     the SQL editor:
+                         delete from public.church_money_holders
+                          where business_id = '<the church id>';
     THE RULES ...... church_money_gate asks holder() and nothing else here.
                      The rows live in two server-only tables
                      (supabase/APPLY-2026-11-18-church-money-holders.sql);
@@ -92,6 +103,16 @@ MONEY_503 = "Giving didn't save. Try that part again."
 EXPIRED = "That request ran out before it was answered. Ask them to send it again."
 NOT_WAITING = "That request isn't waiting any more."
 ONLY_OWNER_ANSWERS = "Only the owner answers a request for giving access."
+# The switch off for a church, and a login that still holds a tick
+# (the database keeps honouring the row until it is lowered or deleted).
+OFF_HELD = ("Giving as its own switch is off for this church, but this login still holds what the owner gave. "
+            "It can only be lowered or taken away until the switch is on again.")
+OFF_NO_RAISE = "While the switch is off, giving can only be lowered or taken away."
+ASK_VIEWER_NOW = ("They are a Viewer login now, and a Viewer can only see giving. Nothing was opened. Ask again for "
+                  "See, or make them a Member or Manager login first.")
+ASK_ADMIN_NOW = ("They are an Admin login now, so they see and work giving already. Nothing was opened. The one thing "
+                 "to add on their sheet is the bank and payouts.")
+ASK_NO_SEAT = "They aren't on the team any more, so there is nothing to open."
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -220,12 +241,53 @@ def _pending(ch: Any, business_id: str, target: str) -> Optional[Dict[str, Any]]
             "wants_words": words(ask["wants"])}
 
 
+def _off_block(biz: str, st: Dict[str, Any], target: str) -> Optional[Dict[str, Any]]:
+    """The Giving block while the switch is off for this church: None (the
+    app shows nothing new) unless this login still HOLDS a tick, which the
+    database goes on honouring whatever the switch says. Then it is shown,
+    and it can only be lowered or taken away: by the owner, or by an Admin
+    as with the switch on (never an Admin's own row, never by a holder of
+    the jobs grant). `can` keeps the app's two values ("grant" for the
+    owner, "ask" for an Admin, whose lowering the app saves as it does
+    today); the server refuses any raise with NOT_ON. `off: true` says so."""
+    trole, ed = st["target_role"], st["editor"]
+    if trole == "owner":
+        return None
+    held = mh.money_holder(biz, target)
+    if not held:
+        return None
+    can: Optional[str] = None
+    why = OFF_HELD
+    if not st["can_edit"]:
+        why = st.get("why_not") or OFF_HELD
+    elif ed == "owner":
+        can = "grant"
+    elif ed == "admin" and trole != "admin":
+        can = "ask"
+    elif ed in ("admin", "holder"):
+        why = OFF_HELD + " " + (ADMIN_HAS_IT if trole == "admin" else LOWER_IS_ADMINS)
+    if trole == "admin":
+        return {"level": "lead", "who_gave": True, "bank": bool(held["bank"]), "pending": None, "can": can,
+                "why": why, "words": words({"level": "lead", "who_gave": True, "bank": bool(held["bank"])}),
+                "levels": [], "off": True}
+    viewer_seat = trole == "viewer"
+
+    def row(k: str) -> Dict[str, Any]:
+        higher = _RANK[k] > _RANK[held["level"]]
+        no = (viewer_seat and k != "see") or higher
+        return {"key": k, "label": LEVEL_LABEL[k], "means": LEVEL_MEANS[k], "allowed": not no,
+                "why": (OFF_NO_RAISE if higher else VIEWER_SEES) if no else ""}
+    return {"level": held["level"], "who_gave": bool(held["who_gave"]), "bank": bool(held["bank"]), "pending": None,
+            "can": can, "why": why, "words": words(held), "levels": [row(k) for k in LEVELS], "off": True}
+
+
 def block(business: Dict[str, Any], ch: Any, st: Dict[str, Any], target: str) -> Optional[Dict[str, Any]]:
-    """The Giving block of one person's sheet for one viewer, or None while
-    the switch is off for this church (the app then shows nothing new)."""
+    """The Giving block of one person's sheet for one viewer. While the
+    switch is off for this church: None, unless the login still holds a
+    tick (_off_block: shown, to be lowered or taken away only)."""
     biz = str(business.get("id") or "")
     if not open_for(biz):
-        return None
+        return _off_block(biz, st, target)
     trole, ed = st["target_role"], st["editor"]
     if trole == "owner":
         return {"level": "lead", "who_gave": True, "bank": True, "pending": None, "can": None, "why": OWNER_HAS_IT,
@@ -269,11 +331,17 @@ def plan(business: Dict[str, Any], ch: Any, st: Dict[str, Any], viewer: str, tar
             is what asks for the password; an ask never does
       first written before the level (a change that only takes away), so a
             save that fails part way leaves the login with less, never more
-    """
+
+    With the switch OFF for the church only a lowering or a taking away of a
+    tick the login still holds is accepted (the database keeps honouring the
+    row whatever the switch says), by the owner or by an Admin as with it on.
+    It is written as "lower" (only ever down, church_money_ticks._lower).
+    Anything else, a raise or a login that holds nothing, is NOT_ON."""
     if "money" not in body or body.get("money") is None:
         return None
     biz = str(business.get("id") or "")
-    if not open_for(biz):
+    switched_on = open_for(biz)
+    if not switched_on and not mh.money_holder(biz, target):
         raise HTTPException(400, NOT_ON)
     raw = body.get("money")
     if not isinstance(raw, dict):
@@ -318,6 +386,19 @@ def plan(business: Dict[str, Any], ch: Any, st: Dict[str, Any], viewer: str, tar
     more = bool(wants) and (_RANK[w.get("level")] > _RANK[n.get("level")]
                             or (w.get("who_gave") and not n.get("who_gave"))
                             or (w.get("bank") and not n.get("bank")))
+    if not switched_on:
+        # Off: down only. A raise (or a row this save itself would make, as
+        # for a login moved down from Admin) waits for the switch.
+        if more:
+            raise HTTPException(400, NOT_ON)
+        if ed == "owner" or (ed == "admin" and level_after != "admin"):
+            kind = "lower"
+        elif ed == "admin":
+            raise HTTPException(403, ADMIN_HAS_IT)
+        else:
+            raise HTTPException(403, LOWER_IS_ADMINS)
+        return {"kind": kind, "wants": wants, "now": now_t, "more": False, "first": True,
+                "said": f"giving: {words(wants)} (was {words(now_t)})", "name": name}
     if ed == "owner":
         kind = "grant"
     elif more:
@@ -400,11 +481,15 @@ def _lower(biz: str, target: str, wants: Optional[Dict[str, Any]]) -> bool:
 # Taking a tick away, or lowering it, is always safe, so these hooks run
 # whatever CHURCH_MONEY_TICKS says (2026-11-20): rows can be there with the
 # switch off (it was on, or `owner`, and was turned off). Giving one stays
-# behind the switch (plan, apply). They act whenever the tables are there:
-#   the tables gone (never applied, or rolled back)  nothing to clean: True
-#   couldn't tell whether they are there            not done: False
-#   an id that isn't a uuid                          refused: False, never
-#                                                    read as "no id"
+# behind the switch (plan, apply). They ALWAYS make their write; they never
+# trust a kept answer about the tables (one replica's passing "no such
+# table" must never skip a lowering that another replica's grant needs):
+#   the write saved                                   True
+#   it failed, and a fresh probe says the tables are
+#   not there (never applied, or rolled back)        nothing to clean: True
+#   it failed any other way, or the probe can't tell  not done: False
+#   an id that isn't a uuid                           refused: False, never
+#                                                     read as "no id"
 # Every id is filtered in its one spelling (church_money_holders._id), so
 # an unhyphenated, upper-case or braced id finds the same row.
 
@@ -417,9 +502,18 @@ def _hook_ids(business_id: Any, user_id: Any) -> Optional[Tuple[str, str]]:
 
 
 def _gone_now() -> bool:
-    """After a hook's write failed: True only when that was because the
-    tables aren't there (asked again now), so there was nothing to clean."""
+    """After a hook's write failed: True only when a probe made NOW says the
+    tables aren't there, so there was nothing to clean. Never a kept answer."""
     return _tables(fresh=True) is False
+
+
+def _withdraw(b: str, u: str, column: str) -> bool:
+    """Every request still waiting at this church about (`user_id`) or by
+    (`asked_by`) this login, withdrawn. True when saved."""
+    got = sb_clients.sb_patch_as_service(
+        f"/{mh.ASKS}?business_id=eq.{b}&{column}=eq.{u}&status=eq.asked",
+        {"status": "withdrawn", "answered_at": _iso(_now())}, redact=True)
+    return isinstance(got, list)
 
 
 def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
@@ -434,9 +528,6 @@ def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
     seat = mh._id(seat_id) if seat_id is not None else None
     if ids is None or (seat_id is not None and not seat):
         return False
-    ready = _tables()
-    if ready is not True:
-        return ready is False
     b, u = (_q(x) for x in ids)
     gone = sb_clients.sb_delete_as_service(
         f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}" + (f"&seat_id=eq.{_q(seat)}" if seat else ""))
@@ -447,28 +538,25 @@ def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
         return False
     if live:
         return True                          # still on the team by another seat: their asks stand
-    stamp = {"status": "withdrawn", "answered_at": _iso(_now())}
-    about = sb_clients.sb_patch_as_service(
-        f"/{mh.ASKS}?business_id=eq.{b}&user_id=eq.{u}&status=eq.asked", stamp, redact=True)
-    by = sb_clients.sb_patch_as_service(
-        f"/{mh.ASKS}?business_id=eq.{b}&asked_by=eq.{u}&status=eq.asked", stamp, redact=True)
-    return (isinstance(about, list) and isinstance(by, list)) or _gone_now()
+    about, by = _withdraw(b, u, "user_id"), _withdraw(b, u, "asked_by")
+    return (about and by) or _gone_now()
 
 
 def seat_lowered_to_viewer(business_id: Any, user_id: Any) -> bool:
     """Before a login becomes a Viewer its tick is lowered to See, so moving
-    it back up later never brings Work back without the owner. True when
-    that is so (or there is nothing to lower)."""
+    it back up later never brings Work back without the owner, and every
+    request still waiting ABOUT it is withdrawn (it was asked for the level
+    it had; the asker asks again). True when that is so (or there is nothing
+    to lower)."""
     ids = _hook_ids(business_id, user_id)
     if ids is None:
         return False
-    ready = _tables()
-    if ready is not True:
-        return ready is False
     b, u = (_q(x) for x in ids)
     got = sb_clients.sb_patch_as_service(
         f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}&level=in.(work,lead)", {"level": "see"}, redact=True)
-    return isinstance(got, list) or _gone_now()
+    if not isinstance(got, list):
+        return _gone_now()
+    return _withdraw(b, u, "user_id") or _gone_now()
 
 
 def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
@@ -478,7 +566,8 @@ def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
                                CLEARED: the owner gives what a Manager or
                                Member should hold, on purpose, with the
                                password
-      anything → Viewer        the tick is lowered to See
+      anything → Viewer        the tick is lowered to See, and the requests
+                               waiting about it are withdrawn
     True when that is so; False stops the save."""
     if old == new:
         return True
@@ -488,9 +577,6 @@ def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
     demoted = old == "admin" and new != "admin"
     if not demoted and new != "viewer":
         return True                          # a raise, or a move that lowers nothing here
-    ready = _tables()
-    if ready is not True:
-        return ready is False
     ok = True
     if demoted:
         b, u = (_q(x) for x in ids)
@@ -519,12 +605,39 @@ def bank_holders(business_id: Any) -> List[str]:
 
 # ─── The asks ─────────────────────────────────────────────────────────
 
+def _off() -> None:
+    """With the switch off everywhere, the request routes are not there:
+    404 before anything is read (a passing read failure must never make a
+    page say a request may be waiting)."""
+    if mode() == "off":
+        raise HTTPException(404, "Not Found")
+
+
 def _church(biz: str) -> Dict[str, Any]:
-    import church_sheet
-    business = church_sheet._business(biz)
+    """The church, when the switch is on for it: off is a 404 before the
+    church is read."""
+    _off()
     if not open_for(biz):
         raise HTTPException(404, "Not Found")
-    return business
+    import church_sheet
+    return church_sheet._business(biz)
+
+
+def _seat_can_hold(biz: str, target: str, wants: Dict[str, Any]) -> None:
+    """At a yes: the login the request is about must still have a seat that
+    can hold what was asked (it may have been lowered, raised to Admin or
+    taken off the team since). 409 in words when it can't; 503 unread."""
+    rows = mh._rows(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(target)}&status=eq.active"
+                    "&select=role&limit=1")
+    if rows is None:
+        raise HTTPException(503, "That didn't save. Nothing changed. Try again.")
+    role = (rows[0] or {}).get("role") if rows and isinstance(rows[0], dict) else None
+    if not rows or role not in mh.WORKING_SEATS + ("viewer",):
+        raise HTTPException(409, ASK_NO_SEAT)
+    if role == "admin":
+        raise HTTPException(409, ASK_ADMIN_NOW)
+    if role == "viewer" and (wants or {}).get("level") != "see":
+        raise HTTPException(409, ASK_VIEWER_NOW)
 
 
 def _ask_row(ask_id: str) -> Dict[str, Any]:
@@ -583,7 +696,9 @@ def answer_ask(ask_id: str, body: Dict[str, Any], request: Request,
     """The owner says yes (with the password) or no. A yes opens exactly
     what was asked; a no opens nothing."""
     uid = str(session.user.id)
-    ask = _ask_row(_uuid(ask_id, "request"))
+    rid = _uuid(ask_id, "request")
+    _off()
+    ask = _ask_row(rid)
     biz = str(ask["business_id"])
     business = _church(biz)
     if str(business.get("owner_id") or "") != uid:
@@ -594,6 +709,8 @@ def answer_ask(ask_id: str, body: Dict[str, Any], request: Request,
     if ask.get("status") != "asked":
         raise HTTPException(409, NOT_WAITING)
     if yes:
+        _seat_can_hold(biz, str(ask.get("user_id") or ""), ask.get("wants") if isinstance(ask.get("wants"), dict)
+                       else {})
         import ledger_unlock
         ledger_unlock.require_unlock(request, uid, ledger_unlock.SCOPE_ACCESS, business_id=biz)
     out = _rpc("church_money_answer", {"p_ask": ask["id"], "p_yes": yes, "p_by": uid})
@@ -655,7 +772,9 @@ def _tell_asker(business: Dict[str, Any], ask: Dict[str, Any], yes: bool) -> Non
 def withdraw_ask(ask_id: str, session: UserSession = Depends(sb_clients.authed_request)):
     """Whoever asked takes the request back, or the owner clears it."""
     uid = str(session.user.id)
-    ask = _ask_row(_uuid(ask_id, "request"))
+    rid = _uuid(ask_id, "request")
+    _off()
+    ask = _ask_row(rid)
     biz = str(ask["business_id"])
     business = _church(biz)
     if uid not in (str(business.get("owner_id") or ""), str(ask.get("asked_by") or "")):

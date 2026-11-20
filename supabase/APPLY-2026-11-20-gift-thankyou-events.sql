@@ -29,8 +29,13 @@
 --
 -- Nothing reads either event type today (the agent reads only the payment
 -- events that prompt a thank-you). Safe to run twice: a second run finds no
--- old gift row and changes nothing. One transaction; lock_timeout 5s; rows
--- only, no table, policy or function touched.
+-- old gift row and changes nothing. One transaction; lock_timeout 5s,
+-- statement_timeout 30s; rows only, no table, policy or function touched.
+--
+-- Production, read 2026-11-20: 0 rows of either event type
+-- ('payment_thankyou_created' or 'giving_thankyou_created'). Applied today
+-- it moves nothing; it is here so that any written before the switch goes
+-- on are moved too. Run Check before first.
 --
 -- Check before (read-only; Q1 is how many rows this file moves):
 --   select count(*) as old_gift_rows from public.events
@@ -51,6 +56,7 @@
 begin;
 
 set local lock_timeout = '5s';
+set local statement_timeout = '30s';
 
 update public.events
    set event_type = 'giving_thankyou_created',

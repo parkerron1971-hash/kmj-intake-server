@@ -42,8 +42,8 @@ import church_money_ticks as cmt  # noqa: E402
 import church_sheet as cs  # noqa: E402
 import sb_clients  # noqa: E402
 from test_church_money_ticks import (  # noqa: E402,F401  (db and _fresh are fixtures)
-    ADMIN, BIZ, MANAGER, MEMBER, OWNER, SHOP, VIEWER, _ask, _biz, _change, _fresh, _give, _held, _seat, _status, _u,
-    db)
+    ADMIN, BIZ, HOLDER, MANAGER, MEMBER, OTHER, OWNER, SHOP, VIEWER, _ask, _biz, _change, _fresh, _give, _held, _seat,
+    _session, _status, _u, db)
 
 MISSING = {"status": 404, "code": "PGRST205", "message": "Could not find the table in the schema cache"}
 
@@ -223,7 +223,7 @@ def test_lowering_and_taking_away_run_whatever_the_switch_says(db, monkeypatch, 
     assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "withdrawn"
     # Giving stays behind the switch.
     with pytest.raises(HTTPException) as e:
-        _change(db, OWNER, MANAGER, {"money": {"level": "see"}})
+        _change(db, OWNER, HOLDER, {"money": {"level": "see"}})
     assert e.value.status_code == 400 and e.value.detail == cmt.NOT_ON
     assert cmt.holder(BIZ, MANAGER) is None                       # and no door reads a tick
 
@@ -296,24 +296,189 @@ def test_with_the_tables_gone_no_hook_blocks_a_revoke_or_a_level_change(db, monk
         assert fn(*args) is True, fn.__name__
 
 
-def test_a_probe_that_cannot_tell_stops_a_lowering_and_is_not_kept(db, monkeypatch, clock):
+def test_a_write_that_fails_when_the_probe_cannot_tell_stops_a_lowering(db, monkeypatch, clock):
+    """The write fails, and the probe made then can't say the tables are
+    gone (a timeout): not done, and nothing about it is kept."""
     import business_users_router as bur
     _give(db, MANAGER, "lead")
-    real = db.get
+    real_get, real_patch, real_delete = db.get, db.patch, db.delete
 
-    def down(path, **kw):
-        if path.startswith(f"/{mh.HOLDERS}"):
+    def mine(path):
+        return path.startswith(f"/{mh.HOLDERS}") or path.startswith(f"/{mh.ASKS}")
+
+    def get(path, **kw):
+        if mine(path):
             db.err = None                                         # a timeout: no answer at all
             return None
-        return real(path, **kw)
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", down)
+        return real_get(path, **kw)
+
+    def patch(path, body, **kw):
+        if mine(path):
+            db.err = None
+            return None
+        return real_patch(path, body, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **kw: False if mine(path) else real_delete(path))
     assert cmt._tables() is None and not cmt.tables_ready()
     assert _status(cs.change, _biz(db), OWNER, MANAGER, {"level": "viewer"}) == 503
     assert db._active(BIZ, MANAGER)["role"] == "manager" and _held(db, MANAGER)["level"] == "lead"
     db._active(BIZ, MANAGER)["status"] = "revoked"
     assert bur.hand_back_login(BIZ, MANAGER)["failed"] == 1
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)    # it answers again: nothing was kept
+    for name, fn in (("sb_get_as_service", real_get), ("sb_patch_as_service", real_patch),
+                     ("sb_delete_as_service", real_delete)):
+        monkeypatch.setattr(sb_clients, name, fn)                 # it answers again: nothing was kept
     assert bur.hand_back_login(BIZ, MANAGER)["failed"] == 0 and _held(db, MANAGER) is None
+
+
+def test_a_kept_no_never_skips_a_lowering(db, clock):
+    """One replica's passing "no such table" is kept there five minutes;
+    meanwhile another replica's owner gave a tick. A demotion or a revoke
+    landing on the first replica still makes its write (review, 2026-11-20)."""
+    import business_users_router as bur
+    _change(db, OWNER, ADMIN, {"money": {"bank": True}})          # an Admin with the bank
+    _give(db, MANAGER, "lead", who=True, bank=True)
+    _give(db, MEMBER, "work")
+    mh.tables_gone()                                              # the kept, stale no
+    assert not cmt.tables_ready()
+    _change(db, OWNER, ADMIN, {"level": "manager", "areas": ["office"]})
+    assert _held(db, ADMIN) is None                               # cleared all the same
+    _change(db, OWNER, MANAGER, {"level": "viewer"})
+    assert _held(db, MANAGER)["level"] == "see"
+    seat = db._active(BIZ, MEMBER)
+    seat["status"] = "revoked"
+    assert bur.hand_back_login(BIZ, MEMBER, seat_id=seat["id"])["failed"] == 0 and _held(db, MEMBER) is None
+    src = pathlib.Path(ROOT, "church_money_ticks.py").read_text(encoding="utf-8")
+    hooks = src[src.index("def _hook_ids("):src.index("# ─── Who holds the bank")]
+    assert "_tables()" not in hooks and "tables_ready()" not in hooks and hooks.count("_tables(fresh=True)") == 1
+
+
+# ─── 2b. The switch off: a tick still held is shown, and only goes down ─
+
+@pytest.fixture
+def off(db, monkeypatch):
+    """Ticks given while on; then the switch turned off as a rollback."""
+    _give(db, MANAGER, "see", bank=True)
+    _give(db, MEMBER, "work", who=True)
+    _change(db, OWNER, ADMIN, {"money": {"bank": True}})
+    monkeypatch.setenv("CHURCH_MONEY_TICKS", "off")
+    return db
+
+
+def _change_pw(db, by, target, body):
+    asked = []
+    out = cs.change(_biz(db), by, target, body, widening=lambda: asked.append(1))
+    return out, bool(asked)
+
+
+def test_off_a_tick_still_held_is_shown_to_be_lowered_only(off):
+    db = off
+    sheet = cs.compose(_biz(db), OWNER, MANAGER)["money"]
+    assert sheet["off"] is True and sheet["why"] == cmt.OFF_HELD and sheet["can"] == "grant"
+    assert (sheet["level"], sheet["who_gave"], sheet["bank"]) == ("see", False, True)
+    assert {x["key"]: x["allowed"] for x in sheet["levels"]} == {"see": True, "work": False, "lead": False}
+    assert next(x for x in sheet["levels"] if x["key"] == "work")["why"] == cmt.OFF_NO_RAISE
+    assert sheet["pending"] is None
+    assert cs.compose(_biz(db), ADMIN, MEMBER)["money"]["can"] == "ask"        # an Admin lowers, as when on
+    admin = cs.compose(_biz(db), OWNER, ADMIN)["money"]
+    assert admin["off"] and admin["bank"] is True and admin["can"] == "grant" and admin["levels"] == []
+    assert cs.compose(_biz(db), OWNER, VIEWER)["money"] is None   # holds nothing: nothing new
+    assert cs.compose(_biz(db), OWNER, OWNER)["money"] is None
+
+
+def test_off_the_owner_lowers_or_takes_a_tick_away_and_raises_nothing(off):
+    db = off
+    out, pw = _change_pw(db, OWNER, MANAGER, {"money": {"bank": False}})
+    assert not pw and _held(db, MANAGER) == {**_held(db, MANAGER), "level": "see", "bank": False}
+    assert "giving: See (was See, with the bank and payouts)" in out["summary"]
+    for raise_ in ({"bank": True}, {"level": "work"}, {"who_gave": True}):
+        with pytest.raises(HTTPException) as e:
+            cs.change(_biz(db), OWNER, MANAGER, {"money": raise_})
+        assert e.value.status_code == 400 and e.value.detail == cmt.NOT_ON, raise_
+    out, pw = _change_pw(db, OWNER, MANAGER, {"money": {"level": None}})
+    assert not pw and _held(db, MANAGER) is None
+    with pytest.raises(HTTPException) as e:                       # nothing held now: nothing to do but give
+        cs.change(_biz(db), OWNER, MANAGER, {"money": {"level": "see"}})
+    assert e.value.detail == cmt.NOT_ON
+    out, pw = _change_pw(db, OWNER, ADMIN, {"money": {"bank": False}})        # an Admin's bank row
+    assert not pw and _held(db, ADMIN) is None
+
+
+def test_off_an_admin_lowers_as_when_on_and_a_holder_does_not(off):
+    db = off
+    _change_pw(db, ADMIN, MEMBER, {"money": {"level": "see", "who_gave": False}})
+    held = _held(db, MEMBER)
+    assert (held["level"], held["who_gave"]) == ("see", False)
+    with pytest.raises(HTTPException) as e:
+        cs.change(_biz(db), ADMIN, MEMBER, {"money": {"level": "work"}})
+    assert e.value.detail == cmt.NOT_ON and not db.t[mh.ASKS]    # no request while off either
+    assert _status(cs.change, _biz(db), HOLDER, MEMBER, {"money": {"level": None}}) == 403
+    assert _held(db, MEMBER) is not None
+
+
+def test_off_is_not_a_stop_and_the_instant_stop_is_written_down():
+    src = pathlib.Path(ROOT, "church_money_ticks.py").read_text(encoding="utf-8")
+    doc = src[:src.index('"""', 10)]
+    assert "OFF IS NOT A STOP" in doc and "delete from public.church_money_holders" in doc
+    assert "where business_id = '<the church id>';" in doc
+    log = pathlib.Path(ROOT, "worklog", "2026-11-20-church-money-ticks-follow-up.md").read_text(encoding="utf-8")
+    assert "delete from public.church_money_holders where business_id" in log
+
+
+# ─── 3b. The request routes: off is a 404 before anything is read ─────
+
+def test_off_the_request_routes_read_nothing(db, monkeypatch):
+    import member_asks
+    aid = _ask(db, ADMIN, MANAGER)
+    monkeypatch.setenv("CHURCH_MONEY_TICKS", "off")
+    db.reads.clear()
+    assert _status(cmt.list_asks, BIZ, session=_session(OWNER)) == 404
+    assert _status(cmt.answer_ask, aid, {"yes": False}, None, session=_session(OWNER)) == 404
+    assert _status(cmt.withdraw_ask, aid, session=_session(OWNER)) == 404
+    assert db.reads == []
+    monkeypatch.setenv("CHURCH_MONEY_TICKS", "owner")             # on for another church only
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: str(biz) == OTHER)
+    assert _status(cmt.list_asks, BIZ, session=_session(OWNER)) == 404
+    assert not [r for r in db.reads if r.startswith("/businesses?")]
+
+
+# ─── 4b. A request about a login that has changed since ───────────────
+
+def test_a_request_about_a_login_made_a_viewer_is_withdrawn(db):
+    aid = _ask(db, ADMIN, MANAGER, "work", True, False)
+    _change(db, OWNER, MANAGER, {"level": "viewer"})
+    assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "withdrawn"
+    other = _ask(db, ADMIN, MEMBER, "see", False, False)
+    assert cmt.role_lowered(BIZ, MEMBER, "member", "viewer")
+    assert next(a for a in db.t[mh.ASKS] if a["id"] == other)["status"] == "withdrawn"
+
+
+@pytest.mark.parametrize("seat_now, words", [("viewer", cmt.ASK_VIEWER_NOW), ("admin", cmt.ASK_ADMIN_NOW),
+                                              (None, cmt.ASK_NO_SEAT)])
+def test_a_yes_is_refused_when_the_seat_can_no_longer_hold_it(db, monkeypatch, seat_now, words):
+    import ledger_unlock
+    unlocked = []
+    monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: unlocked.append(1))
+    aid = _ask(db, ADMIN, MEMBER, "work", True, False)
+    seat = db._active(BIZ, MEMBER)
+    if seat_now:
+        seat["role"] = seat_now                                   # changed by a path that didn't withdraw it
+    else:
+        seat["status"] = "revoked"
+    with pytest.raises(HTTPException) as e:
+        cmt.answer_ask(aid, {"yes": True}, None, session=_session(OWNER))
+    assert e.value.status_code == 409 and e.value.detail == words
+    assert _held(db, MEMBER) is None and unlocked == []           # nothing opened, no password asked
+    assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "asked"
+    assert cmt.answer_ask(aid, {"yes": False}, None, session=_session(OWNER))["status"] == "declined"
+
+
+def test_a_see_request_for_a_viewer_is_still_answered(db, monkeypatch):
+    import ledger_unlock
+    monkeypatch.setattr(ledger_unlock, "require_unlock", lambda *a, **k: None)
+    aid = _ask(db, ADMIN, VIEWER, "see", True, False)
+    assert cmt.answer_ask(aid, {"yes": True}, None, session=_session(OWNER))["status"] == "approved"
+    assert _held(db, VIEWER)["level"] == "see"
 
 
 # ─── 4. The bank's own rows take the bank tick ────────────────────────
@@ -503,7 +668,8 @@ def test_the_sql_picks_exactly_the_codes_gifts_and_waits_for_kevin():
     apply = pathlib.Path(ROOT, "supabase", "APPLY-2026-11-20-gift-thankyou-events.sql").read_text(encoding="utf-8")
     test = ("(starts_with(data->>'trigger_event', 'giving') or starts_with(data->>'trigger_event', 'donation'))")
     statement = apply[apply.index("\nbegin;"):apply.index("\ncommit;")]
-    assert "set local lock_timeout = '5s';" in statement
+    assert "set local lock_timeout = '5s';" in statement and "set local statement_timeout = '30s';" in statement
+    assert "Production, read 2026-11-20: 0 rows of either event type" in apply
     assert "update public.events" in statement and "delete" not in statement.lower()
     assert "where event_type = 'payment_thankyou_created'" in statement and test in statement
     assert "set event_type = 'giving_thankyou_created'" in statement

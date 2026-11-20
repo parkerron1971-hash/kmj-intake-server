@@ -10,11 +10,12 @@
 -- with CHURCH_MONEY_TICKS on, a login that only Sees the books reads them
 -- again. Run it only with the switch off, or to apply the file again.
 --
--- Safe to run twice. One transaction; lock_timeout 5s.
+-- Safe to run twice. One transaction; lock_timeout 5s, statement_timeout 30s.
 
 begin;
 
 set local lock_timeout = '5s';
+set local statement_timeout = '30s';
 
 update public.events
    set event_type = 'payment_thankyou_created',
