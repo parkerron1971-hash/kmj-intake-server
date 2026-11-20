@@ -727,6 +727,10 @@ app.include_router(new_here_router)
 # they scan the bulletin's "New here?" code; the first-time guests' choice.
 from guest_card import router as guest_card_router
 app.include_router(guest_card_router)
+# The Guests room (church_guests.py): People › Guests, This week and the
+# Scorecard. Read-only; behind GUEST_PATH (guest_path.switched_on).
+from church_guests import router as church_guests_router
+app.include_router(church_guests_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)
