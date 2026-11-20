@@ -52,13 +52,14 @@ PAYROLL_MIGRATION = ROOT / "supabase" / "APPLY-2026-11-19-payroll-deposits.sql"
 
 def test_the_sql_list_is_the_python_list():
     assert sorted(_array("business_settings_server_keys")) == sorted(bs.SERVER_KEYS)
-    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 44
+    assert len(bs.SERVER_KEYS) == len(set(bs.SERVER_KEYS)) == 45
     # The payroll file writes the same list when this file is already in (it
-    # added "payroll" on 2026-11-19), so either order ends with all 44.
+    # added "payroll" on 2026-11-19; guest_calls joined both on 2026-11-20),
+    # so either order ends with all 45.
     payroll = "\n".join(ln.split("--", 1)[0] for ln in PAYROLL_MIGRATION.read_text(encoding="utf-8").splitlines())
     body = payroll[payroll.index("create or replace function public.business_settings_server_keys()"):]
     listed = re.findall(r"'([a-z_]+)'", body.split("array[", 1)[1].split("]", 1)[0])
-    assert sorted(listed) == sorted(bs.SERVER_KEYS) and "payroll" in listed
+    assert sorted(listed) == sorted(bs.SERVER_KEYS) and "payroll" in listed and "guest_calls" in listed
     assert set(_array("business_settings_birth_keys")) == set(bs.BIRTH_KEYS) == {"churchsavvy_only"}
     assert bs.BIRTH_KEYS <= set(bs.SERVER_KEYS)
 
