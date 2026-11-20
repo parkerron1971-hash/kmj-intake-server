@@ -1238,8 +1238,9 @@ async def service_ics(request: Request):
 # shows a page it kept), runs the audio player, hears YouTube and Vimeo,
 # saves where the member is (on pause, on hide, once a minute while it plays),
 # flips Save at once and goes Back through history when the page before was
-# ours. Share is member_lumen_share's sheet (its own script, which _shell adds).
-JS = r"""(function(){var d=document,root=d.querySelector('.lw[data-lw-who]'),sj=d.getElementById('lw-state');
+# ours (not once something has played: then Back is a link, which the mini
+# player, member_mini, opens over the message so it plays on). Share is member_lumen_share's sheet (its own script, which _shell adds).
+JS = r"""(function(){var w=window,d=document,root=d.querySelector('.lw[data-lw-who]'),sj=d.getElementById('lw-state');
 if(!root||!sj)return;var S;try{S=JSON.parse(sj.textContent);}catch(e){return;}
 var skew=S.now-Date.now()/1000,K='lw:'+S.who,TTL=600,STARTED=20,LEFT=45;
 function now(){return Math.round(Date.now()/1000+skew);}
@@ -1252,8 +1253,8 @@ function isDone(p,u){return u>0&&(u-p<=LEFT||p>=u*.95);}
 function clock(x){x=Math.max(0,Math.floor(x||0));var h=Math.floor(x/3600),m=Math.floor(x%3600/60),s=x%60;
 return(h?h+':'+(m<10?'0':''):'')+m+':'+(s<10?'0':'')+s;}
 function left(p,u){return Math.max(1,Math.ceil((u-p)/60))+' min left';}
-function bar(el,p,u){var b=el.querySelector('.lw-bar');if(!b)return;var w=isDone(p,u)?100:(u?Math.min(99,Math.max(2,Math.round(p*100/u))):0);
-b.hidden=!w;b.firstChild.style.width=w+'%';}
+function bar(el,p,u){var b=el.querySelector('.lw-bar');if(!b)return;var pc=isDone(p,u)?100:(u?Math.min(99,Math.max(2,Math.round(p*100/u))):0);
+b.hidden=!pc;b.firstChild.style.width=pc+'%';}
 function paint(){var M=merged();
 [].forEach.call(d.querySelectorAll('[data-lw-sid]'),function(el){var a=M.p[el.getAttribute('data-lw-sid')];if(!a)return;
 bar(el,a[0],a[1]);var c=el.querySelector('.lw-dur');if(c&&a[1]){c.textContent=clock(a[1]);c.hidden=false;}
@@ -1292,7 +1293,7 @@ flip(b,on);L.s[sid]=[on?1:0,now()];keep(L);rails(merged());
 post('/my/sermons/save',{id:sid,on:on?1:0},function(j){if(j&&j.ok){var L2=load();if(L2.s[sid])L2.s[sid][1]=j.at||L2.s[sid][1];keep(L2);return;}
 if(j&&j.error==='preview')return;var L3=load();delete L3.s[sid];keep(L3);paint();});},true);
 // Back: through history when the page before was ours.
-var fb=d.querySelector('[data-lw-back]');if(fb)fb.addEventListener('click',function(e){try{var r=new URL(d.referrer);
+var fb=d.querySelector('[data-lw-back]');if(fb)fb.addEventListener('click',function(e){if(w.__lwPlayed)return;try{var r=new URL(d.referrer);
 if(r.origin===location.origin&&r.pathname.indexOf('/my')===0&&history.length>1){e.preventDefault();history.back();}}catch(x){}});
 paint();addEventListener('pageshow',function(e){if(e.persisted)paint();});
 // The player.
@@ -1322,7 +1323,7 @@ seek.style.setProperty('--p',(dur?Math.min(100,seek.value*100/dur):0)+'%');
 seek.setAttribute('aria-valuetext',clock(pos)+(dur?' of '+clock(dur):''));
 root.querySelector('.lw-pv').classList.toggle('is-playing',!au.paused);pb.setAttribute('aria-label',au.paused?'Play':'Pause');}
 au.addEventListener('loadedmetadata',meta);au.addEventListener('durationchange',meta);au.addEventListener('canplay',function(){seekTo();show();});au.addEventListener('timeupdate',show);
-au.addEventListener('play',function(){begun=true;playing=true;last=Date.now();show();});
+au.addEventListener('play',function(){begun=true;playing=true;w.__lwPlayed=1;last=Date.now();show();});
 au.addEventListener('pause',function(){playing=false;show();remember();});
 au.addEventListener('ended',function(){playing=false;pos=dur;remember();});
 if(au.readyState>=1)meta();else if(at){cur.textContent=clock(at);seek.value=at;}
@@ -1351,10 +1352,10 @@ window.addEventListener('message',function(e){if(e.source!==fr.contentWindow||!o
 try{m=typeof e.data==='string'?JSON.parse(e.data):e.data;}catch(x){return;}if(!m)return;
 if(kind==='yt'){var i=m.info||{};if(m.event==='onReady')say({event:'listening',id:1,channel:'widget'});
 if(typeof i.duration==='number'&&i.duration>0)dur=i.duration;if(typeof i.currentTime==='number')pos=i.currentTime;
-if(typeof i.playerState==='number'){var was=playing;playing=i.playerState===1;if(playing&&!was)last=Date.now();
+if(typeof i.playerState==='number'){var was=playing;playing=i.playerState===1;if(playing){w.__lwPlayed=1;if(!was)last=Date.now();}
 if(!playing&&was&&(i.playerState===2||i.playerState===0)){if(i.playerState===0&&dur)pos=dur;remember();}}}
 else{var x=m.data||{};if(typeof x.duration==='number'&&x.duration>0)dur=x.duration;if(typeof x.seconds==='number')pos=x.seconds;
-if(m.event==='play'){playing=true;last=Date.now();}if(m.event==='pause'||m.event==='ended'){playing=false;if(m.event==='ended'&&dur)pos=dur;remember();}}});
+if(m.event==='play'){playing=true;w.__lwPlayed=1;last=Date.now();}if(m.event==='pause'||m.event==='ended'){playing=false;if(m.event==='ended'&&dur)pos=dur;remember();}}});
 })();"""
 
 
