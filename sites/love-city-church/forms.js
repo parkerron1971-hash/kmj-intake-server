@@ -55,18 +55,21 @@
   }
 
   function toPayload(kind, form, v) {
-    var own = { first_name: 1, last_name: 1, email: 1, phone: 1 };
+    // sms_consent: the connect card's "Text me" box, which the server adds
+    // only when the church's welcome texts are on. A yes to texts, never an
+    // answer on the card.
+    var own = { first_name: 1, last_name: 1, email: 1, phone: 1, sms_consent: 1 };
     var lines = [TITLES[kind] || kind];
     var fields = {};
     Object.keys(v).forEach(function (k) {
-      if (k !== 'email' && k !== 'phone') fields[k] = v[k];
+      if (k !== 'email' && k !== 'phone' && k !== 'sms_consent') fields[k] = v[k];
     });
     if (kind === 'prayer-request') fields.follow_up = !!v.follow_up;
     Object.keys(v).forEach(function (k) {
       if (own[k]) return;
       lines.push(question(form, k) + ': ' + (Array.isArray(v[k]) ? v[k].join(', ') : v[k]));
     });
-    return {
+    var payload = {
       name: [v.first_name, v.last_name].filter(Boolean).join(' '),
       email: v.email || '',
       phone: v.phone || '',
@@ -74,6 +77,8 @@
       form: kind.replace(/-/g, '_'),
       fields: fields
     };
+    if (v.sms_consent) payload.sms_consent = true;
+    return payload;
   }
 
   // A link like /connect?interest=next-step#connect-card ticks that box.

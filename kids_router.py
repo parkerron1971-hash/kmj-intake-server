@@ -32,7 +32,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import church_keys
@@ -197,7 +197,25 @@ def list_families(business_id: str = Query(...), user: AuthedUser = Depends(requ
         if r and r.lower() not in {x.lower() for x in rooms}:
             rooms.append(r)
     return {"role": role, "can_see_private": private, "private_locked": locked, "rooms": rooms,
-            "families": list(out.values())}
+            "families": list(out.values()), "guest_texts": guest_texts(biz)}
+
+
+def guest_texts(biz: str) -> Dict[str, Any]:
+    """The "Text me" box on Add a family (the Welcome Path, 2026-11-20):
+    {on, words}. On only where a family's yes would bring the church's
+    welcome texts (new_here.text_me_words: the path on, New here on, the
+    church's own number); the words are the ones the desk reads out to the
+    family. A read that fails is {on: false}: the family is added as before."""
+    try:
+        import new_here
+        if not new_here.path_on(biz):
+            return {"on": False, "words": ""}
+        business = new_here._business(biz)
+        words = new_here.text_me_words(business, ask=True) if business else ""
+        return {"on": bool(words), "words": words}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("kids: the Text me box wasn't read (%s)", type(e).__name__)
+        return {"on": False, "words": ""}
 
 
 # ─── Families ────────────────────────────────────────────────────────
@@ -211,6 +229,9 @@ class FamilyIn(BaseModel):
     business_id: str
     name: str = Field(..., min_length=1, max_length=120)
     adults: List[AdultIn] = Field(default_factory=list, max_length=6)
+    # The "Text me" box (guest_texts): the first adult said yes to the
+    # church's texts. An older app never sends it.
+    texts_ok: bool = False
 
 
 class FamilyPatch(BaseModel):
@@ -228,7 +249,7 @@ def _link_adult(biz: str, household_id: str, contact_id: str, relationship: str)
 
 
 @router.post("/families")
-def create_family(body: FamilyIn, user: AuthedUser = Depends(require_user)):
+def create_family(body: FamilyIn, request: Request, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business")
     require(biz, user, "member")
     name = _clean(body.name)
@@ -245,7 +266,34 @@ def create_family(body: FamilyIn, user: AuthedUser = Depends(require_user)):
         # is worse than no family.
         sb_clients.sb_delete_as_service(f"/households?id=eq.{fam['id']}&business_id=eq.{biz}")
         raise
-    return {"family": fam}
+    texts = keep_family_yes(biz, body.adults[0].contact_id, request) if body.texts_ok and body.adults else ""
+    return {"family": fam, **({"texts": texts} if texts else {})}
+
+
+def keep_family_yes(biz: str, contact_id: str, request: Request) -> str:
+    """The family's "Text me" yes, kept for its first adult's mobile as an
+    sms_consents row (source kids_checkin) when the box was showing
+    (guest_texts). Their first check-in puts them on the Welcome Path with
+    texts (church_first_visit.join_path reads this yes). "kept", "no_mobile",
+    "off" (the box isn't showing for this church), or "failed"; never fails
+    the family, which is already saved."""
+    try:
+        import new_here
+        import rate_limit
+        if not guest_texts(biz)["on"]:
+            return "off"
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?id=eq.{_uuid(contact_id, 'person')}&business_id=eq.{biz}&select=id,name,phone&limit=1")
+        person = rows[0] if isinstance(rows, list) and rows else None
+        if not person or not new_here.mobile(person.get("phone")):
+            return "no_mobile"
+        ok = new_here.keep_yes(biz, person.get("phone"), source=new_here.YES_SOURCES["kids"],
+                               name=person.get("name") or "", ip=rate_limit.trusted_client_ip(request) or "",
+                               user_agent=request.headers.get("user-agent") or "")
+        return "kept" if ok else "failed"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("kids: a family's yes to texts wasn't kept (%s)", type(e).__name__)
+        return "failed"
 
 
 @router.patch("/families/{household_id}")

@@ -23,6 +23,9 @@ from urllib.parse import urlsplit
 # The honeypot the submit door drops on. Rendered hidden and unlabeled so a
 # person never fills it; the endpoint discards any submission that does.
 HONEYPOT_NAME = "sol-hp"
+# A church guest card's "Text me" box (the Welcome Path, new_here.text_me_for_form):
+# the intake endpoint takes it out of the answers and keeps the yes.
+TEXTS_NAME = "sol-texts"
 _TEXT_TYPES = ("text", "email", "phone", "number", "date", "url")
 
 
@@ -32,7 +35,7 @@ def _esc(s: Any) -> str:
 
 def _field_html(f: Dict[str, Any]) -> str:
     name = str(f.get("name") or "").strip()
-    if not name or name in (HONEYPOT_NAME, "_hp"):
+    if not name or name in (HONEYPOT_NAME, "_hp", TEXTS_NAME):
         return ""
     label = str(f.get("label") or name).strip()
     ftype = str(f.get("type") or "text").strip().lower()
@@ -134,15 +137,28 @@ def render_closed_page(business: Dict[str, Any], form: Dict[str, Any], *,
 </html>"""
 
 
+def texts_box_html(words: str) -> str:
+    """The "Text me" box under a church guest card's fields: unticked, the
+    church's words beside it (who texts, how many a week, rates, STOP and
+    HELP). "" when there are no words (the box doesn't show)."""
+    if not words:
+        return ""
+    return (f'<div class="field check texts"><input type="checkbox" id="f-{TEXTS_NAME}" name="{TEXTS_NAME}" '
+            f'value="yes"> <label for="f-{TEXTS_NAME}"><b>Text me.</b> {_esc(words)}</label></div>')
+
+
 def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
-                     submit_url: str, canonical_url: str, site=None, embedded=False) -> str:
-    """The complete HTML document for one active client form."""
+                     submit_url: str, canonical_url: str, site=None, embedded=False,
+                     text_me: str = "") -> str:
+    """The complete HTML document for one active client form. `text_me`:
+    a church guest card's "Text me" words (new_here.text_me_for_form), or ""
+    for no box."""
     form_name = (form.get("name") or "").strip() or "Get in touch"
     settings = form.get("settings") if isinstance(form.get("settings"), dict) else {}
     description = str(settings.get("description") or "").strip()
     thanks = str(settings.get("confirmation_message") or "Thanks — we'll be in touch soon.").strip()
     fields: List[Dict[str, Any]] = [f for f in (form.get("fields") or []) if isinstance(f, dict)]
-    fields_html = "".join(_field_html(f) for f in fields)
+    fields_html = "".join(_field_html(f) for f in fields) + texts_box_html(text_me)
     theme = resolve_theme(business, site, settings)
     css_vars = theme_css(theme)
     name, home_url, logo = _brand(business, theme, canonical_url)
@@ -199,6 +215,9 @@ body[data-embedded=true] h1{{font-size:clamp(1.6rem,5vw,2.3rem)}}
 .field label{{display:block;font-size:12px;letter-spacing:.06em;font-weight:600;margin:0 0 10px}}
 .field.check{{display:flex;gap:10px;align-items:center}}
 .field.check label{{margin:0;font-weight:500}}
+.field.check.texts{{align-items:flex-start}}
+.field.check.texts label{{font-size:14px;letter-spacing:0;line-height:1.5;font-weight:400;color:var(--text-secondary)}}
+.field.check.texts label b{{color:var(--text-primary);font-weight:600}}
 .req{{color:var(--accent)}}
 input,select,textarea{{width:100%;font:inherit;font-size:16px;min-height:52px;color:inherit;background:var(--input-surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}}
 input[type=checkbox]{{width:20px;height:20px;min-height:20px;flex:none;accent-color:var(--focus)}}
