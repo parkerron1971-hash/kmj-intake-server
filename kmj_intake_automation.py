@@ -828,6 +828,12 @@ app.include_router(stripe_data_proxy_router)
 # All under /payments/* prefix; FastAPI merges with the other
 # /payments routers cleanly.
 app.include_router(stripe_payments_router)
+# A church's Payments page, the new Overview (payments_overview.py):
+# GET /payments/overview, /payments/feed and /payments/feed.csv. Read-only,
+# behind PAYMENTS_OVERVIEW (off | owner | on, owner when unset). BEFORE
+# public_site_router.
+from payments_overview import router as payments_overview_router
+app.include_router(payments_overview_router)
 # The invoice drawer's Void button — POST /invoices/{id}/void, the same
 # path as Chief's void_invoice (pay-link cleanup included).
 from chief_invoice_actions import router as invoice_lifecycle_router
