@@ -765,12 +765,14 @@ def _link() -> str:
     return f"{app_base.app_base_url()}/?nav={NAV}"
 
 
-def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str) -> bool:
+def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str, *, nav: str = NAV,
+               link: Optional[str] = None, label: str = "Open the Follow-up board") -> bool:
     """One notice to one office login, as care_handoff.tell: a push to the
     office app and an email to its sign-in address, each as the church's
-    setting says (both by default), with a link to the Follow-up board.
-    True when either went. Never raises. Run it off the event loop (the
-    email goes through asyncio.run)."""
+    setting says (both by default), with a link to the Follow-up board (or
+    where `nav` / `link` say: a guest's reply opens their texts,
+    guest_replies). True when either went. Never raises. Run it off the
+    event loop (the email goes through asyncio.run)."""
     import church_assignments as cas
     import church_leader_tasks as clt
     import church_office_tasks as cot
@@ -780,7 +782,7 @@ def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str) -> bool:
     if want.get("app", True):
         try:
             import push_notifications
-            rang = push_notifications.send_to_user(uid, title=words["title"][:80], body=words["body"][:160], nav=NAV,
+            rang = push_notifications.send_to_user(uid, title=words["title"][:80], body=words["body"][:160], nav=nav,
                                                    tag=ref[:60], business_id=ch.b)
         except Exception:  # noqa: BLE001
             logger.info("guest calls: a push didn't go (business %s)", ch.b[:8], exc_info=True)
@@ -792,7 +794,7 @@ def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str) -> bool:
             email = None
         if email:
             try:
-                html = cot.render(ch.business, words["text"], words["title"], _link(), "Open the Follow-up board")
+                html = cot.render(ch.business, words["text"], words["title"], link or _link(), label)
                 clt.deliver(ch.business, email, "", words["subject"], html, ref, reply_to=clt._office_email(ch.business))
                 mailed = True
             except Exception:  # noqa: BLE001

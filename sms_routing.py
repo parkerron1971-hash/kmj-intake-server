@@ -451,6 +451,15 @@ async def route_inbound(
                 client, from_number=phone, text=body,
                 provider_id=provider_id, media=media, business_id=business_id,
             )
+            # The Welcome Path (guest_replies.py): a guest on the path who
+            # texts back holds the automatic texts until a person answers,
+            # and whoever has them hears. In a thread of its own, after the
+            # text is kept: it never slows or breaks routing.
+            try:
+                import guest_replies
+                guest_replies.later(guest_replies.on_reply, business_id, phone, body)
+            except Exception:  # noqa: BLE001
+                logger.info("[ROUTE] guest reply hand-off skipped", exc_info=True)
             return {"action": "routed_direct", "business_id": business_id, "reply": None}
 
         if to_number:

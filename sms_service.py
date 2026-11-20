@@ -657,11 +657,22 @@ async def send_sms(req: SendSmsRequest, user: AuthedUser = Depends(require_user)
     business_access.assert_access(str(req.business_id), user, "member")
     async with httpx.AsyncClient() as client:
         try:
-            return await send_sms_core(
+            out = await send_sms_core(
                 client, business_id=req.business_id, to=req.to,
                 message=req.message, contact_id=req.contact_id)
         except SmsSendError as e:
             return JSONResponse({"error": str(e)}, e.status)
+    # A person from the church just texted them: a Welcome Path guest whose
+    # reply was waiting is answered, and their automatic texts go on
+    # (guest_replies). Chief's texts and the automatic ones never come
+    # through here. In a thread of its own: never in the way of the send.
+    try:
+        import guest_replies
+        guest_replies.later(guest_replies.on_person_text, str(req.business_id), req.contact_id, req.to,
+                            str(user.id))
+    except Exception:  # noqa: BLE001
+        logger.info("[SMS] guest answer hand-off skipped", exc_info=True)
+    return out
 
 
 # ─── Contact lookup helpers ──────────────────────────────────────────

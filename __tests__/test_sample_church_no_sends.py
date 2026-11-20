@@ -90,6 +90,8 @@ TICKS = {
     "notif_unanswered_leads": "notification_engine:unanswered_lead_sweep",
     "church_follow_up_sweep": "church_follow_up:sweep",
     "care_handoff_sweep": "care_handoff:sweep_tick",
+    # A Welcome Path guest's waiting reply: its churches go through drop_samples.
+    "guest_replies_sweep": "guest_replies:sweep",
     "church_checkin_sweep": "church_checkin:sweep",
     "church_shepherd_sweep": "church_shepherd_signals:sweep",
     "church_leader_tasks_sweep": "church_leader_tasks:sweep_tick",
