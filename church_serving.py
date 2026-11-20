@@ -69,6 +69,11 @@ admin's, or the Manager's that holds the background_checks duty
 (church_duties, Kevin 2026-11-02: Sunday & Serving's by default); a Manager
 that doesn't is told whose job it is. Serving is only for churches.
 
+The office's week of volunteers (church_week.py, "The week") shows one week's
+people with their hours this year and who can't serve with kids yet: it
+reads them with minutes_of and checks_of (the rules above, for those people
+alone), and only for a login this access rule lets read them.
+
 Switched by CHURCH_SERVING: off | owner | on (on by default since 2026-11-17). The
 member's own hours on My serving (member_portal_serving) follow the same
 switch: on for everyone, and in owner mode only in the platform owner's own
@@ -426,15 +431,24 @@ def _year_window(zone, year: int, now: datetime) -> Tuple[datetime, datetime]:
 
 
 def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[str, Any],
-                  only: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+                  only: Optional[str] = None,
+                  people: Optional[Sequence[str]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Every yes this year, as credits {contact_id, team, minutes, day}; and
-    the teams' names. Away days, and anything but a yes, never count."""
+    the teams' names. Away days, and anything but a yes, never count.
+    `only` is one person's; `people` a few people's (minutes_of), each read
+    by their ids, so their credits are exactly the ones the whole church's
+    read gives them."""
     b = _q(biz_id)
     window = (f"&starts_at=gte.{_q(lo.astimezone(timezone.utc).isoformat())}"
               f"&starts_at=lt.{_q(hi.astimezone(timezone.utc).isoformat())}")
     if only:
         said = _need_all(f"/serve_assignments?business_id=eq.{b}&contact_id=eq.{_q(only)}&status=eq.yes"
                          f"&select=id,service_id,position_id,contact_id", "id")
+        services = _need_in(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
+                            f"&select=id,starts_at,items", "id", [r["service_id"] for r in said], "id") if said else []
+    elif people is not None:
+        said = _need_in(f"/serve_assignments?business_id=eq.{b}&status=eq.yes&select=id,service_id,position_id,contact_id",
+                        "contact_id", people, "id") if people else []
         services = _need_in(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
                             f"&select=id,starts_at,items", "id", [r["service_id"] for r in said], "id") if said else []
     else:
@@ -453,8 +467,12 @@ def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[
     names = {str(g["id"]): _plain(g.get("name")) or "A team"
              for g in _need_in(f"/groups?business_id=eq.{b}&select=id,name", "id", gids, "id")} if gids else {}
     who = f"&contact_id=eq.{_q(only)}" if only else ""
-    away = _need_all(f"/serve_away?business_id=eq.{b}{who}&starts_on=lte.{hi.date().isoformat()}"
-                     f"&ends_on=gte.{lo.date().isoformat()}&select=id,contact_id,starts_on,ends_on", "id")
+    span = f"&starts_on=lte.{hi.date().isoformat()}&ends_on=gte.{lo.date().isoformat()}"
+    if people is not None and not only:
+        away = _need_in(f"/serve_away?business_id=eq.{b}{span}&select=id,contact_id,starts_on,ends_on",
+                        "contact_id", people, "id")
+    else:
+        away = _need_all(f"/serve_away?business_id=eq.{b}{who}{span}&select=id,contact_id,starts_on,ends_on", "id")
     gone: Dict[str, List[Tuple[str, str]]] = {}
     for a in away:
         gone.setdefault(str(a["contact_id"]), []).append((str(a["starts_on"])[:10], str(a["ends_on"])[:10]))
@@ -481,14 +499,19 @@ def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[
 
 
 def _group_credits(biz_id: str, lo: date, hi: date, settings: Dict[str, Any],
-                   only: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+                   only: Optional[str] = None,
+                   people: Optional[Sequence[str]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """A logged gathering counts for each leader of the group who was marked
     there. A Sunday team's own group never counts here: its hours are its
-    Sundays."""
+    Sundays. `people`: these leaders' only, read by their ids."""
     b = _q(biz_id)
     who = f"&contact_id=eq.{_q(only)}" if only else ""
-    leads = _need_all(f"/group_members?business_id=eq.{b}&role=eq.leader{who}&select=group_id,contact_id",
-                      "group_id,contact_id")
+    if people is not None and not only:
+        leads = _need_in(f"/group_members?business_id=eq.{b}&role=eq.leader&select=group_id,contact_id",
+                         "contact_id", people, "group_id,contact_id") if people else []
+    else:
+        leads = _need_all(f"/group_members?business_id=eq.{b}&role=eq.leader{who}&select=group_id,contact_id",
+                          "group_id,contact_id")
     if not leads:
         return [], {}
     groups = {str(g["id"]): g for g in _need_in(f"/groups?business_id=eq.{b}&select=id,name,kind", "id",
@@ -513,12 +536,15 @@ def _group_credits(biz_id: str, lo: date, hi: date, settings: Dict[str, Any],
     return out, {g: _plain(groups[g].get("name")) or "A group" for g, _ in led}
 
 
-def _extra_rows(biz_id: str, only: Optional[str] = None) -> List[Dict[str, Any]]:
+def _extra_rows(biz_id: str, only: Optional[str] = None, people: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     """Everyone with something recorded here: hours outside the schedule, a
-    check date, a reminder."""
+    check date, a reminder. `people`: of these people only, by their ids."""
     b = _q(biz_id)
     one = f"&id=eq.{_q(only)}" if only else ""
     has = _q(json.dumps({KEY: {}}, separators=(",", ":")))
+    if people is not None and not only:
+        return _need_in(f"/contacts?business_id=eq.{b}&metadata=cs.{has}&select=id,name,birthdate,metadata",
+                        "id", people, "id") if people else []
     return _need_all(f"/contacts?business_id=eq.{b}{one}&metadata=cs.{has}&select=id,name,birthdate,metadata", "id")
 
 
@@ -558,6 +584,13 @@ def _kids_teams(biz_id: str) -> Dict[str, str]:
         places = {}   # a pick only narrows; the name still says
     return {str(g["id"]): _plain(g.get("name")) for g in groups
             if church_areas.place_team(_plain(g.get("name")), places).get("area") == "kids_youth"}
+
+
+def check_on(leader_dates: List[date], recorded: Dict[str, Any]) -> Optional[date]:
+    """A person's check date: the latest of the leader approval's (space_
+    leaders) and one recorded here (their contact row's serving record)."""
+    own = _day(_mine(recorded).get("check_on"))
+    return max(list(leader_dates) + ([own] if own else []), default=None)
 
 
 def checks(biz: Dict[str, Any], settings: Dict[str, Any], today: date, zone,
@@ -621,8 +654,7 @@ def checks(biz: Dict[str, Any], settings: Dict[str, Any], today: date, zone,
         if not person:
             continue
         mine = _mine(recorded.get(cid) or {})
-        own = _day(mine.get("check_on"))
-        on = max(dates.get(cid, []) + ([own] if own else []), default=None)
+        on = check_on(dates.get(cid, []), recorded.get(cid) or {})
         age = _age(person.get("birthdate"), today)
         state = check_state(on, settings["check_years"], today, age is not None and age < 18, nexts.get(cid))
         out.append({"contact_id": cid, "name": person["name"], "where": labels, "on": on.isoformat() if on else None,
@@ -797,6 +829,70 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
         "check": ({"status": c["status"], "on": c["on"], "due": c["due"], "next": c["next"]} if c else None),
         "check_link": settings["check_link"] or None,
     }
+
+
+# ─── A few people's (The week, church_week.py) ────────────────────────
+# The same rules as the page above, read for the people of one week only:
+# every read is by their ids, chunked and paged, so a church's size never
+# changes what one week costs. Who may see these is the caller's to decide,
+# by _access's rule (hours: `_access` lets them in; who's cleared: `checks`).
+
+def minutes_of(biz: Dict[str, Any], people: Iterable[str], zone=None) -> Dict[str, int]:
+    """This year's serving minutes for each of these people: what overview()
+    adds up for them (each yes this year by the team's length or the plan,
+    a gathering they led and were marked at, hours the office added), never
+    anyone else's. 0 for someone with none."""
+    biz_id = str(biz["id"])
+    ids = sorted({str(p) for p in people if p})
+    if not ids:
+        return {}
+    zone = zone or _zone(biz_id)
+    now = _now()
+    year = now.astimezone(zone).year
+    settings = _settings(biz)
+    lo, hi = _year_window(zone, year, now)
+    sundays, _ = _sunday_spans(biz_id, zone, lo, hi, settings, people=ids)
+    groups, _ = _group_credits(biz_id, lo.date(), hi.date(), settings, people=ids)
+    extra = _extra_credits(_extra_rows(biz_id, people=ids), year)
+    out = {cid: 0 for cid in ids}
+    for c in (*sundays, *groups, *extra):
+        if c["contact_id"] in out:
+            out[c["contact_id"]] += c["minutes"]
+    return out
+
+
+def checks_of(biz: Dict[str, Any], people: Iterable[str], today: date,
+              nexts: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
+    """These people's checks, by checks()'s own rules: the check date
+    (check_on), under 18 (teen), and check_state, given each one's next time
+    on the schedule with kids or youth as the caller knows it (`nexts`,
+    {contact_id: {day, place, team}}): no check on record and a next time is
+    `blocked`, "Can't serve with kids yet". {contact_id: {status, due, on}}.
+    PRIVATE to whoever may read who's cleared (_access's `checks`)."""
+    biz_id = str(biz["id"])
+    ids = sorted({str(p) for p in people if p})
+    if not ids:
+        return {}
+    b = _q(biz_id)
+    settings = _settings(biz)
+    dates: Dict[str, List[date]] = {}
+    for x in _need_in(f"/space_leaders?business_id=eq.{b}&select=contact_id,space,background_check_on",
+                      "contact_id", ids, "contact_id,space"):
+        d = _day(x.get("background_check_on"))
+        if d:
+            dates.setdefault(str(x["contact_id"]), []).append(d)
+    recorded = {str(c["id"]): c for c in _extra_rows(biz_id, people=ids)}
+    found = _people(biz_id, ids)
+    out: Dict[str, Dict[str, Any]] = {}
+    for cid in ids:
+        person = found.get(cid)
+        if not person:
+            continue
+        on = check_on(dates.get(cid, []), recorded.get(cid) or {})
+        age = _age(person.get("birthdate"), today)
+        state = check_state(on, settings["check_years"], today, age is not None and age < 18, (nexts or {}).get(cid))
+        out[cid] = {"on": on.isoformat() if on else None, **state}
+    return out
 
 
 # ─── Writes ───────────────────────────────────────────────────────────

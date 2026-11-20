@@ -477,6 +477,11 @@ app.include_router(church_schedule_router)
 # switch; 404 until supabase/APPLY-2026-11-20-church-schedule-limits.sql too.
 from church_schedule_limits import router as church_schedule_limits_router
 app.include_router(church_schedule_limits_router)
+# The week (/church/week, /church/week/status; church_week.py): every
+# department's volunteers for one week, with hours, read only, for whoever
+# keeps Who serves when (2026-11-19; CHURCH_WEEK off | owner | on, owner when unset).
+from church_week import router as church_week_router
+app.include_router(church_week_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what
