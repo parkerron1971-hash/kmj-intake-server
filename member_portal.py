@@ -1977,7 +1977,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
         asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
         # "From the church" and the bell (member_portal_news).
-        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"])) if church_home else _nothing(),
+        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **_feed_previews()) if church_home else _nothing(),
         asyncio.to_thread(cn.comments_open, biz) if church_home else _nothing(),
         # "Celebrating today" and the church's once-only question (member_portal_celebrations).
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
@@ -2010,7 +2010,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_lumen
     lumen_home = member_lumen.page()
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
-                               **({"title": "What's happening", "more": "News"} if lumen_home else {}))
+                               **({"title": "What's happening", "more": "News", "me": me, "site": site,
+                                   "new_n": news_n} if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
     import member_portal_serving as mpsv
@@ -2045,6 +2046,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                              edit=can_picture and request.query_params.get("edit") == "pictures",
                              news=news_html, news_n=mpn.home_bell(news), celebrate=celebrate,
                              ask=member_asks.home_row(await _ask_entry(biz, me)), inbox=inbox or ""))
+
+
+def _feed_previews() -> Dict[str, Any]:
+    """Home's feed in the new look carries each post's newest comments and
+    whether it was opened (church_news.home_view previews, in the reads Home
+    already makes); today's look asks nothing more."""
+    import member_lumen
+    return {"previews": True} if member_lumen.page() else {}
 
 
 def _inbox_space() -> bool:

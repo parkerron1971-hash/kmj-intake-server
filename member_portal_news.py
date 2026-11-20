@@ -290,18 +290,24 @@ def _flash(request: Request) -> str:
 # ─── words ───────────────────────────────────────────────────────────
 
 
-def _local(biz: Dict[str, Any], ts: Any) -> Optional[datetime]:
+_ASK = object()
+
+
+def _local(biz: Dict[str, Any], ts: Any, tz: Any = _ASK) -> Optional[datetime]:
     import group_gatherings as gg
     t = cn._ts(ts)
     if t is None:
         return None
-    tz = gg.zone(biz)
+    if tz is _ASK:
+        tz = gg.zone(biz)
     return t.astimezone(tz) if tz is not None else t
 
 
-def when_label(biz: Dict[str, Any], ts: Any, now: Optional[datetime] = None) -> str:
-    """'Just now', '20m', '3h', 'Monday at 9:14 AM', 'Oct 20' — on the church's clock."""
-    t = _local(biz, ts)
+def when_label(biz: Dict[str, Any], ts: Any, now: Optional[datetime] = None, *, tz: Any = _ASK) -> str:
+    """'Just now', '20m', '3h', 'Monday at 9:14 AM', 'Oct 20' — on the church's clock.
+    `tz`: the church's clock already looked up (group_gatherings.zone, which
+    reads), for a page that labels many times (Home's feed)."""
+    t = _local(biz, ts, tz)
     if t is None:
         return ""
     now = now or datetime.now(timezone.utc)
@@ -607,13 +613,22 @@ def _row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
 
 def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: Optional[List[Dict[str, Any]]],
                open_: bool, rights: Optional[Dict[str, Any]] = None, *, title: str = "From the church",
-               more: str = "All news") -> str:
+               more: str = "All news", me: Optional[Dict[str, Any]] = None, site=None,
+               new_n: Optional[int] = None) -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
     never says "nothing yet"), except to someone who posts (`rights`,
     church_news.can_post): one row that opens Post, so a pastor at a church
-    with no news yet sees where the news will go."""
+    with no news yet sees where the news will go.
+    In the new look (member_lumen) it is the feed instead, "What's happening
+    at <church>": every post as a card with its comments under it
+    (member_lumen_feed; `me` for the write pill's face, `site` for the
+    church's pictures, `new_n` how many are new)."""
     import member_app_ui as ui
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_feed
+        return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n)
     if not posts:
         return home_first(biz, rights, heading=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
@@ -920,8 +935,43 @@ async def react_route(request: Request):
     return _go(back, f"p-{pid}" if pid and not back.startswith("/my/news/") else "", **({} if ok else {"err": code}))
 
 
+async def _comment_json(request: Request):
+    """A comment from Home's feed (member_lumen_feed): the same checks and the
+    same save as the form post, answered as JSON so Home shows the result in
+    place. {ok, code, pid, html: the comment as the feed draws it, notice:
+    the held or crisis words}, or {ok: false, code, error}."""
+    import member_instant_send as mis
+    import member_lumen_feed
+    import member_portal_church as mpc
+    from fastapi.responses import JSONResponse
+    church, me, unavailable = await mpc._signed_in(request)
+    if unavailable:
+        return mis.refused("preview" if unavailable == "preview" else "error", 403 if unavailable == "preview" else 503,
+                           own=ERRORS)
+    if not me:
+        return JSONResponse({"ok": False, "code": "signed_out", "error": "Please sign in again, then try once more."},
+                            status_code=401)
+    if not mpc._allowed(church, me):
+        return mis.refused("slow", 429, own=ERRORS)
+    form = await request.form()
+    saved: Dict[str, Any] = {}
+    ok, code, pid = await cn.comment(church["business"], me, str(form.get("id") or ""), str(form.get("body") or ""),
+                                     str(form.get("reply_to") or ""), saved=saved)
+    if not ok:
+        return mis.refused(code, 400, own=ERRORS)
+    row = saved.get("row") or {}
+    c = {**row, "person": me, "mine": True, "status": "shown" if code == "commented" else "held"}
+    return JSONResponse({"ok": True, "code": code, "pid": pid,
+                         "html": member_lumen_feed.comment_html(church["business"], c, pid) if row else "",
+                         "notice": DONE.get(code, "") if code in ("comment_held", "care") else ""},
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.post("/my/news/comment", include_in_schema=False)
 async def comment_route(request: Request):
+    import member_instant_send as mis
+    if mis.wants_json(request):
+        return await _comment_json(request)
     church, me, form, stop = await _who(request, "/my/news")
     if stop:
         return stop
