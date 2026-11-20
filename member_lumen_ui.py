@@ -440,12 +440,14 @@ def templates() -> Tuple[Template, ...]:
     member_lumen_motion.CSS: how it all moves, and Watch and Live as a
     cinema; member_lumen_moments.CSS: the moments in Prayer, Give and
     Messages; member_lumen_feed.CSS: Home's feed and the comments under
-    each post; member_lumen_home.CSS: the top of Home, Look 4.1), and last
-    the type (member_lumen_fonts: the faces and the church's pairing, which
-    set every block's fonts).
+    each post; member_lumen_home.CSS: the top of Home, Look 4.1;
+    member_lumen_devotional.CSS: the devotional on the Bible tab and its
+    day), and last the type (member_lumen_fonts: the faces and the church's
+    pairing, which set every block's fonts).
     member_app_ui.sheet("lumen") serves them as one file."""
     import member_lumen_bible
     import member_lumen_classes
+    import member_lumen_devotional
     import member_lumen_feed
     import member_lumen_fonts
     import member_lumen_give
@@ -455,7 +457,7 @@ def templates() -> Tuple[Template, ...]:
     import member_lumen_people
     return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
             member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS, member_lumen_feed.CSS,
-            member_lumen_home.CSS, member_lumen_fonts.template())
+            member_lumen_home.CSS, Template(member_lumen_devotional.CSS), member_lumen_fonts.template())
 
 
 def css() -> str:

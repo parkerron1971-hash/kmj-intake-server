@@ -528,10 +528,15 @@ if(sh)sh.addEventListener('click',function(){var t=sh.getAttribute('data-text');
 
 
 def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any],
-               mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False) -> str:
+               mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False, night: bool = False) -> str:
     """A devotional's day (approved board 11). `mine` is the member's own
     day (done, ticks, journal); None = it couldn't load, so nothing on the
-    page can save."""
+    page can save. `night` (the member's night reading, the Bible reader's
+    cookie) is the new look's dark day; today's day ignores it."""
+    import member_lumen
+    if member_lumen.page():
+        import member_lumen_devotional as mld
+        return mld.render_day(biz, site, me, dev, n, st, mine, tr=tr, listen=listen, night=night)
     import member_app_photos as photos
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -796,7 +801,7 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     n = int(parts[1])
     import devotional_voice as dvv
     return render_day(biz, site, me, dev, n, st, None if days is None and not preview else (days or {}).get(n, {}),
-                      tr=tr, listen=dvv.can_speak()), 200
+                      tr=tr, listen=dvv.can_speak(), night=request.cookies.get("lm_night") == "1"), 200
 
 
 def _or_empty(fn, preview: bool, *args):
