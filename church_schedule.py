@@ -141,7 +141,10 @@ volunteers) to their team's leader. Such an ask is never "flagged" here
 (volunteer()): it never goes up, the one it went to answers it with a plain
 yes, and the yes is never rechecked.
 
-Not here yet (its own PR): things that repeat.
+Things that repeat (S1-7) are church_schedule_repeats.py: "I work every other
+Saturday", said once. No yes, never blocked, never counted toward a limit. The
+calendar's `standing` and holds() read them; their label is as private as a
+reason (the same people read it).
 """
 from __future__ import annotations
 
@@ -876,11 +879,16 @@ def holds(biz_id: Any, lo: Any, hi: Any) -> List[Dict[str, str]]:
     """The scheduler's hook (sunday_planning._Board): the days someone has
     asked to be away and is still waiting on, so Who serves when doesn't ask
     them to serve on a day they have asked for. [{contact_id, starts_on,
-    ends_on}] for every ask still `asked` that touches `lo`..`hi` (days).
+    ends_on}] for every ask still `asked` that touches `lo`..`hi` (days),
+    then (S1-7) one row for each day a thing that repeats falls on inside
+    them, both days the same (church_schedule_repeats.held_days).
 
-    Only who and which days. The read never selects the reason, the kind,
-    who it went to or anything else of the ask's, so the board has nothing
-    to say but "away", in the words it already uses.
+    Only who and which days. The reads never select the reason, the kind,
+    who it went to, a commitment's label or anything else, so the board has
+    nothing to say but "away", in the words it already uses. With nobody's
+    commitment in the window the answer is exactly what it was before S1-7.
+    The commitments' read fails on its own: when it does, the asks are
+    still held.
 
     FAILS OPEN, ON PURPOSE (decision 12), AND NEVER RAISES: [] when the
     switch is off, the tables aren't there, the switch is closed for this
@@ -924,7 +932,14 @@ def holds(biz_id: Any, lo: Any, hi: Any) -> List[Dict[str, str]]:
             if (str(r.get("business_id")) == b and r.get("state") == "asked" and r.get("contact_id")
                     and s <= z.isoformat() and e >= a.isoformat()):
                 out.append({"contact_id": str(r["contact_id"]), "starts_on": s, "ends_on": e})
-        return out
+        # S1-7: each day a thing that repeats falls on, one row a day. Its own
+        # read, which fails open on its own: the asks above are held anyway.
+        try:
+            import church_schedule_repeats
+            more = church_schedule_repeats.held_days(b, a, z)
+        except Exception:  # noqa: BLE001 — held_days never raises; this only keeps the asks if it ever did
+            more = []
+        return out + more
     except Exception as e:  # noqa: BLE001 — the volunteer schedule is never worth failing for this
         print(f"[church_schedule] the scheduler's hold couldn't be read ({type(e).__name__}); nobody is held",
               flush=True)
@@ -1754,7 +1769,11 @@ def calendar(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[str,
     it), or as a plain away date. `waiting` holds only the asks `me` may
     read (their own, the ones that went to them, and for the owner and the
     office overseer every one): a waiting ask is nobody else's to see.
-    `standing` (things that repeat) comes with its own PR."""
+    `standing` (S1-7, things that repeat): one entry a day each of the
+    group's people's commitments falls on, {contact_id, name, day}, with
+    `label` only for the person, the owner and the office overseer
+    (church_schedule_repeats.sees_label); for anyone else the key is
+    absent."""
     if hi < lo or (hi - lo).days > WINDOW_DAYS:
         raise HTTPException(400, "Pick up to three months")
     import church_map
@@ -1779,7 +1798,10 @@ def calendar(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[str,
                                   f"&select={_fields()}")
                 if str(a.get("business_id")) == ch.b and a.get("state") == "asked"
                 and str(a.get("contact_id")) in on_it and sees_reason(ch, me, a)]
-        names = _names(ch, list(asks.values()) + held + [{"contact_id": f.get("contact_id")} for f in facts])
+        import church_schedule_repeats as repeats
+        repeating = repeats.of_people(ch, on_it, lo, hi)
+        names = _names(ch, list(asks.values()) + held + [{"contact_id": f.get("contact_id")} for f in facts]
+                       + [{"contact_id": c.get("contact_id")} for c in repeating])
         groups = []
         for key in ROSTER_GROUPS:
             away = []
@@ -1792,9 +1814,12 @@ def calendar(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[str,
                 away.append(shape(ch, me, dict(a, starts_on=f.get("starts_on"), ends_on=f.get("ends_on")), names)
                             if a and str(a.get("contact_id")) == cid else _fact(ch, me, f, key, names))
             asked = [shape(ch, me, a, names) for a in held if r.group_of(a.get("contact_id")) == key]
+            standing = repeats.standing(ch, me, [c for c in repeating if r.group_of(c.get("contact_id")) == key],
+                                        names["people"], lo, hi)
             groups.append({"key": key, "name": GROUP_NAMES[key],
                            "people": len(r.leaders if key == "leaders" else r.office),
-                           "away": sorted(away, key=_by_day), "waiting": sorted(asked, key=_by_day), "standing": []})
+                           "away": sorted(away, key=_by_day), "waiting": sorted(asked, key=_by_day),
+                           "standing": standing})
     return {"from": lo.isoformat(), "to": hi.isoformat(), "groups": groups}
 
 
