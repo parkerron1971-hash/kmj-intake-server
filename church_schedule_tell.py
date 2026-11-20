@@ -18,6 +18,12 @@ certain obiligations so that we as a church can plan around meeting".
                        oversees the office: the one who asked hears. Sent
                        straight after the write and never tried again (no
                        column claims it)
+    repeats (S1-7) ... something that repeats was added: the one an ask of
+                       theirs would go to hears, once (told_at on
+                       church_away_commitments), outside quiet hours, in
+                       who and which days ("Every other Saturday, from Dec
+                       5") and NEVER WHAT IT IS (its label). Taking one off
+                       tells nobody
 
 WHAT A NOTICE SAYS. Who, and which days, and nothing else: a lock screen is
 not private. THE REASON AND THE NOTE THAT CAME WITH AN ANSWER ARE NEVER IN A
@@ -74,6 +80,7 @@ open for, and never a sample church. For each:
   * untold asks older than two minutes, and untold "can't make it"s
   * untold answers from the last week
   * the one nudge
+  * untold things that repeat (S1-7) added in the last week
   * the reason, and the note that came with the answer, are cleared 90
     days after the last day (a reason can be medical, and the note can say
     why). Only those two: the ask and its answer stay
@@ -120,6 +127,9 @@ FIELDS = ("id,business_id,contact_id,made_by,grp,department_id,kind,starts_on,en
           "to_contact_id,decided_by_user_id,decided_by_contact_id,decided_at,told_at,answer_told_at,nudged_at,"
           "created_at")
 _KEEP = frozenset(FIELDS.split(",")) | {"team_group_id"}
+# What a notice may know of a thing that repeats (S1-7): never the label.
+REPEAT_FIELDS = "id,business_id,contact_id,weekday,pattern,nth,starts_on,until_on,told_at,created_at"
+_REPEAT_KEEP = frozenset(REPEAT_FIELDS.split(","))
 
 
 def _q(v: Any) -> str:
@@ -303,6 +313,21 @@ def taken_words(church: str, asker: str, by: str, ask: Dict[str, Any]) -> Dict[s
                                  "it’s off the church’s calendar.", "You can ask again in the church’s app."])}
 
 
+def repeat_words(church: str, to_name: str, person: str, row: Dict[str, Any], today: date) -> Dict[str, str]:
+    """Something that repeats (S1-7), to the one an ask of theirs would go
+    to: who, and which days, in the words of church_schedule_repeats.said.
+    NEVER WHAT IT IS (the label): _bare_repeat drops it at the door. Nothing
+    to answer: it needed no yes."""
+    import church_schedule_repeats as repeats
+    short, long = repeats.said(row, today), repeats.said(row, today, long=True)
+    title = f"{_first(person)} has something that repeats"
+    return {"title": title, "body": f"{short}. It’s on the calendar. Nothing for you to answer.",
+            "subject": f"{church}: {title}",
+            "text": "\n\n".join([_hi(to_name), f"{person} has something that repeats: {long[0].lower()}{long[1:]}. "
+                                 "It’s on the church’s calendar, so nobody asks them to serve on those days. There’s "
+                                 "nothing for you to answer. You’re hearing so you can plan around it."])}
+
+
 # ─── Who, and how they are reached ────────────────────────────────────
 
 def _open(ch: co.Church) -> bool:
@@ -470,29 +495,31 @@ def _send(ch: co.Church, who: Dict[str, str], words: Dict[str, str], ref: str, p
 
 # ─── The claim ────────────────────────────────────────────────────────
 
-def _claim(b: str, ask: Dict[str, Any], column: str, stamp: str, guard: str) -> bool:
+def _claim(b: str, ask: Dict[str, Any], column: str, stamp: str, guard: str, table: str = "church_away_asks") -> bool:
     """Take this notice: the mark is still empty and the ask is still as it
-    was read (`guard`). Many replicas and the worker: one wins."""
+    was read (`guard`). Many replicas and the worker: one wins. `table`:
+    church_away_commitments for a thing that repeats (S1-7)."""
     got = sb_clients.sb_patch_as_service(
-        f"/church_away_asks?id=eq.{_q(ask['id'])}&business_id=eq.{_q(b)}&{column}=is.null{guard}&select=id",
+        f"/{table}?id=eq.{_q(ask['id'])}&business_id=eq.{_q(b)}&{column}=is.null{guard}&select=id",
         {column: stamp}, redact=True)
     return isinstance(got, list) and bool(got)
 
 
-def _release(b: str, ask: Dict[str, Any], column: str, stamp: str) -> None:
+def _release(b: str, ask: Dict[str, Any], column: str, stamp: str, table: str = "church_away_asks") -> None:
     """Let a claim go (nothing could be sent), only if it is still ours."""
     try:
         sb_clients.sb_patch_as_service(
-            f"/church_away_asks?id=eq.{_q(ask['id'])}&business_id=eq.{_q(b)}&{column}=eq.{_q(stamp)}&select=id",
+            f"/{table}?id=eq.{_q(ask['id'])}&business_id=eq.{_q(b)}&{column}=eq.{_q(stamp)}&select=id",
             {column: None}, redact=True)
     except Exception:  # noqa: BLE001
         logger.warning("leaders schedule: a claim wasn't let go (ask %s)", str(ask.get("id"))[:8], exc_info=True)
 
 
 def _claimed_send(ch: co.Church, ask: Dict[str, Any], column: str, guard: str, who: Dict[str, str],
-                  words: Dict[str, str], ref: str, now: datetime, page: str = MEMBER_PAGE) -> str:
+                  words: Dict[str, str], ref: str, now: datetime, page: str = MEMBER_PAGE,
+                  table: str = "church_away_asks") -> str:
     stamp = cs._iso(now)
-    if not _claim(ch.b, ask, column, stamp, guard):
+    if not _claim(ch.b, ask, column, stamp, guard, table):
         return "taken"
     try:
         sent = _send(ch, who, words, ref, page)
@@ -500,7 +527,7 @@ def _claimed_send(ch: co.Church, ask: Dict[str, Any], column: str, guard: str, w
         logger.warning("leaders schedule: a notice failed (ask %s)", str(ask.get("id"))[:8], exc_info=True)
         sent = False
     if not sent:
-        _release(ch.b, ask, column, stamp)
+        _release(ch.b, ask, column, stamp, table)
         return "unsent"
     return "told"
 
@@ -644,6 +671,49 @@ def tell_nudge(ch: co.Church, ask: Dict[str, Any], *, now: Optional[datetime] = 
         return "unread"
 
 
+def _bare_repeat(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A thing that repeats with only what a notice may know (REPEAT_FIELDS).
+    Its label stops here, whoever handed the row over."""
+    return {k: v for k, v in (row or {}).items() if k in _REPEAT_KEEP}
+
+
+def tell_repeat(ch: co.Church, row: Dict[str, Any], *, now: Optional[datetime] = None) -> str:
+    """Something that repeats was added (S1-7): the one an ask of theirs
+    would go to (church_schedule.goes_to, worked out now: the table keeps no
+    `to`) hears, once (told_at, claimed before the send and let go when
+    nothing went). It waits out the church's quiet hours, as a planned ask
+    does; the sweep sends it then. Nobody, for the one person the owner is.
+    One that has already ended tells nobody. Never the label. Answers as
+    tell_new does."""
+    row = _bare_repeat(row)
+    try:
+        if not _open(ch):
+            return "closed"
+        if row.get("told_at") or not row.get("id"):
+            return "none"
+        now = now or cs._now()
+        today = cs._today(ch, now)
+        until = cs._day(row.get("until_on")) if row.get("until_on") else None
+        if until and until < today:
+            return "none"
+        cid = str(row.get("contact_id") or "")
+        to = cs.goes_to(ch, cid)
+        if not to or (to["kind"] == co.LOGIN and not cs._in_office(ch, to["id"])):
+            return "none"
+        import member_push
+        if member_push.quiet_hour(ch.business, now):
+            return "held"
+        who = _reach(ch, co.who(to["kind"], to["id"]))
+        if who is None:
+            return "unread"
+        person = ch.names([cid]).get(cid, "Someone")
+        words = repeat_words(_church_name(ch), who["name"], person, row, today)
+        return _claimed_send(ch, row, "told_at", "", who, words, f"away-repeat-{row['id']}-{to['id']}", now,
+                             table="church_away_commitments")
+    except HTTPException:
+        return "unread"
+
+
 # ─── The hourly sweep ─────────────────────────────────────────────────
 
 def _all(path: str, what: str) -> Optional[List[Dict[str, Any]]]:
@@ -714,7 +784,8 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
     import church_map
     ch = co.Church(biz)
     b = ch.b
-    mine = {k: [_bare(r) for r in rows if str(r.get("business_id")) == b] for k, rows in todo.items() if k != "old"}
+    mine = {k: [_bare(r) for r in rows if str(r.get("business_id")) == b] for k, rows in todo.items()
+            if k not in ("old", "repeats")}
     with church_map.once():
         today = cs._today(ch, now)
         near: Dict[str, List[Dict[str, str]]] = {}
@@ -762,6 +833,13 @@ def _sweep_church(biz: Dict[str, Any], todo: Dict[str, List[Dict[str, Any]]], no
         for a in waiting:
             if a.get("told_at") and not a.get("nudged_at"):
                 _count(stats, tell_nudge(ch, a, now=now), "nudged")
+        # Things that repeat (S1-7), added in the last week and still untold:
+        # older than the two minutes the write's own notice gets.
+        for r in todo.get("repeats", []):
+            r = _bare_repeat(r)
+            made = cfu._parse(r.get("created_at"))
+            if str(r.get("business_id")) == b and not r.get("told_at") and (not made or made <= fresh):
+                _count(stats, tell_repeat(ch, r, now=now), "repeats")
         cutoff = today - timedelta(days=REASON_DAYS)
         old = [str(r["id"]) for r in todo.get("old", []) if str(r.get("business_id")) == b and r.get("id")
                and (cs._day(r.get("ends_on")) or today) < cutoff]
@@ -777,7 +855,7 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     check). Only the churches church_assignments._open_churches() gives that
     CHURCH_SCHEDULE is open for too; never a sample church. A church that
     fails never stops the others."""
-    stats = {"churches": 0, "moved": 0, "told": 0, "answers": 0, "nudged": 0, "cleared": 0, "held": 0,
+    stats = {"churches": 0, "moved": 0, "told": 0, "answers": 0, "nudged": 0, "repeats": 0, "cleared": 0, "held": 0,
              "unsent": 0, "unread": 0}
     if cs.mode() == "off" or not cs.ready():
         return stats
@@ -807,8 +885,15 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                     "the untold answers") or []
     old = _all(f"/church_away_asks?{PRIVATE}&ends_on=lt.{(day - timedelta(days=REASON_DAYS - 1)).isoformat()}"
                f"{scope}&select=id,business_id,ends_on", "the reasons to clear") or []
+    # Things that repeat (S1-7) nobody has been told of yet, added in the last
+    # week (TELL_DAYS): never the label.
+    import church_schedule_repeats as repeats
+    added = _all(f"/church_away_commitments?told_at=is.null"
+                 f"&created_at=gte.{_q(cs._iso(now - timedelta(days=repeats.TELL_DAYS)))}{scope}"
+                 f"&select={REPEAT_FIELDS}", "the untold things that repeat") or []
     work: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-    for kind, rows in (("waiting", waiting), ("cant", cant), ("answered", answered), ("old", old)):
+    for kind, rows in (("waiting", waiting), ("cant", cant), ("answered", answered), ("old", old),
+                       ("repeats", added)):
         for r in rows:
             work.setdefault(str(r.get("business_id")), {})\
                 .setdefault(kind, []).append(r)
