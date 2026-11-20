@@ -338,8 +338,10 @@ def _back(**q: str) -> RedirectResponse:
 async def save_note_route(request: Request):
     """Save the pastor's welcome note (form: note). The picture route's
     checks: this church's address, the same site, a session that may change
-    the app's pictures, the per-person limit."""
+    the app's pictures, the per-person limit; and the new look showing to
+    this session (member_lumen), as the page it's written on does."""
     import member_app_pictures as mapic
+    import member_lumen
     import member_portal as mp
     import rate_limit
     church = await mp._church_or_404(request)
@@ -347,6 +349,9 @@ async def save_note_route(request: Request):
     sess = await asyncio.to_thread(mp._session_for, request, church)
     by = mapic.may_edit(sess, biz)
     if not by:
+        return RedirectResponse("/my", status_code=303, headers=mp._SECURE_HEADERS)
+    # Meet the pastor is the new look's: where it doesn't show, there's no note to write.
+    if not await member_lumen.decide(request, {"business": biz, "session": sess}):
         return RedirectResponse("/my", status_code=303, headers=mp._SECURE_HEADERS)
     try:
         form = await request.form()

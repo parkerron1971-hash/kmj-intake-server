@@ -403,3 +403,18 @@ def test_the_note_route_is_mounted_before_the_catch_all():
     paths = [p for p, _ in routes]
     catch = next(i for i, p in enumerate(paths) if "{full_path" in p or p.endswith("{path:path}"))
     assert next(i for i, (p, m) in enumerate(routes) if p == "/my/pastor/note" and "POST" in m) < catch
+
+
+def test_switch_off_writes_no_note(pastor, fake, monkeypatch):  # noqa: F811
+    """Where the new look doesn't show, the note isn't there to write: the
+    route goes Home and the church's row is untouched."""
+    wrote = _businesses_patch(fake, monkeypatch)
+    fake.biz[tct.BIZ]["settings"]["member_portal"]["photo_editors"] = [tct.ANA]
+    c = _app(fake, monkeypatch)
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    r = _post(c, "Written while it's off")
+    assert r.status_code == 303 and r.headers["location"] == "/my" and wrote == []
+    assert fake.biz[tct.BIZ]["settings"]["member_portal"]["pastor_note"]["text"] == NOTE
+    # Preview: only for the platform owner, at their own church (an editor here isn't).
+    monkeypatch.setenv("MEMBER_LUMEN", "preview")
+    assert _post(c, "Written in preview").headers["location"] == "/my" and wrote == []
