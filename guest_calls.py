@@ -576,11 +576,6 @@ def route(business_id: str, contact_id: str, *, card_key: str, kind: str, answer
     return {**pick, "assigned_by": f"{BY}:{pick['route']}", "due_at": due, "door": door}
 
 
-def other_door_note(card_name: str, answers: List[Dict[str, str]]) -> str:
-    said = "; ".join(f"{a['q']} {a['a']}" for a in answers if a.get("a"))[:1500]
-    return f"Came through another door: {_plain(card_name) or 'a card'}." + (f" {said}" if said else "")
-
-
 # ─── The sweep (church_follow_up._sweep_church) ───────────────────────
 
 class Ctx:

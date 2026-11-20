@@ -12,6 +12,7 @@ left_undone:
   - "The call brief (Chief's short brief, one tap to call) is step 3; the caller's push and email say where the guest came in and when the call is due, nothing more"
   - "The Follow-up board's Hand to list still offers only role holders, so the office can't hand a guest to an office login by hand; Who calls our guests can"
   - "church_follow_up.remove_role (taking a person's last role) still sends everything of theirs back to the office, guest calls included, even when they are also an office login"
+  - "A church's bulletin guest card whose form kind is general joins the path (new_here.form_door), but guest_path.is_guest_follow_up doesn't count a general form's follow-up, so Who calls our guests doesn't route it (today's hand-off). The coordinator fixes guest_path separately"
   - "settings.guest_calls joined the server keys in the two unapplied settings-guard files (APPLY-2026-11-17-settings-server-keys.sql and APPLY-2026-11-19-payroll-deposits.sql): if Kevin applied either before this merged, run it again (safe twice)"
 decisions:
   - "Behind guest_path.switched_on and only for guest follow-ups (guest_path.is_guest_follow_up). Off is today's hand-off exactly"
@@ -22,7 +23,7 @@ decisions:
   - "Marked assigned_by guest_calls:<route>, leader_role guest_calls (the welcome route keeps the role choose() picked). _sweep_handed leaves them to guest_calls.recheck, which re-hands by the same rules when the caller can't take it (login gone, duty moved, person or role gone), with a note; with the path off, back to the office"
   - "Due in due_days (default 2) at 6 PM church time. Ladder for the call: 9 AM on the due day the caller is reminded; a day late the backup takes it and both hear (no backup: today's chain); three days late, after a backup, the senior pastor (else the owner) hears plus the office's alert (no backup: today's next_up)"
   - "A login caller hears by push + email (care_handoff.tell's pattern) linking to the Follow-up board, held in the church's quiet hours; a member caller keeps today's email to /my/lead"
-  - "One guest, one caller: a guest with another open guest follow-up gets a note on it ('Came through another door: …') instead of a second follow-up"
+  - "One guest, one caller has one check: the doors' own (new_here.second_door from #2008: a second card door is one note on the open guest follow-up; a first check-in keeps its family rule). start() doesn't check again, so a second door never gets two notes, and the first follow-up keeps the caller Who calls our guests gave it"
   - "A Welcome Team lead appearing in auto mode raises one office alert (deduped, and stamped settings.guest_calls.welcome_asked so it's asked once); calls stay with People & Care until the office says yes; guests already handed stay put"
 related: [2026-11-20-guest-welcome-path.md, 2026-11-17-guest-lane-new-here.md, 2026-11-14-new-here-guest-texts.md, 2026-10-26-checkin-welcome-handoff.md]
 ---

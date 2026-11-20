@@ -265,13 +265,18 @@ def test_the_call_is_due_in_due_days_at_six_church_time(g):
     assert cfu._parse(row["due_at"]) == datetime(2026, 11, 23, 18, tzinfo=ET)
 
 
-def test_one_guest_one_caller_a_second_door_is_a_note(g):
-    first = _connect(g)
-    again = cfu.start(BIZ, MARCUS, card_key="text:new_here", card_name="New here", kind="connect",
+def test_one_guest_one_caller_a_second_door_is_one_note_and_the_caller_stays(g):
+    """The doors keep one guest to one follow-up (new_here.second_door, #2008):
+    a second card door is one note on the open one, which keeps the caller
+    Who calls our guests gave it."""
+    first = cfu.start(BIZ, MARCUS, card_key="text:new_here", card_name="New here", kind="connect",
                       answers=[{"q": "Tell us about you", "a": "Here with my kids"}])
+    assert first["leader_contact_id"] == RENEE
+    again = _connect(g)
     assert again is None and len(g.t["church_follow_ups"]) == 1
-    note = [n for n in g.t["church_follow_up_notes"] if n["follow_up_id"] == first["id"] and n["kind"] == "note"]
-    assert note and note[0]["body"] == "Came through another door: New here. Tell us about you Here with my kids"
+    notes = [n for n in g.t["church_follow_up_notes"] if n["follow_up_id"] == first["id"] and n["kind"] == "note"]
+    assert len(notes) == 1 and notes[0]["body"].startswith("Also sent the website connect card.")
+    assert _row(g, first["id"])["leader_contact_id"] == RENEE
 
 
 def test_a_card_that_isnt_a_guests_is_handed_as_always(g):

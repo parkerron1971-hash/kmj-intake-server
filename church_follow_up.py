@@ -569,22 +569,11 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
             _note(biz, str(open_one[0]["id"]), "chief", "note",
                   "Filled in the card again." + (f" {said}" if said else ""))
             return None
-        # A first-time guest, with the Welcome Path on: one guest, one
-        # caller. A guest already waiting on a welcome call from another door
-        # gets a note on that one instead of a second call (guest_calls).
+        # A first-time guest, with the Welcome Path on: "Who calls our guests"
+        # picks the caller below. One guest, one caller is the doors' own
+        # check, before they get here (new_here.second_door: a second card
+        # door is a note on the open one; a first check-in's family rule).
         guest = _guest_path_on(biz, card_key[:80], kind)
-        if guest:
-            import guest_calls
-            import guest_path
-            others = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
-                           "&status=in.(open,handed_back)&select=id,card_key,path_kind&order=created_at.asc&limit=20")
-            if others is None:
-                logger.warning("church follow-up skipped: guest check failed (business %s)", biz[:8])
-                return None
-            other = next((r for r in others if guest_path.is_guest_follow_up(r)), None)
-            if other:
-                _note(biz, str(other["id"]), "chief", "note", guest_calls.other_door_note(card_name, answers))
-                return None
         # The church's roles as they stand. A card never fills the library
         # (the office's first visit to Leaders & roles does); before then
         # the first version's roles its holders carry decide, as they did.
