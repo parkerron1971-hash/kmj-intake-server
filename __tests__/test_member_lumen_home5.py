@@ -133,7 +133,7 @@ def test_share_only_on_the_churchs_own(church, fake, monkeypatch):  # noqa: F811
     sv = slides[ids[1]]
     assert ('<a class="lm-share lm-mvac" href="/events" data-share-kind="moment" data-share-title="Sunday Worship"'
             in sv)
-    assert html.count('<script src="/my/share.') == 1                         # the sheet's script, once
+    assert html.count('<script src="/my/share.') <= 1                         # the sheet's script (#1986), once
     assert f'data-share-id="event:{church["occ"][0]["entry_id"]}"' in sv and 'aria-label="Share"' in sv
     # Its message, when one is dated that day: shared as the message.
     import member_portal_sermons as mps
@@ -372,6 +372,8 @@ def test_the_sheet():
     import member_lumen_stories
     assert parts[-1].template == member_lumen_fonts.template().template          # the type block last
     assert parts.index(member_lumen_stories.CSS) < len(parts) - 1
+    with pytest.raises(ValueError):
+        mls.share_link("/", "post", "x", "A member's post")                 # never anything but the church's own
     css = member_lumen_stories.CSS.template
     # The segments fill and the slides rise only with the phone's yes to motion.
     for anim in ("animation:lmMvFill", "animation:lmMvIn"):

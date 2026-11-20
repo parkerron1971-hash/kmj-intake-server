@@ -359,7 +359,6 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_app_samples as samples
     import member_app_ui as ui
     import member_lumen_home as lh
-    import member_lumen_share as lshare
     import member_lumen_stories as mls
     import member_lumen_ui as lm
     import member_photos as ph
@@ -599,11 +598,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         place = (svc_o or {}).get("location") or svc.get("where") or ""
         # Shared only as what has a public page: its message, else the service on the public events page.
         if msg:
-            share = mls.share_link(lshare.message_href(msg["id"]), "message", str(msg["id"]), line, kicker,
-                                   lshare.message_art(library, msg, site, pool))
-        elif svc_o and lshare.event_shareable(biz, svc_o):
-            share = mls.share_link(lshare.EVENTS_HREF, "event", str(svc_o.get("entry_id") or ""), line, kicker,
-                                   lshare.event_picture(biz, site, svc_o.get("title") or ""))
+            share = mls.share_link(mls.message_href(msg["id"]), "message", str(msg["id"]), line, kicker,
+                                   mls.message_art(library, msg, site, pool))
+        elif svc_o and mls.event_shareable(biz, svc_o):
+            share = mls.share_link(mls.EVENTS_HREF, "event", str(svc_o.get("entry_id") or ""), line, kicker,
+                                   mls.event_picture(biz, site, svc_o.get("title") or ""))
         else:
             share = ""
         moments.append(mls.moment(
@@ -641,9 +640,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             kicker=kicker, line=o.get("title") or "",
             sub=" · ".join(x for x in (o.get("location") or "", f"{n_going} going" if n_going >= 2 else "") if x),
             action=event_act(o, "lm-mvb")[0], reply=(to_church[0], "Ask about this…") if to_church else None,
-            share=mls.share_link(lshare.EVENTS_HREF, "event", str(o.get("entry_id") or ""), o.get("title") or "", kicker,
-                                 lshare.event_picture(biz, site, o.get("title") or ""))
-            if lshare.event_shareable(biz, o) else ""))
+            share=mls.share_link(mls.EVENTS_HREF, "event", str(o.get("entry_id") or ""), o.get("title") or "", kicker,
+                                 mls.event_picture(biz, site, o.get("title") or ""))
+            if mls.event_shareable(biz, o) else ""))
     stories_html = mls.row(moments)
 
     # Also for you: two picture tiles, by the day and the person.

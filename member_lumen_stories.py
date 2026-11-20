@@ -40,9 +40,9 @@ pastor, when member messages allow it; the group's chat; else the church's
 conversation while church threads are open), Love when it is a real
 reaction (a post's, through /my/news/react), and Share only on the church's
 own content with a public page (Sunday's message, or the service or an
-event on the public events page: contract 1's <a class="lm-share">, through
-member_lumen_share; never a group's gathering, a members' post, nor a
-devotional, which has no public page). Its buttons are today's forms posting to today's routes
+event on the public events page: contract 1's <a class="lm-share"> with
+data-share-id "<message|event>:<id>"; never a group's gathering, a members'
+post, nor a devotional, which has no public page). Its buttons are today's forms posting to today's routes
 (each with its own session, same-site and rate checks): this file adds no
 route and no write.
 
@@ -136,15 +136,70 @@ def ring_initials(name: Any) -> str:
     return f'<span class="lm-moini" aria-hidden="true">{_e(ui.initials(name))}</span>'
 
 
+# Contract 1's share control, written by hand until member_lumen_share (PR
+# #1986: its link()/attrs() and the public checks below) is on main; then
+# these call it. A moment stands for one of the church's own public things.
+MOMENT_OF = ("message", "series", "event")
+EVENTS_HREF = "/events"
+
+
+def message_href(sermon_id: Any) -> str:
+    from urllib.parse import quote
+    return f"/sermons/{quote(str(sermon_id), safe='')}"
+
+
 def share_link(href: str, of: str, sid: str, title: str, sub: str = "", img: str = "") -> str:
-    """Contract 1's share control for a moment (member_lumen_share.link,
-    which escapes it and refuses anything but the church's own kinds): a
-    link to the PUBLIC page it stands for (it opens that page without
-    script), its id "<message|event>:<id>" for the story picture. `img`
-    must already be public (the church's website)."""
-    import member_lumen_share as share
-    return share.link("moment", href, title, _ic("share", 24), sub=sub, img=img, sid=f"{of}:{sid}", cls="lm-mvac",
-                      label="Share")
+    """A moment's share control: a link to the PUBLIC page it stands for (it
+    opens that page without script), kind "moment", its id "<of>:<id>" for
+    the story picture, everything escaped. `img` must already be public (on
+    the church's website)."""
+    if of not in MOMENT_OF or not sid:
+        raise ValueError(f"not a church moment: {of!r}")
+    out = [f'class="lm-share lm-mvac" href="{_e(href)}" data-share-kind="moment" data-share-title="{_e(title)}"']
+    if sub:
+        out.append(f'data-share-sub="{_e(sub)}"')
+    if img:
+        out.append(f'data-share-img="{_e(img)}"')
+    out.append(f'data-share-id="{_e(of)}:{_e(sid)}"')
+    return f'<a {" ".join(out)} aria-label="Share">{_ic("share", 24)}</a>'
+
+
+def events_on(biz: Dict[str, Any]) -> bool:
+    """Whether the church's public events page is switched on
+    (events_rsvp_router: settings.events_public.enabled)."""
+    import events_rsvp_router as er
+    return bool(er.events_settings((biz or {}).get("settings")).get("enabled"))
+
+
+def event_shareable(biz: Dict[str, Any], o: Dict[str, Any]) -> bool:
+    """An occasion a member may share: on the public events page (its
+    "public" mark, set by member_portal_church.upcoming_for once #1986
+    lands; until then nothing is), the page on, not a sample."""
+    import member_app_samples as samples
+    return bool(o.get("public")) and not samples.is_sample(dict(o)) and events_on(biz)
+
+
+def event_picture(biz: Dict[str, Any], site, title: str) -> str:
+    """An occasion's picture for its story, only when it is already on the
+    church's website (its media library or site files); '' otherwise: a
+    picture uploaded only into the app stays in the app."""
+    import member_app_photos as photos
+    import member_portal_church as mpc
+    pool = photos.photos(dict(biz), site, limit=None)
+    pic, _look = photos.choose(dict(biz), mpc.event_key(title), pool, title=title, look="colour")
+    return pic if pic and pic in pool else ""
+
+
+def message_art(lib: Dict[str, Any], s: Dict[str, Any], site, pool) -> str:
+    """The picture a message already shows on its public page: its series'
+    own art, else the church's photo named for it; '' for the poster."""
+    import member_app_photos as photos
+    import member_portal_sermons as mps
+    series = mps._titles(dict(lib)).get(str(s.get("series_id") or ""), "")
+    own = photos.series_art(site, series) if series else ""
+    if own:
+        return own
+    return photos.by_name(pool or [], series or s.get("title") or "") if pool else ""
 
 
 def love_form(post_id: str, on: bool) -> str:
