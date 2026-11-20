@@ -110,7 +110,7 @@ production that time has passed.
   migrations were applied before it merged, so it is live at the platform owner's church from its
   first deploy, and **real volunteers there meet it on deploy**. No migration of its own; on a
   database with step 1's file alone a volunteer's Away is exactly what it was.
-- **Step 4, The week (#PR_WEEK)** holds `church_week.py`: the office's read-only page of every
+- **Step 4, The week (#1979)** holds `church_week.py`: the office's read-only page of every
   department's volunteers for one week, with hours (Volunteers → The week; the pastor approved the
   mock on 2026-11-19, "go"). `GET /church/week` and `GET /church/week/status`, for the owner, an
   Admin and a Manager who keeps either door of Who serves when; hours and "Can't serve with kids
@@ -2296,7 +2296,7 @@ Seen and left as they are:
 
 ---
 
-## 8. Step 4: The week (#PR_WEEK)
+## 8. Step 4: The week (#1979)
 
 The pastor approved the mock on 2026-11-19 ("go"). The office's menu: Volunteers → **The week**,
 first in that group. One week, Sunday to Saturday (Nov 22 to 28), with a way to the week before
