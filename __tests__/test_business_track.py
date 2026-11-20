@@ -151,6 +151,26 @@ def test_vertical_filter_returns_real_keys_heaviest_first():
         assert weights == sorted(weights, reverse=True)
 
 
+def test_quickbooks_is_off_every_setup_list(monkeypatch):
+    # Kevin, 2026-11-20: "everyone might not have that setup because they
+    # might not have quickbooks". Not on any vertical's list or the
+    # coach's menu, not even when an older coach plan chose it; its probe
+    # still answers, because Chief's knowledge of the books reads it.
+    for vertical in ("coach", "barber", "lawyer", "ministry", "church", "therapist",
+                     "contractor", "nonprofit", "consultant", "unknown_vertical", ""):
+        assert "quickbooks" not in bta.plugins_for_vertical(vertical), vertical
+    menu = bta.build_business_coach_prompt(_ctx(), False).split("Choose 4-7")[0]
+    assert "Connect QuickBooks" not in menu
+    assert "quickbooks" in btr.PROBES
+
+    monkeypatch.setattr(btr.sb_clients, "sb_get_as_service", lambda path: [
+        {"first_30_days": {"plugins": ["payments", {"key": "quickbooks", "why": "they keep books there"}, "site"]},
+         "operations_map": {}}])
+    monkeypatch.setattr(btr, "_probe", lambda key, biz: False)
+    keys = [p["key"] for p in btr.resolve_plugins({"id": "b1", "type": "coach", "settings": {}})]
+    assert keys and "quickbooks" not in keys and "payments" in keys
+
+
 def test_the_universal_plugins_reach_every_vertical():
     # Importing your people is not a vertical concern — every business
     # needs it, and it leads the list. Prices are universal EXCEPT for the
