@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-19: "also upgrade the payments section as well. this needs to be top tier. make this experience awesome! show me the mock for this as well." He saw the mock and on 2026-11-20 chose "Build it". Contract: payments_overview_contract.md (the app is built against it in parallel; the differences are written under its "Changes").'
 status: in progress
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#2003]
 migrations: []
 left_undone:
   - "Switched on for the platform owner's own church only (PAYMENTS_OVERVIEW unset = owner). Kevin sees it in the preview before it goes to every church (on)."
