@@ -889,9 +889,10 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
 
     A main tab (Home, Watch, Bible, Connect, Give) with no way back gets the
     full bar: the church's logo and name on the left (Home keeps the space
-    switcher for someone with more than one space); on the right the message
-    bubble with the unread count (member_portal_threads' count, already read
-    for this page), the bell and the profile picture. Every other page is
+    switcher for someone with more than one space); on the right, in Look
+    5.1's order, the bell (its dot), the message bubble with the unread count
+    (member_portal_threads' count, already read for this page) and the
+    profile picture. Every other page is
     pushed: a plain back bar, its own back link or, with none, Back to the
     tab it was opened over (the browser's history; Home without it).
     `extra` = (middle, right) puts more in a pushed page's bar: the reader's
@@ -923,8 +924,8 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
             left = f'<a class="mb-brand lm-brand" href="/my"><img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}"></a>'
         else:
             left = lm.brand(name, logo)
-        right = ((lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else "")
-                 + lm.bell(member_lumen.BELL.get()) + avatar)
+        right = (lm.bell(member_lumen.BELL.get()) + (lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else "")
+                 + avatar)
     else:
         href, label = back or ("/my", "Back")
         mark = "" if back else " data-back"
@@ -1545,6 +1546,7 @@ async def serve(request: Request, path: str) -> HTMLResponse:
             ctx = dict(ctx, lead=lead, board=board)
         msp.CURRENT.set(ctx)
         mpt.BADGE.set(int(unread["total"]) if unread and mpt._in_church(ctx) else None)
+        mpt.NOW.set(unread if unread and mpt._in_church(ctx) else None)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
@@ -2080,8 +2082,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         mpd.home_extras(biz, me, preview=preview, church_reading=bool(today), info=devo_info),
         checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
         asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
-        # "From the church" and the bell (member_portal_news).
-        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **feed_kw) if church_home else _nothing(),
+        # "From the church" and the bell (member_portal_news); the new look
+        # also asks, after it, whether the member may write to the pastor who
+        # posted the word its moments show (member_portal_lumen.news_and_reply:
+        # kept ten minutes, only when a pastor posted in the last three days).
+        (mlp.news_and_reply(biz, me, feed_kw, preview=preview) if lumen_home else
+         asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **feed_kw)) if church_home else _nothing(),
         asyncio.to_thread(cn.comments_open, biz) if church_home else _nothing(),
         # "Celebrating today" and the church's once-only question (member_portal_celebrations).
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
@@ -2091,10 +2097,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         # Messages, while something there is unread (member_portal_threads).
         _inbox_card(biz, me) if church_home else _nothing(),
         mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing())
-    gnext, serving_info, ck, pastor = None, None, None, None
+    gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
     if lumen_home:
         told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
-        groups, gnext = groups if isinstance(groups, tuple) else (groups, None)
+        groups, gnext, week_g = groups if isinstance(groups, tuple) else (groups, None, [])
+        if church_home:
+            news, write = news
         serving_info, serve_asks = serve_asks, (serve_asks or {}).get("asks") or []
         checkin, ck = checkin if isinstance(checkin, tuple) else (checkin, None)
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
@@ -2151,7 +2159,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             cards=(mai.install_card(church_name), member_push.home_card(biz),
                    member_asks.home_row(await _ask_entry(biz, me))),
             ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
-            devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor))
+            devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
+            write=write))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,

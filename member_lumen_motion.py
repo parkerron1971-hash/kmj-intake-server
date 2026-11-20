@@ -14,8 +14,8 @@ THE MOVES (all CSS, in /my/lumen.<hash>.css; reduced motion gets none):
     thumbnail, Home's tile) grows into the player on its page, and a
     conversation's face and name travel from the inbox row into the bar at
     the top, and back again.
-  - The tab bar floats, its highlight springs from tab to tab and the
-    tab you land on pops.
+  - The tab you land on pops (the bar itself is Look 5.1's flat bar,
+    member_lumen_ui; it floated until 2026-11-20).
   - A main tab's blocks arrive one after another, and a page's serif
     heading settles in with its italic word landing last.
   - Buttons and rows give under a finger and spring back.
@@ -180,7 +180,6 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
   /* a face and a name fly over the bar they land in (the old page painted them under it) */
   ::view-transition-group(lm-face),::view-transition-group(lm-ttl){z-index:1;}
   ::view-transition-old(lm-sermon),::view-transition-new(lm-sermon){height:100%;width:100%;object-fit:cover;}
-  ::view-transition-group(lm-ind){animation-duration:.65s;}
   /* the bars keep today's short change (member_app_ui.MOTION_CSS) */
   ::view-transition-group(mb-top),::view-transition-group(mb-nav){animation-duration:.18s;}
   /* into a conversation (no tab bar) the bar fades away, and back again it fades in */
@@ -189,7 +188,6 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
 }
 @supports (transition-timing-function:linear(0,1)){@media (prefers-reduced-motion:no-preference){
   ::view-transition-group(lm-sermon),::view-transition-group(lm-face),::view-transition-group(lm-ttl){animation-timing-function:""" + _SOFT + """;}
-  ::view-transition-group(lm-ind){animation-timing-function:""" + _SPRING + """;}
 }}
 @keyframes lmVtOutL{to{transform:translateX(-24%);opacity:0}}
 @keyframes lmVtInR{from{transform:translateX(42%);opacity:0}}
@@ -221,28 +219,9 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
 @keyframes lmSettleEm{from{opacity:0;transform:translateY(12px) skewX(-6deg)}}
 @keyframes lmTabPop{from{transform:scale(.72) translateY(3px)}}
 
-/* the tab bar floats: a rounded bar off the edges, a soft highlight that springs to your tab */
-@media (max-width:1099px){
-  .lm .mb-nav.lm-nav{left:12px;right:12px;bottom:max(14px,env(safe-area-inset-bottom,0px));max-width:576px;margin:0 auto;padding:6px;
-    border:0;border-radius:24px;background:var(--bg);box-shadow:0 12px 32px -12px var(--lm-shadow),0 0 0 1px var(--lm-line);}
-  .lm .lm-nav .mb-tab{position:relative;z-index:1;min-height:54px;gap:4px;border-radius:18px;}
-  .lm-ind{top:6px;bottom:6px;left:6px;width:calc((100% - 12px) / var(--n));height:auto;border-radius:18px;background:var(--lm-tint-12);}
-  .lm-ind::after{display:none;}
-  .lm .mp-shell.mb-has-nav{padding-bottom:calc(118px + env(safe-area-inset-bottom,0px));}
-}
+/* the tab bar is flat (Look 5.1, member_lumen_ui): the tab you land on pops a little */
 @media (max-width:1099px) and (prefers-reduced-motion:no-preference){
   .lm .lm-nav .mb-tab[aria-current] svg{animation:lmTabPop .6s var(--lm-spring) backwards;}
-  /* each tab moves on its own, over the highlight sliding under it */
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my"]{view-transition-name:lm-t-home;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/sermons"]{view-transition-name:lm-t-watch;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/bible"]{view-transition-name:lm-t-bible;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/connect"]{view-transition-name:lm-t-connect;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/give"]{view-transition-name:lm-t-give;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/lead"]{view-transition-name:lm-t-lead;}
-  html:active-view-transition .lm .lm-nav .mb-tab[href="/my/board"]{view-transition-name:lm-t-board;}
-  ::view-transition-group(lm-t-home),::view-transition-group(lm-t-watch),::view-transition-group(lm-t-bible),
-  ::view-transition-group(lm-t-connect),::view-transition-group(lm-t-give),::view-transition-group(lm-t-lead),
-  ::view-transition-group(lm-t-board){animation-duration:.3s;}
 }
 
 /* the cinema: every page under Watch takes the dark switch (lm-dark), in a neutral black */
@@ -256,9 +235,6 @@ body.lm.lm-dark.pg-watch{--bg:#050506;--s1:#151517;--s2:#1F1F22;--s3:#2C2C30;--l
 @supports (color:color-mix(in oklab,red 50%,blue)){body.lm.lm-dark.pg-watch{--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);}}
 .lm.lm-tab.pg-watch .mb-top::after{display:none;}
 html:has(>body.lm.lm-dark.pg-watch){background:#050506;color-scheme:dark;}
-@media (max-width:1099px){.lm.pg-watch .mb-nav.lm-nav{background:#161618;box-shadow:0 12px 32px -12px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08);}}
-.lm.pg-watch .lm-ind{background:var(--lm-tint-12);}
-@supports (background:color-mix(in srgb,red 50%,blue)){.lm.pg-watch .lm-ind{background:color-mix(in srgb,var(--acc-fill) 28%,#161618);}}
 
 /* Watch: the next live as a card, the latest edge to edge under a serif title, posters on a rail */
 .lm.pg-watch .lm-nrow{margin:6px 0 18px;padding:12px 14px;border:0;border-radius:16px;background:var(--s1);}

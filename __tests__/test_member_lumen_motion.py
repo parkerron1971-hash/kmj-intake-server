@@ -85,8 +85,10 @@ def test_what_travels_is_named_only_during_a_page_change():
             assert all(s.strip().startswith("html:active-view-transition") for s in sel.split(",")), sel
             assert "prefers-reduced-motion:no-preference" in cond, sel
     names = " ".join(body for _, _, body in rules)
-    for n in ("lm-sermon", "lm-face", "lm-ttl", "lm-t-home", "lm-t-give"):
+    for n in ("lm-sermon", "lm-face", "lm-ttl"):
         assert f"view-transition-name:{n}" in names
+    # The tab bar is flat since Look 5.1 (member_lumen_ui): no highlight slides, so no tab travels on its own.
+    assert "lm-t-home" not in names and "lm-ind" not in names
     # The script names a clicked message's picture or a conversation's face and name.
     for bit in (".lm-irow", "'lm-face'", "'lm-ttl'", ".lm-poster", ".lm-th", "'lm-sermon'", "pagereveal", "data-vt"):
         assert bit in mlm.JS
