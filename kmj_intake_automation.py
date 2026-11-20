@@ -2109,6 +2109,17 @@ async def startup():
                           id="guest_replies_sweep", max_instances=1)
     except Exception as e:
         print(f"   [warn] guest replies sweep not scheduled: {e}")
+    # The Welcome Path after week one (2026-11-20): the two roads' texts
+    # (came back, not yet, the church's next step, the door is open), the
+    # held texts once a reply is answered, and Saturday's heads-up to the
+    # greeters and the kids desk. Each send claimed first and read again
+    # (guest_path_weeks.sweep_tick); GUEST_PATH=off sends nothing.
+    try:
+        import guest_path_weeks as _gpw
+        scheduler.add_job(g("guest_path_weeks_sweep", _gpw.sweep_tick), "interval", minutes=15,
+                          id="guest_path_weeks_sweep")
+    except Exception as e:
+        print(f"   [warn] guest path weeks sweep not scheduled: {e}")
     # Prayer & care handed to an office login (2026-11-18, Kevin: "build the
     # heads-up and due time for logins"): the login hears once, two minutes
     # after the hand-off; when it's due they're reminded, a day late whoever

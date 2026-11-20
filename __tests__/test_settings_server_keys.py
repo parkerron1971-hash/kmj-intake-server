@@ -64,6 +64,25 @@ def test_the_sql_list_is_the_python_list():
     assert bs.BIRTH_KEYS <= set(bs.SERVER_KEYS)
 
 
+REFRESH_MIGRATION = ROOT / "supabase" / "APPLY-2026-11-20-settings-server-keys-refresh.sql"
+
+
+def test_the_refresh_file_writes_the_python_list():
+    """The 11-17 file went in with 42 keys; the refresh replaces the list
+    function alone with all of them, so it must stay equal to the server's."""
+    lines = REFRESH_MIGRATION.read_text(encoding="utf-8").splitlines()
+    sql = "\n".join(ln.split("--", 1)[0] for ln in lines).lower()
+    body = sql[sql.index("create or replace function public.business_settings_server_keys() returns text[]"):]
+    listed = re.findall(r"'([a-z_]+)'", body.split("array[", 1)[1].split("]", 1)[0])
+    assert sorted(listed) == sorted(bs.SERVER_KEYS)
+    assert sql.count("create or replace function") == 1
+    assert "begin;" in sql and "commit;" in sql and "set local lock_timeout = '5s';" in sql
+    assert "revoke all on function public.business_settings_server_keys() from public, anon;" in sql
+    assert "grant execute on function public.business_settings_server_keys() to authenticated, service_role;" in sql
+    assert "alter table" not in sql and "delete from" not in sql and "drop " not in sql
+    assert "security definer" not in sql
+
+
 def test_every_key_the_server_names_in_code_is_on_the_list():
     import church_billing
     import church_founding
