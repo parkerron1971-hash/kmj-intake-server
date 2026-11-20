@@ -325,11 +325,13 @@ async def _ensure_contact(client: httpx.AsyncClient, business_id: str, phone: st
     existing = await _find_contact_by_phone(client, business_id, phone)
     if existing:
         return
+    from sms_service import new_texter_status
     await _sb_post(client, "/contacts", {
         "business_id": business_id,
         "name": phone,          # practitioner renames later
         "phone": phone,
-        "status": "active",
+        # A church's new texter is a guest, never a Member (new_texter_status).
+        "status": await new_texter_status(client, business_id),
     })
 
 
