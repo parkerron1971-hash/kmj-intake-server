@@ -452,6 +452,12 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
     # asked in words, with the same who and the assignment's title.
     "give_assignment": ("Undo doesn't reach an assignment, and they may have had the email about it already. "
                         "I can take it back: just say so."),
+    # Taking an ask for time away back is take_back_time_off, and a thing that repeats comes off with
+    # take_off_repeat, both class C (no inverse may be): Chief does either when asked in words.
+    "ask_time_off": ("Undo doesn't reach an ask for time away, and whoever it went to may have heard about it "
+                     "already. I can take it back: just say so."),
+    "add_repeat": ("Undo doesn't reach a thing that repeats, and whoever is over them may have heard about it "
+                   "already. I can take it off: just say so."),
 }
 
 
