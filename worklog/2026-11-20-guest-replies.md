@@ -8,16 +8,16 @@ prs: [kmj-intake-server (this PR), solutionist-studio (Text opens on the guest f
 migrations: []
 left_undone:
   - "Live only where GUEST_PATH lets it (unset = owner: the platform's own church). Off: nothing here runs, and replies land in Text as before"
-  - "Holding the texts is new_here.run_scheduled's job (Builder 4's HOLD check reads metadata.new_here.hold). Until that merges, a hold is set, told and cleared, but the next automatic text still goes"
+  - "Holding the texts is guest_path_weeks' (#2013: new_here.run_scheduled keeps a week-one text waiting, the road texts stay due, a day on they're skipped with why). This PR sets and clears the hold it reads"
   - "Only the church's own number: a guest's reply to the shared number (a church with no number of its own) isn't held. New here's texts never go from the shared number, so a path guest texting there is rare"
   - "A member caller who texts the guest from their own phone doesn't clear the hold: they clear it by noting Talked or Left a message on the Lead tab (the email says so). The office can also answer in Text"
-  - "The path's end: on_path() treats `ended` or `ended_at` in metadata.new_here as ended (Builder 4's weeks two to six may name it otherwise: line it up there)"
-  - "Other writers of contacts.metadata (new_here._keep, enroll, save_card) read-modify-write the whole column without the hold_v check; a write of theirs landing in the same moment as a reply could drop the hold keys. The window is milliseconds; the sweep can't restore a lost hold"
+  - "New here's door writers (new_here._keep, enroll, save_card) still read-modify-write the whole metadata column without the hold_v check; one landing in the same millisecond as a reply could drop the hold keys (the sweep can't restore a lost hold). guest_path_weeks and this module share hold_v, so those two never undo each other"
   - "A guest with two contact records on one number: the reply goes to the one on the path with the newest texted_at; the Text room's message may sit under the other record"
 decisions:
   - "Hook: sms_routing.route_inbound's own-number routed_direct branch, after record_inbound_sms, hands (business, phone, body) to guest_replies.on_reply in a daemon thread (guest_replies.later). A failing hand-off is logged and routing goes on"
-  - "A reply = on the path (metadata.new_here.texted_at within 42 days, no ended/ended_at) and not a keyword: STOP/START/HELP (or a text starting with one), GIVE, DAILY, the church's New here word (even with New here off), its texting keyword. An emoji or a one-word answer counts"
-  - "The hold: metadata.new_here.hold true, hold_since (the first reply still waiting; kept on later replies), hold_reply_at; every write is compare-and-swap on hold_v (PATCH guarded by metadata->new_here->>hold_v), three tries, the rest of metadata kept as read"
+  - "A reply = on the path (above) and not a keyword: STOP/START/HELP (or a text starting with one), GIVE, DAILY, the church's New here word (even with New here off), its texting keyword. An emoji or a one-word answer counts"
+  - "The hold: metadata.new_here.hold true, hold_since (the first reply still waiting; kept on later replies), hold_reply_at; every write is compare-and-swap on hold_v (PATCH guarded by metadata->new_here->>hold_v), three tries, the rest of metadata kept as read. guest_path_weeks.update (merged #2013 just before this) now guards on and bumps the same hold_v, so a send's claim or a kept text and a reply's hold never undo each other"
+  - "On the path: texted_at within 42 days, and the path not ended (guest_path_weeks' path.ended on this path's own record, e.g. they joined a group; or ended/ended_at). After the road texts rest, a reply inside the six weeks still holds and tells"
   - "Each reply is a note on the guest's newest open or handed-back guest follow-up: \"Answered the church's text: “…”\" (kind note, author chief). church_history lines never carry the words or the name (hold started, answered, a day late, three days late)"
   - "Who hears: the follow-up's caller when it's open with one: an office login (guest_calls.logins) by guest_calls.tell_login, now taking nav/link/label (push nav operate:sms:<contact id>, email button Open their texts → /?nav=operate:sms:<id>); a member by email (the reply, the guest's number, Open your Lead tab). No caller (no follow-up, none open, handed back): guest_calls.first_guests_login. Nobody reachable (a member with no email, a login nothing reached): the office's alert, without the words"
   - "Words: \"<Name> answered the church's text\" / \"“<reply, 90 chars>” Their texts are on hold until you reply.\" (someone replies, for First-time guests). A nameless guest is \"A guest at (555) 123-4567\""
@@ -38,7 +38,8 @@ its next move "Answer <name>" opens Text on that guest (FE textHandoff).
 tell / who_hears, the words, sweep. Hooks: `sms_routing.route_inbound`
 (routed_direct), `sms_service.send_sms` (after a send that went),
 `church_follow_up._note` (REACHED notes), `guest_calls.tell_login` (optional
-nav/link/label; defaults unchanged), the scheduler job in
-`kmj_intake_automation.py`, and the sample-church job list.
+nav/link/label; defaults unchanged), `guest_path_weeks.update` (the shared
+hold_v guard), the scheduler job in `kmj_intake_automation.py`, and the
+sample-church job list.
 
-Tests: `__tests__/test_guest_replies.py` (46).
+Tests: `__tests__/test_guest_replies.py` (47).

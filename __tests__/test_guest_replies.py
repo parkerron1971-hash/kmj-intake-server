@@ -183,8 +183,12 @@ def test_only_a_guest_on_the_path_is_held(w):
             "new_here": {"door": "text", "texted_at": gr._iso(MONDAY - timedelta(days=gr.PATH_DAYS + 1))}}},
         {"id": CARD, "business_id": BIZ, "name": "Done Already", "phone": "+15551230003", "metadata": {
             "new_here": {"door": "web", "texted_at": gr._iso(SUNDAY), "ended_at": gr._iso(MONDAY)}}},
-        {"id": cid(43), "business_id": BIZ, "name": "A Member", "phone": "+15551230004", "metadata": {}}]
-    for phone in ("+15551230002", "+15551230003", "+15551230004", "+15550000000"):
+        {"id": cid(43), "business_id": BIZ, "name": "A Member", "phone": "+15551230004", "metadata": {}},
+        # Joined a group: guest_path_weeks ended this path (path.ended on its own record).
+        {"id": cid(44), "business_id": BIZ, "name": "Joined Up", "phone": "+15551230005", "metadata": {
+            "new_here": {"door": "kids", "texted_at": gr._iso(SUNDAY),
+                         "path": {"for": gr._iso(SUNDAY), "ended": {"why": "connected"}}}}}]
+    for phone in ("+15551230002", "+15551230003", "+15551230004", "+15551230005", "+15550000000"):
         assert _reply(w, "hi there", phone=phone) == "not_a_guest"
     assert not any(_mine(w, c).get("hold") for c in (OLD, CARD))
     assert w.sent["login"] == [] and _notes(w) == []
@@ -242,6 +246,51 @@ def test_a_write_that_loses_a_race_reads_again_and_keeps_the_other_write(w, monk
     mine = _mine(w)
     assert mine["hold"] is True and mine["card_at"] == "2026-11-23T15:00:00Z", "the other write was kept"
     assert mine["hold_v"] >= 8
+
+
+def test_the_weeks_writer_and_a_reply_never_undo_each_other(w, monkeypatch):
+    """guest_path_weeks.update and this module share one write count
+    (hold_v): a send's claim written while a reply is being held survives,
+    and so does a hold written while a send is being claimed."""
+    import guest_path_weeks as gpw
+    real = w.patch
+    state = {"step": 0}
+
+    def claim(mine, _c):
+        p = gpw.path_of(mine, MONDAY)
+        p["claim"] = {"at": "2026-11-23T15:19:00Z", "step": "thinking"}
+        mine["path"] = p
+        return mine
+
+    def patch(path, body, **kw):
+        if path.startswith("/contacts") and state["step"] == 0:
+            state["step"] = 1                      # the weeks sweep claims a send first
+            assert gpw.update(BIZ, LENA, claim)
+        return real(path, body, **kw)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    assert _reply(w, "Thank you!") == "told"
+    mine = _mine(w)
+    assert mine["hold"] is True and mine["path"]["claim"]["step"] == "thinking"
+
+    # The other way: a reply lands while the weeks sweep writes.
+    def log(mine, _c):
+        p = gpw.path_of(mine, MONDAY)
+        p["log"] = p["log"] + ["2026-11-23T15:30:00Z"]
+        mine["path"] = p
+        return mine
+
+    def patch2(path, body, **kw):
+        if path.startswith("/contacts") and state["step"] == 1:
+            state["step"] = 2
+            monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+            assert gr.on_person_text(BIZ, LENA, PHONE, RENEE_SEAT) == "answered"
+            monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch2)
+        return real(path, body, **kw)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch2)
+    assert gpw.update(BIZ, LENA, log)
+    mine = _mine(w)
+    assert mine["hold"] is False, "the answer wasn't undone"
+    assert "2026-11-23T15:30:00Z" in mine["path"]["log"]
 
 
 def test_two_replicas_claiming_one_alert_send_it_once(w):

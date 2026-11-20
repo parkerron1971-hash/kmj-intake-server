@@ -253,7 +253,19 @@ def _guards(read: Dict[str, Any]) -> str:
     claim = (read.get("path") or {}).get("claim") if isinstance(read.get("path"), dict) else None
     at = str((claim or {}).get("at") or "") if isinstance(claim, dict) else ""
     out += f"&metadata->new_here->path->claim->>at=eq.{_q(at)}" if at else "&metadata->new_here->path->>claim=is.null"
+    # The guest's write count, shared with guest_replies (the hold's own
+    # writes): a reply, an answer and a send landing in the same moment never
+    # undo one another's keys (path.claim, path.waiting, the hold).
+    v = read.get("hold_v")
+    out += f"&metadata->new_here->>hold_v=eq.{_q(v)}" if v not in (None, "") else "&metadata->new_here->>hold_v=is.null"
     return out
+
+
+def _next_v(read: Dict[str, Any]) -> int:
+    try:
+        return int(read.get("hold_v") or 0) + 1
+    except (TypeError, ValueError):
+        return 1
 
 
 def update(biz_id: str, contact_id: str,
@@ -276,6 +288,7 @@ def update(biz_id: str, contact_id: str,
             new = change(copy.deepcopy(read), contact)
             if new is None:
                 return {}
+            new["hold_v"] = _next_v(read)
             meta = dict(contact.get("metadata") or {}) if isinstance(contact.get("metadata"), dict) else {}
             meta["new_here"] = new
             got = sb_clients.sb_patch_as_service(

@@ -157,9 +157,13 @@ def _quietly(fn: Callable[..., Any], *args: Any) -> None:
 # ─── Who is a guest on the path ───────────────────────────────────────
 
 def on_path(mine: Dict[str, Any], now: datetime) -> bool:
-    """Started within PATH_DAYS and not ended."""
+    """Started within PATH_DAYS and not ended (guest_path_weeks: path.ended
+    on this path's own record, e.g. they joined a group)."""
     start = _parse(mine.get("texted_at"))
     if not start or start > now + timedelta(minutes=5) or now - start > timedelta(days=PATH_DAYS):
+        return False
+    path = mine.get("path") if isinstance(mine.get("path"), dict) else {}
+    if path.get("ended") and str(path.get("for") or "") == str(mine.get("texted_at") or ""):
         return False
     return not (mine.get("ended") or mine.get("ended_at"))
 
