@@ -572,6 +572,9 @@ def test_the_script_keeps_the_contracts():
                 "method:'addEventListener'", "pageshow", "w.__lwPlayed"):
         assert bit in mlw.JS, bit
     assert "</script" not in mlw.JS and "<script" not in mlw.JS
+    # Once something has played, Back is a link the mini player opens over the message (member_mini).
+    back = mlw.JS[mlw.JS.index("[data-lw-back]"):]
+    assert back[:back.index("history.back()")].count("if(w.__lwPlayed)return;") == 1
 
 
 def test_the_script_is_its_own_kept_file(watch, fake, monkeypatch):  # noqa: F811
