@@ -28,7 +28,7 @@ decisions:
   - "Save: metadata.member_watch.s = {sermon id: when}, the newest 60; POST /my/sermons/save (the same rules; a form without a script, JSON with one). The bookmark flips at once and turns back if it didn't save."
   - "Share: member_lumen_share's helpers (#1986) on the latest and a message (message_link) and a series (link with series_href, the series' id for Your story); its sheet takes the tap, and without a script the link opens the public page. The share sheet's two tests now find Share where Watch draws it."
   - "Add to calendar: GET /my/sermons/live.ics on the church's own address, public. The day, time and time zone the office saved for check-in (church_checkin_settings; check-in's defaults are not a real time, so an unsaved church gets no card), every week (RRULE), with a VTIMEZONE written from the zone's own changes and the live page's link; no end time (we don't know how long it runs). The read is kept ten minutes per server copy; the phone keeps the file an hour. Switched off it answers what the address answered before."
-  - "The mini-player: the media element carries data-lm-media data-title data-sub data-thumb data-href; each save is a lm:progress event on window ({id, pos, dur, m, playing}) and the phone's places are localStorage lw:<who>."
+  - "The mini player (member_mini, #1989): the media element carries data-title data-sub data-thumb data-href, and data-lm-media only where the mini player shows (its own switch, MEMBER_MINI_PLAYER: with it off the page is what it would be without it); Watch's own script finds its player by data-lw-media. Once a message has played, Back on the player is a plain link (no history.back), so the mini player opens Watch over the message and it plays on (driven in Chromium and WebKit: Back while playing, Watch in the frame, the bar 'Playing · 9:56 of 44:18', the audio still playing). member_mini.mark() in render_sermon now only reaches today's page; its test reads Watch's data-sub. Each save is also a lm:progress event on window ({id, pos, dur, m, playing}); the phone's places are localStorage lw:<who>."
   - "Look: member_lumen_watch.CSS in the Lumen sheet before the type block; tokens only (the player's black is the media's in any look); moves only for no-preference; the script its own file (GET /my/watch.<hash>.js, kept a year, as Share's is)."
   - "member_lumen_give's old Watch (watch, live_row and their rules) and the motion sheet's Watch-only rules are gone; the motion script names the new picture classes for a picture that grows into the player."
 related: [2026-11-20-lumen-share.md, 2026-11-20-lumen-dark-light.md, 2026-11-19-lumen-next-motion.md, 2026-11-19-member-lumen-give.md, 2026-11-20-lumen-connect.md]
@@ -46,7 +46,7 @@ a message with questions her groups; the household read selects her places),
 `member_lumen_share` (its link helpers; its tests find Share on Watch's pages),
 `member_lumen_ui.templates()`, `rate_limit` (member_watch),
 `kmj_intake_automation` (the router). Tests:
-`__tests__/test_member_lumen_watch.py` (39); the give, motion and dark tests
+`__tests__/test_member_lumen_watch.py` (40); the give, motion and dark tests
 now pin Live as the cinema and Watch in her look.
 
 **Checked.** Switch off, as bytes against main: 296 Watch pages x scenes (the
@@ -59,11 +59,13 @@ page's own), reload opens a few seconds back; with the server's copy held 30 s
 old, back on Watch the rail shows the new place from the phone, also from a
 page the browser kept; YouTube's place saved with v and opened at start=; Save
 pressed at once, on her record, in Saved; the tabs and arrow keys; Talk about
-it in Young Adults; the phone's share sheet gets the public link; the .ics.
+it in Young Adults; the share sheet opens over the message; the .ics; with the
+mini player on, Back while playing opens Watch over the still-playing message.
 Rehearsed: the preview writing, no rate limit, no updated_at guard, no bound,
 the service time or her groups not kept, a no-op written, a leaders-only chat
-offered, the new look when off, no share id, the video's place used for audio:
-each went red.
+offered, the new look when off, the mini player's mark with its switch off,
+Back through history after playing, the video's place used for audio: each
+went red.
 
 **Measured** (the harness over the test fake, database time about 0; main and
 this branch alternated page by page; median of 30 warm, Server-Timing total):
