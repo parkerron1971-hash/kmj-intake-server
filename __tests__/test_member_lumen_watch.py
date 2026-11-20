@@ -153,7 +153,7 @@ def test_watch_messages(watch, fake, monkeypatch):  # noqa: F811
     assert f'href="/my/sermons/{M[0]}?listen=1"' in btns                    # Listen: it has audio
     share = re.search(r'<a class="lm-share[^"]*"[^>]*>', btns).group(0)
     assert f'href="/sermons/{M[0]}"' in share and 'data-share-kind="message"' in share
-    assert 'data-share-title="Hope Has a Name"' in share and 'data-share-sub="Pastor James · Light Has Come, part 3"' in share
+    assert 'data-share-title="Hope Has a Name"' in share and 'data-share-sub="Pastor James · Light Has Come"' in share
     assert f'data-share-id="{M[0]}"' in share
     assert 'action="/my/sermons/save"' in btns and 'aria-pressed="false"' in btns and 'aria-label="Save for later"' in btns
     rows = html.count('class="lw-mrow"')
@@ -162,6 +162,8 @@ def test_watch_messages(watch, fake, monkeypatch):  # noqa: F811
     card = _cut(html, '<div class="lw-card">', "</div>")
     assert "Watch live" in card and "Sundays at 10:30 AM" in card and 'href="/my/sermons/live.ics"' in card
     assert html.count(f'<script src="{mlw.js_url()}" defer></script>') == 1 and 'id="lw-state"' in html
+    import member_lumen_share as mls
+    assert html.count(f'<script src="{mls.js_url()}" defer></script>') == 1         # the share sheet's
     assert mlw.JS not in html                                              # its own file, kept by the phone
 
 
@@ -549,7 +551,7 @@ def test_the_sheet_carries_the_watch_block_before_the_type():
 def test_the_script_keeps_the_contracts():
     for bit in ("lm:progress", "'lw:'+S.who", "/my/sermons/progress", "/my/sermons/save", "sendBeacon", "keepalive",
                 "visibilitychange", "pagehide", "60000", "mediaSession", "event:'listening'",
-                "method:'addEventListener'", "e.defaultPrevented", "navigator.share", "pageshow"):
+                "method:'addEventListener'", "pageshow"):
         assert bit in mlw.JS, bit
     assert "</script" not in mlw.JS and "<script" not in mlw.JS
 

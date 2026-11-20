@@ -26,12 +26,12 @@ decisions:
   - "A series: its art big with Back, 'Series · <months>', the serif title, the description, Keep watching part n (a part she's in the middle of), else Watch part n (the next after the last she watched), else Play part 1; Share; the parts (· New on one preached in the last week that she hasn't started)."
   - "Where she is: on her own record, contacts.metadata.member_watch.p = {sermon id: [seconds, length, when (unix, the server's clock), v or a]}, the newest 20 (no migration). Video and audio keep their own place (a church's audio is often the sermon alone). Saved on pause, when the page is hidden (sendBeacon, else fetch keepalive) and at most once a minute while it plays: POST /my/sermons/progress (the member session through member_portal_church._signed_in, the same-origin check, its own rate limit member_watch 60 per 10 minutes, her own row, the updated_at guard member_lumen_look.save uses, a place within 5 s of the stored one not written again). Read from the record the session already reads (contacts_for_email and contacts_for_phone select watch:metadata->member_watch): no new read. That record is kept 30 s per server copy, so a save forgets it on that copy, and the phone keeps its newest places for ten minutes (localStorage lw:<who>, in the server's clock) and lays them over what the server drew, on load and when the browser shows a kept page: a pause shows on Watch the moment she goes back."
   - "Save: metadata.member_watch.s = {sermon id: when}, the newest 60; POST /my/sermons/save (the same rules; a form without a script, JSON with one). The bookmark flips at once and turns back if it didn't save."
-  - "Share: the shared contract on the latest, a message and a series (<a class=lm-share href=public page data-share-kind data-share-title data-share-sub data-share-img data-share-id>; a series' public page is /sermons#sm-s-<id>). The share sheet is another piece; without it the phone's own share sheet opens, and without a script the public page."
+  - "Share: member_lumen_share's helpers (#1986) on the latest and a message (message_link) and a series (link with series_href, the series' id for Your story); its sheet takes the tap, and without a script the link opens the public page. The share sheet's two tests now find Share where Watch draws it."
   - "Add to calendar: GET /my/sermons/live.ics on the church's own address, public. The day, time and time zone the office saved for check-in (church_checkin_settings; check-in's defaults are not a real time, so an unsaved church gets no card), every week (RRULE), with a VTIMEZONE written from the zone's own changes and the live page's link; no end time (we don't know how long it runs). The read is kept ten minutes per server copy; the phone keeps the file an hour. Switched off it answers what the address answered before."
   - "The mini-player: the media element carries data-lm-media data-title data-sub data-thumb data-href; each save is a lm:progress event on window ({id, pos, dur, m, playing}) and the phone's places are localStorage lw:<who>."
   - "Look: member_lumen_watch.CSS in the Lumen sheet before the type block; tokens only (the player's black is the media's in any look); moves only for no-preference; the script its own file (GET /my/watch.<hash>.js, kept a year, as Share's is)."
   - "member_lumen_give's old Watch (watch, live_row and their rules) and the motion sheet's Watch-only rules are gone; the motion script names the new picture classes for a picture that grows into the player."
-related: [2026-11-20-lumen-dark-light.md, 2026-11-19-lumen-next-motion.md, 2026-11-19-member-lumen-give.md, 2026-11-20-lumen-connect.md]
+related: [2026-11-20-lumen-share.md, 2026-11-20-lumen-dark-light.md, 2026-11-19-lumen-next-motion.md, 2026-11-19-member-lumen-give.md, 2026-11-20-lumen-connect.md]
 ---
 `member_lumen_watch.py` (new) holds Watch (`watch_page`), a series
 (`series_page`), a message (`message_page`), her places and saves (`state`,
@@ -43,6 +43,7 @@ CSS. Wired in: `member_portal_sermons` (render_library and render_sermon hand
 the new look to it), `member_portal` (the Watch gather gets the service time,
 a message with questions her groups; the household read selects her places),
 `member_lumen_motion` (cine is Live; the cinema's bar on a dark page only),
+`member_lumen_share` (its link helpers; its tests find Share on Watch's pages),
 `member_lumen_ui.templates()`, `rate_limit` (member_watch),
 `kmj_intake_automation` (the router). Tests:
 `__tests__/test_member_lumen_watch.py` (39); the give, motion and dark tests

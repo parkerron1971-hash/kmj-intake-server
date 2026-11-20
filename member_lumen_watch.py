@@ -68,10 +68,10 @@ SAVE. The bookmark on Watch and on a message: metadata.member_watch.s =
 {sermon id: when}, the newest 60. The same route rules (POST
 /my/sermons/save, a form without a script). Saved shows on Watch.
 
-SHARE. Church content only (a message, a series), as the shared contract:
-<a class="lm-share" href="<public page>" data-share-...>; the share sheet
-(another piece) opens over it. Without that sheet the phone's own share
-sheet opens, and without a script the link opens the public page.
+SHARE. Church content only (a message, a series), through member_lumen_share
+(link, message_link: the public page, the sermon's or the series' id for
+Your story); its sheet opens over it, and without a script the link opens
+the public page.
 
 ADD TO CALENDAR (GET /my/sermons/live.ics). The church's weekly service,
 public (service times are public), on the church's own address: the day,
@@ -470,13 +470,6 @@ def _bar(pos: int, dur: int) -> str:
     return f'<span class="lw-bar"><i style="width:{w}%"></i></span>' if w else '<span class="lw-bar" hidden><i></i></span>'
 
 
-def _share(kind: str, href: str, title: str, sub: str, img: str, sid: str, inner: str, cls: str) -> str:
-    """The shared contract's Share: the public page, and what the sheet shows
-    (data-share-id: the sermon's or the series' id, for Your story)."""
-    return (f'<a class="lm-share {cls}" href="{_e(href)}" data-share-kind="{kind}" data-share-title="{_e(title)}" '
-            f'data-share-sub="{_e(sub)}" data-share-img="{_e(img)}" data-share-id="{_e(sid)}">{inner}</a>')
-
-
 def _save(s: Dict[str, Any], on: bool, back: str, cls: str, inner_on: str, inner_off: str, label: bool) -> str:
     """Save: a form that posts without a script; the script flips it at once."""
     sid = _e(s["id"])
@@ -608,6 +601,7 @@ def watch_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Optional[
 def _messages(pg: _Page, show_all: bool) -> str:
     import member_app_samples as samples
     import member_app_ui as ui
+    import member_lumen_share as mls
     lib = pg.lib
     s = lib["sermons"][0]
     pt = pg.part(s)
@@ -625,12 +619,10 @@ def _messages(pg: _Page, show_all: bool) -> str:
             f'<span class="lw-img">{art}</span><span class="lw-scrim"></span>{ui.sample_tag() if sample else ""}'
             f'<span class="lw-tx"><span class="lw-kick">{_e(kick)}</span><h2>{_e(s.get("title"))}</h2>'
             f'<span class="lw-hm" data-lw-heromins>{_meta(s.get("speaker"), s.get("scripture"), minutes(d) if d else "")}</span></span></a>')
-    sub = _meta(s.get("speaker"), f"{pt[2]}, part {pt[0]}" if pt else "")
     listen = (f'<a class="lw-pill" href="{href}?listen=1">{icon("listen", 15)}Listen</a>' if audio and video else "")
     btns = (f'<div class="lw-btns"><a class="lw-pill pri" href="{href}{"" if video or not audio else "?listen=1"}">'
             f'{icon("play", 14)}{play_word}</a>{listen}'
-            + _share("message", f"/sermons/{s['id']}", s.get("title") or "", unescape(sub), _src(art), str(s["id"]),
-                     f'{icon("share", 15)}Share', "lw-pill")
+            + mls.message_link(lib, s, pg.site, pg.pool, f'{icon("share", 15)}Share', cls="lw-pill")
             + _save(s, pg.saved(s), "/my/sermons", "lw-pill lw-sq", icon("save", 19, "on"), icon("save", 19), False)
             + '</div>')
     # Pick up where you left off: started, not finished, newest first.
@@ -733,8 +725,10 @@ def series_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Dict[str
         q = "?listen=1" if m == "a" and (first.get("audio_url") or "").strip() else ""
         play = f'<a class="lw-pill pri lw-grow" href="/my/sermons/{_e(first["id"])}{q}">{icon("play", 14)}{_e(word)}</a>'
     n = len(msgs)
-    share = _share("series", f"/sermons#sm-s-{series_id}", title, unescape(_meta(when, f"{n} message{'' if n == 1 else 's'}")),
-                   _src(art), series_id, f'{icon("share", 15)}Share', "lw-pill")
+    import member_lumen_share as mls
+    share = mls.link("series", mls.series_href(series_id), title, f'{icon("share", 15)}Share',
+                     sub=unescape(_meta(when, f"{n} message{'' if n == 1 else 's'}")), img=_src(art), sid=series_id,
+                     cls="lw-pill")
     rows = "".join(_prow(pg, s) for s in msgs)
     parts = (f'<div class="lw-parts">{rows}</div>' if rows else
              '<p class="lw-pad lw-quiet">No messages in this series are posted yet.</p>')
@@ -851,8 +845,8 @@ def message_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Dict[st
     if audio_url and video_url:
         acts.append(f'<a class="lw-pa{" on" if mode == "a" else ""}" href="/my/sermons/{_e(s["id"])}{"" if mode == "a" else "?listen=1"}">'
                     f'{icon("play" if mode == "a" else "listen", 22)}<span>{"Video" if mode == "a" else "Listen"}</span></a>')
-    acts.append(_share("message", f"/sermons/{s['id']}", s.get("title") or "", unescape(_meta(s.get("speaker"), series_sub)),
-                       thumb, str(s["id"]), f'{icon("share", 22)}<span>Share</span>', "lw-pa"))
+    import member_lumen_share as mls
+    acts.append(mls.message_link(lib, s, site, pg.pool, f'{icon("share", 22)}<span>Share</span>', cls="lw-pa"))
     acts.append(_save(s, pg.saved(s), f"/my/sermons/{s['id']}", "lw-pa",
                       f'{icon("save", 22, "on")}<span>Saved</span>', f'{icon("save", 22)}<span>Save</span>', True))
     if give_url:
@@ -1243,8 +1237,8 @@ async def service_ics(request: Request):
 # clock), lays them over what the server drew (on load and when the browser
 # shows a page it kept), runs the audio player, hears YouTube and Vimeo,
 # saves where the member is (on pause, on hide, once a minute while it plays),
-# flips Save at once, goes Back through history when the page before was
-# ours, and opens the phone's share sheet when no other sheet took the tap.
+# flips Save at once and goes Back through history when the page before was
+# ours. Share is member_lumen_share's sheet (its own script, which _shell adds).
 JS = r"""(function(){var d=document,root=d.querySelector('.lw[data-lw-who]'),sj=d.getElementById('lw-state');
 if(!root||!sj)return;var S;try{S=JSON.parse(sj.textContent);}catch(e){return;}
 var skew=S.now-Date.now()/1000,K='lw:'+S.who,TTL=600,STARTED=20,LEFT=45;
@@ -1300,9 +1294,6 @@ if(j&&j.error==='preview')return;var L3=load();delete L3.s[sid];keep(L3);paint()
 // Back: through history when the page before was ours.
 var fb=d.querySelector('[data-lw-back]');if(fb)fb.addEventListener('click',function(e){try{var r=new URL(d.referrer);
 if(r.origin===location.origin&&r.pathname.indexOf('/my')===0&&history.length>1){e.preventDefault();history.back();}}catch(x){}});
-// Share: the phone's own sheet when no other sheet took the tap.
-window.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a.lm-share');if(!a||e.defaultPrevented||!navigator.share)return;
-e.preventDefault();navigator.share({title:a.getAttribute('data-share-title')||'',url:new URL(a.getAttribute('href'),location.href).href}).catch(function(){});});
 paint();addEventListener('pageshow',function(e){if(e.persisted)paint();});
 // The player.
 var sid=root.getAttribute('data-lw-sid'),mode=root.getAttribute('data-lw-m');if(!sid)return;
