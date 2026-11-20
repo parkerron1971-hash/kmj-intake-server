@@ -83,10 +83,12 @@ What it changes, switched on, for someone it shows to: the message page
 gains the marks and one script (page_script); the new look's sheet gains
 the bar's rules (CSS). Every other page is byte for byte what it was:
 a page loads in the frame exactly as it would on its own. The one server
-difference: a page asked for by a frame on the same site
-(Sec-Fetch-Dest: iframe, Sec-Fetch-Site: same-origin) answers with
+difference: for that same someone, a page asked for by a frame on the same
+site (Sec-Fetch-Dest: iframe, Sec-Fetch-Site: same-origin) answers with
 X-Frame-Options: SAMEORIGIN and frame-ancestors 'self' instead of DENY and
-'none' (FrameForStage), which still refuses every other site's frame. And
+'none' (allow_frame, at the end of member_portal.serve, where the session
+is known), which still refuses every other site's frame; for anyone else
+every header is what it was. And
 the service worker leaves a frame's page to the browser
 (member_app_install.SW_JS): a page the worker asks for itself, or kept
 early, goes out without the frame's Sec-Fetch-Dest and would be refused
@@ -433,69 +435,36 @@ body.lm .lm-mini-go:focus-visible,body.lm .lm-mini-b:focus-visible{outline:2px s
 # ─── the frame's headers ───────────────────────────────────────────────
 
 
-def _is_member_path(path: str) -> bool:
-    return path == "/my" or path.startswith("/my/")
-
-
-def stage_request(scope: Mapping[str, Any]) -> bool:
-    """A member page asked for by a frame on the same site (the mini
-    player's frame): Sec-Fetch-Dest: iframe and Sec-Fetch-Site:
-    same-origin, under /my, with the switch not off. A browser that sends
-    no fetch metadata never qualifies (the frame is refused and the page
-    loads the ordinary way)."""
-    if scope.get("type") != "http" or not _is_member_path(str(scope.get("path") or "")):
+def frame_request(request: Any) -> bool:
+    """A page asked for by a frame on the same site (the mini player's
+    frame): Sec-Fetch-Dest: iframe and Sec-Fetch-Site: same-origin. A
+    browser that sends no fetch metadata never qualifies (the frame is
+    refused and the page loads the ordinary way)."""
+    try:
+        h = request.headers
+        return ((h.get("sec-fetch-dest") or "").strip().lower() == "iframe"
+                and (h.get("sec-fetch-site") or "").strip().lower() == "same-origin")
+    except Exception:
         return False
-    if mode() == "off":
-        return False
-    dest = site = b""
-    for k, v in scope.get("headers") or []:
-        lk = k.lower()
-        if lk == b"sec-fetch-dest":
-            dest = v.strip().lower()
-        elif lk == b"sec-fetch-site":
-            site = v.strip().lower()
-    return dest == b"iframe" and site == b"same-origin"
 
 
-def relax(headers):
-    """The member pages' frame refusal (X-Frame-Options: DENY,
-    Content-Security-Policy: frame-ancestors 'none') turned into "this
-    site only" (SAMEORIGIN, 'self'). Any other value is left alone, so a
-    page with its own policy keeps it."""
-    out = []
-    for k, v in headers:
-        lk = k.lower()
-        if lk == b"x-frame-options" and v.strip().upper() == b"DENY":
-            v = b"SAMEORIGIN"
-        elif lk == b"content-security-policy" and v.strip() == b"frame-ancestors 'none'":
-            v = b"frame-ancestors 'self'"
-        out.append((k, v))
-    return out
-
-
-class FrameForStage:
-    """Pure ASGI: on a member page asked for by the mini player's frame
-    (stage_request), the page's frame headers allow this site only
-    (relax). Every other request passes through untouched."""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        try:
-            yes = stage_request(scope)
-        except Exception:  # noqa: BLE001 — never in the way of a page
-            yes = False
-        if not yes:
-            await self.app(scope, receive, send)
-            return
-
-        async def relaxed(message):
-            if message.get("type") == "http.response.start":
-                try:
-                    message = {**message, "headers": relax(list(message.get("headers") or []))}
-                except Exception:  # noqa: BLE001 — the page goes out as it was
-                    pass
-            await send(message)
-
-        await self.app(scope, receive, relaxed)
+def allow_frame(request: Any, resp: Any) -> Any:
+    """The member page's answer, framed by the mini player: for someone the
+    switch shows it to (here(), decided from this request's session) and a
+    request from a same-site frame (frame_request), the page's frame
+    refusal (X-Frame-Options: DENY, frame-ancestors 'none') becomes "this
+    site only" (SAMEORIGIN, 'self'). Every other answer is untouched, so
+    another site's frame is still refused, and so is a frame for anyone
+    the switch doesn't show it to (their page then loads the ordinary way).
+    Any other header value is left alone. Never raises."""
+    try:
+        if resp is None or not here() or not frame_request(request):
+            return resp
+        h = resp.headers
+        if (h.get("x-frame-options") or "").strip().upper() == "DENY":
+            h["X-Frame-Options"] = "SAMEORIGIN"
+        if (h.get("content-security-policy") or "").strip() == "frame-ancestors 'none'":
+            h["Content-Security-Policy"] = "frame-ancestors 'self'"
+    except Exception:
+        pass
+    return resp

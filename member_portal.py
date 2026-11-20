@@ -1549,7 +1549,9 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
         resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
-    return resp
+    # The mini player's frame (member_mini): its own site's frame may show the
+    # page, for someone the switch shows it to; every other answer as it was.
+    return member_mini.allow_frame(request, resp)
 
 
 async def _nothing():

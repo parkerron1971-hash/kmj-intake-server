@@ -15,7 +15,8 @@
 #   - the sheet: the bar's rules in /my/lumen.<hash>.css before the type
 #     block, every move only without reduced motion;
 #   - the frame's headers: SAMEORIGIN / 'self' only for a same-site frame's
-#     request under /my, nothing else touched, nothing at all when off;
+#     request, for someone the switch shows it to; every other answer as it
+#     was (another site's frame, the default preview for a member, off);
 #   - the service worker leaves a frame's page to the browser;
 #   - the same reads with the switch on and off.
 
@@ -268,71 +269,62 @@ def test_the_bar_moves_only_without_reduced_motion():
 # ─── the frame's headers ─────────────────────────────────────────────
 
 
-def _scope(path="/my", dest=b"iframe", site=b"same-origin"):
-    h = [(b"host", b"lovecityc.com")]
-    if dest is not None:
-        h.append((b"sec-fetch-dest", dest))
-    if site is not None:
-        h.append((b"sec-fetch-site", site))
-    return {"type": "http", "path": path, "method": "GET", "headers": h}
+FRAME = {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin"}
 
 
-def test_a_frame_request_is_a_same_site_frame_under_my(monkeypatch):
-    monkeypatch.setenv("MEMBER_MINI_PLAYER", "preview")
-    assert member_mini.stage_request(_scope())
-    assert member_mini.stage_request(_scope("/my/connect"))
-    assert not member_mini.stage_request(_scope(site=b"cross-site"))
-    assert not member_mini.stage_request(_scope(site=b"same-site"))
-    assert not member_mini.stage_request(_scope(dest=b"document"))
-    assert not member_mini.stage_request(_scope(dest=b"empty"))
-    assert not member_mini.stage_request(_scope(dest=None, site=None))       # no fetch metadata: never
-    assert not member_mini.stage_request(_scope("/sermons/1"))
-    assert not member_mini.stage_request(_scope("/myother"))
-    monkeypatch.setenv("MEMBER_MINI_PLAYER", "off")
-    assert not member_mini.stage_request(_scope())
+def _frame_headers(fake, monkeypatch, path, mini="on", headers=FRAME):  # noqa: F811
+    monkeypatch.setenv("MEMBER_MINI_PLAYER", mini)
+    r = _client(fake, monkeypatch).get(path, headers=headers)
+    return r.headers.get("x-frame-options"), r.headers.get("content-security-policy")
 
 
-def test_relax_turns_only_the_refusal_into_this_site_only():
-    got = dict(member_mini.relax([(b"x-frame-options", b"DENY"), (b"content-security-policy", b"frame-ancestors 'none'"),
-                                  (b"cache-control", b"no-store")]))
-    assert got == {b"x-frame-options": b"SAMEORIGIN", b"content-security-policy": b"frame-ancestors 'self'",
-                   b"cache-control": b"no-store"}
-    other = [(b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'")]
-    assert member_mini.relax(other) == other                                 # a page's own policy is kept
+ONLY_US = ("SAMEORIGIN", "frame-ancestors 'self'")
+REFUSED = ("DENY", "frame-ancestors 'none'")
 
 
-def _served(monkeypatch, mode, headers, path="/my"):
-    from fastapi import FastAPI
+@pytest.mark.parametrize("path", ["/my", "/my/connect", "/my/bible", MSG])
+def test_the_frame_may_show_the_page_to_someone_the_switch_shows_it_to(church, fake, monkeypatch, path):  # noqa: F811
+    assert _frame_headers(fake, monkeypatch, path) == ONLY_US
+
+
+def test_every_other_answer_refuses_every_frame(church, fake, monkeypatch):  # noqa: F811
+    assert _frame_headers(fake, monkeypatch, "/my", "off") == REFUSED
+    assert _frame_headers(fake, monkeypatch, "/my", headers={}) == REFUSED                         # a page in the browser
+    assert _frame_headers(fake, monkeypatch, "/my", headers={"Sec-Fetch-Dest": "document",
+                                                             "Sec-Fetch-Site": "same-origin"}) == REFUSED
+    assert _frame_headers(fake, monkeypatch, "/my", headers={"Sec-Fetch-Dest": "iframe",
+                                                             "Sec-Fetch-Site": "cross-site"}) == REFUSED
+    assert _frame_headers(fake, monkeypatch, "/my", headers={"Sec-Fetch-Dest": "iframe",
+                                                             "Sec-Fetch-Site": "same-site"}) == REFUSED
+    # the default (preview): Ana isn't the platform owner, so even her own site's frame is refused
+    monkeypatch.setenv("PLATFORM_OWNER_EMAIL", "pastor@example.test")
+    assert _frame_headers(fake, monkeypatch, "/my", "preview") == REFUSED
+    # the old look: refused (the frame then loads the page the ordinary way)
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    assert _frame_headers(fake, monkeypatch, "/my") == REFUSED
+
+
+def test_allow_frame_turns_only_the_refusal_into_this_site_only(monkeypatch):
     from fastapi.responses import HTMLResponse
-    from fastapi.testclient import TestClient
-    import member_portal as mp
-    monkeypatch.setenv("MEMBER_MINI_PLAYER", mode)
-    app = FastAPI()
-
-    @app.get("/{rest:path}")
-    async def page(rest: str):
-        return HTMLResponse("<p>x</p>", headers=mp._SECURE_HEADERS)
-    app.add_middleware(member_mini.FrameForStage)
-    r = TestClient(app, base_url="https://lovecityc.com").get(path, headers=headers)
-    return r.headers.get("x-frame-options"), r.headers.get("content-security-policy"), r.text
-
-
-def test_the_middleware(monkeypatch):
-    frame = {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin"}
-    assert _served(monkeypatch, "preview", frame) == ("SAMEORIGIN", "frame-ancestors 'self'", "<p>x</p>")
-    assert _served(monkeypatch, "on", frame, "/my/bible/john/1")[:2] == ("SAMEORIGIN", "frame-ancestors 'self'")
-    # everything else exactly as it was
-    deny = ("DENY", "frame-ancestors 'none'", "<p>x</p>")
-    assert _served(monkeypatch, "off", frame) == deny
-    assert _served(monkeypatch, "on", {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"}) == deny
-    assert _served(monkeypatch, "on", {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "same-origin"}) == deny
-    assert _served(monkeypatch, "on", {}) == deny
-    assert _served(monkeypatch, "on", frame, "/give") == deny
+    from starlette.requests import Request
+    req = Request({"type": "http", "headers": [(b"sec-fetch-dest", b"iframe"), (b"sec-fetch-site", b"same-origin")]})
+    monkeypatch.setattr(member_mini, "here", lambda: True)
+    r = member_mini.allow_frame(req, HTMLResponse("x", headers={"X-Frame-Options": "DENY",
+                                                                "Content-Security-Policy": "frame-ancestors 'none'",
+                                                                "Cache-Control": "no-store"}))
+    assert (r.headers["x-frame-options"], r.headers["content-security-policy"], r.headers["cache-control"]) == (
+        "SAMEORIGIN", "frame-ancestors 'self'", "no-store")
+    own = HTMLResponse("x", headers={"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"})
+    assert member_mini.allow_frame(req, own).headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert member_mini.allow_frame(req, None) is None
+    monkeypatch.setattr(member_mini, "here", lambda: False)
+    r = member_mini.allow_frame(req, HTMLResponse("x", headers={"X-Frame-Options": "DENY"}))
+    assert r.headers["x-frame-options"] == "DENY"
 
 
-def test_the_app_has_the_middleware():
+def test_no_middleware_every_other_request_untouched():
     src = (pathlib.Path(__file__).resolve().parent.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
-    assert "from member_mini import FrameForStage\napp.add_middleware(FrameForStage)" in src
+    assert "member_mini" not in src
 
 
 # ─── the service worker ──────────────────────────────────────────────
