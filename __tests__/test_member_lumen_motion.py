@@ -120,9 +120,8 @@ def test_live_is_the_cinema_and_watch_wears_her_look(church, fake, monkeypatch):
     sheet = ui.sheet("lumen")[0]
     assert "body.lm.lm-dark.pg-watch{--bg:#050506;" in sheet and "--acc:var(--acc-lit)" in sheet
     assert "html:has(>body.lm.lm-dark.pg-watch){background:#050506;" in sheet
-    # The floating bar's cinema colour only on a dark page.
-    assert ".lm.lm-dark.pg-watch .mb-nav.lm-nav{background:#161618;" in sheet
-    assert ".lm.pg-watch .mb-nav.lm-nav{" not in sheet
+    # The tab bar is Look 5.1's flat bar on Watch too (no cinema colour of its own).
+    assert ".pg-watch .mb-nav.lm-nav{" not in sheet
     assert mlm.cine("live") and not mlm.cine("sermons") and not mlm.cine("watch") and not mlm.cine("bible")
 
 

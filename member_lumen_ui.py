@@ -528,7 +528,8 @@ def templates() -> Tuple[Template, ...]:
     return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
             member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS, member_lumen_feed.CSS,
             member_lumen_home.CSS, Template(member_lumen_devotional.CSS), member_pastor.CSS, member_lumen_connect.CSS,
-            member_lumen_stories.CSS, member_lumen_share.CSS, member_lumen_watch.CSS, member_mini.CSS, member_lumen_fonts.template())
+            member_lumen_stories.CSS, member_lumen_share.CSS, member_lumen_watch.CSS, member_mini.CSS,
+            member_lumen_fonts.template())
 
 
 def css() -> str:
