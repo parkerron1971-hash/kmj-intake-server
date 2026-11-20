@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: "Giving tick, the follow-up before the switch goes on (backend, one PR): the seven fixes the reviews of #1931, #1933 and #1940 left before CHURCH_MONEY_TICKS can go on for any church."
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1987]
 migrations: [supabase/APPLY-2026-11-20-gift-thankyou-events.sql (NOT applied)]
 left_undone:
   - "NOT APPLIED: supabase/APPLY-2026-11-20-gift-thankyou-events.sql. Kevin runs its Check before block, then the file, then Check after, before the switch goes on. Its rollback puts old givers' names back in the books' class: only with the switch off."
