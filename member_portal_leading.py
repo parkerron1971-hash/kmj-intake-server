@@ -285,8 +285,15 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], team
                 rows.append(_candidates(gid, cur["id"], p, k, cands))
     call = f' · be there by {_e(team["call_time"])}' if team.get("call_time") else ""
     fill = _form("/my/lead/sundays/fill", {"team": gid}, "Fill the next five Sundays", "sv-btn hue")
-    title, sub = ("Your team's Sundays", "You see your team; the office sees every team.") if theirs else (
-        "This team's Sundays", "It's one of your department's teams. Whoever leads it is told what you ask, offer or fill here.")
+    if theirs:
+        title, sub = "Your team's Sundays", "You see your team; the office sees every team."
+    else:
+        # Said only when it is so: the church sends serving notes, and the team has a leader besides them.
+        import member_push
+        told = "serving" in member_push.church_kinds(biz.get("settings")) and any(
+            p.get("leader") and str(p.get("contact_id")) != str(me.get("id")) for p in team.get("people") or [])
+        title, sub = "This team's Sundays", "It's one of your department's teams." + (
+            " Whoever leads it is told what you ask, offer or fill here." if told else "")
     body = f"""{head}{_flash(request)}{chips}
 <div class="h-teal"><p class="sl-team">{_e(team["name"])}</p><h2 class="sl-h">{title}</h2>
 <p class="sl-sub">{waiting} waiting on an answer. {sub} Someone on another team that hour shows here, so nobody is double-booked.</p></div>
@@ -341,6 +348,11 @@ def _dept_section(d: Dict[str, Any], alone: bool = False) -> str:
     head = "" if alone and not led else f'<div class="dw-dh"><h2>{_e(d["name"])}</h2>{led}</div>'
     if d["teams"]:
         teams = "".join(_dept_team(t) for t in d["teams"])
+    elif d.get("elsewhere"):
+        # Its teams are on an earlier department's card (one team, two departments): say where.
+        lines = "".join(f'<p class="dw-quiet" style="padding-top:14px">{_e(x["team"])} is shown under '
+                        f'{_e(x["under"])} above.</p>' for x in d["elsewhere"])
+        teams = f'<div class="sv-card">{lines}</div>'
     else:
         teams = (f'<div class="sv-card"><p class="dw-quiet" style="padding-top:14px">No Sunday team is part of '
                  f'{_e(d["name"])} yet. When the church office adds one, its week shows here.</p></div>')
@@ -348,8 +360,10 @@ def _dept_section(d: Dict[str, Any], alone: bool = False) -> str:
         away = "".join(f'<div class="r"><b>{_e(a["name"])}</b><span>{_e(a["days"])}</span></div>' for a in d["away"])
     else:
         away = '<p class="dw-quiet">Nobody on these teams is away this week.</p>'
+    # Who is away is said under the card that shows their team: none here without a team of its own.
+    away = f'<div class="sv-card dw-away"><h3>Away</h3>{away}</div>' if d["teams"] else ""
     return (f'<section class="h-teal" aria-label="{_e(d["name"])}"{"" if head else " style=\"margin-top:24px\""}>'
-            f'{head}{teams}<div class="sv-card dw-away"><h3>Away</h3>{away}</div></section>')
+            f'{head}{teams}{away}</section>')
 
 
 def render_department(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], d: Dict[str, Any],
@@ -390,7 +404,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any])
     """GET /my/lead/sundays: (html, status). A team asked for (?team=) that
     is theirs, or one of their department's Volunteers' teams, opens on its
     Sundays; otherwise a department's leader or overseer reads My
-    department, and anyone else their first team, as before."""
+    department, and anyone else their first team, as before. Someone who
+    heads no department (church_week.entry: what it keeps a minute, never
+    raising) never waits on a department read: their page is what it was."""
     from member_portal import _shell
     import church_week as cw
     cid = str(me["id"])
@@ -400,17 +416,20 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any])
         gid = str(q.get("team") or "")
         import group_lead
         groups = len(await asyncio.to_thread(group_lead.led_groups, str(biz["id"]), cid) or [])
+        dept = await asyncio.to_thread(cw.standing, biz, cid)
+        if dept is None and not teams:
+            # Who heads a department couldn't be read, and there is no team of theirs to show instead.
+            raise HTTPException(503, DEPT_UNREAD)
         v = None
-        if _ID.match(gid) and gid not in {t["group_id"] for t in teams}:
+        if _ID.match(gid) and gid in {t["group_id"] for t in teams}:
+            v = await asyncio.to_thread(sl.team_view, biz, cid, gid)
+        elif _ID.match(gid) and dept:
             try:                                    # one of their department's teams (sunday_leading checks)
                 v = await asyncio.to_thread(sl.team_view, biz, cid, gid)
             except HTTPException as e:
                 if e.status_code != 404:
                     raise
-        elif _ID.match(gid):
-            v = await asyncio.to_thread(sl.team_view, biz, cid, gid)
-        dept = await asyncio.to_thread(cw.entry, biz, cid)
-        if v is None:
+        if v is None and dept:
             try:
                 d = await asyncio.to_thread(cw.department_week, biz, cid, str(q.get("week") or ""))
             except HTTPException as e:
@@ -420,20 +439,21 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any])
                               tab="lead", who=me), 503
             if d is not None:
                 return render_department(biz, site, request, me, d, teams, groups), 200
-            if teams:
-                gid = teams[0]["group_id"]
-                v = await asyncio.to_thread(sl.team_view, biz, cid, gid)
+        if v is None and teams:
+            gid = teams[0]["group_id"]
+            v = await asyncio.to_thread(sl.team_view, biz, cid, gid)
         day = str(q.get("day") or "")
         spot = str(q.get("spot") or "")
         cands = None
         m = _SPOT.match(spot)
         if v and m and _ID.match(day):
             cands = await asyncio.to_thread(sl.candidates, biz, cid, day, m.group(1))
-        return render(biz, site, request, me, teams, v, day, spot if m else "", cands, groups, dept=dept), 200
+        return render(biz, site, request, me, teams, v, day, spot if m else "", cands, groups, dept=bool(dept)), 200
     except HTTPException as e:
         logger.warning("lead sundays read failed: %s", e.detail)
+        said = DEPT_UNREAD if e.detail == DEPT_UNREAD else UNREAD
         return _shell(biz, site, "Sundays", '<a class="mb-back" href="/my/lead">Lead</a>'
-                      f'<p class="mp-err" role="alert">{UNREAD}</p>', tab="lead", who=me), 503
+                      f'<p class="mp-err" role="alert">{said}</p>', tab="lead", who=me), 503
 
 
 def _lead_css() -> str:

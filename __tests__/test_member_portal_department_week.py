@@ -59,7 +59,7 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 KEYS = re.compile(r"\b[a-z]+_[a-z_]+\b")
 TITLE_WORDS = re.compile(r"\b(pastors?|elders?|deacons?|ministers?|bishops?|overseers?|directors?|executive|"
                          r"treasurers?|secretary|owners?|trustees?|reverend|apostles?|prophets?)\b", re.I)
-OFFICE_WORDS = re.compile(r"\b(login|logins|seat|seats|manager|admin|lane|lanes|duty|duties)\b", re.I)
+OFFICE_WORDS = re.compile(r"\b(login|logins|seat|seats|manager|admin|lane|lanes|duty|duties|who serves when)\b", re.I)
 ROLE_KEYS = re.compile(r"\b(pastor|executive_pastor|associate_pastor|elders|deacons|ministers|youth_pastor|"
                        r"worship_leader|team_leader|director_of_operations|childrens_director)\b")
 # Nothing of hours or checks, in any words, on the phone.
@@ -156,18 +156,14 @@ def me(db, handle):
     return {"id": cid, "name": next(x["name"] for x in db.t["contacts"] if x["id"] == cid), "email": ""}
 
 
-def mine(db, handle, which="next"):
-    """My department as this person reads it. Read on Wednesday Nov 18, the
-    week of Nov 22 (test_church_week's) is next week: this week (Sunday to
-    Saturday, as the office's) is Nov 15 to 21."""
+def mine(db, handle, which="this"):
+    """My department as this person reads it. Read on Wednesday Nov 18,
+    this week is the coming Sunday's: Nov 22 to 28 (test_church_week's)."""
     return cw.department_week(member_row(db), db.who[HOPE][handle], which)
 
 
 def page(db, handle, **q):
-    """The Sundays page, through the Lead tab, as this person, on next week
-    unless asked otherwise: (html, status)."""
-    if "team" not in q:
-        q.setdefault("week", "next")
+    """The Sundays page, through the Lead tab, as this person: (html, status)."""
     q = {k: v for k, v in q.items() if v is not None}
     return asyncio.run(mpl.serve(SimpleNamespace(query_params=q), member_row(db), {}, me(db, handle), "/my/lead/sundays"))
 
@@ -227,7 +223,7 @@ def told(db):
 
 def test_the_kids_leader_sees_kids_only(hope, shell):
     d = mine(hope, "kara")
-    assert d["week"] == {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "which": "next"}
+    assert d["week"] == {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "which": "this"}
     assert d["counts"] == {"on": 2, "open": 4, "away": 2}
     assert [(x["name"], x["led_by"]) for x in d["departments"]] == [("Kids", None)], "her own: no 'led by' herself"
     kids = d["departments"][0]
@@ -277,6 +273,37 @@ def test_a_team_leader_over_no_department_sees_just_their_own_team(hope, shell):
         assert "My department" not in shown and "Look at first" not in shown
 
 
+def test_a_team_leader_over_no_department_never_waits_on_a_department_read(hope, shell, monkeypatch):
+    """Gemma leads Kids Check-in and heads nothing: My department's read is
+    never asked for; once who heads a department is kept (any page in that
+    minute), her page makes exactly the reads it made before this change
+    (CHURCH_WEEK off); and with the leaders map's departments failing to
+    read, her team's page still opens."""
+    def never(*a, **k):
+        raise AssertionError("a department read for someone who heads none")
+    monkeypatch.setattr(cw, "department_week", never)
+    monkeypatch.setenv("CHURCH_WEEK", "off")
+    page(hope, "n040")                                                  # what other pages keep, kept
+    hope.reads.clear()
+    before = page(hope, "n040")
+    reads_before = list(hope.reads)
+    monkeypatch.setenv("CHURCH_WEEK", "on")
+    cw.entry(member_row(hope), hope.who[HOPE]["kara"])                  # the minute's answer, kept
+    hope.reads.clear()
+    assert page(hope, "n040") == before and hope.reads == reads_before, "no extra read"
+    cw._HEADS.clear()
+    hope.fail = {"get": "/church_departments"}
+    html, status = page(hope, "n040")
+    hope.fail = {}
+    assert status == 200 and "Your team's Sundays" in text(html) and "Kids Check-in" in text(html)
+    # Someone with no team of their own, when who heads a department can't be read: plain words, never a 500.
+    cw._HEADS.clear()
+    hope.fail = {"get": "/church_departments"}
+    html, status = page(hope, "kara")
+    hope.fail = {}
+    assert status == 503 and mplg.DEPT_UNREAD in html
+
+
 def test_someone_else_gets_no_my_department(hope, shell):
     for handle in ("n041", "elena", "nathan"):       # a volunteer, an elder, the owner's own person: none heads one
         assert mine(hope, handle) is None
@@ -310,9 +337,11 @@ def test_the_lead_tab_gets_no_new_entry_and_a_head_who_leads_no_team_reaches_sun
     cw._HEADS.clear()
     got, _known = asyncio.run(member_portal._read_leads(HOPE, quinn, biz, me(hope, "n100")))
     assert got is True
-    # Care has no Sunday team: My department says so in plain words.
+    # Care has no Sunday team: My department says so in plain words, never the office page's name.
     html, status = page(hope, "n100")
     assert status == 200 and "No Sunday team is part of Care yet" in text(html)
+    assert [x["title"] for x in mine(hope, "n100")["look"]] == ["None of your department's teams is on the schedule yet."]
+    assert not OFFICE_WORDS.search(text(html))
 
 
 def test_who_heads_a_department_is_kept_a_minute_and_costs_one_read(hope):
@@ -458,6 +487,141 @@ def test_find_someone_on_a_team_outside_their_department_is_refused(app, shell):
     assert "My department" in text(html) and "Parking" not in text(html)
 
 
+def test_take_back_unfill_and_who_could_take_it_outside_their_department_are_refused(app, shell):
+    """Hazel Dunn's ask on the Parking Team's Lot is not Kara's to take back,
+    its asks not hers to take back as a fill, and who could take the Lot is
+    not hers to read."""
+    db = app.db
+    w = db.who[HOPE]
+    hazel = next(r for r in asks(db) if r["position_id"] == LOTS and r["contact_id"] == w["n061"])
+    before = [dict(r) for r in asks(db)]
+    for fn in (lambda: sl.take_back(member_row(db), me(db, "kara"), hazel["id"]),
+               lambda: sl.unfill(member_row(db), me(db, "kara"), LOT, [hazel["id"]]),
+               lambda: sl.candidates(member_row(db), w["kara"], SUN, LOTS)):
+        with pytest.raises(HTTPException) as e:
+            fn()
+        assert e.value.status_code == 404
+    as_(app, "kara")
+    assert "err=said" in post(app, "/my/lead/sundays/takeback", team=LOT, day=SUN, id=hazel["id"])
+    assert "err=said" in post(app, "/my/lead/sundays/unfill", team=LOT, ids=hazel["id"])
+    html, _ = page(db, "kara", team=LOT, day=SUN, spot=f"{LOTS}:2")
+    assert "Who could take" not in html and "Hazel" not in text(html)
+    assert [dict(r) for r in asks(db)] == before
+
+
+def test_a_team_from_another_church_is_refused(app, shell):
+    """A team at Grace with the very name of Kids' Serve option: New Hope's
+    department reaches none of it."""
+    db = app.db
+    grace_team, grace_place = "7d000000-0000-4000-8000-0000000000e1", "7e000000-0000-4000-8000-0000000000e1"
+    db.t["groups"].append({"id": grace_team, "business_id": c3.GRACE, "name": "Kids Check-in", "kind": "team",
+                           "active": True})
+    db.t["serve_teams"].append({"group_id": grace_team, "business_id": c3.GRACE, "call_time": None, "max_month": 4,
+                                "owner": "volunteers", "swap_needs_ok": False, "families": True, "sort": 0})
+    db.t["serve_positions"].append({"id": grace_place, "business_id": c3.GRACE, "group_id": grace_team,
+                                    "name": "Nursery", "needed": 1, "note": "", "sort": 0, "active": True,
+                                    "created_at": "2026-10-01T00:00:00+00:00"})
+    w = db.who[HOPE]
+    assert cw.department_team(member_row(db), w["kara"], grace_team) is None
+    before = [dict(r) for r in db.t["serve_assignments"]]
+    as_(app, "kara")
+    assert "err=said" in post(app, "/my/lead/sundays/ask", team=grace_team, day=THU, place=grace_place, slot="1",
+                              person=w["n049"])
+    assert "err=said" in post(app, "/my/lead/sundays/fill", team=grace_team)
+    assert [dict(r) for r in db.t["serve_assignments"]] == before and db.later == []
+
+
+def test_a_former_head_is_refused_a_write_while_the_minutes_answer_is_warm(app, shell):
+    """Kara is moved off Kids: the Sundays entry may lag a minute (kept),
+    but every write reads the map fresh and is refused, and My department is
+    gone at once."""
+    db = app.db
+    w = db.who[HOPE]
+    assert cw.entry(member_row(db), w["kara"]) is True                  # kept for the minute
+    kids = next(x for x in db.t["church_departments"] if x["business_id"] == HOPE and x["name"] == "Kids")
+    kids["leader_contact_id"] = w["n100"]
+    assert cw.entry(member_row(db), w["kara"]) is True, "the switcher's answer lags, as Dates' does"
+    before = [dict(r) for r in asks(db)]
+    as_(app, "kara")
+    went = post(app, "/my/lead/sundays/ask", team=KIDS, day=THU, place=NURSERY, slot="1", person=w["n049"])
+    assert "err=said" in went and "lead+that+team" in went
+    assert [dict(r) for r in asks(db)] == before and db.later == []
+    assert mine(db, "kara") is None
+    assert "You don't lead a Sunday team right now" in text(page(db, "kara")[0])
+
+
+def test_a_draft_department_gives_no_access(app, shell):
+    db = app.db
+    w = db.who[HOPE]
+    kids = next(x for x in db.t["church_departments"] if x["business_id"] == HOPE and x["name"] == "Kids")
+    kids["status"] = "draft"
+    cw._HEADS.clear()
+    assert cw.entry(member_row(db), w["kara"]) is False and mine(db, "kara") is None
+    assert cw.department_team(member_row(db), w["kara"], KIDS) is None
+    as_(app, "kara")
+    before = [dict(r) for r in asks(db)]
+    went = post(app, "/my/lead/sundays/ask", team=KIDS, day=THU, place=NURSERY, slot="1", person=w["n049"])
+    assert "err=said" in went and [dict(r) for r in asks(db)] == before
+    assert [x["name"] for x in mine(db, "amara")["departments"]] == ["Youth"], "her other one stays"
+
+
+def test_whoever_leads_it_is_told_is_said_only_when_it_is_so(app, shell):
+    """The church sends serving notes and the team has a leader besides
+    them: the page says so. Serving notes off: it doesn't, and nothing is
+    sent. A team with no leader of its own: it doesn't."""
+    db = app.db
+    told = "Whoever leads it is told"
+    assert told in text(page(db, "kara", team=KIDS)[0])
+    biz = next(b for b in db.t["businesses"] if b["id"] == HOPE)
+    biz["settings"] = {**biz["settings"], "member_portal": {"notifications": {"serving": False}}}
+    shown = text(page(db, "kara", team=KIDS)[0])
+    assert told not in shown and "It's one of your department's teams." in shown
+    as_(app, "kara")
+    post(app, "/my/lead/sundays/ask", team=KIDS, day=THU, place=NURSERY, slot="1", person=db.who[HOPE]["n049"])
+    fake.later(db)
+    assert db.rang == [] and db.t["church_thread_notes"] == [], "the church keeps serving notes off: none goes"
+    biz["settings"] = {**biz["settings"], "member_portal": {"notifications": {"serving": True}}}
+    for m in db.t["group_members"]:
+        if m["group_id"] == KIDS and m["role"] == "leader":
+            m["role"] = "member"
+    assert told not in text(page(db, "kara", team=KIDS)[0]), "nobody leads it but her department"
+
+
+def test_a_place_the_office_is_handling_makes_no_hasnt_answered_line(hope, shell):
+    """Toby was asked for Check-in and has no check on record: his place
+    reads "The office is handling this place", and Look at first says
+    nothing of him (the office's own week still has both lines)."""
+    contact(hope, "n043")["metadata"] = {}
+    d = mine(hope, "kara")
+    toby = rows_of(d, "Kids", "Kids Check-in", "Sunday 10:30 AM")[2]
+    assert (toby["who"], toby["words"]) == ("Toby Wells", OFFICE_LINE)
+    assert not [x for x in d["look"] if "Toby" in x["title"] or any("Toby" in t for t in x["details"])]
+    assert "Toby Wells hasn't answered" not in text(page(hope, "kara")[0])
+    office = cw.week({"biz": c3.church(hope, HOPE), "role": "owner", "change": frozenset(), "hours": False,
+                      "checks": True}, "2026-11-22")
+    assert {"Kids: Toby Wells hasn't answered for Sunday.", "Kids: Toby Wells can't serve with kids yet."} <= {
+        x["title"] for x in office["look"]}
+
+
+def test_a_team_two_of_their_departments_name_says_where_it_is(hope, shell):
+    """Youth names the Kids Check-in team too (Youth comes first in the
+    map): Amara sees it under Youth, and Kids says where it is, never that
+    it has no team. Kara, who leads Kids alone, sees it under Kids."""
+    youth = next(x for x in hope.t["church_departments"] if x["business_id"] == HOPE and x["name"] == "Youth")
+    hope.t["church_department_units"].append({"id": "7d900000-0000-4000-8000-000000000001", "business_id": HOPE,
+                                              "department_id": youth["id"], "kind": "serve_option", "group_id": None,
+                                              "role_id": None, "board_id": None, "worship_ministry_id": None,
+                                              "label": "Kids Check-in"})
+    d = mine(hope, "amara")
+    assert [(x["name"], [t["name"] for t in x["teams"]], x["elsewhere"]) for x in d["departments"]] == [
+        ("Youth", ["Kids Check-in", "Youth Volunteers"], []),           # Who serves when's team order
+        ("Kids", [], [{"team": "Kids Check-in", "under": "Youth"}])]
+    assert d["counts"] == {"on": 3, "open": 5, "away": 2}, "nothing counted twice"
+    shown = text(page(hope, "amara")[0])
+    assert "Kids Check-in is shown under Youth above." in shown and "No Sunday team is part of Kids" not in shown
+    assert [t["name"] for t in mine(hope, "kara")["departments"][0]["teams"]] == ["Kids Check-in"]
+
+
 # ─── 3. Hours and checks stay in the office ───────────────────────────
 
 def test_no_hours_no_check_state_and_the_office_line_for_an_uncleared_kids_place(hope, shell):
@@ -590,22 +754,30 @@ def test_a_cross_site_post_is_refused(hope, monkeypatch):
 
 # ─── Bounded, plain, and never a 500 ──────────────────────────────────
 
-def test_this_week_and_next_week_as_the_office_counts_weeks(hope, shell):
-    """Sunday to Saturday, as the office's week: read on Wednesday Nov 18,
-    this week is Nov 15 to 21 (its Sunday has passed: no Find someone) and
-    next week holds the coming Sunday. Nothing else is offered."""
-    d = mine(hope, "kara", "this")
-    assert d["week"] == {"from": "2026-11-15", "to": "2026-11-21", "words": "Nov 15 to 21", "which": "this"}
-    assert [s["words"] for s in d["departments"][0]["teams"][0]["services"]] == ["Sunday 10:30 AM"]
-    assert all(s["past"] for s in d["departments"][0]["teams"][0]["services"])
-    assert all(r["find"] is None for t in d["departments"][0]["teams"] for s in t["services"] for r in s["rows"])
-    assert [x["title"] for x in d["look"]] == ["This week's services have passed."]
-    assert mine(hope, "kara", "2027-01-03")["week"]["which"] == "this", "anything else is this week"
-    html, _ = page(hope, "kara", week=None)
-    assert "Nov 15 to 21" in text(html) and "Sunday 10:30 AM · passed" in text(html)
-    assert '<a href="/my/lead/sundays" aria-current="page">This week</a>' in html
+def test_this_week_is_the_coming_sundays_and_next_week_the_one_after(hope, shell, monkeypatch):
+    """As the office's week: read on Wednesday Nov 18, This week is the
+    coming Sunday's (Nov 22 to 28), Next week the one after. On that Sunday
+    afternoon This week is still Nov 22 to 28, its morning passed (no Find
+    someone there). Nothing else is offered."""
     html, _ = page(hope, "kara")
-    assert "Nov 22 to 28" in text(html) and '<a href="/my/lead/sundays?week=next" aria-current="page">Next week</a>' in html
+    assert "Nov 22 to 28" in text(html) and '<a href="/my/lead/sundays" aria-current="page">This week</a>' in html
+    d = mine(hope, "kara", "next")
+    assert d["week"] == {"from": "2026-11-29", "to": "2026-12-05", "words": "Nov 29 to Dec 5", "which": "next"}
+    assert [s["words"] for s in d["departments"][0]["teams"][0]["services"]] == ["Sunday 10:30 AM"]
+    assert d["counts"] == {"on": 0, "open": 3, "away": 0}
+    html, _ = page(hope, "kara", week="next")
+    assert "Nov 29 to Dec 5" in text(html) and '<a href="/my/lead/sundays?week=next" aria-current="page">Next week</a>' in html
+    assert mine(hope, "kara", "2027-01-03")["week"]["which"] == "this", "anything else is this week"
+    # Sunday Nov 22, 3 PM at the church: the coming Sunday is today.
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(cw, "_now", lambda: datetime(2026, 11, 22, 15, tzinfo=ZoneInfo("America/New_York"))
+                        .astimezone(timezone.utc))
+    d = mine(hope, "kara")
+    assert d["week"]["from"] == "2026-11-22"
+    sunday = next(s for s in d["departments"][0]["teams"][0]["services"] if s["words"] == "Sunday 10:30 AM")
+    assert sunday["past"] and all(r["find"] is None for r in sunday["rows"])
+    assert "Sunday 10:30 AM · passed" in text(page(hope, "kara")[0])
 
 
 def test_reads_are_the_churchs_own_bounded_and_counted(hope, shell):
@@ -634,6 +806,15 @@ def test_reads_are_the_churchs_own_bounded_and_counted(hope, shell):
     for p in reads:
         if p.startswith(("/serve_away", "/serve_assignments")):
             assert not re.search(r"select=[^&]*\bnote\b", p), p
+    # Away dates: only the department's own people (and whoever holds its places), never another team's.
+    w = hope.who[HOPE]
+    away = [p for p in reads if p.startswith("/serve_away")]
+    assert away and all(w["n040"] in p for p in away)
+    others = [w[h] for h in ("n050", "n051", "n052", "n060", "n061", "n062")]          # worship and parking
+    assert not [p for p in away for c in others if c in p], "no other department's people's away dates"
+    # Every ask at this week's services is read (who is busy on any team is never counted free), and no other week's.
+    said = [p for p in reads if p.startswith("/serve_assignments")]
+    assert said and all("service_id=in." in p and SUN in p and NEXT_SUN not in p for p in said)
 
 
 def test_a_read_that_fails_is_plain_words_never_a_500(hope, shell):

@@ -2521,7 +2521,7 @@ My department, is built since (section 8.8).
 | Route | Answers |
 |---|---|
 | `GET /church/week/status?business_id=` | `{"enabled": bool, "hours": bool, "checks": bool}`: whether this login's menu shows The week, and what it will show. All three false (200) for a closed switch, a business that isn't a church (or a church on ChurchSavvy alone), a login that keeps neither door of Who serves when, or a read that failed. 404 for a login with no seat at that business; 400 for an id that isn't one. |
-| `GET /church/week?business_id=&start=YYYY-MM-DD` | The week `start` falls in (any day of it: Wednesday Nov 25 is the week of Sunday Nov 22). No `start`, or one that isn't a real date, is this week on the church's clock. A week more than 52 weeks back or 26 weeks ahead of this one is a 400 ("Pick a week from a year back to six months ahead."). 403 for a seat here that keeps neither door; 404 for no seat here, the switch closed for this church, Who serves when (`SUNDAY_PLANNING`) closed to them, or not a church; 503 when a read fails (never an empty or shorter week). |
+| `GET /church/week?business_id=&start=YYYY-MM-DD` | The week `start` falls in (any day of it: Wednesday Nov 25 is the week of Sunday Nov 22). No start: the week of the coming Sunday, today when it is Sunday (on the church's clock; read on Wednesday Nov 18 that is Nov 22 to 28, as the pastor's approved mock opened; changed with #2011, section 8.8); a `start` that isn't a real date is the same. A week more than 52 weeks back or 26 weeks ahead of that one is a 400 ("Pick a week from a year back to six months ahead."). 403 for a seat here that keeps neither door; 404 for no seat here, the switch closed for this church, Who serves when (`SUNDAY_PLANNING`) closed to them, or not a church; 503 when a read fails (never an empty or shorter week). |
 
 Both take the auth header like every office route (`require_user`). The frontend reads `status`
 once to decide whether Volunteers shows "The week", then `GET /church/week` with `start` set to
@@ -2580,7 +2580,7 @@ Nov 18):
 
 ```json
 {
-  "week": {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": false,
+  "week": {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": true,
            "prev": "2026-11-15", "next": "2026-11-29"},
   "counts": {"on": 6, "open": 7, "away": 2, "hours": 9.5},
   "look": [
@@ -2624,7 +2624,7 @@ Nov 18):
 |---|---|
 | `from`, `to` | The Sunday and the Saturday shown (`YYYY-MM-DD`, the church's clock). |
 | `words` | The heading: "Nov 22 to 28", or "Nov 29 to Dec 5" across a month. |
-| `this_week` | The week we're in, on the church's clock. |
+| `this_week` | The week of the coming Sunday (today's on a Sunday), on the church's clock: the one a call with no `start` gets. |
 | `prev`, `next` | The Sundays of the weeks either side, to pass back as `start`; `null` past the bounds (52 weeks back, 26 ahead), so the arrow hides. |
 
 **`counts`** (the four at the top; the whole week, every service in it, past or to come)
@@ -2829,7 +2829,11 @@ table, no new switch.
    entry (`member_portal_lead._context`) and the Lead tab itself (`member_portal._read_leads`)
    ask `church_week.entry`, which answers from who heads a department, kept a minute a replica
    (one read of `church_departments` a church a minute; none on a page view). The page itself
-   reads fresh.
+   reads fresh, and only for someone that kept answer says heads a department: a team leader over
+   no department never waits on a department read (once the minute's answer is kept, their page
+   makes exactly the reads it made before; with the departments failing to read, it still opens
+   on their team). Someone with no team of their own when the answer can't be read gets the
+   plain-words 503 below (`church_week.standing` tells "no" from "couldn't tell").
 2. **Find someone, on any team in their department.** An open place of a Volunteers' team at a
    service still to come has Find someone, which opens that team's day on the same page
    (`?team=&day=&spot=`): who could take it, free and not away first, then the most rested (the
@@ -2838,13 +2842,18 @@ table, no new switch.
    team only" is now "their team, or a Volunteers' team that hangs from a department they lead or
    oversee" (`_mine` asks `church_week.department_team` on every read and write, after its own
    teams), and only that. When they ask, offer or fill on a team that has its own leaders, those
-   leaders are told (below). A team outside their departments is refused in the page's plain words
+   leaders are told (below), and that team's page says so ("Whoever leads it is told what you
+   ask, offer or fill here.") only when it is true: the church sends serving notes
+   (`member_push.church_kinds`) and the team has a leader besides them. A team outside their departments is refused in the page's plain words
    ("You don't lead that team."); asked for by address, it opens My department instead.
 3. **Hours and background checks stay in the office.** No hours anywhere in the read or on the
    page (`hours` is never asked). Someone on a kids place who isn't cleared (church_serving's
    `blocked`, worked out only while `CHURCH_SERVING` is on for every church) reads **"The office
-   is handling this place"**, with their name, never why; no Look at first line says it, the
-   place counts as on the schedule (as the office's count has it), and it has no Find someone.
+   is handling this place"**, with their name, never why; no Look at first line points at it
+   (neither "can't serve with kids yet" nor "hasn't answered"), the place counts as on the
+   schedule (as the office's count has it), and it has no Find someone. On purpose this differs
+   from the office's own rule, where a Manager who may not read who's cleared sees that person as
+   On: the pastor approved this line for the phone as call 3.
 4. **Worship and production are read only.** ChurchSavvy's teams show who is on, with "Scheduled
    in ChurchSavvy" on the card and "The worship team fills this in ChurchSavvy." on an open place;
    no Find someone, and `department_team` never hands one to `sunday_leading`, so a write is
@@ -2853,16 +2862,18 @@ table, no new switch.
 **The read.** `department_week(biz, contact_id, which)` is `church_week.week()` with `person` set:
 `_cards` keeps only the departments this person leads or oversees (a team one of theirs names is
 on their card even when an earlier department names it too) and no team's own card; only those
-teams' places, people and away dates are read. A member-app session is a person: it never passes
+teams' places and people are read, and away dates only of their people and whoever holds one of
+their places (never another department's people). Every ask at the week's services is still read,
+whatever the team, so someone busy on another team that hour is never counted free. A member-app session is a person: it never passes
 `_reader`, carries no office standing and reads with `hours` off. Then a whitelist into the
 phone's shape:
 
 | Field | What it is |
 |---|---|
-| `week` | `{from, to, words, which}`: `which` is `this` or `next`, anything else is `this`. Sunday to Saturday, as the office's week. |
+| `week` | `{from, to, words, which}`: `which` is `this` or `next`, anything else is `this`. Sunday to Saturday, as the office's week: This week is the coming Sunday's (today's on a Sunday), Next week the one after. |
 | `counts` | `{on, open, away}` across all their departments; the office's counts, no hours. |
-| `look` | `[{title, details, find}]`: the office's short and no-answer lines for their departments (never a "can't serve with kids yet" line); `find` `{team, day}` opens that team's day. |
-| `departments` | In the map's order: `{name, led_by, teams, away}`. `led_by` is the leader's name, `null` when it is the reader (or nobody). `teams`: `[{name, churchsavvy, services: [{words, past, rows}]}]`, one card a team; a row is `{place ("Nursery 2" when the place has two spots), who, state (on, no_answer, open, away, office), words, note, find}`, `find` `{team, day, spot}` on an open Volunteers' place still to come. `away`: `[{name, days}]` ("Nov 21 to 23", "Sunday, Nov 22"), the facts of people on its teams, never a waiting ask, never a note. A department with no Sunday team has `teams: []` and the page says so. |
+| `look` | `[{title, details, find}]`: the office's short and no-answer lines for their departments (never a "can't serve with kids yet" line, nor a "hasn't answered" line for a place the office is handling), or its own all-clear line ("None of your department's teams is on the schedule yet." where the office's says "No teams are on Who serves when yet."); `find` `{team, day}` opens that team's day. |
+| `departments` | In the map's order: `{name, led_by, teams, elsewhere, away}`. `led_by` is the leader's name, `null` when it is the reader (or nobody). `teams`: `[{name, churchsavvy, services: [{words, past, rows}]}]`, one card a team; a row is `{place ("Nursery 2" when the place has two spots), who, state (on, no_answer, open, away, office), words, note, find}`, `find` `{team, day, spot}` on an open Volunteers' place still to come. `away`: `[{name, days}]` ("Nov 21 to 23", "Sunday, Nov 22"), the facts of people on its teams, never a waiting ask, never a note. A department with no Sunday team has `teams: []` and the page says so; one whose teams are all on an earlier department of theirs (a team two departments name) has `elsewhere: [{team, under}]` and the page says "Kids Check-in is shown under Youth above.", with no Away list of its own. |
 
 `None` (the page falls back to their own team, or "You don't lead a Sunday team right now"): the
 switch closed for the church, Who serves when off, not a church (or ChurchSavvy alone), the
@@ -2870,8 +2881,9 @@ leaders map closed, or no department of theirs. A read that fails is a 503 with 
 ("Your department's week couldn't load just now. Please try again in a moment."), never a 500.
 
 **Reads.** At the fixture church: 22 for one department's week, 23 for two (bounded and paged as
-the office's week, each the church's own and quoted); about 49 for the whole Sundays page, the Lead
-tab's own reads (roles, groups, tasks, Dates) included.
+the office's week, each the church's own and quoted; the away read now names only the department's
+people); about 49 for the whole Sundays page, the Lead tab's own reads (roles, groups, tasks,
+Dates) included. A team leader over no department: no more than before.
 
 **Telling the team's own leaders** (`sunday_leading.tell`). After a department's leader or
 overseer asks, offers or fills on a team they don't lead, each of that team's leaders (never the
@@ -2886,7 +2898,10 @@ see it on your team's Sundays."; "Check-in was offered to Kids Check-in" / "Kara
 Check-in, Thursday, Nov 26, to the whole team. The first yes takes it."; "Kids Check-in: 3 places
 asked for" / "Kara Bell asked people for the next five Sundays. You'll see who on your team's
 Sundays." It opens the team's Sundays. Nobody is told of a take-back or a fill taken back, and a
-team leader on their own team tells nobody.
+team leader on their own team tells nobody. Left as it is: several notes held overnight reach the
+phone in the morning as one ("While you were resting", member_push's own summary), while the
+church's conversation keeps every line. A church with serving notes off sends none (member_push's
+own switch), and the team's page doesn't say anyone is told.
 
 **The switch.** `CHURCH_WEEK`, the office week's own (off | owner | on, owner when unset), read as
 `church_open` (a person has no login, so the platform owner's own login opens nothing here), and
@@ -2899,8 +2914,13 @@ departments, so no My department.
 
 1. My department is where Sundays opens for a department's leader or overseer; their own teams sit
    beside it as chips ("My department", "Kids Check-in").
-2. This week and Next week are the office's Sunday-to-Saturday weeks: on a weekday, This week's
-   Sunday has passed, and the coming Sunday is under Next week.
+2. This week is the coming Sunday's week (today's when it is Sunday), for the office's page and
+   the phone alike, and Next week the one after: the pastor's approved mock, made on a weekday,
+   opened on the coming Sunday ("Nov 22 to 28" on Wednesday Nov 18). Before #2011's review the
+   office's no-start week was the one we're in, whose Sunday had passed by Monday. A `start` is
+   still the week it falls in. The office frontend needs no change: `TheWeek.tsx` asks
+   `readWeek(bizId, null)` for this week, its arrows pass the server's `prev`/`next`, and "Back to
+   this week" asks with no start again.
 3. Find someone is on an open place only, not on someone away: a yes stays until the office takes
    them off, which a leader can't do (`sunday_leading.take_back`), so the button would only be
    refused. The Look at first line still opens that team's day.
@@ -2917,7 +2937,7 @@ departments, so no My department.
 8. A department leader or overseer is whoever the map names, whether or not their role has its
    leads or oversees switch on (the leaders schedule's own `_runs` reads it the same way).
 
-**Tests** (`__tests__/test_member_portal_department_week.py`, 23, at New Hope; every name made up):
+**Tests** (`__tests__/test_member_portal_department_week.py`, 31, at New Hope; every name made up):
 the Kids leader sees Kids only, word for word; an overseer of Youth and Kids sees both in the
 map's order with counts across both; a team leader over no department, and someone else, see
 nothing new; the switcher gets no new entry and a head with no team, role or group still reaches
@@ -2929,8 +2949,16 @@ hours, no check states, the office's line, and nothing else changes when the che
 nothing about checks read with Serving off; no note, reason or waiting ask; ChurchSavvy read only;
 the switch; the preview never writes; another site's POST refused; this week and next; reads
 bounded, the church's own and only the department's; a failed read in plain words; plain words
-and no title word deciding anything. Each rule was broken once on purpose and its test went red,
-then green again (the PR lists them).
+and no title word deciding anything. From the review: a team leader over no department never
+waits on a department read (the same reads as before; their team with the departments failing);
+"Whoever leads it is told" only with serving notes on and a leader to tell; no "hasn't answered"
+line for a place the office is handling; a team two of their departments name says where it is;
+the phone's own all-clear words, never the office page's name; away dates read only for the
+department's people; This week is the coming Sunday's (and, in `test_church_week.py`, for the
+office's page too, Sunday on the church's clock included); take back, unfill and who could take it
+on a team outside the department refused; a team from another church refused; a former head
+refused a write while the minute's answer is still warm; a draft department gives nothing. Each
+rule was broken once on purpose and its test went red, then green again (the PR lists them).
 
 ---
 

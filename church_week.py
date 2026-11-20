@@ -67,8 +67,11 @@ departments' and teams' leaders.
 
 Every read is the church's own (business_id) with every value quoted, and
 paged or chunked by ids (never the first 1,000 taken for all of them). One
-week a call: no start, or one that isn't a date, is this week; a week more
-than WEEKS_BACK weeks back or WEEKS_AHEAD weeks ahead is refused (400).
+week a call: no start, or one that isn't a date, is this week, the week of
+the coming Sunday (today when it is Sunday; the approved mock, made on a
+Wednesday, opened on the Sunday to come); a start is the week it falls in;
+a week more than WEEKS_BACK weeks back or WEEKS_AHEAD weeks ahead of this
+week is refused (400).
 
 Switched by CHURCH_WEEK: off | owner | on, owner when unset (the platform
 owner's own church, and the platform owner's own login). Off, or closed for
@@ -345,10 +348,19 @@ def _sunday_of(d: date) -> date:
     return d - timedelta(days=(d.weekday() + 1) % 7)
 
 
+def _coming_sunday(today: date) -> date:
+    """The coming Sunday: today when it is Sunday. "This week" is that
+    Sunday's week (Sunday to Saturday), as the pastor's approved mock opened
+    on a weekday (Wednesday Nov 18 shows Nov 22 to 28): on a weekday the
+    Sunday before has passed and the one to come is what needs a look."""
+    return today + timedelta(days=(6 - today.weekday()) % 7)
+
+
 def _week(start: Any, today: date) -> date:
     """The Sunday of the week asked for: the one `start` is in; this week
-    when there is no start or it isn't a date. 400 past the bounds."""
-    this = _sunday_of(today)
+    (the coming Sunday's, _coming_sunday) when there is no start or it isn't
+    a date. 400 past the bounds."""
+    this = _coming_sunday(today)
     first = this
     raw = start.strip() if isinstance(start, str) else ""
     if _DAY.match(raw):
@@ -464,7 +476,8 @@ def _heads_it(d: Dict[str, Any], person: str) -> bool:
     return bool(person) and person in (str(d.get("leader_contact_id") or ""), str(d.get("overseer_contact_id") or ""))
 
 
-def _cards(biz: Dict[str, Any], teams: List[Dict[str, Any]], person: Optional[str] = None) -> List[Dict[str, Any]]:
+def _cards(biz: Dict[str, Any], teams: List[Dict[str, Any]], person: Optional[str] = None,
+           ch: Any = None) -> List[Dict[str, Any]]:
     """[{department, teams}] in the church's own order, then one card for
     each team that hangs from no department. A team two departments name is
     on the first one's card only, so nothing is counted twice.
@@ -481,7 +494,7 @@ def _cards(biz: Dict[str, Any], teams: List[Dict[str, Any]], person: Optional[st
     taken: Set[str] = set()
     try:
         with church_map.once():
-            ch = co.Church(biz)
+            ch = ch or co.Church(biz)
             for d in csl._departments(ch):
                 if person is not None and not _heads_it(d, person):
                     continue
@@ -501,7 +514,7 @@ def _cards(biz: Dict[str, Any], teams: List[Dict[str, Any]], person: Optional[st
 
 # ─── The week ─────────────────────────────────────────────────────────
 
-def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None) -> Dict[str, Any]:
+def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None, ch: Any = None) -> Dict[str, Any]:
     """GET /church/week: the shape is docs/CHURCH_SCHEDULE.md's "Step 4:
     The week".
 
@@ -510,7 +523,10 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None)
     or oversees (only their places, their people and their away dates are
     read), no "can't serve with kids yet" line in Look at first (the row
     says it, and department_week turns it into "The office is handling this
-    place"), and each card carries who on its teams is away this week."""
+    place"), no "hasn't answered" line for a place the office has either,
+    and each card carries who on its teams is away this week. `ch`: the
+    church_over.Church the caller already holds (its map and teams are read
+    once)."""
     import business_marketing
     biz = me["biz"]
     biz_id = str(biz["id"])
@@ -522,13 +538,15 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None)
     last = first + timedelta(days=6)
     services = _services(b, zone, first)
     teams = _teams(b)
-    cards = _cards(biz, teams, person)
+    cards = _cards(biz, teams, person, ch)
     if person is not None:
         theirs = {t["group_id"] for c in cards for t in c["teams"]}
         teams = [t for t in teams if t["group_id"] in theirs]
     gids = [t["group_id"] for t in teams]
     places = _places(b, gids) if gids else {}
     members = _members(b, gids)
+    # Every ask at the week's services, whatever the team: who is busy at a
+    # service (on any team) is never counted free.
     rows = _every_in(f"/serve_assignments?business_id=eq.{b}&select=id,service_id,position_id,slot,contact_id,status,"
                      f"asked_at", "service_id", [s["id"] for s in services]) if services and gids else []
     holder: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
@@ -539,7 +557,12 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None)
             continue
         holder.setdefault((str(r.get("service_id")), str(r.get("position_id")), slot), r)
     on_rows = [r for r in rows if r.get("status") in ("asked", "yes") and r.get("contact_id")]
-    everyone = {c for m in members.values() for c in m} | {str(r["contact_id"]) for r in on_rows}
+    shown_places = {p["id"] for gid in gids for p in places.get(gid, [])}
+    # Whose away dates are read: the teams' people, and whoever is on one of
+    # the shown places (My department: its own places only, so no other
+    # department's people's away dates are read).
+    everyone = {c for m in members.values() for c in m} | {
+        str(r["contact_id"]) for r in on_rows if person is None or str(r.get("position_id")) in shown_places}
     away = _away(b, everyone, first, last) if everyone else {}
 
     def is_away(cid: str, day: str) -> bool:
@@ -692,7 +715,9 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None)
                     "find": ({"group_id": gaps[0]["team"]["group_id"], "service_id": svc["id"], "day": svc["day"]}
                              if door == VOLUNTEERS else None)}))
             for i, s in enumerate(here):
-                if s["cid"] and s["status"] == "asked" and s["state"] != "away":
+                # My department: a place the office is handling makes no line at all (it would point at it).
+                if s["cid"] and s["status"] == "asked" and s["state"] != "away" and not (
+                        person is not None and s["state"] == "cant_serve_kids"):
                     who = names.get(s["cid"], "Someone")
                     asked = _asked_words(s["asked"], zone, today)
                     look.append(((svc["at"], rank["no_answer"], DOORS.index(s["team"]["owner"]), n, i), {
@@ -729,9 +754,10 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None)
     items = [item for _key, item in sorted(look, key=lambda x: x[0])]
     if not items:
         with_places = {s["svc"]["id"] for s in slots}
-        items = [{"kind": "clear", "title": _all_clear([s for s in services if s["id"] in with_places], teams, now),
+        items = [{"kind": "clear", "title": _all_clear([s for s in services if s["id"] in with_places], teams, now,
+                                                       mine=person is not None),
                   "details": [], "service_id": None, "day": None, "find": None}]
-    this = _sunday_of(today)
+    this = _coming_sunday(today)
     prev, nxt = first - timedelta(days=7), first + timedelta(days=7)
     total = sum((minutes or {}).get(c, 0) for c in shown_people) if minutes is not None else None
     on_teams = {c for m in members.values() for c in m}
@@ -767,13 +793,14 @@ def _asked_words(asked_at: Any, zone, today: date) -> Optional[str]:
     return f"on {_short(day)}"
 
 
-def _all_clear(services: List[Dict[str, Any]], teams: List[Dict[str, Any]], now: datetime) -> str:
+def _all_clear(services: List[Dict[str, Any]], teams: List[Dict[str, Any]], now: datetime, mine: bool = False) -> str:
     """The one line when nothing needs a look. `services` are only those at
     which some team has a place this week: a service nothing serves (an
     event date with only ChurchSavvy's teams, a team with no places) is
-    never said to be filled."""
+    never said to be filled. `mine`: My department's words (never the
+    office page's name)."""
     if not teams:
-        return "No teams are on Who serves when yet."
+        return "None of your department's teams is on the schedule yet." if mine else "No teams are on Who serves when yet."
     if not services:
         return "Nothing is on the schedule this week."
     ahead = [s for s in services if s["at"] > now]
@@ -851,20 +878,26 @@ def heads(biz: Any) -> Optional[FrozenSet[str]]:
     return got
 
 
-def entry(biz: Any, contact_id: Any) -> bool:
-    """Whether My department is this person's, for the Lead tab's Sundays
-    entry and the tab itself, from what heads() keeps. NEVER RAISES: every
-    page of the member app waits on it."""
+def standing(biz: Any, contact_id: Any) -> Optional[bool]:
+    """Whether My department is this person's, from what heads() keeps:
+    None when it couldn't be told (a read failed). NEVER RAISES: every page
+    of the member app waits on it."""
     try:
         cid = str(contact_id or "")
         if not cid or not member_open(biz):
             return False
         got = heads(biz)
-        return bool(got) and cid in got
+        return None if got is None else cid in got
     except Exception as e:  # noqa: BLE001 — the tab bar is never worth a 500
         print(f"[church_week] {_bid(biz)[:8]}: My department's entry couldn't be worked out ({type(e).__name__})",
               flush=True)
-        return False
+        return None
+
+
+def entry(biz: Any, contact_id: Any) -> bool:
+    """standing(), with "couldn't be told" as no: the Lead tab's Sundays
+    entry and the tab itself."""
+    return bool(standing(biz, contact_id))
 
 
 def _church_row(biz: Any) -> Optional[Dict[str, Any]]:
@@ -949,7 +982,9 @@ def department_week(biz: Any, contact_id: Any, which: str = "this") -> Optional[
     next, in the phone's shape: {week, counts (on, open, away), look,
     departments: [{name, led_by, teams: [{name, churchsavvy, services:
     [{words, past, rows: [{place, who, state, words, note, find}]}]}],
-    away: [{name, days}]}]}. No hours and no check state anywhere in it.
+    elsewhere: [{team, under}], away: [{name, days}]}]}. No hours and no
+    check state anywhere in it. "This week" is the coming Sunday's
+    (_coming_sunday), "next" the one after.
     None when it isn't theirs: the switch closed for the church, not a
     church, the leaders map closed, or no department of theirs. Fresh
     reads; one that fails is a 503 (the page says so in plain words)."""
@@ -966,7 +1001,8 @@ def department_week(biz: Any, contact_id: Any, which: str = "this") -> Optional[
     import church_serving
     with church_map.once():
         try:
-            depts = [d for d in csl._departments(co.Church(row)) if _heads_it(d, cid)]
+            ch = co.Church(row)
+            depts = [d for d in csl._departments(ch) if _heads_it(d, cid)]
         except HTTPException as e:
             if e.status_code == 503:
                 raise HTTPException(503, UNREAD)
@@ -974,13 +1010,24 @@ def department_week(biz: Any, contact_id: Any, which: str = "this") -> Optional[
         if not depts:
             return None
         which = which if which in WHICH else "this"
-        this = _sunday_of(_now().astimezone(business_marketing.business_tz(row)).date())
+        this = _coming_sunday(_now().astimezone(business_marketing.business_tz(row)).date())
         start = this + timedelta(days=7) if which == "next" else this
         # Hours: never. Who isn't cleared for a kids place: worked out while
         # Serving is on for every church, only to say the office has it.
         body = week({"biz": row, "role": None, "change": frozenset(), "hours": False,
-                     "checks": church_serving.mode() == "on"}, start.isoformat(), person=cid)
-    cards = {c["department_id"]: c for c in body["departments"]}
+                     "checks": church_serving.mode() == "on"}, start.isoformat(), person=cid, ch=ch)
+        cards = {c["department_id"]: c for c in body["departments"]}
+        # A team two of their departments name is on the first one's card:
+        # the other says where it is, never that it has no team.
+        under = {t["group_id"]: (t["name"], c["name"]) for c in body["departments"] for t in c["teams"]}
+        try:
+            elsewhere = {str(d["id"]): [{"team": under[g][0], "under": under[g][1]}
+                                        for g in csl._department_teams(ch, d) if g in under]
+                         for d in depts if str(d["id"]) not in cards}
+        except HTTPException as e:
+            if e.status_code == 503:
+                raise HTTPException(503, UNREAD)
+            raise
     missing = {str(d["leader_contact_id"]) for d in depts if str(d["id"]) not in cards and d.get("leader_contact_id")}
     called = _names(_q(row["id"]), missing - {cid}) if missing - {cid} else {}
     out = []
@@ -990,6 +1037,7 @@ def department_week(biz: Any, contact_id: Any, which: str = "this") -> Optional[
         out.append({"name": _plain(d.get("name")) or "A department",
                     "led_by": None if not lead or lead == cid else (c["led_by"] if c else called.get(lead)),
                     "teams": _phone_teams(c) if c else [],
+                    "elsewhere": elsewhere.get(str(d["id"]), []),
                     "away": [{"name": a["name"], "days": _days_words(a["days"])} for a in (c or {}).get("away", [])]})
     w = body["week"]
     return {"week": {"from": w["from"], "to": w["to"], "words": w["words"], "which": which},
