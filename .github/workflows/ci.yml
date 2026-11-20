@@ -220,6 +220,7 @@ jobs:
           node __tests__/group_email_db.mjs
           node __tests__/group_prayer_db.mjs
           node __tests__/group_gatherings_db.mjs
+          node __tests__/church_moments_db.mjs
           node __tests__/group_bring_db.mjs
           node __tests__/group_study_db.mjs
           node __tests__/chat_evening_db.mjs
