@@ -43,7 +43,8 @@
 // The fixture: the six tables of the frontend's supabase/ets-schema.sql
 // (module-system), with the columns production's site writes to inquiries
 // (email, phone, org_type) and the internal ones the brief names
-// (processed_at, converted_to_engagement); ets_events with production's
+// (processed_at, converted_to_engagement: a uuid on production, read
+// 2026-11-20, the engagement the inquiry became); ets_events with production's
 // columns in production's order (read from its catalog 2026-11-19: no
 // address column; every event has a timezone and require_phone set), the
 // other event tables from the columns the site and the app use, the tier
@@ -186,7 +187,7 @@ CREATE TABLE public.ets_inquiries (
   agent_notes TEXT,
   processed BOOLEAN DEFAULT FALSE,
   processed_at TIMESTAMPTZ,
-  converted_to_engagement BOOLEAN DEFAULT FALSE,
+  converted_to_engagement UUID,
   source TEXT DEFAULT 'website',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -696,14 +697,14 @@ async function scenario({ ownedBy }) {
     refused(await as(db, 'anon', `INSERT INTO public.ets_inquiries (id, contact_name) VALUES ($1, $2) RETURNING id`, [back.id, back.contact_name]),
       `${label}: the live site's insert-and-read-back is refused`);
     for (const [field, value] of [['processed', true], ['processed_at', '2026-11-19T10:00:00Z'], ['agent_notes', 'hot lead'],
-      ['lead_score', 'hot'], ['lead_score', 'cold'], ['converted_to_engagement', true]]) {
+      ['lead_score', 'hot'], ['lead_score', 'cold'], ['converted_to_engagement', '00000000-0000-4000-8000-0000000000e1']]) {
       const [q2, p2] = minimal('ets_inquiries', inquiry(10, { [field]: value }));
       refused(await as(db, 'anon', q2, p2), `${label}: the public may not set ${field} = ${value}`);
     }
-    const [q3, p3] = minimal('ets_inquiries', inquiry(11, { lead_score: 'warm', processed: false, converted_to_engagement: false }));
+    const [q3, p3] = minimal('ets_inquiries', inquiry(11, { lead_score: 'warm', processed: false, converted_to_engagement: null }));
     went(await as(db, 'anon', q3, p3), `${label}: the defaults written out are the defaults`);
     const stored = await su(db, `SELECT processed, lead_score, converted_to_engagement FROM public.ets_inquiries WHERE id = $1`, [inquiry(1).id]);
-    eq(stored, [{ processed: false, lead_score: 'warm', converted_to_engagement: false }], `${label}: the new inquiry has the defaults`);
+    eq(stored, [{ processed: false, lead_score: 'warm', converted_to_engagement: null }], `${label}: the new inquiry has the defaults`);
   }
 
   // Registrations.

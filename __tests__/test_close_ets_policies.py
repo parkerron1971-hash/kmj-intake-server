@@ -226,7 +226,7 @@ def test_the_registration_rule_names_every_column_with_its_table():
     inquiry = next(b for n, *_, b in _policies(_code(APPLY)) if n == "ets_public_send_inquiry")
     for need in ("ets_inquiries.processed is not true", "ets_inquiries.processed_at is null",
                  "ets_inquiries.agent_notes is null", "ets_inquiries.lead_score::text = 'warm'",
-                 "ets_inquiries.converted_to_engagement is not true"):
+                 "ets_inquiries.converted_to_engagement is null"):
         assert need in inquiry, need
 
 

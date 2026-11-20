@@ -146,9 +146,10 @@
 --   --    and require_phone among them), the new policies read and the
 --   --    confirmation function answers. Expect 56 rows, every one present
 --   --    (the site's select fails on a missing one; production has no
---   --    address column, and the site no longer asks for one). processed,
---   --    converted_to_engagement and checked_in:
---   --    boolean, default false or none. lead_score: default 'warm' or none.
+--   --    address column, and the site no longer asks for one). processed
+--   --    and checked_in: boolean, default false or none.
+--   --    converted_to_engagement: uuid (the engagement it became; production
+--   --    2026-11-20), no default. lead_score: default 'warm' or none.
 --   --    processed_at, agent_notes, checked_in_at, stripe_session_id,
 --   --    stripe_payment_intent, notes: no default. (The file checks those
 --   --    defaults itself and stops if they differ.)
@@ -315,7 +316,7 @@ begin
     select want.table_name, want.column_name, want.rule, c.data_type, c.column_default
       from (values
         ('ets_inquiries', 'processed', 'false'),
-        ('ets_inquiries', 'converted_to_engagement', 'false'),
+        ('ets_inquiries', 'converted_to_engagement', 'none'),
         ('ets_inquiries', 'processed_at', 'none'),
         ('ets_inquiries', 'agent_notes', 'none'),
         ('ets_inquiries', 'lead_score', 'warm'),
@@ -476,7 +477,7 @@ create policy ets_public_send_inquiry on public.ets_inquiries for insert to anon
     and ets_inquiries.processed_at is null
     and ets_inquiries.agent_notes is null
     and (ets_inquiries.lead_score is null or ets_inquiries.lead_score::text = 'warm')
-    and ets_inquiries.converted_to_engagement is not true
+    and ets_inquiries.converted_to_engagement is null
   );
 
 -- Registrations: the form sends event_id, tier_id, first_name, last_name,
