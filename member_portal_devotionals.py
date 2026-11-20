@@ -812,11 +812,14 @@ def _unavailable(biz, site, me) -> str:
                   'Please try again in a moment.</p>', tab="bible", who=me)
 
 
-async def home_extras(biz, me, *, preview: bool = False, church_reading: bool = True
-                      ) -> Tuple[str, Optional[Dict[str, Any]], Optional[set]]:
+async def home_extras(biz, me, *, preview: bool = False, church_reading: bool = True,
+                      info: Optional[Dict[str, Any]] = None) -> Tuple[str, Optional[Dict[str, Any]], Optional[set]]:
     """For Home: (today's devotional row or '', today's reading on a plan
     of the member's own when the church has none running, its days read).
-    Never stops Home: anything that fails is left out."""
+    `info`, when given, is filled with the devotional itself for the new
+    look's Home (member_portal_lumen's tile): {"dev", "st", "day", "href",
+    "minutes"}; the same reads. Never stops Home: anything that fails is
+    left out."""
     import asyncio
     devotional, own, own_done = "", None, None
     try:
@@ -828,6 +831,10 @@ async def home_extras(biz, me, *, preview: bool = False, church_reading: bool = 
         if dev:
             full, _ok = await asyncio.to_thread(dv.one, bid, str(dev["id"]))
             devotional = today_row(full or dev, st)
+            if info is not None and devotional:
+                d = full or dev
+                day = (d.get("days") or [{}])[st["now"] - 1] if d.get("days") else {}
+                info.update(dev=d, st=st, day=day, href=_href(d, st["now"]), minutes=dv.minutes(day))
         if not church_reading and mine:
             for key in rp.PLANS:
                 plan = own_plan(key, mine.get(f"reading:{key}"))

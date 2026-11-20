@@ -390,7 +390,9 @@ def test_the_form_post_is_unchanged(church, monkeypatch):
 def test_the_feeds_css_is_in_the_lumen_file_before_the_type():
     import member_lumen_ui as lm
     parts = lm.templates()
-    assert mlf.CSS in parts and parts.index(mlf.CSS) == len(parts) - 2               # the type block stays last
+    import member_lumen_fonts
+    assert mlf.CSS in parts and parts.index(mlf.CSS) < len(parts) - 1               # before the type block,
+    assert parts[-1].template == member_lumen_fonts.template().template            # which stays last
     css = mlf.CSS.template
     assert "$" not in css
     # It moves only when the phone allows it.

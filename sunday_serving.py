@@ -164,6 +164,8 @@ def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
         # whichever Sunday this member serves next. An event date is its own
         # day: one in the coming week is "this Thursday" (soon_days).
         "next_day": min((s["day"] for s in soon.values() if not s["event"]), default=None),
+        # ... and when it starts (Home's greeting: "Sunday is in 5 days").
+        "next_at": min((s["at"] for s in soon.values() if not s["event"]), default=None),
         "soon_days": sorted({s["day"] for s in soon.values()
                              if s["event"] and s["at"] - now < timedelta(days=7)}),
     }
@@ -205,15 +207,22 @@ def serves(biz: Dict[str, Any], cid: str) -> bool:
         return False
 
 
+def home(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
+    """What Home reads of My serving: mine(), or None (Planning off, not on a
+    team, a read that failed). The new look's Home (member_portal_lumen)
+    uses all of it, its greeting and Up next; waiting() is its asks: the
+    same reads either way."""
+    if not on():
+        return None
+    try:
+        return mine(biz, cid)
+    except HTTPException:
+        return None
+
+
 def waiting(biz: Dict[str, Any], cid: str) -> List[Dict[str, Any]]:
     """Home's card: asks and cover requests waiting on this member."""
-    if not on():
-        return []
-    try:
-        m = mine(biz, cid)
-    except HTTPException:
-        return []
-    return (m or {}).get("asks") or []
+    return (home(biz, cid) or {}).get("asks") or []
 
 
 # ─── one ask ─────────────────────────────────────────────────────────

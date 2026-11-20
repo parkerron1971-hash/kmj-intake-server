@@ -269,6 +269,16 @@ def _roster_modules(business_id: str) -> Optional[List[Dict[str, Any]]]:
     return mods if isinstance(mods, list) else None
 
 
+def clock_of(v: Any) -> str:
+    """'HH:MM' from an occasion's date when it carries a time on the
+    church's own clock ('2026-11-22T10:30'); '' for a bare date, junk, or
+    a time with an offset (it would need the church's zone to read)."""
+    m = re.fullmatch(r"\d{4}-\d\d-\d\d[T ](\d\d):(\d\d)(:\d\d(\.\d+)?)?", str(v or "").strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return ""
+    return f"{m.group(1)}:{m.group(2)}"
+
+
 def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """The church's upcoming occasions, each with this person's answer.
     None when the read failed (the page says so; it never shows "nothing
@@ -302,6 +312,9 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         signups = er.read_signups(entry.get("data") or {}, f["signups_field"]) if f else []
         mine = next((s for s in signups if is_mine(s, me)), None)
         o["mine"] = ({"status": mine.get("status") or "yes", "role": mine.get("role")} if mine else None)
+        # Its start time when the date says one ("2026-11-22T10:30"), for the
+        # new Home's date leaf; today's look shows the day only.
+        o["time"] = clock_of((entry.get("data") or {}).get(f["date_field"])) if f else ""
     import church_event_signups
     return church_event_signups.annotate(str(business_id), out, contact_id=str(me["id"]))
 
@@ -475,6 +488,8 @@ def update_details(business_id: str, contact_id: str, details: Dict[str, Any]) -
 # a tap.
 
 GROUP_KINDS = {"small_group": "Small group", "team": "Serving team", "class": "Class", "ministry": "Ministry"}
+# A group's regular time (group_gatherings), read with the group.
+_SCHEDULE = "meet_day,meet_time,meet_skips,meet_every,meet_from,meet_nth,meet_address"
 
 
 def _first(name: Any) -> str:
@@ -486,7 +501,8 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
     read (the page says "try again" rather than showing no groups)."""
     groups = sb_clients.sb_get_as_service(
         f"/groups?business_id=eq.{business_id}&active=eq.true"
-        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,youth&order=name.asc&limit=500")
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,youth,chat_on,"
+        f"{_SCHEDULE}&order=name.asc&limit=500")
     members = sb_clients.sb_get_as_service(
         f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role,can_host_live&limit=20000")
     if groups is None or members is None:
@@ -522,7 +538,12 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
             "mode": join_mode(g), "asked": gid in asked,
         }
         if gid in my_role:
-            mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth"))})
+            # The regular time and who's in it, for the new Home's "Up next"
+            # (member_portal_lumen.next_gathering): read with the group, no
+            # read of their own; today's look doesn't show them.
+            mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth")),
+                         "sched": {k: g.get(k) for k in _SCHEDULE.split(",")}, "chat_on": g.get("chat_on"),
+                         "member_ids": [str(m["contact_id"]) for m in members if str(m["group_id"]) == gid]})
         elif item["mode"] != "invite" and not item["full"]:
             open_.append(item)
     # Live group meetings (member_portal_group_live.py) for the groups

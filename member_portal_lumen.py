@@ -6,18 +6,18 @@ These pages port the mock's layout and read the same data today's pages do;
 nothing here is made up, and a block with nothing in it is left out (Home
 never says "nothing yet").
 
-HOME (/my), on an ordinary weekday with nothing live: the next gathering on
-the church's own photo, edge to edge, with I'm coming; a greeting by the
-phone's clock and Coming up; Today (the verse of the day on the ivory card,
-with the reading plan or where they left off); the latest message; your
-group; prayer; what's happening (the church's news).
-  - The day of a gathering, the lead says Today, and while Sunday check-in is
-    open its card follows the lead (church_checkin: it shows only then).
-  - While the church is live, live wins: Live now on the photo, Join the room.
-The rest of today's Home keeps a place: asks to serve and celebrations under
-the lead, the church's own tiles after the message, and installing the app,
-phone alerts and Ask the church at the foot. The Messages card is gone: the
-bubble at the top carries the unread count.
+HOME (/my), "Look 4.1" (Kevin, 2026-11-19; the pieces are member_lumen_home):
+the greeting by the church's clock and one sentence from the records; Up next,
+one card featured by the data (live, Sunday's service with check-in, someone
+new's first Sunday, their group's next gathering or the next event) with its
+main button; Also for you, two picture tiles (the devotional, prayer, serving,
+the latest message, groups to join); then what's happening (the news block,
+member_portal_news.home_block) and the rest of Home below it: Coming up,
+Today (the verse of the day on the ivory card, the reading plan or where they
+left off), the latest message, the church's own tiles, the groups not on the
+card, prayer, and installing the app, phone alerts and Ask the church at the
+foot. What's a tile isn't repeated. Asks to serve and celebrations sit under
+Up next. The Messages card is gone: the bubble at the top carries the count.
 
 CONNECT (/my/connect), the people hub: your group, serving (your next date,
 with Can't make it), prayer, events, classes (with how far you've come),
@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 logger = logging.getLogger("member_portal_lumen")
 
@@ -56,88 +57,6 @@ def _answer(o: Dict[str, Any]) -> str:
 
 
 # ─── Home ────────────────────────────────────────────────────────────
-
-
-def _when(d: date, today: date) -> str:
-    n = (d - today).days
-    day = f"{d.strftime('%B')} {d.day}"
-    if n <= 0:
-        return f"Today · {d.strftime('%A')}, {day}"
-    if n == 1:
-        return f"Tomorrow · {d.strftime('%A')}, {day}"
-    if n < 7:
-        return f"This {d.strftime('%A')} · {day}"
-    return f"{d.strftime('%A')}, {day}"
-
-
-def _going(count: int, answered: bool) -> str:
-    """How many are coming: a number, never names, and only from two."""
-    import member_lumen_ui as lm
-    if count < 2:
-        return ""
-    words = (f"You and {count - 1} other{'' if count == 2 else 's'}" if answered else f"{count} coming")
-    return f'<span class="lm-count">{lm.ic("people", 18)}{_e(words)}</span>'
-
-
-def lead(occasions: Optional[List[Dict[str, Any]]], live: Optional[Dict[str, Any]], *, pic: str, look: str,
-         church: str, today: Optional[date] = None, edit: bool = False) -> Tuple[str, str]:
-    """Home's top: (the photo and the lead block under it, the entry id of the
-    gathering it leads with, '' for none). Live wins; then the next thing on
-    the calendar; then the church itself."""
-    import member_app_samples as samples
-    import member_app_ui as ui
-    import member_lumen_ui as lm
-    today = today or date.today()
-    pin = ui.pin("/my/pictures/spot?key=home&amp;back=home") if edit else ""
-    if live:
-        photo = (f'<figure class="lm-bleed lm-hero">{ui.picture(pic, look, "worship", eager=True)}{pin}'
-                 f'<span class="lm-livechip"><i class="lm-dotlive"></i>Live now</span></figure>')
-        block = (f'<section class="lm-lead" aria-labelledby="lm-lead-h">'
-                 f'<p class="lm-eyebrow"><span class="lm-dot lm-dotlive"></span>Live now</p>'
-                 f'<h1 class="lm-disp" id="lm-lead-h">{lm.italic_last(live.get("title") or "Live now")}</h1>'
-                 f'<p class="lm-meta">Watch and chat with your church</p>'
-                 f'<div class="lm-row2"><a class="lm-btn" href="/my/live">Join the room</a></div></section>')
-        return photo + block, ""
-    o = (occasions or [None])[0]
-    d = _day((o or {}).get("date") or "")
-    photo = f'<figure class="lm-bleed lm-hero">{ui.picture(pic, look, "welcome", eager=True)}{pin}</figure>'
-    if not o or not d:
-        block = (f'<section class="lm-lead" aria-labelledby="lm-lead-h"><p class="lm-eyebrow">Welcome home</p>'
-                 f'<h1 class="lm-disp" id="lm-lead-h">{lm.italic_last(church)}</h1>'
-                 f'<p class="lm-meta">Messages, prayer and your church family, all week.</p>'
-                 f'<div class="lm-row2"><a class="lm-btn" href="/my/sermons">Watch a message</a>'
-                 f'<a class="lm-btn ghost" href="/my/bible">Read</a></div></section>')
-        return photo + block, ""
-    eid = _e(o.get("entry_id"))
-    sample = ui.sample_tag() if samples.is_sample(o) else ""
-    hint = ui.sample_hint(samples.WHERE["events"]) if sample else ""
-    n = (d - today).days
-    meta = " · ".join(_e(x) for x in (o.get("location") or "", f"in {n} days" if n >= 2 else "") if x)
-    mine = o.get("mine") or {}
-    answer = _answer(o)
-    count = int(o.get("attending") or 0)
-    about = 'aria-describedby="lm-lead-h"'
-    if answer:
-        acts = f'<a class="lm-btn going" href="/my/events" {about}>{ui.icon("check", 16)}{_e(answer)}</a>' + _going(count, True)
-    elif o.get("signup"):
-        su = o["signup"].get("mine") or {}
-        acts = (f'<a class="lm-btn going" href="/my/events" {about}>{ui.icon("check", 16)}You\'re signed up</a>'
-                if su.get("status") in ("paid", "confirmed") else
-                f'<a class="lm-btn" href="/my/events" {about}>Sign up</a>') + _going(count, False)
-    elif o.get("full"):
-        acts = f'<span class="lm-btn ghost">Full</span><a class="lm-txtbtn" href="/my/events" {about}>Details</a>'
-    else:
-        said_no = ('<span class="lm-count">You said you can\'t make it</span>' if mine.get("status") == "no" else "")
-        acts = (f'<form method="post" action="/my/rsvp"><input type="hidden" name="entry_id" value="{eid}">'
-                f'<input type="hidden" name="back" value="/my"><input type="hidden" name="action" value="coming">'
-                f'<button class="lm-btn" type="submit" {about}>I\'m coming</button></form>'
-                + (said_no or _going(count, False)))
-    block = (f'<section class="lm-lead" aria-labelledby="lm-lead-h">'
-             f'<p class="lm-eyebrow"><span class="lm-dot"></span>{_e(_when(d, today))}{sample}</p>'
-             f'<h1 class="lm-disp" id="lm-lead-h">{lm.italic_last(o.get("title"))}</h1>'
-             f'{f"<p class=lm-meta>{meta}</p>" if meta else ""}'
-             f'<div class="lm-row2">{acts}</div>{hint}</section>')
-    return photo + block, str(o.get("entry_id") or "")
 
 
 def coming_rows(occasions: Optional[List[Dict[str, Any]]], skip: str = "", top: int = 3) -> str:
@@ -264,56 +183,353 @@ def prayer_row(title: str = "How can we pray for you?") -> str:
             f'{lm.row("/my/prayer", lm.round_icon("flame"), title, "It goes privately to the pastors.", cls="lm-pray")}</section>')
 
 
+def church_now(biz: Dict[str, Any]) -> datetime:
+    """Now on the church's own clock: the Lead tab's (church_checkin
+    .church_zone_name, from the church's row already in hand; New York when
+    it has none). The greeting, "tonight" and the date read it."""
+    from zoneinfo import ZoneInfo
+    import church_checkin as cc
+    return datetime.now(ZoneInfo(cc.church_zone_name(biz)))
+
+
+def next_gathering(biz: Dict[str, Any], groups: Optional[Dict[str, List[Dict[str, Any]]]], *,
+                   now: Optional[datetime] = None, fresh: bool = False) -> Optional[Dict[str, Any]]:
+    """The member's next group gathering in the coming week, from their
+    groups' regular times (read with the groups: groups_for), and who's
+    answered for it (group_gatherings.answers: kept a little while; `fresh`
+    reads it now). {group, day, time, start, answers}; answers None when
+    they couldn't be read. None when no group of theirs meets on a schedule
+    in the next 7 days."""
+    import group_gatherings as gg
+    now = now or church_now(biz)
+    best = None
+    for g in (groups or {}).get("mine") or []:
+        sched = g.get("sched") or {}
+        if not gg.scheduled(sched):
+            continue
+        day, _skipped = gg.next_on(sched, now)
+        if not day or (day - now.date()).days >= 7:
+            continue
+        start = gg.starts_at(sched, day, now.tzinfo)
+        if best is None or start < best[2]:
+            best = (g, day, start)
+    if not best:
+        return None
+    g, day, start = best
+    got = gg.answers(str(biz["id"]), str(g["id"]), day, fresh=fresh)
+    members = set(g.get("member_ids") or [])
+    if got is not None and members:
+        got = {k: v for k, v in got.items() if k in members}
+    return {"group": g, "day": day, "time": start.time(), "start": start, "answers": got}
+
+
+def groups_and_next(biz: Dict[str, Any], me: Dict[str, Any], *, fresh: bool = False):
+    """Home's groups (groups_for) and, from them, the next gathering. Past
+    the groups read, a failure only leaves the gathering out."""
+    import member_portal_church as mpc
+    groups = mpc.groups_for(biz["id"], me)
+    try:
+        return groups, next_gathering(biz, groups, fresh=fresh)
+    except Exception:  # noqa: BLE001
+        logger.warning("home: the next gathering skipped", exc_info=True)
+        return groups, None
+
+
+def told(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What the member told the church in "I'm new here" (member_im_new),
+    when they said it's their first time; None for everyone else and where
+    I'm new here doesn't show. Kept there (told_state: a read at most once
+    a minute per member, once every ten minutes after they've told)."""
+    try:
+        import member_im_new as mim
+        if not mim.on() or not mim.is_church(biz) or not mim.adult(me):
+            return None
+        app = mim.told_state(str(biz["id"]), str(me["id"]))
+        return app if app and app.get("at") and app.get("first_time") else None
+    except Exception:  # noqa: BLE001
+        logger.warning("home: what they told the church skipped", exc_info=True)
+        return None
+
+
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library, live,
                 bible: str, where, plan_today, plan_done, devotional: str = "", checkin: str = "",
                 serving: str = "", celebrate: str = "", flash: str = "", news: str = "", news_n: Optional[int] = None,
-                cards: Tuple[str, ...] = (), edit: bool = False, editbar: str = "", today: Optional[date] = None) -> str:
-    """Home in the new look. `news` is the news block (member_portal_news
-    .home_block, titled What's happening), `cards` the small cards at the
-    foot (installing the app, phone alerts, Ask the church), each '' to
-    leave it out."""
+                cards: Tuple[str, ...] = (), edit: bool = False, editbar: str = "", today: Optional[date] = None,
+                ck: Optional[Dict[str, Any]] = None, ck_err: bool = False, serving_info: Optional[Dict[str, Any]] = None,
+                devo: Optional[Dict[str, Any]] = None, gnext: Optional[Dict[str, Any]] = None,
+                told_us: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, dark: bool = False) -> str:
+    """Home in the new look (Look 4.1, member_lumen_home): the greeting and
+    its sentence, Up next and its card, Also for you, then `news` (the news
+    block, member_portal_news.home_block) and the rest of Home below it.
+
+    `checkin` is the check-in card (member_portal_checkin.lumen_card) and
+    `ck` what it was drawn from (church_checkin.card); `ck_err` a check-in
+    that didn't go through (?ck=): the full card follows Up next then.
+    `serving` and `celebrate` are the asks to serve and the celebrations,
+    under Up next; `serving_info` My serving (sunday_serving.home); `devo`
+    today's devotional (member_portal_devotionals.home_extras' info);
+    `gnext` the next group gathering (next_gathering); `told_us` what a
+    brand-new person told the church (told()). `cards` are the small cards
+    at the foot (installing the app, phone alerts, Ask the church), each ''
+    to leave it out. `dark` draws it on the look's dark switch (nothing
+    sets it yet: the new look is always white)."""
     import member_app_photos as photos
+    import member_app_pictures as mapic
+    import member_app_samples as samples
+    import member_app_ui as ui
+    import member_lumen_home as lh
     import member_lumen_ui as lm
     import member_portal_church as mpc
-    from member_portal import _shell, first_name, palette_for
+    import member_portal_messaging as mpm
+    import member_portal_sermons as mps
+    from member_portal import _shell, first_name, palette_for, portal_settings
+    from sermons_public import day_label
     pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
     used: set = set()
-    # Full-bleed photos in colour, unless the church chose a look for this one.
-    pic, look = photos.choose(biz, "home", pool, fallback=photos.hero(pool), look="colour", used=used)
+    now = now or church_now(biz)
+    if today and today != now.date():
+        now = datetime.combine(today, now.timetz())
     church = (biz.get("name") or "").strip() or "Your church"
-    top, first = lead(occasions, live, pic=pic, look=look, church=church, today=today, edit=edit)
-    hello = first_name(me.get("name") or "") or "there"
-    rows = coming_rows(occasions, skip=first)
-    is_today = bool(first) and _day((occasions or [{}])[0].get("date") or "") == (today or date.today())
-    hint = ("Here's what's next after today." if is_today else "Here's what's coming up.") if rows else ""
-    coming = (f'{lm.section("Coming up", "/my/events", "All events")}<div class="lm-list">{rows}</div>' if rows else "")
-    hello_html = (f'<div class="lm-hello"><h2 class="lm-disp s" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h2>'
-                  f'{f"<p class=lm-hint>{hint}</p>" if hint else ""}{coming}</div>')
-    reading = reading_row(plan_today, plan_done) or continue_row(where, bible)
-    today_html = (f'<section aria-labelledby="lm-today-h">{lm.section("Today", "/my/bible/plans", "Plans", hid="lm-today-h")}'
-                  f'{verse_page(bible)}{reading}{f"<div class=lm-today-more>{devotional}</div>" if devotional else ""}</section>')
-    # The church's own tiles, when it saved some (the ways in every church
-    # has, which today's Home shows without them, are on this page already).
-    from member_portal import portal_settings
-    saved = mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles"))
-    tiles = mpc.home_tiles(biz, site, pool, used, edit=edit) if saved else ""
-    check = f'<div class="lm-ck">{checkin}</div>' if checkin else ""
+    occ = [o for o in occasions or [] if _day(o.get("date"))]
+    service = lh.service_next(ck, serving_info, occ, now)
+    new, first = lh.first_sunday(told_us, service, now)
+    choice = lh.pick(live=live, ck=ck, gnext=gnext, occasions=occ, first=first if new else None, now=now)
+    kind = choice["kind"]
+    about = ' aria-describedby="lm-f4-t"'
+
+    def spot(key: str, art_kind: str, *, title: str = "", fallback: str = "", look: str = "colour") -> Tuple[str, str]:
+        pic, lk = photos.choose(biz, key, pool, title=title, fallback=fallback, look=look, used=used)
+        pin = ui.pin(f"/my/pictures/spot?key={quote(key, safe=':')}&amp;back=home") if edit else ""
+        return ui.picture(pic, lk, art_kind, eager=True), pin
+
+    def acts(inner: str) -> str:
+        return f'<div class="lm-f4acts">{inner}</div>'
+
+    feat, after, feat_eid, feat_gid = "", "", "", ""
+    if kind == "live":
+        art, pin = spot("home", "worship", fallback=photos.hero(pool))
+        feat = lh.card(art, day=now.date(), foot="Live", kicker='<i class="lm-dotlive" aria-hidden="true"></i>Live now',
+                       title=live.get("title") or "Live now", meta="Watch and chat with your church",
+                       row=acts(f'<a class="lm-btn sm" href="/my/live"{about}>Join the room</a>'), pin=pin)
+    elif kind == "service":
+        w = ck["w"]
+        d, t = w["day"], w["start"].time()
+        title = ((ck.get("occasion") or {}).get("title") or "").strip() or church
+        o = next((x for x in occ if _day(x["date"]) == d and (x.get("title") or "") == title), None)
+        art, pin = spot("home", "welcome", fallback=photos.hero(pool))
+        word = "Your first Sunday" if new and first and first["day"] == d else lh.when(d, t, now)[0].split(" · ")[0]
+        marks, fam = ck.get("marks") or {}, ck.get("family") or []
+        note = ""
+        if ck_err:
+            row = ""
+            after = f'<div class="lm-ck">{checkin}</div>' if checkin else ""
+        elif marks:
+            online = all((m or {}).get("method") == "online" for m in marks.values())
+            row = acts(lh.done_pill("Glad you're with us." if online else "Welcome home.")
+                       + '<a class="lm-q4" href="/my/here?change=1&amp;from=home">Change it</a>')
+        else:
+            people = "".join(f'<input type="hidden" name="people" value="{_e(p["id"])}">' for p in fam)
+
+            def one(where_: str, label: str, cls: str) -> str:
+                return (f'<form method="post" action="/my/here"><input type="hidden" name="back" value="/my">'
+                        f'<input type="hidden" name="where" value="{where_}">{people}'
+                        f'<button class="{cls}" type="submit"{about}>{label}</button></form>')
+            many = len(fam) > 1
+            row = acts(one("in", "I&#x27;m here", "lm-btn sm") + one("online", "Watching online", "lm-q4")
+                       + ('<a class="lm-q4" href="/my/here?from=home">Choose who</a>' if many else ""))
+            note = "One tap counts you and your family." if many else "One tap counts you."
+        feat = lh.card(art, day=d, foot=lh.leaf_time(t), kicker=_e(f"{word} · {lh.clock(t)}"), title=title,
+                       meta=(o or {}).get("location") or "", row=row, pin=pin, note=note)
+        feat_eid = str((o or {}).get("entry_id") or "")
+    elif kind == "first":
+        sv = choice["service"]
+        d, t = sv["day"], sv.get("time")
+        art, pin = spot("home", "welcome", fallback=photos.hero(pool))
+        # Its name when the church's records give one (else "Your first Sunday",
+        # and the label says when).
+        kicker = ("Your first Sunday" + (f" · {lh.clock(t)}" if t else "")) if sv.get("title") else lh.when(d, t, now)[0]
+        feat = lh.card(art, day=d, foot=lh.leaf_time(t), kicker=_e(kicker), title=sv.get("title") or "Your first Sunday",
+                       meta=sv.get("where") or "", row=acts(f'<a class="lm-btn sm" href="/my/new"{about}>Your path</a>'),
+                       pin=pin)
+        feat_eid = str(sv.get("entry_id") or "")
+    elif kind == "group":
+        gx = choice["g"]
+        g, d, t = gx["group"], gx["day"], gx.get("time")
+        gid = _e(g["id"])
+        art, pin = spot(f"group:{g['id']}", "groups", title=g.get("name") or "")
+        ans = gx.get("answers")
+        mine = (ans or {}).get(str(me["id"]))
+        n_going = sum(1 for a in (ans or {}).values() if a == "going")
+        second = (f'<a class="lm-q4" href="/my/groups/{gid}/chat">Chat</a>'
+                  if mpm.turned_on(biz) and g.get("chat_on") is not False else
+                  f'<a class="lm-q4" href="/my/groups/{gid}">Open the group</a>')
+        if g.get("live"):
+            main = f'<a class="lm-btn sm" href="/my/groups/live/{_e(g["live"]["id"])}"{about}>Join</a>'
+        elif mine == "going":
+            main = lh.done_pill("You're going", about)
+        elif ans is None:
+            main = f'<a class="lm-btn sm" href="/my/groups/{gid}/meet"{about}>Are you coming?</a>'
+        else:
+            main = (f'<form method="post" action="/my/groups/meet/rsvp"><input type="hidden" name="group_id" value="{gid}">'
+                    f'<input type="hidden" name="answer" value="going"><input type="hidden" name="back" value="/my">'
+                    f'<button class="lm-btn sm" type="submit"{about}>I&#x27;ll be there</button></form>')
+        count = '<span class="lm-f4n">You said you can&#x27;t make it</span>' if mine == "no" else lh.going(n_going, mine == "going")
+        feat = lh.card(art, day=d, foot=lh.leaf_time(t), kicker=_e(lh.when(d, t, now)[0]), title=g.get("name") or "",
+                       meta=g.get("location") or (g.get("sched") or {}).get("meet_address") or "",
+                       row=count + acts(main + second), pin=pin)
+        feat_gid = str(g["id"])
+    elif kind == "event":
+        o = choice["o"]
+        d, t = _day(o["date"]), lh.parse_hm(o.get("time"))
+        art, pin = spot(mpc.event_key(o.get("title")), "events", title=o.get("title") or "")
+        eid = _e(o.get("entry_id"))
+        answer, count, mine = _answer(o), int(o.get("attending") or 0), o.get("mine") or {}
+        if answer:
+            main, cnt = lh.done_pill(answer, about), lh.going(count, True)
+        elif o.get("signup"):
+            su = o["signup"].get("mine") or {}
+            main = (lh.done_pill("You're signed up", about) if su.get("status") in ("paid", "confirmed") else
+                    f'<a class="lm-btn sm" href="/my/events"{about}>Sign up</a>')
+            cnt = lh.going(count, False)
+        elif o.get("full"):
+            main, cnt = '<span class="lm-btn sm ghost">Full</span>', ""
+        else:
+            main = (f'<form method="post" action="/my/rsvp"><input type="hidden" name="entry_id" value="{eid}">'
+                    f'<input type="hidden" name="back" value="/my"><input type="hidden" name="action" value="coming">'
+                    f'<button class="lm-btn sm" type="submit"{about}>I&#x27;m coming</button></form>')
+            cnt = ('<span class="lm-f4n">You said you can&#x27;t make it</span>' if mine.get("status") == "no"
+                   else lh.going(count, False))
+        sample = samples.is_sample(o)
+        feat = lh.card(art, day=d, foot=lh.leaf_time(t),
+                       kicker=_e(lh.when(d, t, now)[0]) + (ui.sample_tag() if sample else ""), title=o.get("title") or "",
+                       meta=o.get("location") or "", row=cnt + acts(main + '<a class="lm-q4" href="/my/events">Details</a>'),
+                       pin=pin, after=ui.sample_hint(samples.WHERE["events"]) if sample else "")
+        feat_eid = str(o.get("entry_id") or "")
+    else:
+        art, pin = spot("home", "welcome", fallback=photos.hero(pool))
+        feat = lh.card(art, day=None, foot="", kicker="Welcome home", title=church,
+                       meta="Messages, prayer and your church family, all week.",
+                       row=acts('<a class="lm-btn sm" href="/my/sermons">Watch a message</a>'
+                                '<a class="lm-q4" href="/my/bible">Read</a>'), pin=pin)
+
+    # Also for you: two picture tiles, by the day and the person.
+    shown: List[str] = []
+
+    def to_spot(key: str, href: str) -> str:
+        return f"/my/pictures/spot?key={quote(key, safe=':')}&amp;back=home" if edit else _e(href)
+
+    def t_devo() -> str:
+        if not devo or not (devo.get("st") or {}).get("now"):
+            return ""
+        d, st, day = devo["dev"], devo["st"], devo.get("day") or {}
+        n, of = int(st["now"]), max(1, int(st["count"] or 1))
+        key = f"devotional:{d['id']}"
+        pic, lk = photos.choose(biz, key, pool, title=d.get("title") or "", look="church", used=used)
+        shown.append("devo")
+        return lh.tile(to_spot(key, devo["href"]), ui.picture(pic, lk, "word"), "book",
+                       f"Devotional · {devo.get('minutes') or 1} min", day.get("title") or d.get("title") or "",
+                       f"{d.get('title') or 'Devotional'} · day {n} of {of}" + (" · done" if n in st.get("done", ()) else ""),
+                       day_leaf=n, progress=round(100 * n / of), pin=edit)
+
+    def t_prayer() -> str:
+        pic, lk = photos.choose(biz, "prayer", pool, words=mapic.PRAYER_WORDS, look="colour", used=used)
+        shown.append("prayer")
+        return lh.tile(to_spot("prayer", "/my/prayer"), ui.picture(pic, lk, "prayer"), "flame", "Prayer",
+                       "How can we pray for you?", "It goes privately to the pastors.", pin=edit)
+
+    def t_serving(today_only: bool) -> str:
+        today_d = now.date()
+        for c in (serving_info or {}).get("coming") or []:
+            d = _day((c.get("service") or {}).get("day"))
+            if not d or (d != today_d if today_only else not 0 <= (d - today_d).days < 7):
+                continue
+            import member_portal_serving as mpsv
+            at = (c.get("service") or {}).get("at")
+            t = lh.parse_hm(c.get("call_time")) or (at.time() if isinstance(at, datetime) else None)
+            key = f"group:{c['group_id']}" if c.get("group_id") else ""
+            pic, lk = (photos.choose(biz, key, pool, title=c.get("team") or "", look="colour", used=used) if key else ("", ""))
+            when_ = ("" if d == today_d else f"{d:%a} ") + (lh.hm(t) if t else "")
+            meta = ", ".join(x for x in (c.get("place") or "", f"with {mpsv._names(c['with'])}" if c.get("with") else "") if x)
+            return lh.tile(to_spot(key, "/my/serving") if key else "/my/serving", ui.picture(pic, lk, "serve"), "wave",
+                           f"Serving · {when_}".strip(" ·"), c.get("team") or "Serving", meta, pin=edit and bool(key))
+        return ""
+
+    def t_message() -> str:
+        if not library or not library.get("sermons"):
+            return ""
+        s = library["sermons"][0]
+        d = _day(s.get("preached_on") or "")
+        label = ("Today's message" if d == now.date() else
+                 "Last Sunday" if d and 0 <= (now.date() - d).days <= 7 and d.weekday() == 6 else "Latest message")
+        meta = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x) or day_label(s.get("preached_on"))
+        shown.append("message")
+        return lh.tile(f"/my/sermons/{_e(s['id'])}", mps._art(library, s, pal, site, pool, used), "playfill", label,
+                       s.get("title") or "", meta, tag=ui.sample_tag() if samples.is_sample(s) else "")
+
+    def t_groups() -> str:
+        open_ = [g for g in (groups or {}).get("open") or [] if g.get("name")]
+        if not open_:
+            return ""
+        g = open_[0]
+        key = f"group:{g['id']}"
+        pic, lk = photos.choose(biz, key, pool, title=g.get("name") or "", look="colour", used=used)
+        return lh.tile(to_spot(key, "/my/groups"), ui.picture(pic, lk, "groups"), "people", "Find your people",
+                       "Groups to join", " · ".join(x["name"] for x in open_[:3]), pin=edit)
+
+    if new:
+        order = [t_groups, t_prayer, t_devo, t_message]
+    elif service and service["day"] == now.date():
+        order = [lambda: t_serving(True), t_message, t_devo, t_prayer]
+    else:
+        order = [t_devo, t_prayer, lambda: t_serving(False), t_message]
+    tiles_html: List[str] = []
+    for fn in order:
+        if len(tiles_html) == 2:
+            break
+        got = fn()
+        if got:
+            tiles_html.append(got)
+
+    name = first_name(me.get("name") or "")
+    # The sentence names the next gathering even when the card is the live
+    # service.
+    said = choice if kind in ("group", "event") else lh.pick(live=None, ck=None, gnext=gnext, occasions=occ, first=None,
+                                                             now=now)
+    hello = lh.greeting(name, now, lh.line(said, service=service, serving=serving_info, new=new, first=first, now=now),
+                        new=new)
+    up = lh.up_next(1 + len(tiles_html)) if kind != "welcome" else ""
     under = "".join(x for x in (serving, celebrate) if x)
+    top = (f'{editbar}{flash}{lh.live_bar(live) if live and kind != "live" else ""}{hello}'
+           f'<div class="lm-up">{up}{feat}</div>'
+           f'{after}{f"<div class=lm-cards>{under}</div>" if under else ""}{lh.also(tiles_html)}')
+    # The rest of Home, below the news: what's coming after Up next, Today
+    # (the verse, the reading plan, the devotional unless it's a tile), the
+    # latest message unless it's a tile, the church's own tiles (when it
+    # saved some), the groups not on the card, prayer unless it's a tile,
+    # and the small cards at the foot.
+    rows = coming_rows(occ, skip=feat_eid)
+    coming = (f'<section aria-labelledby="lm-cu-h">{lm.section("Coming up", "/my/events", "All events", hid="lm-cu-h")}'
+              f'<div class="lm-list">{rows}</div></section>' if rows else "")
+    reading = reading_row(plan_today, plan_done) or continue_row(where, bible)
+    devo_row = devotional if "devo" not in shown else ""
+    today_html = (f'<section aria-labelledby="lm-today-h">{lm.section("Today", "/my/bible/plans", "Plans", hid="lm-today-h")}'
+                  f'{verse_page(bible)}{reading}{f"<div class=lm-today-more>{devo_row}</div>" if devo_row else ""}</section>')
+    message = "" if "message" in shown else message_tile(library, pal, site=site, pool=pool, used=used, today=now.date())
+    saved = mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles"))
+    own_tiles = mpc.home_tiles(biz, site, pool, used, edit=edit) if saved else ""
+    rest_groups = {"mine": [g for g in (groups or {}).get("mine") or [] if str(g.get("id")) != feat_gid]}
+    prayer = "" if "prayer" in shown else prayer_row()
     foot = "".join(c for c in cards if c)
-    body = (f'{editbar}{flash}{top}{check}{f"<div class=lm-cards>{under}</div>" if under else ""}'
-            f'{hello_html}{today_html}'
-            f'{message_tile(library, pal, site=site, pool=pool, used=used, today=today)}'
-            f'{tiles}{group_rows(groups)}{prayer_row()}{news}'
+    body = (f'{top}{news}{coming}{today_html}{message}{own_tiles}{group_rows(rest_groups)}{prayer}'
             f'{f"<div class=lm-cards>{foot}</div>" if foot else ""}')
     import member_portal_news as mpn
     import member_portal_celebrations as mcl
-    script = lm.GREETING_JS + (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else "")
+    script = (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else "")
     style = ""
     if news or celebrate:
         style = f"<style>{mpn.NEWS_CSS}{mcl.CEL_CSS if celebrate else ''}</style>"
-    return _shell(biz, site, "Home", style + body, tab="home", who=me, script=script)
-
+    return _shell(biz, site, "Home", style + body, tab="home", who=me, script=script, lumen_dark=dark)
 
 # ─── Connect ─────────────────────────────────────────────────────────
 
