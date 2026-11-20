@@ -295,7 +295,8 @@ body.lm{--lm-raise:var(--bg);--lm-mint:#DCF0EA;--lm-mint-ink:#0b4a40;--lm-live:#
 .lm-logo.has-img{background:#fff;box-shadow:inset 0 0 0 1px var(--lm-line);}
 .lm-logo img{width:100%;height:100%;object-fit:contain;}
 .lm-name{font:750 17px/1.1 var(--mb-ui);letter-spacing:-.012em;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.lm .mb-top-right{gap:0;margin-right:-10px;}
+.lm .mb-top-right{gap:4px;}
+.lm.lm-tab .mb-top-right{gap:0;margin-right:-10px;}
 .lm-icb{position:relative;width:44px;height:44px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--fg);text-decoration:none;}
 .lm-cnt{position:absolute;top:5px;right:3px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--acc-fill);color:var(--on-acc);
   font:700 10.5px/18px var(--mb-ui);text-align:center;box-shadow:0 0 0 2px var(--bg);}
