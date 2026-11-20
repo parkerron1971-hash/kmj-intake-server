@@ -45,6 +45,12 @@ churches do on Sunday ("New here? Text NEW to ..."), done our way:
                card, a church's guest card or the member app joins the same
                path and gets these texts once they've said yes ("Text me");
                see "every door" below (enroll).
+  WEEKS TWO TO SIX  with the Welcome Path on (guest_path_weeks.py): the two
+               roads' texts (back, thinking, next_step, door_open), the
+               Monday note signed by the senior pastor (signature), the
+               Saturday heads-up (heads_up), all in settings.new_here; a
+               guest's hold holds every text here too, and none goes past
+               the week's limits (run_scheduled asks guest_path_weeks).
 
 Who: NEW_HERE = off | owner | on; unset is "owner", the platform's own
 church (member_asks.platform_church). A church also turns it on itself
@@ -110,8 +116,30 @@ DEFAULTS: Dict[str, Any] = {
                         "A real person reads every text.")},
     "invite": {"on": True,
                "text": "We'd love to see you again this Sunday. Reply and we'll save you a seat and meet you at the door."},
+    # Weeks two to six (the Welcome Path, guest_path_weeks.py): the two roads.
+    "back": {"on": True,
+             "text": "So good to see you again, {first name}! We'd love to help you find your place here."},
+    "thinking": {"on": True,
+                 "text": "Thinking of you this week, {first name}. No need to reply. We're glad you came."},
+    "next_step": {"on": True, "event_id": None,
+                  "text": ("{first name}, our {event} is {when}. We'd love for you to come. Just reply and we'll save "
+                           "your seats.")},
+    "door_open": {"on": True,
+                  "text": "We're still so glad you visited, {first name}. Our door is always open, any Sunday."},
+    # The Monday note signed by the senior pastor: `name` is the church's own
+    # words for the signature ("Pastor James"); empty is whoever holds the
+    # senior role (guest_path_weeks.signer).
+    "signature": {"on": True, "name": ""},
+    # The Saturday heads-up to the team: the greeters, and the kids desk for
+    # families with kids.
+    "heads_up": {"greeters": True, "kids": True},
 }
-HEARD = ("A friend or family", "Online", "Drove by", "Social media", "Other")
+# The road texts (weeks two to six), each {on, text}; next_step adds event_id.
+PATH_TEXTS = ("back", "thinking", "next_step", "door_open")
+EVENT = "{event}"
+WHEN = "{when}"
+SIGNER_MAX = 40
+HEARD =("A friend or family", "Online", "Drove by", "Social media", "Other")
 KIDS = ("None", "1", "2", "3 or more")
 
 
@@ -193,6 +221,21 @@ def settings_of(business: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 hours = base["hours"]
             out[step]["hours"] = min(6, max(1, hours))
+    for step in PATH_TEXTS:
+        mine = saved.get(step) if isinstance(saved.get(step), dict) else {}
+        base = DEFAULTS[step]
+        text = str(mine.get("text") or "").strip()
+        out[step] = {"on": bool(mine.get("on", base["on"])), "text": text[:MAX_TEXT] if text else base["text"]}
+        if step == "next_step":
+            event = str(mine.get("event_id") or "").strip()
+            out[step]["event_id"] = event if re.fullmatch(r"[0-9a-fA-F-]{36}", event) else None
+            if EVENT not in out[step]["text"] or WHEN not in out[step]["text"]:
+                out[step]["text"] = base["text"]
+    sig = saved.get("signature") if isinstance(saved.get("signature"), dict) else {}
+    out["signature"] = {"on": bool(sig.get("on", DEFAULTS["signature"]["on"])),
+                        "name": " ".join(str(sig.get("name") or "").split())[:SIGNER_MAX]}
+    heads = saved.get("heads_up") if isinstance(saved.get("heads_up"), dict) else {}
+    out["heads_up"] = {k: bool(heads.get(k, v)) for k, v in DEFAULTS["heads_up"].items()}
     return out
 
 
@@ -432,7 +475,8 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
     # A guest from a door that isn't a text is on the Welcome Path: turned
     # off, its texts stop too (the text door's go on as they always did).
     door = str(action.get("door") or "text")
-    if (step == WELCOME or door != "text") and not await asyncio.to_thread(path_on, biz_id):
+    path = await asyncio.to_thread(path_on, biz_id)
+    if (step == WELCOME or door != "text") and not path:
         return True, "The Welcome Path is off now; not sent."
     if not sms_alerts.alerts_enabled():
         return True, "Automated texts are paused; not sent."
@@ -442,6 +486,22 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
         return False, "The guest couldn't be read; not sent."
     if not people:
         return True, "The guest is no longer on the church's list; not sent."
+    gpw = None
+    if path:
+        # The Welcome Path's rules (guest_path_weeks): a reply waiting on a
+        # person holds every automatic text (it waits, never dropped), and
+        # no more than the week's texts the guest said yes to.
+        import guest_path_weeks as gpw
+        mine = (people[0].get("metadata") or {}).get("new_here") or {}
+        if isinstance(mine, dict) and mine.get("hold"):
+            kept = await asyncio.to_thread(gpw.wait_for_hold, fresh, people[0], action, _now())
+            if kept is not None:
+                return kept
+            # The hold was cleared a moment ago: the text goes on now.
+        if step != WELCOME:
+            why = gpw.limit_says(mine if isinstance(mine, dict) else {}, _now())
+            if why:
+                return True, gpw.LIMIT_WORDS[why]
     import texting_hours
     local = _now().astimezone(tz_of(fresh))
     if not texting_hours.in_auto_window(fresh, local):
@@ -468,6 +528,10 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
                      link=await asyncio.to_thread(card_link, biz_id, code))
     else:
         words = fill(settings[step]["text"], name=guest_name)
+        if step == "monday" and gpw is not None:
+            # The Monday note, signed by the senior pastor (a setting, on
+            # unless the church turned it off; no name found, no signature).
+            words = gpw.sign(words, await asyncio.to_thread(gpw.signer, fresh, settings))
     body = sms_service.compose_outbound_body(name, words)
     async with httpx.AsyncClient(timeout=15) as client:
         if await sms_service.is_opted_out(client, phone, biz_id):
@@ -478,6 +542,8 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
                                          telnyx_id=sid or "", sent_by="system")
         except Exception as e:  # noqa: BLE001
             return False, f"The text didn't go: {e}"[:240]
+    if gpw is not None:
+        await asyncio.to_thread(gpw.log_sent, biz_id, contact_id, _now())
     return True, f"Sent the New here {step} text."
 
 
@@ -1322,7 +1388,23 @@ def overview(business: Dict[str, Any], *, can_edit: bool) -> Dict[str, Any]:
         "texts_per_guest": 1 + sum(1 for s in STEPS if settings[s]["on"]),
         # When the texts go (Text → Texting hours): the room says it in words.
         "hours": _hours(business),
+        # Weeks two to six, the signature and the Saturday heads-up, only
+        # where the Welcome Path is on: a room that doesn't get this shows
+        # week one alone, as before.
+        **({"path": _path_view(business, settings)} if path_on(biz) else {}),
     }
+
+
+def _path_view(business: Dict[str, Any], settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """guest_path_weeks.room_view, or None when it couldn't be read (the room
+    says so and keeps week one)."""
+    try:
+        import guest_path_weeks
+        return guest_path_weeks.room_view(business, settings)
+    except Exception as e:  # noqa: BLE001 — the room still reads week one
+        print(f"[new_here] {str(business.get('id'))[:8]}: the path's view wasn't read ({type(e).__name__})",
+              flush=True)
+        return None
 
 
 @router.get("/new-here/{business_id}")
@@ -1343,6 +1425,22 @@ class StepIn(BaseModel):
     hours: Optional[int] = None
 
 
+class PathStepIn(BaseModel):
+    on: bool = True
+    text: str = Field("", max_length=MAX_TEXT)
+    event_id: Optional[str] = Field(None, max_length=40)
+
+
+class SignatureIn(BaseModel):
+    on: bool = True
+    name: str = Field("", max_length=SIGNER_MAX)
+
+
+class HeadsUpIn(BaseModel):
+    greeters: bool = True
+    kids: bool = True
+
+
 class NewHereIn(BaseModel):
     on: bool
     word: str = Field("NEW", max_length=12)
@@ -1350,10 +1448,45 @@ class NewHereIn(BaseModel):
     thanks: StepIn
     monday: StepIn
     invite: StepIn
+    # Weeks two to six, the signature and the Saturday heads-up (the Welcome
+    # Path). Each is optional: a room that doesn't send one (Text › New here,
+    # an app from before) leaves what's saved exactly as it was.
+    back: Optional[PathStepIn] = None
+    thinking: Optional[PathStepIn] = None
+    next_step: Optional[PathStepIn] = None
+    door_open: Optional[PathStepIn] = None
+    signature: Optional[SignatureIn] = None
+    heads_up: Optional[HeadsUpIn] = None
+
+
+# "Reply YES": YES is a word the phone companies read as "start my texts
+# again" (sms_routing.START_WORDS), never a church's reply word.
+_REPLY_START = re.compile(r"\breply\s+(?:with\s+)?[\"'“‘]?(?:yes|start|join|unstop)\b", re.I)
+
+
+def _path_text(step: str, s: PathStepIn) -> Dict[str, Any]:
+    text = " ".join((s.text or DEFAULTS[step]["text"]).split())
+    if CARD_LINK in text:
+        raise HTTPException(400, "Only the welcome carries the card's link.")
+    if _REPLY_START.search(text):
+        raise HTTPException(400, "YES means \"start my texts again\" to the phone companies. Ask them to just "
+                                 "reply instead.")
+    out: Dict[str, Any] = {"on": bool(s.on), "text": text}
+    if step == "next_step":
+        if EVENT not in text or WHEN not in text:
+            raise HTTPException(400, "Keep {event} and {when} in the next step's words: they become your event's "
+                                     "name and its day.")
+        event = (s.event_id or "").strip()
+        if event and not re.fullmatch(r"[0-9a-fA-F-]{36}", event):
+            raise HTTPException(400, "Pick one of your church's upcoming events.")
+        out["event_id"] = event or None
+    return out
 
 
 def clean(body: NewHereIn) -> Dict[str, Any]:
-    """What gets saved, or a 400 that says what to change."""
+    """What gets saved, or a 400 that says what to change. The Welcome
+    Path's keys only when the room sent them (merge never touches a key it
+    isn't given)."""
     word = re.sub(r"[^A-Za-z]", "", body.word or "").upper()
     if not re.fullmatch(r"[A-Z]{2,12}", word):
         raise HTTPException(400, "The word is 2 to 12 letters, like NEW or HELLO.")
@@ -1374,6 +1507,14 @@ def clean(body: NewHereIn) -> Dict[str, Any]:
         out[step] = {"on": bool(s.on), "text": text}
         if step == "thanks":
             out[step]["hours"] = min(6, max(1, int(s.hours or DEFAULTS["thanks"]["hours"])))
+    for step in PATH_TEXTS:
+        s = getattr(body, step)
+        if s is not None:
+            out[step] = _path_text(step, s)
+    if body.signature is not None:
+        out["signature"] = {"on": bool(body.signature.on), "name": " ".join((body.signature.name or "").split())}
+    if body.heads_up is not None:
+        out["heads_up"] = {"greeters": bool(body.heads_up.greeters), "kids": bool(body.heads_up.kids)}
     return out
 
 
@@ -1393,7 +1534,17 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
     # endpoint keeps inside new_here (the church's guest card, guest_card.py),
     # stay as they are, whatever was written a moment ago.
     import business_settings
-    settings = business_settings.merge(biz, set=clean(body), under=["new_here"])
+    saving = clean(body)
+    picked = (saving.get("next_step") or {}).get("event_id")
+    if picked and picked != settings_of(business)["next_step"]["event_id"]:
+        # A newly picked next step is one of the church's own upcoming events.
+        import guest_path_weeks
+        coming = guest_path_weeks.events_coming(business)
+        if coming is None:
+            raise HTTPException(503, "Your events couldn't be read just now. Try again in a minute.")
+        if not any(e["entry_id"] == picked for e in coming):
+            raise HTTPException(400, "That event isn't coming up in Services & Events. Pick another.")
+    settings = business_settings.merge(biz, set=saving, under=["new_here"])
     if settings is None:
         raise HTTPException(503, "That didn't save just now. Try again in a minute.")
     return overview({**business, "settings": settings}, can_edit=True)
