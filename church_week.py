@@ -347,6 +347,8 @@ def _week(start: Any, today: date) -> date:
             first = _sunday_of(date.fromisoformat(raw))
         except ValueError:
             first = this
+        except OverflowError:               # the calendar's first days: far past the bounds
+            raise HTTPException(400, BAD_WEEK)
     if not -WEEKS_BACK <= (first - this).days // 7 <= WEEKS_AHEAD:
         raise HTTPException(400, BAD_WEEK)
     return first

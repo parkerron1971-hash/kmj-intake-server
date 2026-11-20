@@ -644,9 +644,10 @@ def test_one_week_a_call_and_a_bad_start_is_this_week(app):
     assert far["next"] is None and far["prev"]
     back = week(app, "sunny", (this - timedelta(weeks=cw.WEEKS_BACK)).isoformat())["week"]
     assert back["prev"] is None and back["next"]
-    for out in (this + timedelta(weeks=cw.WEEKS_AHEAD + 1), this - timedelta(weeks=cw.WEEKS_BACK + 1)):
+    for out in (this + timedelta(weeks=cw.WEEKS_AHEAD + 1), this - timedelta(weeks=cw.WEEKS_BACK + 1),
+                date(1, 1, 1), date(9999, 12, 31)):
         r = get(app, "sunny", out.isoformat())
-        assert r.status_code == 400 and r.json()["detail"] == cw.BAD_WEEK
+        assert r.status_code == 400 and r.json()["detail"] == cw.BAD_WEEK, out
 
 
 def test_a_read_that_fails_is_a_503_never_an_empty_week(app, db):
