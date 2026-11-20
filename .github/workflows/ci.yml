@@ -275,6 +275,8 @@ jobs:
           node __tests__/recording_small_copy_db.mjs
           node __tests__/event_volunteer_dates_db.mjs
           node __tests__/db_health_db.mjs
+          node __tests__/ets_close_policies_db.mjs
+
           node __tests__/gift_thankyou_events_db.mjs
 
   # The check the main branch's rule requires. It waits for every part and

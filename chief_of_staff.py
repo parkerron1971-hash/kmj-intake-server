@@ -261,6 +261,7 @@ from giving_deposits import (handle_giving_deposits, handle_match_giving_deposit
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
+import chief_church_schedule as _church_schedule  # the leaders schedule: who is away, asks, what repeats
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
 import chief_church_structure as _church_structure  # the standard start: a church's office team, drafted for review
@@ -422,6 +423,7 @@ _ACTION_PHRASES = {
     "undo_move_in_fill": "putting that item back",
     "list_duties": "reading who does what",
     **_church_assign.PROGRESS,
+    **_church_schedule.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
     **_church_structure.PROGRESS,
@@ -12450,6 +12452,8 @@ ACTION_HANDLERS = {
     "undo_move_in_fill":     handle_undo_move_in_fill,
     "list_duties":           handle_list_duties,
     **_church_assign.HANDLERS,
+    # The leaders schedule (chief_church_schedule): who is away, asking and answering, what repeats, the week.
+    **_church_schedule.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
     **_church_structure.HANDLERS,
@@ -15941,6 +15945,9 @@ async def chief_chat(
             # church and this login has an office seat; a read that fails adds nothing.
             if _cfu.is_church(biz):
                 _login_block += await asyncio.to_thread(_church_assign.turn_line, biz, str(user_session.user.id))
+                # The leaders schedule (chief_church_schedule): the same, only where it (or the volunteers'
+                # week) is open for the church; a read that fails adds nothing.
+                _login_block += await asyncio.to_thread(_church_schedule.turn_line, biz, str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the

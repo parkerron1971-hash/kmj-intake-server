@@ -848,7 +848,16 @@ def week_item(business: Dict[str, Any], user_id: str, role: Optional[str], today
 
 @router.get("")
 def monthly_report_read(business_id: str, month: Optional[str] = None, user: AuthedUser = Depends(require_user)):
-    return build(_access(business_id, user), month)
+    me = _access(business_id, user)
+    if str(month or "").strip().lower() == "status":
+        # The app's menu asks once whether this login has the report
+        # (lib/churchMonthlyReport.ts, month=status). It used to be answered
+        # with "Pick a month as YYYY-MM." (a 400 the app read as yes), so
+        # every app load logged a failed request. Now a plain yes, after the
+        # same access checks (401/403/404 as before). `sections: []` keeps
+        # apps that read only `sections` saying yes.
+        return {"enabled": True, "sections": []}
+    return build(me, month)
 
 
 @router.put("")

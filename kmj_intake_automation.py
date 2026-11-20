@@ -727,6 +727,10 @@ app.include_router(new_here_router)
 # they scan the bulletin's "New here?" code; the first-time guests' choice.
 from guest_card import router as guest_card_router
 app.include_router(guest_card_router)
+# The Guests room (church_guests.py): People › Guests, This week and the
+# Scorecard. Read-only; behind GUEST_PATH (guest_path.switched_on).
+from church_guests import router as church_guests_router
+app.include_router(church_guests_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)
@@ -771,8 +775,11 @@ from church_map_router import router as church_map_router
 app.include_router(church_map_router)
 # The roll: a church's People page in one read (people, their last 8
 # Sundays, families, groups, serving, This week). Read-only; CHURCH_ROLL.
+# Changing it (edit in place, add people, Tidy up, merge): church_roll_edit, CHURCH_ROLL_EDIT.
 from church_roll import router as church_roll_router
 app.include_router(church_roll_router)
+from church_roll_edit import router as church_roll_edit_router
+app.include_router(church_roll_edit_router)
 # Live: the team runs a live service and moderates its chat (live_router);
 # members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
 from live_router import router as live_router

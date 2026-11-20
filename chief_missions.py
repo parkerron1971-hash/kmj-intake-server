@@ -87,6 +87,11 @@ _FORBIDDEN_VERBS = {
     "abandon_mission", "mission_status",
     # Window dressing — meaningless as plan steps.
     "set_chat_window", "navigate", "close_view",
+    # The leaders schedule's writes (chief_church_schedule): each is the
+    # signed-in person's own word in the turn they say it, after a look and,
+    # for an exception, their yes to what was put to them. Never a step that
+    # runs later while nobody is looking.
+    "ask_time_off", "answer_time_off", "take_back_time_off", "add_repeat", "take_off_repeat",
 }
 
 _TERMINAL = ("completed", "abandoned")
