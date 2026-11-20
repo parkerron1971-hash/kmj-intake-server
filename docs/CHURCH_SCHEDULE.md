@@ -110,6 +110,13 @@ production that time has passed.
   migrations were applied before it merged, so it is live at the platform owner's church from its
   first deploy, and **real volunteers there meet it on deploy**. No migration of its own; on a
   database with step 1's file alone a volunteer's Away is exactly what it was.
+- **Step 4, The week (#1979)** holds `church_week.py`: the office's read-only page of every
+  department's volunteers for one week, with hours (Volunteers → The week; the pastor approved the
+  mock on 2026-11-19, "go"). `GET /church/week` and `GET /church/week/status`, for the owner, an
+  Admin and a Manager who keeps either door of Who serves when; hours and "Can't serve with kids
+  yet" by church_serving's own rule. Nothing on it writes. `CHURCH_WEEK`, owner when unset, so it
+  is live at the platform owner's church on deploy; the office page itself is the frontend's next
+  PR. No migration. Section 8 is its contract.
 
 The office app has no screen yet: a login's notice still points at the office app, where the
 ask isn't shown. A login whose person is on the schedule answers in the member app, as that
@@ -2286,3 +2293,305 @@ Seen and left as they are:
   later yes adds a second away row for the same days. That comes with the never-fail rule.
 - A leader's yes opens the volunteer's places (S1-6's `open_places`), which clears a cover
   request still waiting for an answer; a cover already accepted is safe (the place has moved).
+
+---
+
+## 8. Step 4: The week (#1979)
+
+The pastor approved the mock on 2026-11-19 ("go"). The office's menu: Volunteers → **The week**,
+first in that group. One week, Sunday to Saturday (Nov 22 to 28), with a way to the week before
+and the week after. In order: four counts, "Look at first", then one card per department. **Read
+only**: nothing on the page writes; changes stay where they are today, door by door, in Who serves
+when. **Built**: `church_week.py` (the module and both routes), `church_serving.minutes_of` and
+`checks_of` (its own rules, read for one week's people), and `__tests__/test_church_week.py`.
+No migration, no new table, no env var set anywhere: `CHURCH_WEEK` is unset, which means
+`owner`, so the routes are live at the platform owner's own church (and to the platform owner's
+own login) as soon as this deploys, and closed everywhere else. The office page is the
+frontend's next PR, built from this section. A department leader's own view in the member app
+comes later.
+
+### 8.1 Routes
+
+| Route | Answers |
+|---|---|
+| `GET /church/week/status?business_id=` | `{"enabled": bool, "hours": bool, "checks": bool}`: whether this login's menu shows The week, and what it will show. All three false (200) for a closed switch, a business that isn't a church (or a church on ChurchSavvy alone), a login that keeps neither door of Who serves when, or a read that failed. 404 for a login with no seat at that business; 400 for an id that isn't one. |
+| `GET /church/week?business_id=&start=YYYY-MM-DD` | The week `start` falls in (any day of it: Wednesday Nov 25 is the week of Sunday Nov 22). No `start`, or one that isn't a real date, is this week on the church's clock. A week more than 52 weeks back or 26 weeks ahead of this one is a 400 ("Pick a week from a year back to six months ahead."). 403 for a seat here that keeps neither door; 404 for no seat here, the switch closed for this church, Who serves when (`SUNDAY_PLANNING`) closed to them, or not a church; 503 when a read fails (never an empty or shorter week). |
+
+Both take the auth header like every office route (`require_user`). The frontend reads `status`
+once to decide whether Volunteers shows "The week", then `GET /church/week` with `start` set to
+`week.prev` or `week.next` for the arrows.
+
+### 8.2 Who reads it
+
+- **The owner, every Admin, and a Manager that keeps either door of Who serves when.** A Manager
+  keeps a door when it changes some team there (`sunday_planning._owners_for`: `serve_schedule`
+  for the Volunteers' door; `production_schedule`, `churchsavvy_team` or a ChurchSavvy part that
+  schedules for ChurchSavvy's), or holds a duty the office menu opens that door's Who serves when
+  for (`church_week.READS`: `serve_teams`, `new_volunteers`, `background_checks`,
+  `serving_thanks` for the Volunteers' door, the office menu's own rule from the frontend's
+  2026-11-02 Volunteers door; `production_schedule`, `churchsavvy_team` for ChurchSavvy's). Duties
+  are `church_duties.standing`'s (a lane's starting duties, a move, or a Manager's areas when it has
+  no lane).
+- **They read every department, both doors**, ChurchSavvy's worship and production teams too.
+  `can.change` says which doors' teams this login changes in Who serves when; the page itself
+  changes nothing.
+- **Anyone else with a seat is a 403** ("The week is for whoever keeps the volunteer teams or Who
+  serves when."): a Member or Viewer seat, and a Manager that keeps neither door (at the fixture
+  church, Office & Leadership and People & Care). A stranger, another church's owner included, is a
+  404 (`business_access.assert_access`). A ChurchSavvy team member without an office seat is not an
+  office login and reads nothing here.
+- **The church's own gate**: a church (`church_follow_up.is_church`), and not one on ChurchSavvy
+  alone (no office, no doors): otherwise 404.
+
+**At the platform owner's church, does the volunteers keeper see "Can't serve with kids yet"?**
+What decides it is `church_serving._access`'s `checks`. The owner and every Admin always have it.
+A Manager the page admits has it when **any one** of these holds:
+
+1. **Who sees what is not on** (`CHURCH_AREAS` anything but `on`): `_access` reads no areas then,
+   so every admitted Manager reads who's cleared.
+2. **Its areas are the whole church**: `church_areas.my_areas` gives none (no pick and nothing to
+   guess from), which `_access` reads as everything.
+3. **Its areas include Kids & youth or People & care** (the church's pick on the login, else
+   Chief's guess), whatever duties it holds.
+4. **It holds the `background_checks` duty** (`church_duties.holds`, `record`). The Sunday &
+   Serving lane starts with it (`church_duties.STARTER`; the owner's 2026-11-02 call made checks
+   Sunday & Serving's). A login on one of the church's own jobs holds it only when it is on that
+   login's sheet; a Manager with no lane, when its areas include Kids & youth. Once the duty is
+   moved to someone else, only the logins it moved to hold it.
+
+A Manager on the Sunday & Serving lane is written with the areas Worship & media alone, so with
+Who sees what on and the duty where the lane starts it, it **does** see it, by 4. If the duty was
+moved away it doesn't, unless 1 to 3 says otherwise (pinned:
+`test_the_volunteers_keeper_reads_checks_by_the_background_checks_duty`, and by areas without the
+duty, `test_a_reader_cleared_by_their_areas_sees_it_without_the_checks_duty`). Whether the duty
+sits with the volunteers keeper at the owner's church, and what that login's areas are, was not
+checked against production in this PR.
+
+### 8.3 The shape, field by field
+
+An example, trimmed (the fixture church's week of Nov 22, read by its volunteers keeper on Wednesday
+Nov 18):
+
+```json
+{
+  "week": {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": false,
+           "prev": "2026-11-15", "next": "2026-11-29"},
+  "counts": {"on": 6, "open": 7, "away": 2, "hours": 9.5},
+  "look": [
+    {"kind": "short", "title": "Kids is short one on Sunday: Nursery.",
+     "details": ["Dara Quinn is away. Two people on the Kids Check-in team are free that morning."],
+     "service_id": "…", "day": "2026-11-22",
+     "find": {"group_id": "…", "service_id": "…", "day": "2026-11-22"}},
+    {"kind": "short", "title": "Worship is short one on Sunday: Vocals.",
+     "details": ["The worship team fills this in ChurchSavvy."], "service_id": "…", "day": "2026-11-22",
+     "find": null},
+    {"kind": "no_answer", "title": "Kids: Toby Wells hasn't answered for Sunday.",
+     "details": ["Toby was asked on Monday."], "service_id": "…", "day": "2026-11-22", "find": null},
+    {"kind": "cant_serve_kids", "title": "Kids: Lila Penn can't serve with kids yet.",
+     "details": ["Lila's background check isn't on record. Lila is on for Sunday."],
+     "service_id": "…", "day": "2026-11-22", "find": null}
+  ],
+  "departments": [
+    {"department_id": "…", "group_id": null, "name": "Kids", "led_by": "Kara Bell", "churchsavvy": false,
+     "open": 4, "label": "4 open",
+     "teams": [{"group_id": "…", "name": "Kids Check-in", "door": "volunteers", "churchsavvy": false}],
+     "services": [
+       {"service_id": "…", "day": "2026-11-22", "weekday": "Sunday", "time": "10:30",
+        "words": "Sunday 10:30 AM", "kind": "service", "title": "Sunday service", "past": false,
+        "rows": [
+          {"group_id": "…", "team": "Kids Check-in", "door": "volunteers", "place_id": "…",
+           "place": "Nursery", "slot": 2, "person": {"contact_id": "…", "name": "Dara Quinn"},
+           "who": "Dara Quinn", "state": "away", "state_words": "Away", "minutes": 90,
+           "hours_words": "1.5 hours", "find": {"group_id": "…", "service_id": "…", "day": "2026-11-22"},
+           "note": null}]},
+       {"service_id": "…", "day": "2026-11-26", "weekday": "Thursday", "time": "19:00",
+        "words": "Thursday 7 PM · Outreach night", "kind": "event", "title": "Outreach night",
+        "past": false, "rows": ["…"]}]}
+  ],
+  "can": {"hours": true, "checks": true, "change": ["volunteers"]}
+}
+```
+
+**`week`**
+
+| Field | What it is |
+|---|---|
+| `from`, `to` | The Sunday and the Saturday shown (`YYYY-MM-DD`, the church's clock). |
+| `words` | The heading: "Nov 22 to 28", or "Nov 29 to Dec 5" across a month. |
+| `this_week` | The week we're in, on the church's clock. |
+| `prev`, `next` | The Sundays of the weeks either side, to pass back as `start`; `null` past the bounds (52 weeks back, 26 ahead), so the arrow hides. |
+
+**`counts`** (the four at the top; the whole week, every service in it, past or to come)
+
+| Field | What it is | The mock's label |
+|---|---|---|
+| `on` | Places with someone on them who said yes or hasn't answered yet (and isn't away that day). Someone who can't serve with kids yet still counts here, for every reader, so the count never gives it away. | On the schedule |
+| `open` | Places nobody is on: never asked, a no, offered to the team and not taken, **or** someone on it who is away that day. | Open places |
+| `away` | People on the Sunday teams (every team shown) with an away date (`serve_away`, the facts) touching this week, each once. A waiting ask is never counted. | Away |
+| `hours` | Hours this calendar year (to today) of this week's people (everyone the rows name), one decimal. `null` when this login doesn't read hours: show nothing, not 0. | Hours this year |
+
+**`look`** ("Look at first"), most urgent first: by service time, then short, no answer, can't
+serve with kids yet; within those, the Volunteers' door before ChurchSavvy's, then the cards'
+order. Only services still to come make a line.
+
+| Field | What it is |
+|---|---|
+| `kind` | `short`, `no_answer`, `cant_serve_kids`, or `clear` (the one line when nothing needs a look). For the frontend's icon or colour only; never show it. |
+| `title` | The line, in full. `short`: "{department} is short {one, two…} on {day}: {places}." (a place needing two reads "Nursery (2)"). `no_answer`: "{department}: {name} hasn't answered for {day}." `cant_serve_kids`: "{department}: {name} can't serve with kids yet." `clear`: "Everything is filled for Sunday." (every day still to come at which some team has a place: "for Sunday and Thursday"; a service no team has a place at, such as an event date with only ChurchSavvy's teams, is never named), "This week's services have passed." (every service with places has started), "Nothing is on the schedule this week." (no service this week at which a team has a place) or "No teams are on Who serves when yet." `{day}` is the weekday, with the time when the week has two services that weekday ("Sunday at 9 AM"). A team on no department's card says its own name where a department's would be ("Parking Team: …"). |
+| `details` | The smaller lines under it, in full, each its own line (may be empty). `short`: one per person on a place who is away ("{name} is away. Two people on the {team} team are free that morning.", "One person…", "Nobody else…"; morning, afternoon or evening by the service's time), and "The worship team fills this in ChurchSavvy." for ChurchSavvy's door. `no_answer`: "{first name} was asked on Monday." (today, yesterday, a weekday within the week, else "on Nov 9"; no line when the ask has no time). `cant_serve_kids`: "{first name}'s background check isn't on record. {first name} is on for Sunday." (or "was asked for Sunday"). |
+| `service_id`, `day` | The service the line is about (`null` on `clear`). |
+| `find` | For a `short` line on the Volunteers' door: `{group_id, service_id, day}` of the first short team, for a "Find someone" button to Who serves when (see rows). `null` otherwise. |
+
+**`departments`**: the cards, in the church's own order (the leaders map's active departments, by
+their order), then one card for each Sunday team that hangs from no department (in Who serves
+when's team order). A department with no Sunday team has no card.
+
+| Field | What it is |
+|---|---|
+| `department_id` | The department's id; `null` on a team's own card. |
+| `group_id` | On a team's own card, the team's id; `null` on a department's. |
+| `name` | The department's name, or the team's on its own card. |
+| `led_by` | The department's leader's name; on a team's own card, the team's own leader (the first by name); `null` when there is none (show nothing). "led by {led_by}". |
+| `churchsavvy` | Every team on the card is ChurchSavvy's: show the "Scheduled in ChurchSavvy" chip on the card. (`teams[].churchsavvy` says it per team, for a card with both.) |
+| `open` | Open places on the card this week (as `counts.open`). |
+| `label` | "{n} open", "Filled", or "Nothing this week" (no places this week at all), in full. |
+| `teams` | `[{group_id, name, door, churchsavvy}]`: its Sunday teams. `door` is `volunteers` or `churchsavvy` (never shown). |
+| `services` | When it serves this week: the services and event dates at which any of its teams serve (ChurchSavvy's teams never serve an event date), soonest first. |
+
+**`departments[].services[]`**
+
+| Field | What it is |
+|---|---|
+| `service_id`, `day`, `weekday`, `time` | The service; `time` is 24-hour `HH:MM` on the church's clock. |
+| `words` | "Sunday 10:30 AM", or for an event date "Thursday 7 PM · Outreach night": the line to show. |
+| `kind`, `title` | `service` or `event`, and its own title. |
+| `past` | It has started. A past service keeps its rows, makes no "Look at first" line and offers no "Find someone". |
+| `rows` | One per place and spot (a place that needs two people has two rows, `slot` 1 and 2), team by team in Who serves when's order, each team's places in its order. |
+
+**`departments[].services[].rows[]`**
+
+| Field | What it is |
+|---|---|
+| `group_id`, `team`, `door` | The team the place is on (its name is shown when a card has more than one team). |
+| `place_id`, `place`, `slot` | The place and which of its spots. |
+| `person` | `{contact_id, name}` of whoever is on it, or `null` for an open place. |
+| `who` | The name to show, or "Open place". |
+| `state` | `on`, `no_answer`, `open`, `away`, `cant_serve_kids`; never shown. |
+| `state_words` | "On", "No answer yet", "Open", "Away", "Can't serve with kids yet": show this. |
+| `minutes`, `hours_words` | That person's serving this year (`0`, "No hours yet"; "45 minutes"; "1 hour"; "3 hours"; "1.5 hours"). Both `null` on an open place, and on every row for a login that doesn't read hours. |
+| `find` | `{group_id, service_id, day}` on an open or away place of a Volunteers' team at a service still to come: "Find someone", opening Who serves when's Volunteers door on that team and day. `null` otherwise. |
+| `note` | On an open or away place of a ChurchSavvy team: "The worship team fills this in ChurchSavvy." (show it where "Find someone" would be); `null` otherwise. |
+
+**`can`**: `hours` and `checks`, whether this login reads hours and who's cleared (as `status`
+says); `change`, the doors (`volunteers`, `churchsavvy`) whose teams it changes in Who serves when.
+The page needs none of them to draw itself; they say why a field is `null`.
+
+### 8.4 Hours and "Can't serve with kids yet"
+
+- **Who sees them is church_serving's rule, asked of `church_serving._access` itself.** A login it
+  turns away (its areas leave Serving out and it doesn't do the background checks, or
+  `CHURCH_SERVING` closed to it) gets no hours: every `minutes`, `hours_words` and `counts.hours`
+  is `null`. A login it lets in but doesn't let read who's cleared (`checks` false) never sees
+  "Can't serve with kids yet": that person is `on` (or `no_answer`), no line says it, and the page
+  is byte for byte the page it would be if their check were on record (pinned).
+- **The hours are church_serving's own arithmetic** (`minutes_of`): each yes this year by the team's
+  length or the plan's span, two places one day counted once, a sub's yes theirs, a group gathering
+  they led and were marked at, hours the office added; away days never. Read for the week's people
+  alone and bounded to the year: the year's services' ids first, then these people's yeses at those
+  services (both lists chunked, sixty ids each), then those services' plans, their away dates, their
+  leads and their records, chunked and paged. So they equal what the Serving page gives the same
+  people (pinned against `overview`, with a gathering, an away day, two places one Sunday and the
+  office's hours), and a long history costs nothing more. The Serving page's own reads (the whole
+  church, and one member's My serving) are unchanged.
+- **"Can't serve with kids yet" is church_serving's `blocked`** (`checks_of`, `check_state`): no
+  check on record (the latest of the leader approval's and one recorded on Serving) and on the
+  schedule with Kids & youth (a Sunday team `church_serving._kids_teams` places there), at a service
+  of this week still to come. Under 18 is never blocked. A check that ran out, or runs out within
+  the month, is not this state, and neither is any check on record (Serving's page shows those).
+  Only worked out for a login that may read it: anyone else's request makes no check read at all
+  (no leaders' dates, no Kids & youth teams; pinned on the reads).
+
+### 8.5 Decided in the build (beyond the brief; none is the pastor's call)
+
+1. **Who reads it**: the owner, an Admin, and a Manager that keeps either door, where keeping is
+   changing its teams (`_owners_for`) **or** holding a duty the office opens that door's Who serves
+   when for (`READS`). The second half is the frontend's own menu rule for the Volunteers' pages;
+   without it the background-checks holder (who sees the Volunteers group) would be refused.
+2. **Counts cover the whole week**, past days included, as Who serves when shows a week. An away
+   person's place is open; a "can't serve with kids yet" person's place is on the schedule, for
+   every reader.
+3. **Away is the facts only.** Someone who asked to be away and still waits is not away here, not
+   counted, and counts as free ("Two people… are free"); Who serves when, where they are picked,
+   already skips them. Nothing here reads `church_away_asks`.
+4. **"Free"** is the team's people who aren't away that day by the facts and aren't on another
+   place at that service. It ignores checks and how many Sundays a month they serve; Who serves
+   when's own list ranks them when someone is picked.
+5. **Short lines are one per department, service and door**, listing the places, not one per
+   place, so a new church with thirty open places reads a few lines. ChurchSavvy's teams get their
+   short lines too, under the Volunteers' door's, with the ChurchSavvy line and no "Find someone".
+6. **A department with no Sunday team has no card**; a team two departments name is on the first
+   department's card only (nothing counted twice); with the leaders map closed for a church every
+   team is its own card. A team's own card is led by its own leader.
+7. **Hours are this calendar year to today**, whatever week is shown, and are those of the people
+   the week's rows name (someone away included). A "no" never shows who said it.
+8. **Bounds**: 52 weeks back, 26 ahead (event dates are added up to 180 days out). A start that
+   isn't a date is this week, never a 400.
+9. **Only a service still to come** makes a "Look at first" line, offers "Find someone" or can show
+   "Can't serve with kids yet"; a past service is what happened.
+10. **A ChurchSavvy-alone church has no week** (404), as it has no office or doors. Who serves when
+    closed (`SUNDAY_PLANNING`) closes it too.
+11. **Status** is quiet (all false, 200) for everything but a login with no seat, as Serving's is.
+12. **"Filled" is said only of days a team has places** that week: with no places at all, or with
+    an event date only ChurchSavvy's teams have places around, the line is "Nothing is on the
+    schedule this week." or names the days that do have places (changed in review).
+
+Seen in review and left as they are:
+
+- **Further out than Serving looks.** The week marks "Can't serve with kids yet" at any service
+  still to come in the week shown, up to 26 weeks out, while Serving's checks call someone
+  `blocked` only when they are on with kids within `SOON_DAYS` (28) and `none` farther out. Both
+  pages are read by the same people (church_serving's rule), so this tells no one anything new; it
+  only means a week two months out can say it while Serving's list says "none on record".
+- **A Manager who loses its duties can still read for up to a minute on a replica.**
+  `church_duties.standing` is kept 60 seconds a replica, as it is for `sunday_planning._owners_for`
+  and every duty check. The same for a login's areas.
+- **The People & Care lane is refused while a no-lane Manager with like areas is let in.** The lane
+  starts with People & Care's duties, none of which opens Who serves when; a Manager with no lane
+  holds every duty in its areas, so one whose areas include Kids & youth holds `background_checks`
+  and keeps the Volunteers' door. That is how duties work today (`church_duties._area_duties`);
+  moving `background_checks` (or `serve_teams`) to a People & Care login lets it in.
+
+### 8.6 Left out
+
+- The department leader's own view in the member app (later, as the brief says).
+- A check that ran out, or runs out soon, is not a line here (Serving's page has it).
+- Who asked someone to cover their place (`swap_to`) is not shown; they read as On until the cover
+  says yes, as Who serves when has it.
+- The ask's state on the person's side (sent or still waiting for the sweep) is not shown; "was
+  asked on Monday" is when it was made.
+- A place's spots past its number (a place cut from three to two) and a retired place are not
+  rows, as Who serves when shows them.
+- No caching: each read is fresh (about fifty reads a week for the fixture church, most of them the
+  gate's duty, area and map reads).
+
+### 8.7 Tests
+
+`__tests__/test_church_week.py` at New Hope (church_three; every name made up), on
+church_schedule_fake's tables with the real gate, duties, areas, leaders map and church_serving:
+the page as the volunteers keeper reads it, word for word; who reads it (owner, Admin, the two
+doors' keepers, the Kids & youth Manager) and who is refused (403 for two office Managers, a Member
+and a Viewer; 404 for another church's owner and a stranger; 404 for a business that isn't a church
+and a ChurchSavvy-alone church); every read this church's and quoted, another church's rows that
+name its places changing nothing, and a typed start never reaching an address; a team of 1,150
+read whole; "Can't serve with kids yet" byte-for-byte hidden, a full Sunday reading full to whoever
+can't see checks, the background checks duty granting it and moving it away taking it; hours by
+church_serving's rule; `minutes_of` and `checks_of` equal to the Serving page's; no note, ask,
+reason, phone, email or stranger's name; plain words; the switch; the bounds; a failed read a 503.
+Each rule was broken once on purpose and its test went red, then green again (the PR lists them).
+From the review: for whoever may see checks, only none on record reads "Can't serve with kids yet"
+(a check that ran out, runs out soon, is recorded on Serving or on the Kids leaders page, and
+someone under 18 read On), the latest check date counts, a past service never says it, a login
+cleared by its areas without the checks duty sees it, and nobody else's request reads a check;
+the hours equal the Serving page's with a gathering, an away day, two places one Sunday and the
+office's hours, and read only this year's yeses; "Everything is filled" is said only of days with
+places.
