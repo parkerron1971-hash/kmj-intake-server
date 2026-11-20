@@ -285,13 +285,17 @@ def test_a_groups_page_head_buttons_and_tabs(gchurch, monkeypatch):  # noqa: F81
     assert re.findall(r">(Posts|Events|Prayer|Members)<", tabs) == ["Posts", "Events", "Prayer", "Members"]
 
 
-def test_the_box_to_write_goes_where_this_member_writes(gchurch, monkeypatch):  # noqa: F811
+def test_the_box_to_write_opens_the_composer_for_this_group(gchurch, monkeypatch):  # noqa: F811
+    # Members post in their own groups (member_posts): the box opens /my/post with the group picked;
+    # a leader's Board announcement is a tap away.
     monkeypatch.setenv("MEMBER_LUMEN", "on")
     html = group_page(gchurch, tmm.ANA, f"/my/groups/{tmm.GRP}").text
-    assert f'<a class="lm-gin" href="/my/groups/{tmm.GRP}/chat">Write something to the group…</a>' in html
+    assert f'<a class="lm-gin" href="/my/post?group={tmm.GRP}">Write something to the group…</a>' in html
+    assert "Post an announcement to the Board" not in html
     leader = next(m for m in gchurch.t["group_members"] if m["group_id"] == tmm.GRP and m.get("role") == "leader")
     html = group_page(gchurch, leader["contact_id"], f"/my/groups/{tmm.GRP}").text
-    assert f'<a class="lm-gin" href="/my/groups/{tmm.GRP}/board#post">' in html and "You lead" in html
+    assert f'<a class="lm-gin" href="/my/post?group={tmm.GRP}">' in html and "You lead" in html
+    assert f'href="/my/groups/{tmm.GRP}/board#post">Post an announcement to the Board</a>' in html
 
 
 def test_board_posts_are_feed_cards(gchurch, monkeypatch):  # noqa: F811

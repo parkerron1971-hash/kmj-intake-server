@@ -958,24 +958,62 @@ def _lumen_posts(biz: Dict[str, Any], g: Dict[str, Any], data: Dict[str, Any], m
     study_line = group_study.home_line(g, st, _ic, _e, _base(g["id"], "meet"))
     if study_line:
         parts.append(f'<div class="gs-list">{study_line}</div>')
-    # Where this member writes to the group today: a leader, the Board; anyone
-    # else, the chat (while it's open to them).
-    write = (_base(g["id"], "board") + "#post" if leader else _base(g["id"], "chat") if chat else "")
-    if write:
-        parts.append(lc.composer(me, write))
+    # The box to write: anyone in the group posts here (member_posts, its
+    # composer, this group picked); a leader's Board announcement is a tap away.
+    parts.append(lc.composer(me, f"/my/post?group={_e(g['id'])}"))
+    if leader:
+        parts.append(f'<a class="lm-cxmore" href="{_base(g["id"], "board")}#post">Post an announcement to the Board</a>')
     pinned = [p for p in posts if p.get("pinned") and not p.get("church")][:1]
     church_new = [p for p in posts if p.get("church") and not p.get("i_acked")][:1]
     rest = [p for p in posts if p not in pinned and p not in church_new]
     shown = pinned + church_new + rest[:LUMEN_POSTS]
-    cards = "".join(_lumen_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in shown)
+    # The group's own posts (a leader's News for the group, its members'
+    # posts: member_posts.group_feed), between the Board's by time.
+    mposts = data.get("mposts") or []
+    items = [(str(p.get("publish_at") or p.get("created_at") or ""), "b", p) for p in rest[:LUMEN_POSTS]]
+    items += [(str(p.get("publish_at") or p.get("created_at") or ""), "m", p) for p in mposts]
+    items.sort(key=lambda x: x[0], reverse=True)
+    import member_app_photos as photos
+    pool = photos.photos(biz, None) if mposts else []
+    used: set = set()
+    tz = ((data.get("meet") or {}).get("tz"),) if (data.get("meet") or {}).get("tz") else None
+    if mposts and tz is None:
+        import group_gatherings
+        tz = (group_gatherings.zone(biz),)
+    cards = "".join(_lumen_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in pinned + church_new)
+    cards += "".join(_lumen_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) if k == "b" else
+                     _lumen_member_card(biz, p, g, me, open_=bool(data.get("comments_open")), leader=leader, pool=pool,
+                                        used=used, tz=tz)
+                     for _at, k, p in items)
     if cards:
-        more = (f'<a class="lm-cxmore" href="{_base(g["id"], "board")}">See all posts</a>'
+        more = (f'<a class="lm-cxmore" href="{_base(g["id"], "board")}">See all of the Board</a>'
                 if len(shown) < len(posts) else "")
         parts.append(f'<div class="lm-gband"></div><div class="lm-gposts">{cards}</div>{more}')
     else:
-        parts.append(f'<p class="gs-empty">Nothing posted yet.'
-                     f'{" Post the first word to your group." if leader else " When a leader posts, it shows here."}</p>')
+        parts.append('<p class="gs-empty">Nothing posted yet. Write the first one.</p>')
     return "".join(x for x in parts if x)
+
+
+def _lumen_member_card(biz: Dict[str, Any], p: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any], *, open_: bool,
+                       leader: bool, pool: List[str], used: set, tz) -> str:
+    """One of the group's own posts as Home's feed card (member_lumen_feed),
+    its reactions and comments coming back to this page. The writer's own
+    post that the check held shows only to them, marked; its writer and the
+    group's leaders can take a member's post down."""
+    import member_lumen_feed as lf
+    import member_posts
+    from member_portal import _e
+    pid = _e(p["id"])
+    tools = ""
+    if p.get("source") == "member" and (leader or str(p.get("posted_by") or "") == str(me["id"])):
+        tools = (f'<form class="gs-acts lm-gtools" method="post" action="/my/post/remove"><input type="hidden" name="id" value="{pid}">'
+                 f'<button class="gs-mini warn" type="submit">Take it down</button></form>')
+    if p.get("held"):
+        return (f'<article class="lm-fc lm-gpost is-held" id="p-{pid}">{lf._source(biz, p, tz)}{lf._picture(p)}{lf._words(p)}'
+                f'<p class="lm-cnote lm-gheld">{lf._ic("shield", 14)}<span>{_e(member_posts.DONE["post_held"])} '
+                f'Only you can see it until then.</span></p>{tools}</article>')
+    html = lf.card(biz, p, {}, open_=open_, me=me, pool=pool, used=used, tz=tz, back=_base(g["id"]))
+    return html[:-len("</article>")] + tools + "</article>" if tools and html.endswith("</article>") else html
 
 
 def _and(names: List[str]) -> str:
@@ -1243,6 +1281,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                         f'<input type="hidden" name="action" value="leave"><button class="gs-mini warn" type="submit">Leave this group</button></form>')
     elif lumen:
         content = _lumen_posts(biz, g, data, me, leader=leader, chat=chat, back=back, size=size)
+        if data.get("mposts"):
+            # Love / Praying / Amen and comments answer in place, as on Home.
+            import member_lumen_feed as lf
+            import member_portal_news as mpn
+            script = mpn.RX_JS + lf.JS
     else:
         import group_study
         parts = []
@@ -1383,7 +1426,23 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             gn = await asyncio.to_thread(mpt.chat_notes, biz, str(me["id"]), gid, [], mark=True)
             if gn:
                 data["chat"] = {**data["chat"], "notes": gn, "notes_tz": await asyncio.to_thread(mpt._zone, biz)}
-    if data and data.get("role") and tab in ("", "meet"):
+    import member_lumen
+    if data and data.get("role") and tab == "" and member_lumen.page():
+        # The new look's Posts tab: the gathering and the study as below, and,
+        # read alongside them, the group's own posts (member_posts.group_feed: a
+        # leader's News for the group and its members' posts); whether comments
+        # are open only when there are posts to comment on.
+        import church_news as cn
+        import group_gatherings
+        import group_study
+        import member_posts
+        data["meet"], data["study"], data["mposts"] = await asyncio.gather(
+            asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"]),
+            asyncio.to_thread(group_study.view, biz, data["group"], leader=data.get("role") == "leader"),
+            asyncio.to_thread(member_posts.group_feed, str(biz["id"]), gid, str(me["id"])))
+        if data["mposts"]:
+            data["comments_open"] = await asyncio.to_thread(cn.comments_open, biz)
+    elif data and data.get("role") and tab in ("", "meet"):
         import group_gatherings
         data["meet"] = await asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"])
         import group_study

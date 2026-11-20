@@ -2004,6 +2004,16 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         data, new_card = await asyncio.gather(mlp.connect_data(biz, me, preview=preview),
                                               asyncio.to_thread(member_lumen.new_here_card, biz, me))
         return _page(mlp.render_connect(biz, site, request, me, data, new_card=new_card or ""))
+    # A member's post (member_posts): the new look's composer. The owner's
+    # preview shows it (nothing saves) with the church's posting switch.
+    if sub == "/my/post":
+        import member_lumen
+        if not member_lumen.page():
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        import member_posts
+        html, status = await member_posts.serve(request, biz, site, me,
+                                                owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:")))
+        return _page(html, status)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr

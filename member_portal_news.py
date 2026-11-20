@@ -74,7 +74,7 @@ REACT_LABEL = {"love": "Love", "pray": "Praying", "amen": "Amen", "cheer": "Cele
 CARD_RX = {"message": ("amen", "pray"), "celebration": ("cheer", "love"), "milestone": ("cheer", "love"),
            "good_news": ("cheer", "love"), "praise": ("amen", "love")}
 CARD_RX_DEFAULT = ("love", "amen")
-_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share|/write)?)?$")
+_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share|/write)?|/groups/[0-9a-fA-F-]{36})?$")
 
 # The canvas's sheet (news.css) on the member app's tokens: the church colour
 # is --acc-fill / --acc / --acc-deep; gold, teal, violet and coral are the
