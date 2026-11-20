@@ -172,8 +172,10 @@ def test_the_reader_is_calm(bible, fake, monkeypatch):  # noqa: F811
     assert '<b aria-hidden="true">1</b>' in on and "John · KJV" in on
     # Today's reader: tap a verse, the dock, its marks.
     assert mpb.READER_JS in on
-    for act in ("note", "copy", "share", "bookmark", "clear", "close", "save-note"):
+    for act in ("note", "copy", "bookmark", "clear", "close", "save-note"):
         assert f'data-act="{act}"' in on, act
+    # Share opens the new look's share sheet with the tapped verse (member_lumen_share).
+    assert 'class="lm-share" data-share-kind="verse" data-share-from="reader"' in on and 'data-act="share"' not in on
     assert 'class="bb-v hl-gold" data-v="5"' in on and "bb-nm" in on and "bb-bm" in on
     # Aa holds the size, the font and the translation.
     panel = on[on.index('id="bb-aa-panel"'):]

@@ -215,7 +215,9 @@ def test_watch(church, fake, monkeypatch):  # noqa: F811
     assert '<h2 class="lm-disp m" id="lm-feat-h">' in feat[:3000] and "Hope Has a <em>Name</em>" in feat[:3000]
     assert "Latest message · " in feat[:3000] and "Pastor James · Isaiah 9:6" in feat[:3000]
     assert 'class="lm-btn lm-light"' in feat[:3000]
-    assert "Listen</a>" in feat[:3000] and 'data-share="/sermons/' in feat[:3000]
+    assert "Listen</a>" in feat[:3000]
+    # Share is the new look's share sheet (member_lumen_share): the public message, its story picture.
+    assert 'class="lm-share lm-btn ghost lm-sq" href="/sermons/' in feat[:3000] and 'data-share-kind="message"' in feat[:3000]
     posters = html[html.index('class="lm-rail lm-sposts"'):]
     assert f'class="lm-spost" href="/my/sermons?series={SER}"' in posters and "2 messages" in posters
     assert "Light Has <em>Come</em>" in posters

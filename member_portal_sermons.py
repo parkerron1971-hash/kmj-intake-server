@@ -247,12 +247,21 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
     if s.get("scripture"):
         import member_portal_bible as mpb
         scrip = f'<span class="mb-scrip">{ui.icon("book", 15)}{mpb.scripture_links(s["scripture"])}</span>'
+    share = (f'<button class="mp-go mp-go-2" type="button" data-share="/sermons/{_e(s["id"])}" '
+             f'data-title="{_e(s.get("title"))}">{ui.icon("share", 17)}<span>Share</span></button>')
+    import member_lumen
+    lumen = member_lumen.page()
+    if lumen:
+        # The new look's share sheet (member_lumen_share): the same public
+        # link, with Your story, Text a friend, Copy link and More apps.
+        import member_lumen_share as mls
+        share = mls.message_link(lib, s, site, photos.photos(biz, site), f'{ui.icon("share", 17)}<span>Share</span>',
+                                 cls="mp-go mp-go-2")
     parts += [f'<div class="mb-player">{player}</div>',
               f'<p class="mb-kick" style="margin-top:18px">{_e(eyebrow)}</p>',
               f'<h1 style="margin:4px 0 4px">{_e(s.get("title"))}</h1>',
               f'<p class="mb-meta">{_e(s.get("speaker") or "")}</p>{scrip}',
-              f'<div class="mb-acts">{give}<button class="mp-go mp-go-2" type="button" data-share="/sermons/{_e(s["id"])}" '
-              f'data-title="{_e(s.get("title"))}">{ui.icon("share", 17)}<span>Share</span></button></div>']
+              f'<div class="mb-acts">{give}{share}</div>']
     if not (s.get("video_url") or s.get("audio_url") or "").strip():
         parts.append('<p class="mp-muted" style="margin-top:14px">The recording for this message isn\'t posted yet.</p>')
     if s.get("summary"):
@@ -270,7 +279,7 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
                          f'<ul class="mb-list mb-cards" style="--inset:124px">{"".join(_row(x, lib, pal, site) for x in others)}</ul>')
     back = (f"/my/sermons?series={sid}", series) if series else ("/my/sermons", "Watch")
     return _shell(biz, site, s.get("title") or "Message", "".join(parts), tab="watch", who=who,
-                  script=SHARE_SCRIPT, back=back)
+                  script="" if lumen else SHARE_SCRIPT, back=back)
 
 
 def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,

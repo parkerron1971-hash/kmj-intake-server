@@ -252,6 +252,7 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
     import member_app_photos as photos
     import member_app_samples as samples
     import member_app_ui as ui
+    import member_lumen_share as mls
     import member_lumen_ui as lm
     import member_portal_sermons as mps
     from member_portal import _shell, palette_for
@@ -290,8 +291,7 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
         f'<h2 class="lm-disp m" id="lm-feat-h"><a href="{href}">{lm.italic_last(s.get("title"))}</a></h2>'
         f'{f"<p class=lm-meta>{_e(meta)}</p>" if meta else ""}'
         f'<div class="lm-acts"><a class="lm-btn lm-light" href="{href}">{ui.icon("play", 15)}Watch</a>{listen}'
-        f'<button class="lm-btn ghost lm-sq" type="button" data-share="/sermons/{_e(s["id"])}" data-title="{_e(s.get("title"))}" '
-        f'aria-label="Share">{ui.icon("share", 18)}</button></div></section>')
+        f'{mls.message_link(lib, s, site, pool, ui.icon("share", 18), cls="lm-btn ghost lm-sq", label="Share")}</div></section>')
     by_series: Dict[str, List[Dict[str, Any]]] = {}
     for x in lib["sermons"]:
         sid = str(x.get("series_id") or "")
@@ -314,7 +314,8 @@ def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str
         for x in lib["sermons"])
     parts.append(f'<section aria-labelledby="lm-all-h">{lm.section("All messages", hid="lm-all-h")}'
                  f'<div class="lm-list">{rows}</div></section>')
-    return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who, script=mps.SHARE_SCRIPT)
+    # Share is the new look's sheet (member_lumen_share, which _shell adds).
+    return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who)
 
 
 # ─── Live ────────────────────────────────────────────────────────────
