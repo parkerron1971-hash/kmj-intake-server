@@ -224,8 +224,8 @@ def test_the_devotional_tab(bible, fake, monkeypatch):  # noqa: F811
     more = more[:more.index("</div>")]
     assert "Psalms at Night" in more and "Seven Days of Rest" not in more and "7 days" not in more
     assert 'href="/my/bible/plans"' in html                                              # All
-    import member_lumen_bible as mlb
-    assert mlb.SHARE_JS in html and '<h1 class="mp-sr">Devotional</h1>' in html
+    import member_lumen_share as mls
+    assert html.count(mls.js_url()) == 1 and '<h1 class="mp-sr">Devotional</h1>' in html   # the share sheet's script
     assert "data-devo-listen" not in html or mld.CARD_JS in html
 
 
@@ -375,18 +375,16 @@ def test_a_verse_share_is_the_share_contracts():
 
 def test_the_scripts_send_nothing_and_keep_the_history_clean():
     import member_lumen_bible as mlb
-    seg, read, share = mlb.SEG_JS, mlb.READ_JS, mlb.SHARE_JS
+    seg, read = mlb.SEG_JS, mlb.READ_JS
     assert "location.replace(a.href)" in seg and "prefers-reduced-motion: reduce" in seg
     assert "e.metaKey||e.ctrlKey" in seg                                                 # a new tab still opens one
-    for js in (seg, read, share):
+    for js in (seg, read):
         assert "fetch(" not in js and "XMLHttpRequest" not in js and "sendBeacon" not in js
     # Listen: the phone's own voice, shown only where it can speak, verse by verse, stopped on leaving
     assert "window.speechSynthesis" in read and "SpeechSynthesisUtterance" in read and "say.hidden=false" in read
     assert "pagehide" in read and "ss.cancel()" in read
     # Share: the verse rides on the share link; the phone's own share only when no share sheet took it
     assert "data-share-title" in read and "data-share-id" in read and "data-share-text" in read and "MutationObserver" in read
-    assert "if(!a||e.defaultPrevented)return;" in share and "navigator.share" in share
-    assert "window.addEventListener('load'" in share                                   # after any share sheet's listener
 
 
 def test_the_tabs_css_is_the_bibles_block_before_the_type():

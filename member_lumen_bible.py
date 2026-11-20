@@ -242,8 +242,8 @@ def card_sheet(biz: Dict[str, Any], site, photo: str, logo: str) -> str:
 </div>"""
 
 
-# A shared verse's public page (the share contract: member_lumen_share.VERSE_HREF):
-# the church's own site, where the member app lives too, so relative.
+# A shared verse's public page (member_lumen_share.VERSE_HREF): the church's
+# own site, where the member app lives too, so relative.
 VERSE_HREF = "/"
 
 
@@ -252,15 +252,14 @@ def verse_share(label: str, words: str, tr: str, sid: str = "", *, cls: str = ""
     """A verse's share control (contract 1, kind=verse), its attributes as
     the share sheet reads them: the reference and version, the words cut
     short, the story picture's id (BOOK.CH.V[-W]), the words for the message
-    and the translation for the picture. Escaped here."""
+    and the translation for the picture (member_lumen_share.link, which
+    escapes it all)."""
     import bible_text as bt
+    import member_lumen_share as mls
     short = bt.TRANSLATIONS[tr]["short"]
     cut = words if len(words) <= 96 else re.sub(r"\s+\S*$", "", words[:94]) + "…"
-    attrs = (f'class="lm-share{" " + cls if cls else ""}" href="{VERSE_HREF}" data-share-kind="verse" '
-             f'data-share-title="{_e(label)} · {_e(short)}" data-share-sub="“{_e(cut)}”"'
-             + (f' data-share-id="{_e(sid)}"' if sid else "")
-             + f' data-share-text="“{_e(words)}” {_e(label)} ({_e(short)})" data-share-tr="{_e(tr)}"')
-    return f'<a {attrs}{f" aria-label={chr(34)}{_e(aria)}{chr(34)}" if aria else ""}>{inner}</a>'
+    return mls.link("verse", mls.VERSE_HREF, f"{label} · {short}", inner, sub=f"“{cut}”", sid=sid,
+                    text=f"“{words}” {label} ({short})", tr=tr, cls=cls, label=aria)
 
 
 def verse_id(ref_label: str, tr: str) -> str:
@@ -398,7 +397,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 {sheet}
 <script type="application/json" id="bb-marks">{data}</script>"""
     return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, lumen_reader=True,
-                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS + READ_JS + SHARE_JS + SEG_JS)
+                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS + READ_JS + SEG_JS)
 
 
 def moon_button(day: str, night_bg: str, night: Optional[bool]) -> str:
@@ -743,7 +742,7 @@ def render_devotional(biz, site, me, tr: str, sts, *, dot: bool = False, preview
     if sts:
         parts.append(more_devotionals(biz, site, sts, shown["id"] if shown else None))
     body = seg("devotional", dot) + '<h1 class="mp-sr">Devotional</h1>' + "".join(p for p in parts if p)
-    return _shell_tab(biz, site, me, "Devotional", body, script + (SHARE_JS if "lm-vodshare" in body else ""))
+    return _shell_tab(biz, site, me, "Devotional", body, script)
 
 
 # ─── Plans ───────────────────────────────────────────────────────────
@@ -932,26 +931,12 @@ s.addEventListener('click',function(e){var a=e.target.closest?e.target.closest('
  location.replace(a.href);});
 })();</script>"""
 
-# A verse's Share (.lm-share, kind=verse) when no share sheet took the tap
-# (the shared sheet calls preventDefault first): the phone's own share, or,
-# where there is none and the page has a toast, a copy to share, as today's
-# verse dock did; else the link opens. Registered once the page has loaded,
-# after any sheet's own listener.
-SHARE_JS = r"""<script>(function(){
-window.addEventListener('load',function(){window.addEventListener('click',function(e){
- var a=e.target.closest?e.target.closest('a.lm-share[data-share-kind="verse"]'):null;if(!a||e.defaultPrevented)return;
- var t=a.getAttribute('data-share-text')||a.getAttribute('data-share-title')||'',toast=document.getElementById('bb-toast');
- function tell(w){if(!toast)return;toast.textContent=w;toast.hidden=false;setTimeout(function(){toast.hidden=true;},1800);}
- if(navigator.share){e.preventDefault();navigator.share({text:t}).catch(function(){});}
- else if(navigator.clipboard&&toast){e.preventDefault();navigator.clipboard.writeText(t).then(function(){tell('Copied to share');},function(){tell('Copying was blocked');});}});});
-})();</script>"""
-
 # The reader's Look 5.1 moments, beside today's reader script and Lumen
 # Next's (which it leaves alone): the verse bar sits just over the tab bar
 # and the mini player when one is showing (member_mini; measured as the bar
 # opens; its CSS place is the fallback); its Share carries
-# the verse it was opened on (data-share-*, for the share sheet; without
-# one, SHARE_JS); the translation pill closes on a
+# the verse it was opened on (data-share-*, as the share sheet,
+# member_lumen_share, reads it); the translation pill closes on a
 # tap outside it; Listen reads the chapter aloud with the phone's own voice,
 # verse by verse from the one picked (or the first), marking the one being
 # read; nothing is sent anywhere, and the button shows only where the phone

@@ -18,7 +18,7 @@ decisions:
   - "Real addresses, no script needed: /my/bible is Read (the reader at the chapter read last, from the sol_bible cookie), /my/bible?tab=devotional|plans|saved|search the others; every old address works (/my/bible/<book>/<n> is Read at that chapter; /books, /notes, /plans, /reading, ?q= as they were). With script, switching tabs replaces the page in the history, so Back leaves the Bible instead of walking back through its tabs; tapping the tab you're on goes to the top."
   - "The segmented control is the page's (helper A owns the bars): sticky right under whatever top bar the shell draws (its height measured on the phone; a CSS place before that), with the search button beside it and, on Read, the reader's line of how far you've read along its lower edge. The tab bar stays while reading."
   - "Read keeps every reader feature: highlights (five colours), notes, Save, Copy, Make a card, versions, Aa (size and font; the translation is its own pill now, a <details> that opens without script), night via lm_night on top of the member's Look (#1981), the line of how far, the ink sweep. The chapter's number is in the church's colour, the book in small capitals, verse numbers quiet. The previous and next chapters are two buttons at the end (no longer floating, since the tab bar is there)."
-  - "The verse bar: the verse, Share (the shared sheet's .lm-share, kind=verse, data-share-from=reader so the sheet reads the tapped verse; data-share-id BOOK.CH.V, -text and -tr kept on it too), close; the five highlighters; Note, Copy, Save, Make a card. It sits just above the tab bar (measured). Without the sheet's script, Share falls back to the phone's own share, as the old dock did."
+  - "The verse bar: the verse, Share (the shared sheet's .lm-share, kind=verse, data-share-from=reader so the sheet reads the tapped verse; data-share-id BOOK.CH.V, -text and -tr kept on it too), close; the five highlighters; Note, Copy, Save, Make a card. It sits just above the tab bar, and above the mini player when a message is playing (member_mini, #1989), measured as it opens. Both Shares open #1986's share sheet (Your story, Text a friend, Copy link, More apps); the verse of the day's is member_lumen_share.link(), and its test now expects the sheet's script on the Bible tab."
   - "Devotional: member_lumen_devotional's green card with its fallbacks; This week, Monday to Sunday, a circle a day from real progress (read filled, today ringed, ahead plain, a day outside the devotional an empty place; open days are links); the verse of the day on the ivory card with Share (kind=verse, href '/', id like LAM.3.22-23); More devotionals: the church's others you can read now (not the one on top, not one still to come), the church's picture for each or a flat cover."
   - "Plans: the plans running for this member as 64px rings ('With your church · day 12' / 'The Gospels · day 5', Today: the reading, about N minutes, Read), a finished own plan quietly; then the plans not started, each a one-tap Start through today's POST /my/bible/plans/start (its letter square in a family colour)."
   - "Saved: highlights, notes and saved verses, newest first (the newest 40; all of them on /my/bible/notes): the colour bar, the verse, the note, 'John 1:14 · highlighted Tuesday', each opening the reader at that verse. Empty, preview and failed states are said."
@@ -46,9 +46,10 @@ strip) is gone; `/my/bible/plans` keeps the full plans & devotionals library.
 | /my/bible/john/1 | 1 | 1 | 1 |
 
 **Server-Timing** (median of 30 warm requests, switch on, main / branch):
-Bible tab 9.2 / 7.0 ms (5.7 with the dot kept), Devotional 8.8 / 6.3,
-Plans 8.1 / 6.8, Saved 9.5 / 6.3, Search 8.0 / 4.0, Reader 6.0 / 5.1, a
-devotional's day 5.2 / 4.9. The plans' minutes a day are worked out once per
+Bible tab 3.1 / 2.8 ms (2.2 with the dot kept), Devotional 3.1 / 2.3,
+Plans 3.2 / 2.3, Saved 3.1 / 2.2, Search 3.2 / 1.5, Reader 2.4 / 2.8, a
+devotional's day 3.0 / 2.5 (after #1994). A chapter page grew from 38.8 to 51.2 KB (the
+segmented control, the reader's bar and its two small scripts). The plans' minutes a day are worked out once per
 server copy and translation (27 ms).
 
 **Tests.** `__tests__/test_member_lumen_bible_tabs.py` (30) and the Bible,
