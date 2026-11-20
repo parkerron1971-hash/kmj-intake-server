@@ -287,10 +287,51 @@ async def list_refunds(
         stripe_account_id=biz_row["stripe_account_id"],
         params=params,
     )
+    out = _built_in_pagination(stripe_resp)
+    if str(biz_row.get("owner_id")) != str(user.id) and not _sees_givers(biz, user):
+        out["data"] = [_refund_without_giver(r) for r in out["data"]]
     return {
         "ok": True,
-        **_built_in_pagination(stripe_resp),
+        **out,
     }
+
+
+# The refunds door is "payouts": with giving as its own tick on, whoever
+# holds "bank and payouts" reads it, even without "who gave". The expanded
+# charge carries the giver (billing name, email, address, phone, card,
+# receipt email, the Stripe customer, metadata.giver_name), so for that
+# login the charge keeps only what is not a person: amounts, dates, status,
+# the payment method's kind, and the two source tags the tab labels by.
+_REFUND_CHARGE_KEYS = ("id", "object", "amount", "amount_captured", "amount_refunded", "currency", "created",
+                       "paid", "refunded", "status", "disputed", "captured", "livemode")
+_REFUND_META_KEYS = ("source_type", "source_id")
+
+
+def _sees_givers(business_id: str, user: AuthedUser) -> bool:
+    """church_money_gate.sees_givers; a failure is a no."""
+    try:
+        import church_money_gate
+        return bool(church_money_gate.sees_givers(business_id, user))
+    except Exception:  # noqa: BLE001 — closed on failure
+        return False
+
+
+def _refund_without_giver(refund: Any) -> Any:
+    if not isinstance(refund, dict):
+        return refund
+    r = dict(refund)
+    ch = r.get("charge")
+    if isinstance(ch, dict):
+        kept = {k: ch[k] for k in _REFUND_CHARGE_KEYS if k in ch}
+        md = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
+        kept["metadata"] = {k: md[k] for k in _REFUND_META_KEYS if k in md}
+        pmd = ch.get("payment_method_details") if isinstance(ch.get("payment_method_details"), dict) else {}
+        if pmd.get("type"):
+            kept["payment_method_details"] = {"type": pmd["type"]}
+        r["charge"] = kept
+    for k in ("metadata", "receipt_number", "destination_details"):
+        r.pop(k, None)
+    return r
 
 
 @router.get("/customers/{customer_id}/charges")
