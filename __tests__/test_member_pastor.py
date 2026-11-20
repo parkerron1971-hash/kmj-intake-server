@@ -201,9 +201,10 @@ def test_edit_mode_puts_change_on_the_tile(pastor, fake, monkeypatch):  # noqa: 
 def test_connect_has_one_quiet_row(pastor, fake, monkeypatch):  # noqa: F811
     c = _app(fake, monkeypatch)
     html = c.get("/my/connect").text
-    rooms = html[html.index('<div class="lm-rooms">'):]
-    assert '<a class="lm-room" href="/my/pastor">' in rooms and "<b>James Carter</b>" in rooms
-    assert "Your pastor · Lead Pastor" in rooms
+    # Look 5.1's More list (member_lumen_connect.more_rows): "Your pastor", the name and the title.
+    rooms = html[html.index('aria-labelledby="lm-more-h"'):]
+    assert '<a class="lm-mrow" href="/my/pastor">' in rooms and "<b>Your pastor</b>" in rooms
+    assert "James Carter · Lead Pastor" in rooms
     fake.t["church_leader_roles"].clear()
     mpa._KEPT.clear()
     assert 'href="/my/pastor"' not in c.get("/my/connect").text

@@ -67,7 +67,8 @@ TITLE_WORDS = re.compile(r"\b(pastors?|elders?|deacons?|ministers?|bishops?|over
                          r"treasurers?|secretary|owners?|trustees?|reverend|apostles?|prophets?)\b", re.I)
 KEYS = re.compile(r"\b[a-z]+_[a-z_]+\b")                 # time_off, short_notice, a role key
 OWNER_CALLED = "Pastor Nathan"           # the church's own name for its owner: the one title on any page, as a name
-ROUTES = ("/my/lead/dates/ask", "/my/lead/dates/cant", "/my/lead/dates/{id}/answer", "/my/lead/dates/{id}/withdraw")
+ROUTES = ("/my/lead/dates/ask", "/my/lead/dates/cant", "/my/lead/dates/{id}/answer", "/my/lead/dates/{id}/withdraw",
+          "/my/lead/dates/commitments", "/my/lead/dates/commitments/{id}/remove")     # the last two: S1-7
 
 
 @pytest.fixture
@@ -171,9 +172,11 @@ def person(db, handle, biz=HOPE):
 
 
 def wrote(db):
-    """Every write to the schedule's tables so far."""
-    return ([p for p, _r in db.posts if p.startswith(("/church_away_asks", "/rpc/church_away_settle"))],
-            [dict(r) for r in db.t["church_away_asks"]], [dict(r) for r in db.t["serve_away"]])
+    """Every write to the schedule's tables so far (things that repeat too, S1-7)."""
+    return ([p for p, _r in db.posts if p.startswith(("/church_away_asks", "/rpc/church_away_settle",
+                                                      "/church_away_commitments"))],
+            [dict(r) for r in db.t["church_away_asks"]], [dict(r) for r in db.t["serve_away"]],
+            [dict(r) for r in db.t["church_away_commitments"]])
 
 
 # ─── The page ─────────────────────────────────────────────────────────
@@ -196,7 +199,7 @@ def test_a_leader_sees_ask_cant_their_own_dates_and_who_else_is_away_in_that_ord
     assert "Amara Stone said yes on Wed, Nov 18. It’s on the calendar." in words
     assert "Yusuf Grant Tue, Dec 8 to Thu, Dec 10" in words, "someone else away: a name and the days"
     assert f'action="/my/lead/dates/{waiting["id"]}/withdraw"' in html, "ids ride in form addresses"
-    assert "Things that repeat" not in words, "that part comes with its own PR"
+    assert words.index("My dates") < words.index("Things that repeat") < words.index("Who else is away"),         "S1-7: things that repeat come after My dates"
     assert not UUID.search(words), "no ids on the screen"
     for rule in (OFFICE_WORDS, TITLE_WORDS, KEYS):
         assert not rule.search(words), rule.search(words)
@@ -443,7 +446,7 @@ def test_a_short_notice_ask_is_said_gently_before_and_after_and_never_blocked(ap
 def test_cant_make_it_is_on_the_calendar_at_once_and_the_page_says_it_needs_no_yes(app, db, shell):
     words = text(page(db, "elena")[0])
     assert ("For the next two weeks: sick, or something came up. It goes straight on the calendar and needs no yes. "
-            "Amara Stone is let know.") in words
+            "We’ll let Amara Stone know.") in words
     as_(app, "elena")
     r = post(app, "/my/lead/dates/cant", start=day(1), end=day(2), reason=SECRET)
     assert went(r) == "/my/lead/dates?done=dt_cant"
@@ -493,7 +496,8 @@ def test_taking_one_back_takes_its_away_date_with_it(app, db, shell):
 
 def each_route(ask_id):
     return [(r.format(id=ask_id), f) for r, f in zip(ROUTES, (
-        {"start": day(50), "kind": "time_off"}, {"start": day(1)}, {"ans": "yes"}, {}))]
+        {"start": day(50), "kind": "time_off"}, {"start": day(1)}, {"ans": "yes"}, {},
+        {"label": "Night shift", "weekday": "6", "often": "weekly"}, {}))]
 
 
 def test_the_owners_preview_never_writes(app, db):
@@ -670,12 +674,13 @@ def test_every_code_a_write_can_send_back_has_plain_words_on_the_page(db, shell)
 # ─── Who covers ───────────────────────────────────────────────────────
 
 class Fields(HTMLParser):
-    """Every field on the page, with whether a label wraps it, and every
-    option of every list."""
+    """Every field on the page, with whether a label wraps it; every option
+    of the list of who covers (`options`), and of every list by its name
+    (`lists`: S1-7 adds the day and how often)."""
 
     def __init__(self):
         super().__init__()
-        self.depth, self.fields, self.options, self.buttons = 0, [], [], []
+        self.depth, self.fields, self.options, self.buttons, self.lists, self.list = 0, [], [], [], {}, None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -683,14 +688,20 @@ class Fields(HTMLParser):
             self.depth += 1
         elif tag in ("input", "select", "textarea") and a.get("type") != "hidden":
             self.fields.append((tag, a.get("name"), self.depth > 0))
-        elif tag == "option":
-            self.options.append(a.get("value") or "")
+            if tag == "select":
+                self.list = a.get("name")
+        if tag == "option":
+            self.lists.setdefault(self.list, []).append(a.get("value") or "")
+            if self.list == "cover":
+                self.options.append(a.get("value") or "")
         elif tag in ("button", "summary"):
             self.buttons.append(a.get("class") or "")
 
     def handle_endtag(self, tag):
         if tag == "label":
             self.depth -= 1
+        elif tag == "select":
+            self.list = None
 
 
 def fields(html):
@@ -764,7 +775,8 @@ def test_every_field_has_a_real_label_and_every_button_is_a_full_size_one(app, d
         assert f.fields and all(labelled for _t, _n, labelled in f.fields), [x for x in f.fields if not x[2]]
         assert f.buttons and all(re.search(r"\bld-(btn|ghost)\b", c) for c in f.buttons), f.buttons
     names = {n for _t, n, _l in fields(page(db, "elena")[0]).fields}
-    assert names == {"start", "end", "kind", "reason", "cover", "cover_name"}
+    assert names == {"start", "end", "kind", "reason", "cover", "cover_name",
+                     "label", "weekday", "often", "until"}, "S1-7 adds what repeats (its start is `start` too)"
     assert re.search(r"\.ld-btn\{[^}]*min-height:50px", mpl.LEAD_CSS) and re.search(
         r"\.ld-ghost\{[^}]*min-height:48px", mpl.LEAD_CSS), "a thumb can hit them"
     assert re.search(r"\.dt-f input,\.dt-f select\{min-height:48px[^}]*font-size:16px[^}]*width:100%;min-width:0;",
@@ -1369,3 +1381,121 @@ def test_a_volunteers_ask_waits_for_their_teams_leader_with_why_it_came(app, db,
     row = asks(db)[-1]
     assert row["state"] == "yes" and row["excepted"] == [] and db.rpcs[-1]["p_by_contact"] == w["n040"]
     assert [p for p, _r in db.posts if p.startswith("/rpc/")] == ["/rpc/church_away_settle"], "no exception"
+
+
+# ─── Things that repeat (S1-7) ────────────────────────────────────────
+
+SHIFT = "Night shift at the plant"          # what Elena typed: as private as a reason
+
+
+def repeat(app, who="elena", **form):
+    """Something that repeats, through the page's own route: where it went back to."""
+    as_(app, who)
+    form = {"label": SHIFT, "weekday": "6", "often": "every_other", "start": day(17), **form}
+    return went(post(app, "/my/lead/dates/commitments", **form))
+
+
+def theirs(db, handle="elena"):
+    return [r for r in db.t["church_away_commitments"] if r["contact_id"] == db.who[HOPE][handle]]
+
+
+def test_things_that_repeat_come_after_my_dates_in_plain_words_with_what_they_typed(app, db, shell):
+    assert repeat(app).endswith("done=dt_repeat")
+    assert repeat(app, label="Choir practice", weekday="7", often="month_last", start=day(-30)).endswith("dt_repeat")
+    assert repeat(app, label="Bible study at the jail", weekday="3", often="weekly", start="",
+                  until="2027-03-31").endswith("done=dt_repeat")
+    assert [(r["weekday"], r["pattern"], r["nth"], r["starts_on"], r["until_on"]) for r in theirs(db)] == [
+        (6, "every_other", None, "2026-12-05", None), (7, "month_nth", 5, "2026-10-25", None),
+        (3, "weekly", None, "2026-11-18", "2027-03-31")], "from the first day each falls on; no start is today"
+    html, status = page(db, "elena", done="dt_repeat")
+    words = text(html)
+    assert status == 200 and "Added. It’s on the calendar, and nobody asks you to serve on those days." in words
+    assert words.index("My dates") < words.index("Things that repeat") < words.index("Who else is away")
+    assert "Things that repeat 3 set" in words
+    assert f"{SHIFT} Every other Saturday, from Dec 5 Remove" in words
+    assert "Choir practice The last Sunday of each month Remove" in words
+    assert "Bible study at the jail Every Wednesday until Mar 31, 2027 Remove" in words
+    for r in theirs(db):
+        assert f'action="/my/lead/dates/commitments/{r["id"]}/remove"' in html, "ids ride in form addresses"
+    assert ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look after "
+            "the whole church.") in words
+    rep = words[words.index("Things that repeat"):words.index("Who else is away")]
+    assert "We’ll let Amara Stone know." in rep, "the form's own line, not the I can't make it one"
+    lists = fields(html).lists
+    assert lists["weekday"] == ["", "1", "2", "3", "4", "5", "6", "7"]
+    assert lists["often"] == ["weekly", "every_other", "month_1", "month_2", "month_3", "month_4", "month_last"]
+    assert "Which day Pick a day Monday Tuesday Wednesday Thursday Friday Saturday Sunday" in words
+    assert ("How often Every week Every other week Once a month: the 1st Once a month: the 2nd Once a month: the 3rd "
+            "Once a month: the 4th Once a month: the last") in words
+    assert not UUID.search(words), "no ids on the screen"
+    for rule in (OFFICE_WORDS, TITLE_WORDS, KEYS):
+        assert not rule.search(words), rule.search(words)
+
+
+def test_who_else_is_away_says_their_name_and_days_and_never_what_it_is(app, db, shell):
+    repeat(app)
+    for handle in ("amara", "yusuf"):       # the one her asks go to (who reads it in the office app), another leader
+        html = page(db, handle)[0]
+        assert "Elena Ruiz Sat, Dec 5 · Sat, Dec 19 · Sat, Jan 2, 2027 · and 1 more" in text(html), handle
+        assert SHIFT not in html and "Night" not in html, handle
+    words = text(page(db, "elena")[0])
+    away = words[words.index("Who else is away"):]
+    assert "Elena Ruiz" not in away, "her own are under Things that repeat"
+
+
+def test_their_own_is_theirs_to_take_off_and_nobody_elses_here(app, db, shell):
+    repeat(app)
+    rid = theirs(db)[0]["id"]
+    for handle in ("yusuf", "amara", "nathan", "owen"):       # another leader, the one over her, the owner's own
+        as_(app, handle)                                       # person, the office overseer's: each a person here
+        assert went(post(app, f"/my/lead/dates/commitments/{rid}/remove")).endswith("err=dt_gone"), handle
+    assert theirs(db)
+    as_(app, "elena")
+    assert went(post(app, f"/my/lead/dates/commitments/{rid}/remove")).endswith("done=dt_repeat_off")
+    assert theirs(db) == [] and "Taken off. Those days are open again." in text(page(db, "elena",
+                                                                                    done="dt_repeat_off")[0])
+    assert went(post(app, f"/my/lead/dates/commitments/{rid}/remove")).endswith("err=dt_gone")
+    assert went(post(app, "/my/lead/dates/commitments/not-an-id/remove")).endswith("err=dt_gone")
+
+
+def test_what_cant_be_saved_comes_back_in_plain_words(app, db, shell):
+    for form, code in (({"label": ""}, "dt_repeat_label"), ({"label": "x" * 81}, "dt_repeat_label"),
+                       ({"weekday": ""}, "dt_said"), ({"weekday": "²"}, "dt_said"),
+                       ({"weekday": "7" * 5000}, "dt_said"), ({"often": "fortnightly"}, "dt_said"),
+                       ({"start": "2028-06-01"}, "dt_repeat_days"), ({"until": day(-1)}, "dt_repeat_days"),
+                       ({"start": day(18), "until": day(18)}, "dt_repeat_none")):
+        assert repeat(app, **form).endswith(f"err={code}"), form
+        assert mpd.ERRORS[code] in text(page(db, "elena", err=code)[0])
+    assert theirs(db) == []
+    for n in range(10):
+        repeat(app, label=f"Shift {n}")
+    assert repeat(app, label="One more").endswith("err=dt_repeat_many") and len(theirs(db)) == 10
+    html = page(db, "elena")[0]
+    assert "That’s ten, as many as you can have. Take one off to add another." in text(html)
+    assert 'name="label"' not in html, "no form past ten"
+    assert repeat(app, "hugo").endswith("err=dt_not_on"), "someone not on the schedule: the page's own words"
+    assert theirs(db, "hugo") == []
+
+
+def test_someone_taken_off_the_schedule_still_sees_theirs_and_can_take_them_off(app, db, shell):
+    w = db.who[HOPE]
+    repeat(app)
+    db.t["church_schedule_people"].append({"business_id": HOPE, "contact_id": w["elena"], "listed": "remove",
+                                           "grp": None})
+    cs.forget(HOPE)
+    html, status = page(db, "elena")
+    words = text(html)
+    assert status == 200 and "Things that repeat 1 set" in words and SHIFT in words
+    assert 'name="label"' not in html and "Ask for time off" not in words, "no form: she isn't on it to add one"
+    assert repeat(app, label="Another").endswith("err=dt_not_on")
+    as_(app, "elena")
+    assert went(post(app, f"/my/lead/dates/commitments/{theirs(db)[0]['id']}/remove")).endswith("done=dt_repeat_off")
+    assert page(db, "elena")[1] == 404, "nothing of hers is left here"
+
+
+def test_the_owners_own_person_adds_one_that_tells_nobody(app, db, shell):
+    assert repeat(app, "nathan").endswith("done=dt_repeat")
+    assert theirs(db, "nathan")[0]["told_at"] and db.later == [], "nobody is over them"
+    words = text(page(db, "nathan")[0])
+    assert ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look after "
+            "the whole church.") in words and "We’ll let" not in words[words.index("Things that repeat"):]

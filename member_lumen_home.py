@@ -1,4 +1,26 @@
-"""member_lumen_home.py — the top half of the member app's new Home ("Look 4.1").
+"""member_lumen_home.py — the top half of the member app's new Home ("Look 4.1",
+then "Look 5.1").
+
+LOOK 5.1 (Kevin, 2026-11-20: "this is awesome. much better design. lets build
+this including the new still to build!"). Home opens with the moments
+(member_lumen_stories), then the greeting (4.1's, unchanged but for the mock's
+sizes and "Thursday · November 19"), then:
+  - the four doors in one bordered strip: Prayer · Events · Serve · Kids, an
+    icon on a soft church-colour tile, the name, and one line from the
+    records ("3 new" requests on the member's groups' prayer walls, from the
+    unread count Messages already read; "4 this week"; their next date to
+    serve, "Sun 9:45"; "Check-in open" while the church's check-in is). With
+    nothing to say a door has a quiet line. Serve shows where the church
+    schedules volunteers (sunday_serving.on), Kids only to a parent or a
+    kids leader (the Kids space: a phone never checks a child in);
+  - This week (week_card, week): horizontal cards, a picture with a date
+    leaf, a grey kicker, the title, where, how many are going (a number:
+    the new look shows no faces) and the record's own action, in place of
+    4.1's single Up next card (pick() now only says what the sentence names);
+  - the composer (composer): Share a praise or a prayer (contract 2:
+    /my/post, the members' composer, member_posts), and the band before
+    the feed.
+Also for you moved below the feed. What follows is Look 4.1 as first built.
 
 Kevin approved the Look 4.1 Home mock on 2026-11-19 ("build this app"): calm
 and confident, warm, with pictures. Restraint is the point (he turned down a
@@ -141,7 +163,7 @@ def greeting(first: str, now: datetime, parts: List[Tuple[str, bool]], *, new: b
     glyph = SUN if 5 <= now.hour < 17 else MOON
     line = "".join(f"<b>{_e(t)}</b>" if bold else _e(t) for t, bold in parts)
     return (f'<header class="lm-brief"><p class="lm-ey4">{glyph}<time datetime="{now.date().isoformat()}">'
-            f'{now:%A}, {now:%B} {now.day}</time></p>'
+            f'{now:%A} · {now:%B} {now.day}</time></p>'
             f'<h1 class="lm-disp lm-hi4">{hello(first, now, new=new)}</h1>'
             f'{f"<p class=lm-line4>{line}</p>" if line else ""}</header>')
 
@@ -304,41 +326,91 @@ def line(choice: Dict[str, Any], *, service: Optional[Dict[str, Any]], serving: 
 # ─── the featured card ───────────────────────────────────────────────
 
 
-def leaf(d: date, foot: str) -> str:
-    return (f'<span class="lm-leaf4" aria-hidden="true"><small>{d:%a}</small><b>{d.day}</b>'
-            f'{f"<small>{_e(foot)}</small>" if foot else ""}</span>')
-
-
 def going(n: int, mine: bool) -> str:
-    """How many are going: a number, never names or faces, and only from two."""
+    """How many are going: a number, never names or faces (the new look's
+    rule), and only from two."""
     import member_lumen_ui as lm
     if n < 2:
         return ""
     label = _e(f"You and {n - 1} other{'' if n == 2 else 's'}") if mine else f"<b>{int(n)}</b> going"
-    return f'<span class="lm-f4n">{lm.ic("people", 18)}<span>{label}</span></span>'
+    return f'<span class="lm-wkn">{lm.ic("people", 17)}<span>{label}</span></span>'
 
 
-def done_pill(words: str, about: str = "") -> str:
+def said_no() -> str:
+    return '<span class="lm-wkn">You said you can&#x27;t make it</span>'
+
+
+def done(words: str, cls: str = "lm-wkb") -> str:
+    """An answer already given, in place of its button: a check and the words."""
     import member_app_ui as ui
-    return f'<span class="lm-btn sm done4"{about}>{ui.icon("check", 16)}{_e(words)}</span>'
+    return f'<span class="{cls} on">{ui.icon("check", 15)}{_e(words)}</span>'
 
 
-def card(pic: str, *, day: Optional[date], foot: str, kicker: str, title: str, meta: str = "", row: str = "",
-         pin: str = "", after: str = "", note: str = "") -> str:
-    """One featured card. `pic`, `kicker`, `row`, `pin` and `after` are
-    trusted markup; the title, meta and note are escaped here."""
-    lf = leaf(day, foot) if day else ""
-    return (f'<section class="lm-f4" aria-labelledby="lm-f4-t"><span class="lm-f4p"><span class="lm-f4a">{pic}</span>'
-            f'{lf}{pin}</span><div class="lm-f4b{"" if day else " noleaf"}"><p class="lm-f4k">{kicker}</p>'
-            f'<h3 class="lm-f4t" id="lm-f4-t">{_e(title)}</h3>{f"<p class=lm-f4m>{_e(meta)}</p>" if meta else ""}'
-            f'{f"<div class=lm-f4row>{row}</div>" if row else ""}{f"<p class=lm-f4note>{_e(note)}</p>" if note else ""}'
-            f'</div>{after}</section>')
+def post_button(action: str, fields: Any, label: str, cls: str = "lm-wkb") -> str:
+    """One of today's forms as a single button (its route keeps its own
+    checks: the member's session, same site, its limit). `fields`: a dict,
+    or (name, value) pairs when a name repeats. `label` escaped."""
+    pairs = fields.items() if isinstance(fields, dict) else fields
+    hidden = "".join(f'<input type="hidden" name="{_e(k)}" value="{_e(v)}">' for k, v in pairs)
+    quiet = ' class="q"' if "q" in cls.split() else ""
+    return (f'<form method="post" action="{_e(action)}"{quiet}>{hidden}<button class="{cls}" type="submit">{_e(label)}'
+            f'</button></form>')
 
 
-def up_next(count: int) -> str:
-    """The heading over the card, with its pill."""
-    pill = f'<span class="lm-cp4">{count} for you</span>' if count > 1 else ""
-    return f'<div class="lm-up4"><h2 class="lm-h2" id="lm-up-h">Up next</h2>{pill}</div>'
+def link_button(href: str, label: str, cls: str = "lm-wkb") -> str:
+    return f'<a class="{cls}" href="{_e(href)}">{_e(label)}</a>'
+
+
+# ─── Look 5.1: the doors, This week, the composer ────────────────────
+
+
+def door(href: str, icon_name: str, label: str, line: str, *, new: bool = False) -> str:
+    """One of the four doors: its icon on a soft tile, the name, and a line
+    of status from the records (in the church's colour when it's new)."""
+    import member_lumen_ui as lm
+    return (f'<a class="lm-door" href="{_e(href)}"><span class="lm-di" aria-hidden="true">{lm.ic(icon_name, 21)}</span>'
+            f'<b>{_e(label)}</b><small{" class=new" if new else ""}>{_e(line)}</small></a>')
+
+
+def doors(items: List[str]) -> str:
+    items = [x for x in items if x]
+    if not items:
+        return ""
+    return f'<nav class="lm-doors" aria-label="Shortcuts" style="--n:{len(items)}">{"".join(items)}</nav>'
+
+
+def week_card(pic: str, *, href: str, day: date, kicker: str, title: str, place: str = "", count: str = "",
+              action: str = "", note: str = "", pin: str = "") -> str:
+    """One card of This week: the picture with the date leaf, the kicker,
+    the title (the card's link), where, how many are going (a number) and
+    the record's own action. `pic`, `kicker`, `count`, `action`, `note` and
+    `pin` are trusted markup; the title and place are escaped."""
+    return (f'<article class="lm-wk"><span class="lm-wkp"><span class="lm-wka">{pic}</span>'
+            f'<span class="lm-wkl" aria-hidden="true"><small>{day:%a}</small><b>{day.day}</b></span>{pin}</span>'
+            f'<div class="lm-wkbd"><p class="lm-wkk">{kicker}</p><h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
+            f'{f"<p class=lm-wkm>{_e(place)}</p>" if place else ""}'
+            f'{f"<div class=lm-wkf>{count}{action}</div>" if count or action else ""}'
+            f'{f"<p class=lm-wknote>{note}</p>" if note else ""}</div></article>')
+
+
+def week(cards: List[str]) -> str:
+    """This week: the cards side by side, See all to Events."""
+    cards = [c for c in cards if c]
+    if not cards:
+        return ""
+    return (f'<section class="lm-wk5" aria-labelledby="lm-wk-h"><div class="lm-sh5"><h2 id="lm-wk-h">This week</h2>'
+            f'<a href="/my/events">See all</a></div><div class="lm-wks">{"".join(cards)}</div></section>')
+
+
+def composer(face: str) -> str:
+    """Share a praise or a prayer (contract 2: the members' composer,
+    /my/post, member_posts), the member's own circle beside it, then the band
+    before the feed. `face` is trusted markup."""
+    import member_lumen_ui as lm
+    return (f'<div class="lm-hcp"><span class="lm-hcpav" aria-hidden="true">{face}</span>'
+            f'<a class="lm-hcpin" href="/my/post">Share a praise or a prayer…</a>'
+            f'<a class="lm-icb" href="/my/post" aria-label="Share a photo">{lm.ic("image", 22)}</a></div>'
+            f'<div class="lm-band" aria-hidden="true"></div>')
 
 
 def live_bar(live: Dict[str, Any]) -> str:
@@ -377,54 +449,82 @@ def also(tiles_html: List[str]) -> str:
 # church-colour surface. The card's 4% church tint is a color-mix over the
 # page; a browser without it gets the plain page colour.
 CSS = Template("""
-/* Home, Look 4.1 (member_lumen_home): the greeting, Up next, Also for you */
+/* Home, Look 5.1 (member_lumen_home): the greeting, the doors, This week, the composer; Also for you (lower down) */
 .lm-brief{margin:18px 0 0;}
-.lm-ey4{margin:0;display:flex;align-items:center;gap:7px;font:650 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg2);}
-.lm-ey4 svg{width:14px;height:14px;flex:none;fill:none;stroke:var(--fg);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;}
-body.lm .lm-brief .lm-hi4{margin-top:12px;font-size:36px;line-height:1.05;}
-.lm-line4{margin:14px 0 0;max-width:345px;font:400 16.5px/1.6 var(--mb-ui);color:var(--fg2);text-wrap:pretty;}
-.lm-line4 b{font-weight:600;color:var(--fg);}
+.lm-ey4{margin:0;display:flex;align-items:center;gap:6px;font:700 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
+.lm-ey4 svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter-spacing:-.02em;}
+.lm-line4{margin:8px 0 0;max-width:350px;font:400 15px/1.45 var(--mb-ui);color:var(--fg2);text-wrap:pretty;}
+.lm-line4 b{font-weight:650;color:var(--fg);}
 .lm-lv4{display:flex;align-items:center;gap:10px;height:44px;margin:14px 0 0;padding:0 6px 0 14px;border-radius:14px;background:var(--s1);
   color:var(--fg);font:600 13.5px/1 var(--mb-ui);text-decoration:none;}
-.lm-lv4 i{width:8px;height:8px;flex:none;border-radius:50%;background:#E11D48;}
+.lm-lv4 i{width:8px;height:8px;flex:none;border-radius:50%;background:var(--lm-live);}
 .lm-lv4 span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lm-lv4 b{height:32px;padding:0 14px;border-radius:16px;background:var(--fg);color:var(--bg);display:inline-flex;align-items:center;font-weight:650;}
-.lm-up4{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:32px 0 14px;}
-.lm-up4 .lm-h2::before{content:"";display:block;width:24px;height:3px;margin-bottom:12px;border-radius:2px;background:var(--acc-fill);}
-.lm-cp4{height:24px;padding:0 10px;border-radius:12px;background:var(--lm-tint-12);color:var(--acc);font:700 11.5px/24px var(--mb-ui);white-space:nowrap;}
-.lm-f4{--lm-f4bg:var(--bg);position:relative;border-radius:20px;overflow:hidden;background:var(--lm-f4bg);
-  box-shadow:0 0 0 1px var(--lm-line),0 28px 50px -36px var(--lm-shadow);}
-@supports (background:color-mix(in srgb,red 50%,blue)){.lm-f4{--lm-f4bg:color-mix(in srgb,var(--acc-fill) 4%,var(--bg));}}
-.lm-f4p{position:relative;display:block;height:180px;background:var(--s2);}
-.lm-f4a{position:absolute;inset:0;overflow:hidden;}
-.lm-f4a>*,.lm-t4a>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
-.lm-f4a .mb-ph.is-colour img,.lm-t4a .mb-ph.is-colour img{filter:saturate(.9) sepia(.05);}
-.lm-leaf4{position:absolute;left:16px;bottom:-22px;z-index:2;width:58px;height:66px;border-radius:14px;background:var(--acc-fill);color:var(--on-acc);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  box-shadow:0 0 0 3px var(--lm-f4bg),0 10px 20px -12px rgba(0,0,0,.5);}
-.lm-leaf4 small{font:700 9.5px/1 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;}
-.lm-leaf4 b{margin:3px 0;font-family:var(--lm-num);font-weight:var(--lm-nw);font-stretch:var(--lm-nst);font-variant-numeric:var(--lm-nvn);
-  font-size:24px;line-height:1;}
-.lm-f4b{padding:32px 16px 16px;}
-.lm-f4b.noleaf{padding-top:16px;}
-.lm-f4k{margin:0;display:flex;align-items:center;gap:8px;font:650 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--acc);}
-.lm-f4t{margin:8px 0 0;font-family:var(--mb-serif);font-weight:var(--lm-dw);font-variation-settings:var(--lm-dvar);font-stretch:var(--lm-dst);
-  font-size:26px;line-height:1.1;letter-spacing:-.02em;color:var(--fg);text-wrap:balance;}
-.lm-f4m{margin:4px 0 0;font:400 14px/1.4 var(--mb-ui);color:var(--fg2);}
-.lm-f4row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:16px;min-height:40px;}
-.lm-f4n{display:inline-flex;align-items:center;gap:7px;font:500 13.5px/1 var(--mb-ui);color:var(--fg2);white-space:nowrap;}
-.lm-f4n b{font-weight:700;color:var(--fg);}
-.lm-f4acts{display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin-left:auto;}
-.lm-btn.done4{background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1px var(--lm-line);gap:6px;}
-.lm-btn.done4 svg{color:var(--acc);}
-.lm-q4{height:38px;padding:0 12px;border:0;border-radius:19px;background:none;display:inline-flex;align-items:center;
-  font:600 13.5px/1 var(--mb-ui);color:var(--fg2);text-decoration:none;cursor:pointer;white-space:nowrap;}
-.lm-f4note{margin:10px 0 0;font:500 12.5px/1.4 var(--mb-ui);color:var(--fg2);}
-.lm-f4 .mb-hint{margin:0 16px 16px;}
-.lm-f4p .mb-pin,.lm-t4p .mb-pin{top:auto;bottom:10px;right:10px;height:30px;padding:0 12px;font-size:12px;background:rgba(20,18,16,.55);
-  box-shadow:none;}
-.lm-f4p .mb-pin svg,.lm-t4p .mb-pin svg{display:none;}
-.lm-up4+.lm-cards,.lm-f4+.lm-cards,.lm-f4+.lm-ck{margin-top:16px;}
+/* the four doors: Prayer · Events · Serve · Kids, each with its line from the records */
+.lm-doors{display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));margin:18px 0 0;border:1px solid var(--lm-line);
+  border-radius:20px;overflow:hidden;background:var(--bg);}
+.lm-door{position:relative;min-width:0;display:flex;flex-direction:column;align-items:center;padding:14px 2px 13px;color:var(--fg);
+  text-decoration:none;-webkit-tap-highlight-color:transparent;}
+.lm-door+.lm-door::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:1px;background:var(--lm-line);}
+.lm-di{width:40px;height:40px;margin-bottom:9px;border-radius:13px;display:grid;place-items:center;background:var(--lm-tint-12);color:var(--acc);}
+.lm-di svg{width:21px;height:21px;stroke-width:1.9;}
+.lm-door b{font:700 13.5px/1.2 var(--mb-ui);}
+.lm-door small{max-width:100%;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 11.5px/1.3 var(--mb-ui);
+  color:var(--fg3);}
+.lm-door small.new{color:var(--acc);font-weight:700;}
+/* This week: horizontal cards, a picture with its date leaf, the record's own action */
+.lm-sh5{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:28px 0 12px;}
+.lm-sh5 h2{margin:0;font:750 18px/1.2 var(--mb-ui);letter-spacing:-.012em;color:var(--fg);}
+.lm-sh5 a{padding:6px 0;font:650 14px/1 var(--mb-ui);color:var(--acc);text-decoration:none;}
+.lm-wks{display:flex;gap:12px;margin:0 -20px;padding:0 20px 2px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:20px;
+  scrollbar-width:none;}
+.lm-wks::-webkit-scrollbar{display:none;}
+.lm-wk{position:relative;flex:none;width:264px;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--lm-line);
+  border-radius:18px;background:var(--bg);scroll-snap-align:start;}
+.lm-wks>.lm-wk:only-child{width:100%;}
+.lm-wkp{position:relative;display:block;height:124px;background:var(--s2);}
+.lm-wka{position:absolute;inset:0;overflow:hidden;}
+.lm-wka>*,.lm-t4a>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm-wka img{display:block;width:100%;height:100%;object-fit:cover;}
+.lm-wkl{position:absolute;left:12px;top:12px;z-index:2;width:46px;padding:6px 0 7px;border-radius:12px;background:var(--bg);text-align:center;
+  box-shadow:0 2px 10px rgba(0,0,0,.14);}
+.lm-wkl small{display:block;font:750 10px/1 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--acc);}
+.lm-wkl b{display:block;margin-top:3px;font:500 21px/1.05 var(--mb-serif);color:var(--fg);}
+.lm-wkbd{flex:1;display:flex;flex-direction:column;padding:12px 14px 14px;}
+.lm-wkk{margin:0;font:750 11px/1.2 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--fg2);}
+.lm-wkt{margin:7px 0 2px;font:650 17px/1.25 var(--mb-ui);letter-spacing:-.01em;}
+.lm-wkt a{color:var(--fg);text-decoration:none;}
+.lm-wkt a::after{content:"";position:absolute;inset:0;z-index:1;}
+.lm-wkm{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 13.5px/1.4 var(--mb-ui);color:var(--fg2);}
+.lm-wkf{display:flex;align-items:center;gap:8px;min-height:38px;margin-top:auto;padding-top:12px;}
+.lm-wkf>*,.lm-wknote{position:relative;z-index:2;}
+.lm-wkn{min-width:0;display:inline-flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;font:400 13px/1.2 var(--mb-ui);color:var(--fg2);}
+.lm-wkn svg{width:17px;height:17px;flex:none;color:var(--fg3);}
+.lm-wkn b{font-weight:650;color:var(--fg);}
+.lm-wkb{height:34px;padding:0 14px;border:0;border-radius:17px;display:inline-flex;align-items:center;gap:6px;background:var(--acc-fill);
+  color:var(--on-acc);font:650 13.5px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;cursor:pointer;}
+.lm-wkb.on{background:var(--lm-tint-12);color:var(--acc);}
+.lm-wkb.q{padding:0 6px;background:none;color:var(--fg2);}
+.lm-wkb svg{width:15px;height:15px;}
+.lm-wkf>.lm-wkb:not(.q),.lm-wkf>form:not(.q){margin-left:auto;}
+.lm-wknote{margin:8px 0 0;font:500 12px/1.4 var(--mb-ui);color:var(--fg2);}
+.lm-wknote a{color:var(--acc);font-weight:650;text-decoration:none;}
+.lm-wkp .mb-pin{z-index:3;top:auto;bottom:10px;right:10px;height:28px;padding:0 11px;font-size:12px;background:rgba(20,18,16,.55);box-shadow:none;}
+.lm-wkp .mb-pin svg{display:none;}
+.lm-wk5+.lm-ck{margin-top:16px;}
+/* the composer, then the band before the feed */
+.lm-hcp{display:flex;align-items:center;gap:10px;margin:22px -10px 0 0;padding:0 0 16px;}
+.lm-hcpav{position:relative;width:40px;height:40px;flex:none;border-radius:50%;overflow:hidden;display:grid;place-items:center;
+  background:var(--s2);color:var(--fg2);font:700 13px/1 var(--mb-ui);}
+.lm-hcpav img{display:block;width:100%;height:100%;object-fit:cover;}
+.lm-hcpin{flex:1;min-width:0;height:44px;display:flex;align-items:center;padding:0 16px;overflow:hidden;border-radius:22px;background:var(--s1);
+  color:var(--fg3);font:400 15px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;text-overflow:ellipsis;}
+.lm-band{height:8px;margin:0 -20px;background:var(--s1);}
+/* Also for you: two picture tiles (lower on Home since Look 5.1) */
+.lm-t4a .mb-ph.is-colour img{filter:saturate(.9) sepia(.05);}
+.lm-t4p .mb-pin{top:auto;bottom:8px;right:8px;height:26px;padding:0 10px;font-size:11px;background:rgba(20,18,16,.55);box-shadow:none;}
+.lm-t4p .mb-pin svg{display:none;}
 .lm-also{margin-top:34px;}
 .lm-also4{margin:0 0 12px;font:650 11px/1 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
 .lm-g4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
@@ -439,18 +539,23 @@ body.lm .lm-brief .lm-hi4{margin-top:12px;font-size:36px;line-height:1.05;}
   display:flex;flex-direction:column;align-items:center;justify-content:center;}
 .lm-dl4 small{font:700 8px/1 var(--mb-ui);letter-spacing:.14em;}
 .lm-dl4 b{margin-top:1px;font-family:var(--lm-num);font-weight:var(--lm-nw);font-size:19px;line-height:1;}
-.lm-t4p .mb-pin{bottom:8px;right:8px;height:26px;padding:0 10px;font-size:11px;}
 .lm-t4k{display:block;font:650 10.5px/1.1 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--acc);}
 .lm-t4t{display:block;margin-top:6px;font:600 15px/1.25 var(--mb-ui);}
 .lm-t4m{display:block;max-width:100%;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
 .lm-t4bar{display:block;width:100%;height:2px;margin-top:9px;border-radius:1px;background:var(--lm-line);overflow:hidden;}
 .lm-t4bar i{display:block;height:100%;background:var(--fg);}
 @media (prefers-reduced-motion:no-preference){
-  .lm-t4,.lm-lv4{transition:transform .2s ease-out;}
-  .lm-t4:active,.lm-lv4:active{transform:scale(.98);}
+  .lm-t4,.lm-lv4,.lm-wk,.lm-door{transition:transform .2s ease-out;}
+  .lm-t4:active,.lm-lv4:active,.lm-wk:active,.lm-door:active{transform:scale(.98);}
 }
-.lm-t4:focus-visible,.lm-lv4:focus-visible,.lm-q4:focus-visible{outline:2px solid var(--acc);outline-offset:3px;border-radius:12px;}
-/* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the badges' ring in the page's black */
+.lm-t4:focus-visible,.lm-lv4:focus-visible,.lm-hcpin:focus-visible,.lm-sh5 a:focus-visible,.lm-wkb:focus-visible
+{outline:2px solid var(--acc);outline-offset:3px;border-radius:12px;}
+.lm-door:focus-visible{outline:2px solid var(--acc);outline-offset:-3px;border-radius:18px;}
+.lm-wkt a:focus-visible{outline:none;}
+.lm-wkt a:focus-visible::after{outline:2px solid var(--acc);outline-offset:-2px;border-radius:18px;}
+/* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the badges' ring in the page's black,
+   the date leaf on a raised surface */
 """ + _dark("""
 body.lm.lm-dark .lm-bdg{box-shadow:0 0 0 2px rgba(10,10,11,.85);}
+body.lm.lm-dark .lm-wkl{background:var(--s2);box-shadow:0 2px 10px rgba(0,0,0,.4);}
 """))

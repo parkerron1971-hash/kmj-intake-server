@@ -18,8 +18,14 @@ one to what went to them.
     I can't make it ........ the day or days and a private note: for the days
                              just ahead, on the calendar at once, no yes
     My dates ............... their own asks and where each stands; Take it back
+    Things that repeat ..... (S1-7) their own, in plain words ("Every other
+                             Saturday, from Dec 5") with what they typed and
+                             Remove; and a small form: what it is, which day,
+                             how often, starting, until if it ends
     Who else is away ....... name, days, who covers. Never a reason, never a
-                             note, never what kind
+                             note, never what kind. Someone's thing that
+                             repeats: their name and its days, never what it
+                             is
 
     GET  /my/lead/dates                      the page (member_portal_lead.serve
                                              hands it over while
@@ -30,6 +36,9 @@ one to what went to them.
     POST /my/lead/dates/cant                 {start, end, reason}
     POST /my/lead/dates/<id>/answer          {ans: yes | no, note}
     POST /my/lead/dates/<id>/withdraw        take it back
+    POST /my/lead/dates/commitments          {label, weekday, often, start,
+                                             until} (S1-7)
+    POST /my/lead/dates/commitments/<id>/remove   take one off (S1-7)
 
 A MEMBER-APP SESSION IS A PERSON, NEVER A LOGIN. Every call into the engine
 is made as church_over.who(PERSON, this person), whoever they are: the
@@ -118,7 +127,14 @@ DONE = {
     "dt_yes": "You said yes. It’s on the calendar now.",
     "dt_no": "You said not this one.",
     "dt_back": "Taken back.",
+    "dt_repeat": "Added. It’s on the calendar, and nobody asks you to serve on those days.",
+    "dt_repeat_off": "Taken off. Those days are open again.",
 }
+# How often (S1-7): one list on the form, the engine's pattern and nth behind each.
+OFTEN = (("weekly", "Every week", "weekly", None), ("every_other", "Every other week", "every_other", None),
+         ("month_1", "Once a month: the 1st", "month_nth", 1), ("month_2", "Once a month: the 2nd", "month_nth", 2),
+         ("month_3", "Once a month: the 3rd", "month_nth", 3), ("month_4", "Once a month: the 4th", "month_nth", 4),
+         ("month_last", "Once a month: the last", "month_nth", 5))
 DONE_ALONE = {"dt_asked": "Asked. It’s waiting for a yes.",
               "dt_asked_short": "Asked. It’s short notice, so the answer may take a little time.",
               "dt_asked_up": "Asked. It went to the one who can make an exception."}
@@ -163,6 +179,10 @@ ERRORS = {
                  "through, and it has gone on to the one who can make an exception.",
     "dt_yours_now": "Those days have changed since this was asked, and they need an exception now. Your yes didn’t go "
                     "through yet. It’s marked below. Say yes again to make an exception.",
+    "dt_repeat_label": "Say what it is, in 80 letters or fewer.",
+    "dt_repeat_many": "That’s ten things that repeat already. Take one off first.",
+    "dt_repeat_days": "Pick when it starts, within a year of today, and when it ends, if it does: today or later.",
+    "dt_repeat_none": "It doesn’t fall on that day between the start and the end you picked.",
 }
 
 DATES_CSS = """
@@ -322,7 +342,13 @@ def view(biz: Dict[str, Any], contact_id: Any, now: Optional[datetime] = None) -
     it still waits for this person's yes, and nothing else, so the page has
     no reason, note or kind to show there even for an ask this person may
     read. It is read from the facts (church_schedule.calendar), and a
-    waiting ask is in it only when this person may read it."""
+    waiting ask is in it only when this person may read it. Someone else's
+    things that repeat (S1-7) are in it as their name and the days (`days`),
+    never what they are.
+
+    `repeats` (S1-7): their own things that repeat still in force, through
+    church_schedule_repeats.shape() as that person (what they typed is
+    theirs)."""
     import church_map
     import church_schedule as cs
     ch, me = _ch_me(biz, {"id": contact_id})
@@ -340,22 +366,34 @@ def view(biz: Dict[str, Any], contact_id: Any, now: Optional[datetime] = None) -
         away: List[Dict[str, Any]] = []
         if on_it:
             cal = cs.calendar(ch, me, today, today + timedelta(days=WINDOW_DAYS))
+            standing: Dict[str, Dict[str, Any]] = {}
             for g in cal["groups"]:
                 for a, held in [(a, False) for a in g["away"]] + [(a, True) for a in g["waiting"]]:
                     if a["contact_id"] == cid:
                         continue                                    # their own are under My dates
                     away.append({"name": a["name"], "starts_on": a["starts_on"], "ends_on": a["ends_on"],
                                  "cover": (a.get("cover") or {}).get("name") or "", "waiting": held})
+                # Someone's thing that repeats (S1-7): their name and its days. NEVER WHAT IT IS, even for
+                # whoever the calendar lets read it: only the name and the day are taken from it here.
+                for s in g.get("standing") or []:
+                    if s["contact_id"] != cid:
+                        standing.setdefault(s["contact_id"], {"name": s["name"], "days": set()})["days"].add(s["day"])
+            for s in standing.values():
+                days = sorted(s["days"])
+                away.append({"name": s["name"], "starts_on": days[0], "ends_on": days[0], "cover": "",
+                             "waiting": False, "days": days})
             away.sort(key=lambda a: (a["starts_on"], a["name"].casefold(), a["ends_on"]))
         people = _pick(ch, roster, cid) if on_it else []
         kept = _on_calendar(ch, cid, [a["id"] for a in mine if a["state"] == "yes" and a.get("id")])
+        import church_schedule_repeats as crep
+        repeats = crep.commitments(ch, me, "mine", now=now)             # their own, as that person
         tz = ch.tz
         up = _limits(ch, cid, mine, waiting, now, on_it and not top) if cs.step2() else ""
     for a in mine:
         a["on_calendar"] = a["id"] in kept
     return {"mine": mine, "waiting": waiting, "away": away, "people": people, "on_it": on_it, "top": top,
             "to": to["name"] if to else "", "notice_days": notice, "near": max(notice, cs.CANT_FLOOR),
-            "today": today, "tz": tz, "up": up}
+            "today": today, "tz": tz, "up": up, "repeats": repeats}
 
 
 def _limits(ch, cid: str, mine: List[Dict[str, Any]], waiting: List[Dict[str, Any]], now: datetime,
@@ -696,11 +734,58 @@ def _mine_card(a: Dict[str, Any], today: date, tz) -> str:
 
 def _away_row(a: Dict[str, Any], today: date) -> str:
     """Someone else who is away: a name, the days, who covers. `a` has
-    nothing else in it (view)."""
+    nothing else in it (view). Someone's thing that repeats: the name and
+    the days it falls on (`days`), the first few and then how many more."""
+    if a.get("days"):
+        shown = [_day(d, today) for d in a["days"][:WHY_MAX]]
+        more = len(a["days"]) - len(shown)
+        when = " · ".join(shown) + (f" · and {more} more" if more else "")
+        return f'<div class="dt-row"><span class="t"><b>{_e(a["name"])}</b><small>{_e(when)}</small></span></div>'
     held = " · waiting for your yes" if a.get("waiting") else ""
     cover = f'<span class="dt-cov">Covering: {_e(a["cover"])}</span>' if a.get("cover") else ""
     return (f'<div class="dt-row"><span class="t"><b>{_e(a["name"])}</b>'
             f'<small>{_e(_days(a["starts_on"], a["ends_on"], today))}{held}</small></span>{cover}</div>')
+
+
+def _repeat_card(r: Dict[str, Any]) -> str:
+    """One of their own things that repeat: what they typed (theirs, so
+    shape() gave it), when it falls in plain words, and Remove."""
+    said = r.get("said") or ""
+    return (f'<section class="ld-pr dt-card" aria-label="{_e(said)}">'
+            f'<div class="dt-top"><b>{_e(r.get("label") or said)}</b></div>'
+            f'<p class="dt-when">{_e(said)}</p>'
+            f'<form method="post" action="/my/lead/dates/commitments/{_e(r["id"])}/remove">'
+            f'<button class="ld-ghost" type="submit">Remove</button></form></section>')
+
+
+def _repeat_form(v: Dict[str, Any]) -> str:
+    """Add something that repeats: what it is, which day, how often,
+    starting, and until if it ends. Every field has its own label; the day
+    and how often are lists, so nothing can be typed wrong there."""
+    from member_app_ui import icon
+    import church_schedule_repeats as crep
+    today, to = v["today"].isoformat(), v.get("to") or ""
+    if len(v.get("repeats") or []) >= crep.MAX_EACH:
+        return f'<p class="ld-quiet">That’s {WORDS[crep.MAX_EACH]}, as many as you can have. Take one off to add another.</p>'
+    reads = ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look "
+             "after the whole church.")
+    told = f" We’ll let {to} know." if to and not v["top"] else ""
+    days = "".join(f'<option value="{n}">{_e(name)}</option>' for n, name in enumerate(crep.WEEKDAYS, 1))
+    often = "".join(f'<option value="{_e(k)}">{_e(words)}</option>' for k, words, _p, _n in OFTEN)
+    return (f'<section class="ld-pr dt-card" aria-label="Add something that repeats">'
+            f'<p class="dt-lede">Something on a set day, like working every other Saturday. Say it once: it goes on '
+            f'the calendar, needs no yes, and nobody asks you to serve on those days.{_e(told)}</p>'
+            f'<form class="dt-form" method="post" action="/my/lead/dates/commitments">'
+            f'<label class="dt-f">What it is<input name="label" maxlength="80" required autocomplete="off"></label>'
+            f'<p class="dt-hint">{icon("lock", 13)} {_e(reads)}</p>'
+            f'<div class="dt-two">'
+            f'<label class="dt-f">Which day<select name="weekday" required><option value="">Pick a day</option>{days}'
+            f'</select></label>'
+            f'<label class="dt-f">How often<select name="often">{often}</select></label></div>'
+            f'<div class="dt-two">'
+            f'<label class="dt-f">Starting<input type="date" name="start" value="{today}"></label>'
+            f'<label class="dt-f">Until, if it ends<input type="date" name="until" min="{today}"></label></div>'
+            f'<button class="ld-btn" type="submit">Add it</button></form></section>')
 
 
 def _ask_form(v: Dict[str, Any], draft: Optional[Dict[str, Any]] = None) -> str:
@@ -776,7 +861,7 @@ def _ask_again(v: Dict[str, Any], d: Dict[str, Any]) -> str:
 def _cant_form(v: Dict[str, Any]) -> str:
     today, near = v["today"], int(v["near"])
     last = (today + timedelta(days=near - 1)).isoformat()
-    told = f" {v['to']} is let know." if v.get("to") else ""
+    told = f" We’ll let {v['to']} know." if v.get("to") else ""
     return (f'<section class="ld-pr dt-card" aria-label="I can’t make it">'
             f'<p class="dt-lede">For the next {_e(_span(near))}: sick, or something came up. It goes straight on the '
             f'calendar and needs no yes.{_e(told)}</p>'
@@ -792,8 +877,8 @@ def _cant_form(v: Dict[str, Any]) -> str:
 def body(v: Optional[Dict[str, Any]], draft: Optional[Dict[str, Any]] = None) -> str:
     """The page's own part (inside the header and the switcher), in the
     order a phone reads it: Waiting for your yes, Ask for time off, I can't
-    make it, My dates, Who else is away. `draft`: an ask not sent yet
-    (_ask_form)."""
+    make it, My dates, Things that repeat (S1-7), Who else is away. `draft`:
+    an ask not sent yet (_ask_form)."""
     from member_app_ui import icon
     from member_portal import band
     if v is None:
@@ -825,6 +910,13 @@ def body(v: Optional[Dict[str, Any]], draft: Optional[Dict[str, Any]] = None) ->
             html_ += (f'<details class="dt-old"><summary class="ld-ghost">Earlier · {len(old)}</summary>'
                       f'<div class="dt-list">{"".join(_mine_card(a, today, tz) for a in old)}</div></details>')
         right += html_ + '</div>'
+    reps = v.get("repeats") or []
+    if v["on_it"] or reps:
+        # Things that repeat (S1-7): their own, and (only for someone on the schedule) the form. Someone taken
+        # off the schedule still sees theirs, and can take them off.
+        right += ('<div class="dt-sec"><div class="mb-sh"><h2>Things that repeat</h2>'
+                  + (f'<span>{len(reps)} set</span>' if reps else '') + '</div>'
+                  + "".join(_repeat_card(r) for r in reps) + (_repeat_form(v) if v["on_it"] else "") + '</div>')
     if v["on_it"]:
         rows = "".join(_away_row(a, today) for a in v["away"])
         right += ('<div class="dt-sec"><div class="mb-sh"><h2>Who else is away</h2><span>Next two months</span></div>'
@@ -930,7 +1022,7 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     except HTTPException as e:
         logger.warning("lead dates read failed: %s", e.status_code)
         v = None
-    if v is not None and not (v["on_it"] or v["waiting"] or v["mine"]):
+    if v is not None and not (v["on_it"] or v["waiting"] or v["mine"] or v["repeats"]):
         # Read fresh, there is nothing of theirs here: they followed a link (a notice, say).
         return render_not_here(biz, site, me), 404
     if v is not None:
@@ -955,7 +1047,10 @@ def _code(e: HTTPException) -> str:
     address): the engine's 400, 403, 404, 409 and 503 each come back as
     plain words (ERRORS), never as a raw error."""
     import church_schedule as cs
+    import church_schedule_repeats as crep
     said, status = str(e.detail or ""), e.status_code
+    if status in (400, 403, 404) and said in crep.CODES:   # things that repeat (S1-7): their own words
+        return crep.CODES[said]
     if status == 400:
         if said == cs.BAD_DAYS:
             return "dt_days"
@@ -1156,3 +1251,34 @@ async def withdraw(ask_id: str, request: Request):
         ch, who = _ch_me(biz, me)
         cs.withdraw(ch, who, _ask_id(ask_id))
     return await _act(request, go, "dt_back")
+
+
+def _often(raw: Any):
+    """How often, from the form's one list: (pattern, nth). Anything else is
+    nothing the engine takes (it says so in its own words)."""
+    got = next(((p, n) for k, _w, p, n in OFTEN if k == str(raw or "")), None)
+    return got or ("", None)
+
+
+@router.post("/my/lead/dates/commitments", include_in_schema=False)
+async def repeat_add(request: Request):
+    """Something that repeats (S1-7), as this person: on the leaders schedule
+    (the engine says so in its own words otherwise). No yes, never blocked."""
+    def go(biz, me, form):
+        import church_schedule_repeats as crep
+        ch, who = _ch_me(biz, me)
+        pattern, nth = _often(form.get("often"))
+        crep.add_commitment(ch, who, {"label": form.get("label"), "weekday": form.get("weekday"), "pattern": pattern,
+                                      "nth": nth, "starts_on": form.get("start") or None,
+                                      "until_on": form.get("until") or None})
+    return await _act(request, go, "dt_repeat")
+
+
+@router.post("/my/lead/dates/commitments/{commitment_id}/remove", include_in_schema=False)
+async def repeat_remove(commitment_id: str, request: Request):
+    """Take one of their own off (S1-7)."""
+    def go(biz, me, form):
+        import church_schedule_repeats as crep
+        ch, who = _ch_me(biz, me)
+        crep.drop_commitment(ch, who, _ask_id(commitment_id))
+    return await _act(request, go, "dt_repeat_off")

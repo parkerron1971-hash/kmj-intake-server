@@ -81,8 +81,8 @@ NIGHT = datetime(2026, 11, 19, 4, 0, tzinfo=timezone.utc)       # 11 PM at the c
 MORNING = NIGHT + 9 * HOUR                                      # 8 AM
 SEATED = ("elena", "yusuf", "amara")     # leaders who sign in to the office app on a Member seat
 REAL_LATER = member_push._later
-ZERO = {"churches": 0, "moved": 0, "told": 0, "answers": 0, "nudged": 0, "cleared": 0, "held": 0, "unsent": 0,
-        "unread": 0}
+ZERO = {"churches": 0, "moved": 0, "told": 0, "answers": 0, "nudged": 0, "repeats": 0, "cleared": 0, "held": 0,
+        "unsent": 0, "unread": 0}
 
 
 @pytest.fixture
@@ -1190,3 +1190,133 @@ def test_the_sweep_never_sends_a_flagged_ask_to_the_login_that_entered_it(app, d
     assert tell.sweep_tick(NOW + 2 * HOUR)["moved"] == 2
     assert (his["to_user_id"], sat["to_user_id"]) == (owner(db), owner(db)), "the owner, never the one who entered them"
     assert w["olive@"] not in said(db) and "made_by" not in said(db), "who entered it is in no notice"
+
+
+# ─── Things that repeat (S1-7) ────────────────────────────────────────
+
+SHIFT = "Night shift at the plant"          # what Elena typed: as private as a reason
+REPEAT_SAID = "Every other Saturday, from Dec 5. It’s on the calendar. Nothing for you to answer."
+
+
+def repeat(app, who, biz=HOPE, **kw):
+    as_(app, biz, who)
+    r = app.post("/church/schedule/commitments", json={"business_id": biz, "label": SHIFT, "weekday": 6,
+                                                       "pattern": "every_other", "starts_on": day(17), **kw})
+    assert r.status_code == 200, r.text
+    return r.json()["saved"]
+
+
+def commitment(db, rid):
+    return next(r for r in db.t["church_away_commitments"] if r["id"] == rid)
+
+
+def test_something_that_repeats_tells_whoever_an_ask_would_go_to_once_and_never_what_it_is(app, db, caplog,
+                                                                                            capsys):
+    w = db.who[HOPE]
+    caplog.set_level(logging.DEBUG)
+    phone(db, "amara")
+    got = repeat(app, "elena")
+    assert quiet(db) and commitment(db, got["id"])["told_at"] is None, "nothing is told inside the write"
+    assert fake.later(db) == 1
+    assert [(p["to"], p["title"], p["body"]) for p in db.rang] == [
+        (w["amara"], "New Hope Church", f"Elena has something that repeats — {REPEAT_SAID}")]
+    assert [(n["contact_id"], n["title"], n["body"]) for n in notes(db)] == [
+        (w["amara"], "Elena has something that repeats", REPEAT_SAID)]
+    assert db.mail == [], "a phone was reached: no email"
+    assert commitment(db, got["id"])["told_at"], "claimed"
+    # Once: the sweep, and the same notice handed on again, tell nobody more.
+    assert tell.sweep_tick(NOW + HOUR)["repeats"] == 0 and len(db.rang) == 1
+    assert tell.tell_repeat(church(db), commitment(db, got["id"])) == "none"
+    out = capsys.readouterr()
+    everything = said(db) + caplog.text + out.out + out.err
+    for word in (SHIFT, "Night", "plant"):
+        assert word not in everything, word
+    assert all(redact for path, _b, redact in db.patches if path.startswith("/church_away_commitments"))
+
+
+def test_its_words_are_the_same_whatever_it_is(app, db):
+    def run(label):
+        for t in ("church_away_commitments", "church_thread_notes", "member_push_sends"):
+            db.t[t].clear()
+        db.rang.clear()
+        db.mail.clear()
+        repeat(app, "elena", label=label)
+        repeat(app, "sunny", label=label, weekday=3, pattern="weekly", starts_on=day(0))      # to a login
+        fake.later(db)
+        return ([(p["title"], p["body"]) for p in db.rang], [(m["subject"], m["html"]) for m in db.mail],
+                [(n["title"], n["body"]) for n in notes(db)])
+    desk(db, db.who[HOPE]["owen@"])
+    first = run(SHIFT)
+    assert first == run("Chemo every other week") and first[1], "the email went, and reads the same"
+    [_elena, sunny] = first[1]
+    assert sunny[0] == "New Hope Church: Sunny has something that repeats"
+    assert ("Sunny Vale has something that repeats: every Wednesday. It’s on the church’s calendar, so nobody asks "
+            "them to serve on those days.") in sunny[1]
+
+
+def test_whoever_an_office_persons_asks_go_to_hears_as_a_login(app, db):
+    w = db.who[HOPE]
+    desk(db, w["owen@"])
+    repeat(app, "sunny", weekday=3, pattern="month_nth", nth=5, starts_on=day(0))
+    fake.later(db)
+    assert [(p["to"], p["staff"], p["title"]) for p in db.rang] == [
+        (w["owen@"], True, "Sunny has something that repeats")]
+    assert [m["to"] for m in db.mail] == ["owen@newhope.church"]
+    assert "The last Wednesday of each month, from Nov 25." in db.rang[0]["body"]
+
+
+def test_added_in_quiet_hours_it_waits_for_the_sweep_and_is_told_once(app, db, monkeypatch):
+    phone(db, "amara")
+    monkeypatch.setattr(cs, "_now", lambda: NIGHT)
+    got = repeat(app, "elena")
+    fake.later(db)
+    assert quiet(db) and commitment(db, got["id"])["told_at"] is None, "held for the morning"
+    assert tell.sweep_tick(NIGHT + HOUR)["held"] == 1 and quiet(db)
+    assert tell.sweep_tick(MORNING)["repeats"] == 1 and len(db.rang) == 1
+    assert tell.sweep_tick(MORNING + HOUR)["repeats"] == 0 and len(db.rang) == 1
+
+
+def test_when_nothing_could_be_sent_the_claim_is_let_go_and_the_sweep_tries_for_a_week(app, db):
+    db.fail_to.add("amara@newhope.church")                        # no phone, and the email fails
+    got = repeat(app, "elena")
+    fake.later(db)
+    assert commitment(db, got["id"])["told_at"] is None and db.mail == []
+    db.fail_to.clear()
+    db.reads.clear()
+    assert tell.sweep_tick(NOW + HOUR)["repeats"] == 1 and [m["to"] for m in db.mail] == ["amara@newhope.church"]
+    assert commitment(db, got["id"])["told_at"]
+    reads = [r for r in db.reads if r.startswith("/church_away_commitments?")]
+    assert reads and all("told_at=is.null" in r and "created_at=gte." in r and "label" not in r for r in reads)
+    # One added more than a week ago that nobody could be told of is left; one that has ended tells nobody.
+    w = db.who[HOPE]
+    old = {"id": str(uuid.uuid4()), "business_id": HOPE, "contact_id": w["elena"], "label": SHIFT, "weekday": 3,
+           "pattern": "weekly", "nth": None, "starts_on": day(-20), "until_on": None, "told_at": None,
+           "created_at": (NOW - timedelta(days=8)).isoformat()}
+    ended = dict(old, id=str(uuid.uuid4()), until_on=day(-1), created_at=NOW.isoformat())
+    db.t["church_away_commitments"] += [old, ended]
+    assert tell.sweep_tick(NOW + 2 * HOUR)["repeats"] == 0 and len(db.mail) == 1
+    assert old["told_at"] is None and ended["told_at"] is None
+    assert tell.tell_repeat(church(db), ended) == "none"
+
+
+def test_nobody_to_tell_is_saved_as_told_and_hands_nothing_on(app, db):
+    """The one person the owner is has nobody over them; whoever oversees the
+    office adding one for a Manager whose asks go to that very login has
+    nobody else to tell."""
+    w = db.who[HOPE]
+    mine = repeat(app, "owner", **{"for": f"person:{w['nathan']}"})
+    assert commitment(db, mine["id"])["told_at"] and db.later == []
+    assert cs.goes_to(church(db), w["sunny"]) == {"kind": "login", "id": w["owen@"], "name": "Owen Diaz"}
+    theirs = repeat(app, "owen", **{"for": f"person:{w['sunny']}"})
+    assert commitment(db, theirs["id"])["told_at"] and db.later == []
+    assert tell.sweep_tick(NOW + HOUR)["repeats"] == 0 and quiet(db)
+
+
+def test_taking_one_off_tells_nobody(app, db):
+    phone(db, "amara")
+    got = repeat(app, "elena")
+    fake.later(db)
+    as_(app, HOPE, "elena")
+    assert app.delete(f"/church/schedule/commitments/{got['id']}?business_id={HOPE}").status_code == 200
+    assert fake.later(db) == 0 and len(db.rang) == 1
+    assert tell.sweep_tick(NOW + HOUR)["repeats"] == 0 and len(db.rang) == 1

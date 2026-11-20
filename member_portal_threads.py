@@ -230,6 +230,10 @@ def thread_name(biz: Dict[str, Any], thread: str) -> str:
 # ─── Unread: the header's count and Home's card ──────────────────────
 
 BADGE: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("messages_badge", default=None)
+# The whole of counts() for the page being drawn (member_portal.serve keeps it
+# beside BADGE, from the same read): the new Home's Prayer door counts the
+# prayer-wall requests in it (prayer_new). None when it wasn't read.
+NOW: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar("messages_counts", default=None)
 _COUNTS: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
 COUNTS_SECONDS = 15
 CHAT_WINDOW_DAYS = 60
@@ -240,6 +244,19 @@ def forget(business_id: Any, contact_id: Any) -> None:
     _COUNTS.pop((str(business_id), str(contact_id)), None)
 
 
+def prayer_new(got: Optional[Dict[str, Any]]) -> Tuple[int, List[str]]:
+    """(how many requests on the member's groups' prayer walls they haven't
+    seen, the groups they're in, most first) from counts()' answer (NOW):
+    the notes church_threads.summary counts as prayer. (0, []) without it."""
+    per = []
+    for t, v in ((got or {}).get("notes") or {}).items():
+        n = int((v or {}).get("prayer") or 0)
+        if n and str(t).startswith("group:"):
+            per.append((n, str(t)[len("group:"):]))
+    per.sort(key=lambda x: (-x[0], x[1]))
+    return sum(n for n, _ in per), [g for _, g in per]
+
+
 def may_chat(full: Optional[Dict[str, Any]]) -> bool:
     """Messaging's own rules let this member into chats (a birthdate, their
     switch on, the guidelines agreed)."""
@@ -247,10 +264,13 @@ def may_chat(full: Optional[Dict[str, Any]]) -> bool:
     return bool(full) and not rules.why_not(full) and bool(full.get("guidelines_at"))
 
 
-def chat_unread(business_id: str, me_id: str, group_ids: List[str]) -> Optional[int]:
+def chat_unread(business_id: str, me_id: str, group_ids: List[str],
+                by_group: Optional[Dict[str, int]] = None) -> Optional[int]:
     """Unread chat messages: another person's delivered messages since the
     member last read each chat (theirs, and their groups'), at most 30 a
-    chat, as Messages counts them. None when a read failed."""
+    chat, as Messages counts them. None when a read failed. `by_group`, when
+    given, is filled with each group chat's own count (Connect's rows in the
+    new look: member_lumen_connect), from the same reads."""
     b, c = ct._q(business_id), ct._q(me_id)
     mine = sb_clients.sb_get_as_service(
         f"/msg_participants?business_id=eq.{b}&contact_id=eq.{c}&select=thread_id,state,last_read_at")
@@ -260,7 +280,7 @@ def chat_unread(business_id: str, me_id: str, group_ids: List[str]) -> Optional[
     if group_ids:
         got = sb_clients.sb_get_as_service(
             f"/msg_threads?business_id=eq.{b}&kind=eq.group&group_id=in.({','.join(ct._q(g) for g in group_ids)})"
-            "&select=id")
+            "&select=id,group_id")
         if not isinstance(got, list):
             return None
         gthreads = got
@@ -281,12 +301,19 @@ def chat_unread(business_id: str, me_id: str, group_ids: List[str]) -> Optional[
         t = str(m.get("thread_id"))
         if str(m.get("created_at") or "") > read.get(t, "") and per.get(t, 0) < 30:
             per[t] = per.get(t, 0) + 1
+    if by_group is not None:
+        for t in gthreads:
+            n = per.get(str(t["id"]), 0)
+            if n and t.get("group_id"):
+                gid = str(t["group_id"]).lower()
+                by_group[gid] = by_group.get(gid, 0) + n
     return sum(per.values())
 
 
 async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """What's unread in Messages, while church threads are open here:
-    {"notes": church_threads.summary, "chat": n, "total": n}. Kept
+    {"notes": church_threads.summary, "chat": n, "total": n, "groups": {group
+    id: its chat's count}}. Kept
     COUNTS_SECONDS per member per replica (reading something here forgets
     it). None when threads aren't open or a read failed. Never raises."""
     try:
@@ -300,6 +327,8 @@ async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, 
         if gids is None:
             return None
 
+        by_group: Dict[str, int] = {}
+
         async def chats() -> Optional[int]:
             import member_portal_messaging as mpm
             if not mpm.turned_on(biz):
@@ -307,12 +336,12 @@ async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, 
             full = await asyncio.to_thread(mpm._me_profile, key[0], me)
             if not may_chat(full):
                 return 0
-            return await asyncio.to_thread(chat_unread, key[0], key[1], gids)
+            return await asyncio.to_thread(chat_unread, key[0], key[1], gids, by_group)
         notes, chat = await asyncio.gather(asyncio.to_thread(ct.summary, key[0], key[1], gids), chats())
         if notes is None:
             return None
         out = {"notes": notes, "chat": chat or 0,
-               "total": sum(t["unread"] for t in notes.values()) + (chat or 0)}
+               "total": sum(t["unread"] for t in notes.values()) + (chat or 0), "groups": by_group if chat else {}}
         _COUNTS[key] = (time.monotonic(), out)
         return out
     except Exception:

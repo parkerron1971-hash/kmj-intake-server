@@ -14,8 +14,11 @@ PGlite check, church_schedule_db.mjs, runs the real file): the defaults, the
 checks, the same-church triggers, one waiting ask for the same days
 (church_away_asks_one_open), one row a person on the lists, and
 church_away_settle exactly as the function is written, `changed: false`
-included. A write the database would refuse answers None, as sb_clients does,
-and `db.refused` keeps why.
+included. Things that repeat (S1-7): church_away_commitments' defaults, its
+checks (the label, the weekday, the pattern, nth only for month_nth, until
+after the start, every other week's start on its weekday) and its same-church
+trigger, on an insert. A write the database would refuse answers None, as
+sb_clients does, and `db.refused` keeps why.
 
     db.fail = {"post": "/church_away_asks", ...}   that write (or read) fails
     db.posts = [(table or rpc, redact)]             every POST, with whether it
@@ -310,6 +313,44 @@ def settle(d, b):
     return {"changed": True, "ask": dict(v)}
 
 
+def _commitment(d, b):
+    """An insert into church_away_commitments (S1-7), as step 1's file makes
+    the table: its defaults, its checks (the label 1 to 80 letters once
+    trimmed, a weekday 1 to 7, the three patterns, nth exactly when it is
+    month_nth and 1 to 5, until on or after the start, every other week's
+    start on its weekday), and its trigger (the person is the church's
+    own). None, with why, for a row the database refuses."""
+    row = {"nth": None, "until_on": None, "told_at": None, **b}
+    label, wd, nth = row.get("label"), row.get("weekday"), row.get("nth")
+    why = None
+    try:
+        start = date.fromisoformat(str(row.get("starts_on")))
+        until = date.fromisoformat(str(row["until_on"])) if row.get("until_on") else None
+    except ValueError:
+        start = until = None
+        why = "type: date"
+    if why:
+        pass
+    elif not isinstance(label, str) or not 1 <= len(label.strip()) <= 80:
+        why = "check: label"
+    elif isinstance(wd, bool) or not isinstance(wd, int) or not 1 <= wd <= 7:
+        why = "check: weekday"
+    elif row.get("pattern") not in ("weekly", "every_other", "month_nth"):
+        why = "check: pattern"
+    elif (row["pattern"] == "month_nth") != (nth is not None) or (nth is not None and not 1 <= nth <= 5):
+        why = "check: church_away_commitments_nth"
+    elif until is not None and until < start:
+        why = "check: church_away_commitments_until"
+    elif row["pattern"] == "every_other" and start.isoweekday() != wd:
+        why = "check: church_away_commitments_anchor"
+    elif not _mine(d, "contacts", row.get("business_id"), row.get("contact_id")):
+        why = "trigger: church_schedule_person_same_business"
+    if why:
+        d.refused.append(why)
+        return None
+    return row
+
+
 def _listed(d, b):
     """church_schedule_people: one row a person (its primary key), merged."""
     if (b.get("listed") == "add") != (b.get("grp") is not None) or b.get("listed") not in ("add", "remove") \
@@ -390,6 +431,12 @@ def build(monkeypatch, *, mode: str = "on", limits: bool = False, **kw):
             return _pair(d, body)
         if path.startswith("/church_away_asks"):
             body = _ask_row(d, body)
+            if body is None:
+                return None
+            d.ticks += 1
+            body = dict(body, created_at=(NOW + timedelta(seconds=d.ticks)).isoformat())
+        if path.startswith("/church_away_commitments"):
+            body = _commitment(d, body)
             if body is None:
                 return None
             d.ticks += 1
@@ -484,9 +531,11 @@ def seat(d, biz, handle, role="member", tie=True):
 def client(d):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    import church_schedule_repeats as crep
     a = FastAPI()
     a.include_router(cs.router)
     a.include_router(csl.router)
+    a.include_router(crep.router)
     who = {"id": None, "email": None}
     a.dependency_overrides[sb_clients.authed_request] = (
         lambda: SimpleNamespace(user=SimpleNamespace(id=who["id"], email=who["email"], user_metadata={})))

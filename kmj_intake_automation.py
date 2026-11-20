@@ -477,6 +477,11 @@ app.include_router(church_schedule_router)
 # switch; 404 until supabase/APPLY-2026-11-20-church-schedule-limits.sql too.
 from church_schedule_limits import router as church_schedule_limits_router
 app.include_router(church_schedule_limits_router)
+# Things that repeat (/church/schedule/commitments; church_schedule_repeats.py,
+# S1-7): "I work every other Saturday", said once. The same switch; step 1's
+# tables (church_away_commitments is in that file).
+from church_schedule_repeats import router as church_schedule_repeats_router
+app.include_router(church_schedule_repeats_router)
 # The week (/church/week, /church/week/status; church_week.py): every
 # department's volunteers for one week, with hours, read only, for whoever
 # keeps Who serves when (2026-11-19; CHURCH_WEEK off | owner | on, owner when unset).
@@ -669,6 +674,12 @@ app.include_router(member_photos_router)
 # Light, Dark or Same as my phone. BEFORE public_site_router.
 from member_lumen_look import router as member_lumen_look_router
 app.include_router(member_lumen_look_router)
+# Watch in the new look (member_lumen_watch.py): POST /my/sermons/progress
+# and /my/sermons/save (where a member is in a message, and Save), and the
+# church's weekly service for the calendar (GET /my/sermons/live.ics, public).
+# BEFORE public_site_router.
+from member_lumen_watch import router as member_lumen_watch_router
+app.include_router(member_lumen_watch_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.
@@ -678,6 +689,16 @@ app.include_router(member_app_pictures_router)
 # welcome note, for the same people as the pictures. BEFORE public_site_router.
 from member_pastor import router as member_pastor_router
 app.include_router(member_pastor_router)
+# Members post (member_posts.py): POST /my/post (in their own groups, or to
+# the whole church through a pastor), /my/post/remove, /my/post/switch.
+# BEFORE public_site_router.
+from member_posts import router as member_posts_router
+app.include_router(member_posts_router)
+# Share in the new look (member_lumen_share.py): the sheet's script
+# (GET /my/share.<hash>.js) and a story picture of the church's own content
+# (GET /my/story/<kind>/<id>.png). BEFORE public_site_router.
+from member_lumen_share import router as member_lumen_share_router
+app.include_router(member_lumen_share_router)
 # A member's own highlights, notes and bookmarks in the Bible
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router

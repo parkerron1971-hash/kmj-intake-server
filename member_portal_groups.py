@@ -812,45 +812,209 @@ def _hero(biz: Dict[str, Any], site, g: Dict[str, Any], people: List[Dict[str, A
             f'{facts_p}{who_p}</div></section>')
 
 
-def _lumen_head(g: Dict[str, Any], people: List[Dict[str, Any]], leaders: List[Dict[str, Any]], in_group: bool) -> str:
-    """A group's page in the new look (member_lumen_people): no photo, its
-    kind and who leads it in small teal letters, its name in the serif, when
-    and where, then faces and how many are in it. Who shows is today's
-    hero's rule: its people to its members (a few faces and the count), its
-    leaders to anyone else."""
-    import member_lumen_ui as lm
-    import member_portal_church as mpc
-    from member_portal import _e
-    kind = mpc.GROUP_KINDS.get(g.get("kind") or "", "Group")
-    led = [display_name(p, "first") for p in leaders]
-    tag = kind + (f" · led by {_and(led)}" if led else "")
-    facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
-    n = len(people)
+# ─── the new look, Look 5.1 (member_lumen_connect) ─────────────────────
+
+LUMEN_POSTS = 8     # the Board's posts on a group's Posts tab in the new look
+
+
+def _lumen_face(g: Dict[str, Any]):
     mode = g.get("name_display") or "full"
-    shown = (leaders + [p for p in people if p["role"] != "leader"])[:5] if in_group else leaders[:3]
-    faces = "".join(_face(p, "gs-av", mode) for p in shown)
-    count = f"<span>{n} {'person' if n == 1 else 'people'}</span>" if in_group else ""
-    row = f'<span class="lm-faces" aria-hidden="{"false" if count else "true"}">{faces}{count}</span>' if faces or count else ""
-    sub = f'<p class="lm-sub">{facts}</p>' if facts else ""
-    return (f'<header class="lm-ghead"><span class="lm-gtag"><i></i>{_e(tag)}</span>'
-            f'<h1 class="lm-disp" id="gs-name">{lm.italic_last(g.get("name") or "")}</h1>{sub}{row}</header>')
+    return lambda p: _face(p, "gs-av", mode)
 
 
-def _lumen_tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[Dict[str, Any]]) -> str:
-    """The group's places in the new look: one segmented control (Home, Chat,
-    Board, Prayer, Meet, People, and Video while a meeting is open), the
-    same places and links as _tabs."""
+def _lumen_top(biz: Dict[str, Any], site, me: Dict[str, Any], data: Dict[str, Any], chat: bool) -> str:
+    """A member's view in the new look: the cover with Back and More, the
+    name, Members only and when, faces and names, Joined and Chat."""
+    import member_lumen_connect as lc
     from member_portal import _e
-    items = [("", "Home", 0)] + ([("chat", "Chat", 0)] if chat else []) + \
-        [("board", "Board", board_new), ("prayer", "Prayer", 0), ("meet", "Meet", 0), ("people", "People", 0)]
-    out = []
-    for key, label, n in items:
-        cur = ' aria-current="page"' if key == current else ""
-        badge = f'<span class="lm-gsegn" aria-label="{n} new">{n}</span>' if n else ""
-        out.append(f'<a href="{_base(gid, key)}"{cur}>{label}{badge}</a>')
+    g, people, leaders, role = data["group"], data["people"], data["leaders"], data.get("role")
+    gid = _e(g["id"])
+    menu = f'<a href="{_base(g["id"], "people")}">Members</a>'
+    if role != "leader":
+        menu += (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
+                 f'<input type="hidden" name="action" value="leave"><button class="warn" type="submit">Leave this group</button></form>')
+    mode = g.get("name_display") or "full"
+    head = lc.head(g, people, leaders, True, me_id=str(me["id"]), face=_lumen_face(g),
+                   name=lambda p: display_name(p, mode))
+    return f'{lc.cover(biz, site, g, menu=menu)}{head}{lc.buttons(g["id"], role, chat)}'
+
+
+def _lumen_outside(biz: Dict[str, Any], site, me: Dict[str, Any], data: Dict[str, Any], flash: str, about: str,
+                   leads: str) -> str:
+    """Someone not in the group, in the new look: the cover, what it is and
+    who leads it, and Join, Ask to join, or where their request stands."""
+    import member_lumen_connect as lc
+    from member_portal import _e, _shell
+    g, people, leaders = data["group"], data["people"], data["leaders"]
+    gid = _e(g["id"])
+    if data.get("asked"):
+        act = (f'<div class="lm-cpills"><span class="lm-cpill on">{_ic("clock", 15)}Asked · a leader will say yes</span></div>'
+               f'<form method="post" action="/my/groups/withdraw"><input type="hidden" name="group_id" value="{gid}">'
+               f'<button class="lm-txtbtn" type="submit">Take back my request</button></form>')
+    elif data.get("full"):
+        act = '<p class="mp-muted">This group is full right now. Ask the church office about the next one.</p>'
+    else:
+        label = "Join" if g["join_mode"] == "open" else "Ask to join"
+        note = ("You'll be in right away." if g["join_mode"] == "open"
+                else "A leader of the group says yes, usually within a day or two.")
+        act = (f'<form class="lm-cpills" method="post" action="/my/groups/ask"><input type="hidden" name="group_id" value="{gid}">'
+               f'<button class="lm-cpill pri" type="submit">{label}</button></form><p class="gs-fine">{note}</p>')
+    head = lc.head(g, people, leaders, False, me_id=str(me["id"]), face=lambda p: _face(p, "gs-av", "first"),
+                   name=lambda p: display_name(p, "first"))
+    body = f'{lc.cover(biz, site, g)}{head}{flash}<div class="lm-gbody">{act}{about}{leads}</div>'
+    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me,
+                  bare=True)
+
+
+def _lumen_post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str, size: int, back: str) -> str:
+    """A Board post as one of Home's feed cards (member_lumen_feed): the
+    face, the name, Leader or Pastor and when, the words; Got it, who has
+    seen it (a leader) and the leader's tools under it, as on the Board."""
+    from member_portal import _e
+    import member_app_ui as ui
+    author = p.get("author") or {}
+    mode = g.get("name_display") or "full"
+    name = (display_name(author, mode) if author else "Your pastors" if p.get("church") else "A leader")
+    bits = ["Pastor" if p.get("church") else "Leader"]
+    later = bool(p.get("later"))
+    bits.append(f"Goes out {p.get('later_label') or 'later'}" if later else _when(p.get("created_at")))
+    if p.get("church"):
+        bits.append("to every group leader" if p.get("audience") == "leaders" else "to every group")
+    pinned = bool(p.get("pinned")) and not p.get("church")
+    face = (_face(author, "lf-face", mode) if author else
+            f'<span class="lm-logo" aria-hidden="true">{_e(ui.initials(name))}</span>')
+    title = f'<b class="lf-t">{_e(p["title"])}</b>' if p.get("title") else ""
+    pid = _e(p["id"])
+    ack = ""
+    if p.get("ask_ack") and not later:
+        if p.get("i_acked"):
+            ack = f'<span class="gs-ack done">{_ic("check", 15)}You saw this</span>'
+        else:
+            ack = (f'<form method="post" action="/my/groups/post/ack"><input type="hidden" name="id" value="{pid}">'
+                   f'<input type="hidden" name="back" value="{_e(back)}">'
+                   f'<button class="gs-ack" type="submit">{_ic("check", 15)}Got it</button></form>')
+    seen = ""
+    if leader and not p.get("church") and not later:
+        said = [f"Seen by {int(p.get('seen_n') or 0)} of {size}"]
+        if p.get("ask_ack"):
+            said.append(f"{int(p.get('acked_n') or 0)} said got it")
+        if p.get("emailed"):
+            said.append(f"{int(p['emailed'])} by email")
+        seen = f'<span class="gs-seen">{" · ".join(said)}</span>'
+    tools = ""
+    if not p.get("church") and (leader or str(p.get("posted_by") or "") == str(me_id)):
+        extra = ""
+        if leader:
+            extra = (f'<form method="post" action="/my/groups/post/pin"><input type="hidden" name="id" value="{pid}">'
+                     f'<input type="hidden" name="on" value="{"0" if pinned else "1"}">'
+                     f'<button class="gs-mini" type="submit">{_ic("pin", 15)}{"Unpin" if pinned else "Pin to the top"}</button></form>')
+        if later:
+            extra = (f'<form method="post" action="/my/groups/post/now"><input type="hidden" name="id" value="{pid}">'
+                     f'<button class="gs-mini" type="submit">{_ic("send", 15)}Send now</button></form>')
+        tools = (f'<div class="gs-acts">{extra}<form method="post" action="/my/groups/post/remove">'
+                 f'<input type="hidden" name="id" value="{pid}"><button class="gs-mini warn" type="submit">Take it down</button>'
+                 f'</form></div>')
+    foot = f'<div class="gs-foot">{ack}{seen}</div>' if (ack or seen) else ""
+    import member_lumen_feed as lf
+    head = lf._head(face, _e(name), " · ".join(b for b in bits if b), _base(g["id"], "board"),
+                    "Open the Board", chip="Scheduled" if later else "Pinned" if pinned else "")
+    return (f'<article class="lf-post lm-gpost" id="p-{pid}">{head}'
+            f'<div class="lf-txt">{title}<p>{_e(p.get("body") or "")}</p></div>{foot}{tools}</article>')
+
+
+def _lumen_posts(biz: Dict[str, Any], g: Dict[str, Any], data: Dict[str, Any], me: Dict[str, Any], *, leader: bool,
+                 chat: bool, back: str, size: int) -> str:
+    """The Posts tab in the new look: the next gathering, the box to write
+    to the group, the Board's posts."""
+    import group_study
+    import member_lumen_connect as lc
+    from member_portal import _e
+    people, posts, me_id = data["people"], data.get("posts") or [], str(me["id"])
+    mode = g.get("name_display") or "full"
+    parts = []
+    st = data.get("study")
+    if leader:
+        parts.append(_requests_block(data.get("requests") or [], g))
+        if st and st.get("study") and not st["study"].get("posted_at"):
+            parts.append(group_study.render(g, st, leader=True, people=people,
+                                            next_day=(data.get("meet") or {}).get("next"), ic=_ic, esc=_e,
+                                            name=lambda p: display_name(p, mode)))
+    parts.append(lc.tonight(biz, g, data.get("meet"), people, me_id=me_id, face=_lumen_face(g)))
+    nxt = (data.get("meet") or {}).get("next")
+    if nxt:
+        import group_bring
+        items = ((data.get("meet") or {}).get("bring") or {}).get(nxt.isoformat()) or []
+        if items:
+            left = group_bring.still_open(items, {p["id"] for p in people})
+            parts.append(f'<a class="gs-mini" href="{_base(g["id"], "meet")}">{_ic("utensils", 15)}'
+                         f'Bring something · {group_bring.open_label(left)}</a>')
+    live = data.get("live") or {}
     if live:
-        out.append(f'<a href="/my/groups/live/{_e(live["id"])}">Video</a>')
-    return f'<nav class="lm-gseg" aria-label="In this group">{"".join(out)}</nav>'
+        label = "Join the video meeting" if live.get("status") == "live" or data.get("host") else "Video starting: waiting for leaders"
+        parts.append(f'<div class="lm-cpills"><a class="lm-cpill" href="/my/groups/live/{_e(live["id"])}">{_ic("video", 15)}{label}</a></div>')
+    elif data.get("host"):
+        parts.append(f'<form class="lm-cpills" method="post" action="/my/groups/live/start"><input type="hidden" name="group_id" value="{_e(g["id"])}">'
+                     f'<input type="hidden" name="mode" value="meeting">'
+                     f'<button class="lm-cpill" type="submit">{_ic("video", 15)}Open a video room</button></form>')
+    study_line = group_study.home_line(g, st, _ic, _e, _base(g["id"], "meet"))
+    if study_line:
+        parts.append(f'<div class="gs-list">{study_line}</div>')
+    # The box to write: anyone in the group posts here (member_posts, its
+    # composer, this group picked); a leader's Board announcement is a tap away.
+    parts.append(lc.composer(me, f"/my/post?group={_e(g['id'])}"))
+    if leader:
+        parts.append(f'<a class="lm-cxmore" href="{_base(g["id"], "board")}#post">Post an announcement to the Board</a>')
+    pinned = [p for p in posts if p.get("pinned") and not p.get("church")][:1]
+    church_new = [p for p in posts if p.get("church") and not p.get("i_acked")][:1]
+    rest = [p for p in posts if p not in pinned and p not in church_new]
+    shown = pinned + church_new + rest[:LUMEN_POSTS]
+    # The group's own posts (a leader's News for the group, its members'
+    # posts: member_posts.group_feed), between the Board's by time.
+    mposts = data.get("mposts") or []
+    items = [(str(p.get("publish_at") or p.get("created_at") or ""), "b", p) for p in rest[:LUMEN_POSTS]]
+    items += [(str(p.get("publish_at") or p.get("created_at") or ""), "m", p) for p in mposts]
+    items.sort(key=lambda x: x[0], reverse=True)
+    import member_app_photos as photos
+    pool = photos.photos(biz, None) if mposts else []
+    used: set = set()
+    tz = ((data.get("meet") or {}).get("tz"),) if (data.get("meet") or {}).get("tz") else None
+    if mposts and tz is None:
+        import group_gatherings
+        tz = (group_gatherings.zone(biz),)
+    cards = "".join(_lumen_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in pinned + church_new)
+    cards += "".join(_lumen_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) if k == "b" else
+                     _lumen_member_card(biz, p, g, me, open_=bool(data.get("comments_open")), leader=leader, pool=pool,
+                                        used=used, tz=tz)
+                     for _at, k, p in items)
+    if cards:
+        more = (f'<a class="lm-cxmore" href="{_base(g["id"], "board")}">See all of the Board</a>'
+                if len(shown) < len(posts) else "")
+        parts.append(f'<div class="lm-gband"></div><div class="lm-gposts">{cards}</div>{more}')
+    else:
+        parts.append('<p class="gs-empty">Nothing posted yet. Write the first one.</p>')
+    return "".join(x for x in parts if x)
+
+
+def _lumen_member_card(biz: Dict[str, Any], p: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any], *, open_: bool,
+                       leader: bool, pool: List[str], used: set, tz) -> str:
+    """One of the group's own posts as Home's feed card (member_lumen_feed),
+    its reactions and comments coming back to this page. The writer's own
+    post that the check held shows only to them, marked; its writer and the
+    group's leaders can take a member's post down."""
+    import member_lumen_feed as lf
+    import member_posts
+    from member_portal import _e
+    pid = _e(p["id"])
+    tools = ""
+    if p.get("source") == "member" and (leader or str(p.get("posted_by") or "") == str(me["id"])):
+        tools = (f'<form class="gs-acts lm-gtools" method="post" action="/my/post/remove"><input type="hidden" name="id" value="{pid}">'
+                 f'<button class="gs-mini warn" type="submit">Take it down</button></form>')
+    if p.get("held"):
+        return (f'<article class="lf-post lm-gpost is-held" id="p-{pid}">{lf._source(biz, p, tz)}{lf._picture(p)}{lf._words(p)}'
+                f'<p class="lf-note lm-gheld">{lf._i("shield", "xs")}<span>{_e(member_posts.DONE["post_held"])} '
+                f'Only you can see it until then.</span></p>{tools}</article>')
+    html = lf.card(biz, p, {}, open_=open_, me=me, pool=pool, used=used, tz=tz, back=_base(g["id"]))
+    return html[:-len("</article>")] + tools + "</article>" if tools and html.endswith("</article>") else html
 
 
 def _and(names: List[str]) -> str:
@@ -996,7 +1160,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     gid = _e(g["id"])
     import member_lumen
     lumen = member_lumen.page()
-    hero = _lumen_head(g, people, leaders, bool(role)) if lumen else _hero(biz, site, g, people, leaders, bool(role))
+    hero = "" if lumen else _hero(biz, site, g, people, leaders, bool(role))
     # The new look pushes a group from Connect, so its way back is Connect.
     connect = "/my/connect" if lumen else "/my/groups"
     flash = _flash(request)
@@ -1017,6 +1181,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         led = "".join(f'<div class="gs-lc">{_face(p, "gs-av l", "first")}<b>{_e(display_name(p, "first"))}</b><small>Leader</small></div>'
                       for p in leaders)
         leads = f'<div class="mb-sh"><h2>Who leads</h2></div><div class="gs-lead">{led}</div>' if led else ""
+        if lumen:
+            return _lumen_outside(biz, site, me, data, flash, about, leads), 200
         body = (f'<a class="mb-back" href="{connect}">Connect</a>{hero}{flash}{about}'
                 f'<div class="gs-acts" style="margin-top:18px">{act}</div>{leads}')
         return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 200
@@ -1025,8 +1191,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     me_id = str(me["id"])
     unread = sum(1 for p in posts if p.get("ask_ack") and not p.get("i_acked"))
     chat = mpm.turned_on(biz) and g.get("chat_on") is not False
-    tabs = (_lumen_tabs if lumen else _tabs)(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat,
-                                             live=data.get("live"))
+    if lumen:
+        import member_lumen_connect as lc
+        tabs = lc.tabs(g["id"], tab, board_new=unread if tab not in ("", "board") else 0, live=data.get("live"))
+    else:
+        tabs = _tabs(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat, live=data.get("live"))
     back = _base(g["id"], tab)
     size = len(people)
     script = ""
@@ -1065,7 +1234,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             import member_lumen_moments as mlm
             script = mlm.JS
     elif tab == "board":
-        cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
+        cards = "".join((_lumen_post_card if lumen else _post_card)(p, g, leader=leader, me_id=me_id, size=size, back=back)
+                        for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
         import member_push
         import group_post_later as gpl
@@ -1110,6 +1280,13 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         if not leader:
             content += (f'<form method="post" action="/my/groups" style="margin-top:8px"><input type="hidden" name="group_id" value="{gid}">'
                         f'<input type="hidden" name="action" value="leave"><button class="gs-mini warn" type="submit">Leave this group</button></form>')
+    elif lumen:
+        content = _lumen_posts(biz, g, data, me, leader=leader, chat=chat, back=back, size=size)
+        if data.get("mposts"):
+            # Love / Praying / Amen and comments answer in place, as on Home.
+            import member_lumen_feed as lf
+            import member_portal_news as mpn
+            script = mpn.RX_JS + lf.JS
     else:
         import group_study
         parts = []
@@ -1178,7 +1355,10 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             parts.append(f'<p class="gs-note">{_ic("chat", 15)}<span>The group chat opens when '
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
-    page = f'<a class="mb-back" href="{connect}">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
+    if lumen:
+        page = f'{_lumen_top(biz, site, me, data, chat)}{tabs}{flash}<div class="lm-gbody">{content}</div>'
+    else:
+        page = f'<a class="mb-back" href="{connect}">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
     import group_bring
     import group_gatherings
     import group_prayer
@@ -1189,7 +1369,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import chat_polls
     return _shell(biz, site, g.get("name") or "Group",
                   f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{chat_photos.PHOTO_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
-                  tab="connect", who=me, script=script), 200
+                  tab="connect", who=me, script=script, bare=lumen), 200
 
 
 def _chat_css() -> str:
@@ -1247,7 +1427,23 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             gn = await asyncio.to_thread(mpt.chat_notes, biz, str(me["id"]), gid, [], mark=True)
             if gn:
                 data["chat"] = {**data["chat"], "notes": gn, "notes_tz": await asyncio.to_thread(mpt._zone, biz)}
-    if data and data.get("role") and tab in ("", "meet"):
+    import member_lumen
+    if data and data.get("role") and tab == "" and member_lumen.page():
+        # The new look's Posts tab: the gathering and the study as below, and,
+        # read alongside them, the group's own posts (member_posts.group_feed: a
+        # leader's News for the group and its members' posts); whether comments
+        # are open only when there are posts to comment on.
+        import church_news as cn
+        import group_gatherings
+        import group_study
+        import member_posts
+        data["meet"], data["study"], data["mposts"] = await asyncio.gather(
+            asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"]),
+            asyncio.to_thread(group_study.view, biz, data["group"], leader=data.get("role") == "leader"),
+            asyncio.to_thread(member_posts.group_feed, str(biz["id"]), gid, str(me["id"])))
+        if data["mposts"]:
+            data["comments_open"] = await asyncio.to_thread(cn.comments_open, biz)
+    elif data and data.get("role") and tab in ("", "meet"):
         import group_gatherings
         data["meet"] = await asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"])
         import group_study
@@ -1259,8 +1455,11 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if data and data.get("role") and tab in ("", "board"):
         shown = data.get("posts") or []
         if tab == "":
+            # The new look's Posts tab shows more of the Board (LUMEN_POSTS).
+            import member_lumen
+            top = LUMEN_POSTS if member_lumen.page() else 3
             shown = [p for p in shown if (p.get("pinned") and not p.get("church"))][:1] + \
-                    [p for p in shown if p.get("church") and not p.get("i_acked")][:1] + shown[:3]
+                    [p for p in shown if p.get("church") and not p.get("i_acked")][:1] + shown[:top]
         await asyncio.to_thread(mark_seen, str(biz["id"]), str(me["id"]), sorted({str(p["id"]) for p in shown}))
     return render(biz, site, request, me, data, tab)
 
@@ -1950,6 +2149,9 @@ async def _meet_action(request: Request, act, *, home: bool = False):
         return _go("/my/groups", err="group_gone")
     ok, code = await asyncio.to_thread(act, church["business"], me, gid, form)
     q = {"done": code} if ok else {"err": code}
+    if str(form.get("back") or "") == _base(gid):
+        # Asked from the group's own Posts tab in the new look (member_lumen_connect): back there.
+        return _go(_base(gid), **q)
     if home and str(form.get("back") or "") == "/my":
         # Asked from Home's "Up next" card (member_portal_lumen): back to Home.
         from member_portal import _SECURE_HEADERS
@@ -2115,14 +2317,40 @@ async def prayer_route(request: Request):
     return _go(_base(gid, "prayer"), **({"done": code} if ok else {"err": code}))
 
 
-async def _prayer_action(request: Request, act):
-    """The shared shape of mark / answer / remove: back to the wall."""
+async def _prayer_action(request: Request, act, *, feed: bool = False):
+    """The shared shape of mark / answer / remove: back to the wall. `feed`
+    (mark): from Home's feed too (member_lumen_feed's "I prayed"): JSON for
+    its script (Accept: application/json), or back to Home at the request
+    (back=/my), and this member's kept feed items are forgotten
+    (member_feed_more)."""
     import asyncio
-    church, me, form, stop = await _who(request, "/my/groups")
-    if stop:
-        return stop
+    wants = feed and "application/json" in (request.headers.get("accept") or "")
+    if wants:
+        from fastapi.responses import JSONResponse
+        import member_portal_church as mpc
+        church, me, unavailable = await mpc._signed_in(request)
+        if unavailable or not me or not mpc._allowed(church, me):
+            code = "preview" if unavailable == "preview" else "error" if unavailable else "signed_out" if not me else "slow"
+            return JSONResponse({"ok": False, "code": code}, status_code={"preview": 403, "signed_out": 401,
+                                                                          "slow": 429}.get(code, 503))
+        form = await request.form()
+    else:
+        church, me, form, stop = await _who(request, "/my/groups")
+        if stop:
+            return stop
     biz_id = str(church["business"]["id"])
     ok, code, gid = await asyncio.to_thread(act, church["business"], biz_id, me, form)
+    if feed and ok:
+        import member_feed_more
+        member_feed_more.forget(biz_id, me["id"])
+    if wants:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": ok, "code": code}, status_code=200 if ok else 400, headers={"Cache-Control": "no-store"})
+    if feed and str(form.get("back") or "") == "/my":
+        from member_portal import _SECURE_HEADERS
+        pid = str(form.get("id") or "")
+        anchor = f"#gp-{pid}" if UUID.match(pid) else ""
+        return RedirectResponse(f"/my?{'done' if ok else 'err'}={code}{anchor}", status_code=303, headers=_SECURE_HEADERS)
     back = _base(gid, "prayer") if UUID.match(gid or "") else "/my/groups"
     if ok and str(form.get("view") or "") == "answered" and UUID.match(gid or ""):
         back = _base(gid, "prayer")
@@ -2134,7 +2362,7 @@ async def prayer_mark_route(request: Request):
     import group_prayer
     return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.mark(
         biz, me, str(form.get("id") or ""), str(form.get("kind") or ""),
-        lambda gid: _is_member(biz_id, gid, me["id"])))
+        lambda gid: _is_member(biz_id, gid, me["id"])), feed=True)
 
 
 @router.post("/my/groups/prayer/answer", include_in_schema=False)

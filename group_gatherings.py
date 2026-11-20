@@ -291,6 +291,43 @@ def answers(business_id: str, group_id: str, day: date, *, fresh: bool = False) 
     return out
 
 
+def answers_many(business_id: str, wanted: List[Tuple[str, date]], *,
+                 fresh: bool = False) -> Dict[Tuple[str, str], Optional[Dict[str, str]]]:
+    """answers() for several gatherings at once (the new Home's This week
+    and its moments: each of the member's groups' next gathering). What's
+    kept answers from memory; the rest come back in ONE read (their groups
+    and days together, sorted out here), each then kept as answers() keeps
+    it. {(group id, day iso): {contact id: answer}, or None when it couldn't
+    be read}. One gathering costs exactly what answers() costs."""
+    out: Dict[Tuple[str, str], Optional[Dict[str, str]]] = {}
+    miss: List[Tuple[str, date]] = []
+    for gid, day in wanted:
+        key = (str(business_id), str(gid), day.isoformat())
+        hit, got = (False, None) if fresh else _ANSWERS.get(key)
+        if hit:
+            out[(str(gid), day.isoformat())] = got
+        elif (str(gid), day) not in miss:
+            miss.append((str(gid), day))
+    if len(miss) == 1:
+        gid, day = miss[0]
+        out[(gid, day.isoformat())] = answers(business_id, gid, day, fresh=True)
+    elif miss:
+        gids = sorted({g for g, _ in miss})
+        days = sorted({d.isoformat() for _, d in miss})
+        rows = sb_clients.sb_get_as_service(
+            f"/group_rsvps?business_id=eq.{_q(business_id)}&group_id=in.({','.join(_q(g) for g in gids)})"
+            f"&met_on=in.({','.join(days)})&select=group_id,met_on,contact_id,answer&limit=20000")
+        for gid, day in miss:
+            if not isinstance(rows, list):
+                out[(gid, day.isoformat())] = None
+                continue
+            got = {str(r["contact_id"]): str(r.get("answer") or "") for r in rows
+                   if str(r.get("group_id")) == gid and str(r.get("met_on") or "")[:10] == day.isoformat()}
+            _ANSWERS.put((str(business_id), gid, day.isoformat()), got, tag=str(business_id))
+            out[(gid, day.isoformat())] = got
+    return out
+
+
 def guests(business_id: str, meeting_id: str) -> Optional[List[Dict[str, Any]]]:
     """First-time guests named at one gathering, in the order they came."""
     rows = sb_clients.sb_get_as_service(

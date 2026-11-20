@@ -361,16 +361,23 @@ def test_on_owner_whose_church_it_is_is_asked_once_a_minute_even_when_it_cant_be
     assert db.reads[n:] == [], "and still closed here, with nothing read"
 
 
-def test_open_the_board_makes_one_more_read_and_never_selects_what_is_private(db):
+def test_open_the_board_makes_two_more_reads_and_never_selects_what_is_private(db):
+    """The asks still waiting, then (S1-7) the things that repeat. An asks
+    read that fails holds nobody and reads nothing more."""
     asked(db, reason=SECRET)
     db.fail = {"get": "/church_away_asks"}       # (a failed read: the same reads, nobody held)
     _b, failed = board(db)
     db.fail = {}
     b, reads = board(db)
     hold = [r for r in reads if r.startswith("/church_away_asks")]
-    assert len(hold) == 1 and len(reads) == len(failed), "one read, and a failed one is not tried again"
-    assert [r for r in reads if not r.startswith("/church_away_asks")] == \
+    repeats = [r for r in reads if r.startswith("/church_away_commitments")]
+    assert len(hold) == 1 and len(repeats) == 1 and len(reads) == len(failed) + 1, \
+        "two reads, and a failed one is not tried again"
+    assert not any(r.startswith("/church_away_commitments") for r in failed), "nothing more after a failed one"
+    assert [r for r in reads if not r.startswith(("/church_away_asks", "/church_away_commitments"))] == \
         [r for r in failed if not r.startswith("/church_away_asks")]
+    rselect = repeats[0].split("select=")[1].split("&")[0]
+    assert rselect == "id,business_id,contact_id,weekday,pattern,nth,starts_on,until_on", "never the label"
     select = hold[0].split("select=")[1].split("&")[0]
     assert select == "id,business_id,contact_id,starts_on,ends_on,state", "who and which days, and nothing of the ask"
     assert "state=eq.asked" in hold[0] and f"business_id=eq.{HOPE}" in hold[0]
@@ -418,14 +425,15 @@ def test_the_hold_is_read_a_page_at_a_time_and_is_bounded(db, monkeypatch):
             "reason": SECRET, "flags": [], "to_user_id": None, "to_contact_id": None})
     n0 = len(db.reads)
     got = cs.holds(HOPE, date(2026, 12, 20), date(2026, 12, 26))
-    reads = db.reads[n0:]
+    reads = [r for r in db.reads[n0:] if r.startswith("/church_away_asks")]     # (and one for things that repeat)
     assert len(got) == 1003 and len(reads) == 2, "no first 1,000 taken for all of them"
     assert all("order=id.asc" in r and "limit=1000" in r for r in reads) and "id=gt." in reads[1]
     assert all(set(h) == {"contact_id", "starts_on", "ends_on"} for h in got)
     monkeypatch.setattr(cs, "HOLD_PAGE", 100)
     monkeypatch.setattr(cs, "HOLD_PAGES", 3)
     n0 = len(db.reads)
-    assert len(cs.holds(HOPE, date(2026, 12, 20), date(2026, 12, 26))) == 300 and len(db.reads) - n0 == 3
+    assert len(cs.holds(HOPE, date(2026, 12, 20), date(2026, 12, 26))) == 300
+    assert len([r for r in db.reads[n0:] if r.startswith("/church_away_asks")]) == 3
 
 
 # ─── Nothing about an ask reaches whoever schedules ───────────────────
@@ -529,6 +537,145 @@ def test_the_board_says_away_in_its_own_words_and_nothing_of_the_ask(db, office,
     assert [(a["name"], a["starts_on"], a["ends_on"]) for a in sched["away"]] == [("Elena Ruiz", day(30), day(37))]
     assert set(sched["away"][0]) == {"contact_id", "name", "starts_on", "ends_on"} and SECRET not in json.dumps(sched)
     assert sp._service_board(HOPE, S[4]).held == [], "the hold became the fact"
+
+
+# ─── Things that repeat (S1-7) ────────────────────────────────────────
+
+SHIFT = "Night shift at the plant"
+
+
+def repeat(db, handle="elena", **kw):
+    """Something that repeats, through the engine as that person: every
+    other Sunday from Nov 22 unless it says otherwise."""
+    import church_schedule_repeats as crep
+    body = {"label": SHIFT, "weekday": 7, "pattern": "every_other", "starts_on": "2026-11-22", **kw}
+    return crep.add_commitment(church(db), person(db, handle), body)
+
+
+def put_repeat(db, n, **kw):
+    row = {"id": f"8a000000-0000-4000-8000-{n:012d}", "business_id": HOPE, "contact_id": cid(db, "elena"),
+           "label": SHIFT, "weekday": 7, "pattern": "weekly", "nth": None, "starts_on": "2026-11-22", "until_on": None,
+           "told_at": fake.NOW.isoformat(), "created_at": fake.NOW.isoformat(), **kw}
+    db.t["church_away_commitments"].append(row)
+    return row
+
+
+def test_a_thing_that_repeats_holds_them_on_its_days_and_only_those(db, office):
+    """Elena works every other Sunday from Nov 22: the board says away on
+    Nov 22, Dec 6 and Dec 20, and still asks her for Nov 29 and Dec 13."""
+    repeat(db)
+    assert {i: cands(db, S[i])["Elena Ruiz"]["away"] for i in range(5)} == {0: True, 1: False, 2: True, 3: False,
+                                                                          4: True}
+    # Five weeks on one board (a fill, a team's leader): held on its days, never the whole window.
+    board = sp._Board(HOPE, "2026-11-22", 5)
+    assert [board.is_away(cid(db, "elena"), s) for s in S] == [True, False, True, False, True]
+    assert [(h["starts_on"], h["ends_on"]) for h in board.held] == [
+        ("2026-11-22", "2026-11-22"), ("2026-12-06", "2026-12-06"), ("2026-12-20", "2026-12-20")]
+    r = office.post("/planning/ask", json={"business_id": HOPE, "service_id": S[2], "position_id": DOOR,
+                                           "contact_id": cid(db, "elena")})
+    assert (r.status_code, r.json()["detail"]) == (409, "Elena Ruiz is away that Sunday")
+    assert office.post("/planning/ask", json={"business_id": HOPE, "service_id": S[3], "position_id": DOOR,
+                                              "contact_id": cid(db, "elena")}).status_code == 200
+    sp.do_fill(HOPE, 1, "2026-12-20", None)
+    on = {r["position_id"]: r["contact_id"] for r in db.t["serve_assignments"] if r["service_id"] == S[4]}
+    assert cid(db, "elena") not in on.values() and on[DOOR] == cid(db, "n024"), "the fill skips her that Sunday"
+    sched = office.get(f"/planning/schedule?business_id={HOPE}&weeks=5").json()
+    assert sched["away"] == [], "never in the list of who is away: that list is the away dates"
+    assert cands(db, S[4])["N024 Member"]["away"] is False, "only her"
+    # Taken off, it holds nothing.
+    import church_schedule_repeats as crep
+    crep.drop_commitment(church(db), person(db, "elena"), db.t["church_away_commitments"][0]["id"])
+    assert cands(db, S[4])["Elena Ruiz"]["away"] is False
+
+
+def test_the_board_says_away_for_a_thing_that_repeats_in_its_words_for_an_away_date(db, office):
+    """Word for word what it says for an away date that day, and nothing of
+    what the thing is reaches the scheduler."""
+    lead = me(db, "n026")
+
+    def said():
+        return {"candidates": office.get(f"/planning/candidates?business_id={HOPE}&service_id={S[4]}"
+                                         f"&position_id={DOOR}").json(),
+                "leader": sl.candidates(biz(db), lead["id"], S[4], DOOR),
+                "ask": office.post("/planning/ask", json={"business_id": HOPE, "service_id": S[4], "position_id": DOOR,
+                                                          "contact_id": cid(db, "elena")}).json()}
+    plain = away(db, "elena", "2026-12-20", "2026-12-20")
+    as_a_date = said()
+    db.t["serve_away"].remove(plain)
+    repeat(db, pattern="weekly", starts_on="2026-12-20", until_on="2026-12-20")
+    as_a_repeat = said()
+    assert as_a_repeat == as_a_date, "nobody can tell which it is"
+    everything = json.dumps([as_a_repeat, office.get(f"/planning/schedule?business_id={HOPE}&weeks=5").json(),
+                             sl.team_view(biz(db), lead["id"], TEAM)["assignments"]])
+    for word in (SHIFT, "Night", "shift", "repeat", "weekly", "commitment"):
+        assert word not in everything, word
+    assert sp._service_board(HOPE, S[4]).held == [
+        {"contact_id": cid(db, "elena"), "starts_on": "2026-12-20", "ends_on": "2026-12-20"}]
+
+
+def test_with_nothing_repeating_in_its_days_the_hold_is_byte_for_byte_what_it_was(db, monkeypatch):
+    import church_schedule_repeats as crep
+    asked(db, reason=SECRET)                                      # Dec 18 to 25
+    lo, hi = date(2026, 12, 20), date(2026, 12, 26)
+    now = json.dumps(cs.holds(HOPE, lo, hi))
+    real = crep.held_days
+    monkeypatch.setattr(crep, "held_days", lambda *a, **k: [])    # what holds() answered before S1-7: the asks alone
+    before = json.dumps(cs.holds(HOPE, lo, hi))
+    monkeypatch.setattr(crep, "held_days", real)
+    assert now == before == json.dumps([{"contact_id": cid(db, "elena"), "starts_on": day(30), "ends_on": day(37)}])
+    # Things that repeat that don't fall in those days, or aren't this church's: the same bytes.
+    put_repeat(db, 1, until_on="2026-12-13")                      # ended before
+    put_repeat(db, 2, starts_on="2027-01-03")                     # starts after
+    put_repeat(db, 3, pattern="month_nth", nth=1)                 # the first Sunday: Dec 6, Jan 3
+    put_repeat(db, 4, pattern="every_other", starts_on="2026-12-13")      # Dec 13, Dec 27
+    put_repeat(db, 5, business_id=GRACE, contact_id=c3.pid(2, 1))         # another church's
+    assert json.dumps(cs.holds(HOPE, lo, hi)) == now
+
+
+def test_a_failed_read_of_things_that_repeat_still_holds_the_asks(db, monkeypatch, capsys):
+    asked(db)                                                     # Dec 18 to 25
+    repeat(db)                                                    # Dec 20 among its Sundays
+    lo, hi = date(2026, 12, 20), date(2026, 12, 26)
+    ask = {"contact_id": cid(db, "elena"), "starts_on": day(30), "ends_on": day(37)}
+    assert cs.holds(HOPE, lo, hi) == [ask, {"contact_id": cid(db, "elena"), "starts_on": "2026-12-20",
+                                            "ends_on": "2026-12-20"}]
+    db.fail = {"get": "/church_away_commitments"}
+    assert cs.holds(HOPE, lo, hi) == [ask], "fails open: the asks are held anyway"
+    assert "only asks are held" in capsys.readouterr().out
+    db.fail = {}
+    real = sb_clients.sb_get_as_service
+
+    def broken(path, **k):
+        if path.startswith("/church_away_commitments"):
+            raise RuntimeError("the connection dropped")
+        return real(path, **k)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", broken)
+    assert cs.holds(HOPE, lo, hi) == [ask] and sp._service_board(HOPE, S[4]).held == [ask]
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+    # The asks' own read failing holds nobody, and nothing more is read.
+    db.fail = {"get": "/church_away_asks"}
+    n = len(db.reads)
+    assert cs.holds(HOPE, lo, hi) == [] and not [r for r in db.reads[n:] if "church_away_commitments" in r]
+
+
+def test_things_that_repeat_are_read_a_page_at_a_time_and_bounded(db, monkeypatch):
+    people = [c["id"] for c in db.t["contacts"] if c["business_id"] == HOPE][:300]
+    for n in range(1003):
+        put_repeat(db, n, contact_id=people[n % 300])
+    lo, hi = date(2026, 12, 20), date(2026, 12, 26)
+    n0 = len(db.reads)
+    got = cs.holds(HOPE, lo, hi)
+    reads = [r for r in db.reads[n0:] if r.startswith("/church_away_commitments")]
+    assert len(got) == 1003 and len(reads) == 2, "every one, read in two pages"
+    assert all("order=id.asc" in r and "limit=1000" in r and f"business_id=eq.{HOPE}" in r for r in reads)
+    assert "id=gt." in reads[1] and "starts_on=lte.2026-12-26" in reads[0]
+    assert "or=(until_on.is.null,until_on.gte.2026-12-20)" in reads[0], "only one still in force in those days"
+    assert all(set(h) == {"contact_id", "starts_on", "ends_on"} and h["starts_on"] == "2026-12-20" for h in got)
+    monkeypatch.setattr(cs, "HOLD_PAGE", 100)
+    monkeypatch.setattr(cs, "HOLD_PAGES", 3)
+    n0 = len(db.reads)
+    assert len(cs.holds(HOPE, lo, hi)) == 300
+    assert len([r for r in db.reads[n0:] if r.startswith("/church_away_commitments")]) == 3
 
 
 # ─── The Serving Away form: a volunteer ───────────────────────────────

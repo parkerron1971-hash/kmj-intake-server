@@ -1,15 +1,18 @@
 # __tests__/test_member_lumen_home.py
 #
-# The top half of the member app's new Home, "Look 4.1" (member_lumen_home,
-# member_portal_lumen.render_home), behind MEMBER_LUMEN. Kevin approved the
-# mock on 2026-11-19. Pins:
+# The top half of the member app's new Home, "Look 4.1" then "Look 5.1"
+# (member_lumen_home, member_portal_lumen.render_home), behind MEMBER_LUMEN.
+# Kevin approved the 4.1 mock on 2026-11-19 and Look 5.1 on 2026-11-20 (its
+# own pins, the moments, the doors and the composer, are
+# test_member_lumen_home5.py). Pins:
 #   - the greeting by the church's clock (moon or sun, the date, Good
 #     evening / It's Sunday / Welcome) and a sentence made only of what the
 #     records say, its facts in heavier ink, no chips;
-#   - Up next: one card, featured by the data (live > Sunday's service while
-#     check-in is open > a brand-new person's first Sunday > the sooner of
-#     their group's gathering and the next event), with the date leaf, how
-#     many are going (a number, never faces), the main button and a quiet one;
+#   - This week (Look 5.1, in place of 4.1's Up next card): the service,
+#     each group's next gathering and the church's events this week, each a
+#     card with the date leaf, how many are going (a number, never faces) and
+#     its own action (check-in on the day, someone new's Your path); the
+#     sentence still names what lh.pick picks;
 #   - the group's I'll be there is today's group RSVP, coming back to Home;
 #     who's answered is kept 30 s, forgotten by their own answer, read fresh
 #     on the page that comes back;
@@ -17,8 +20,8 @@
 #     devotional, prayer, serving, the latest message, groups to join), the
 #     frosted Change on each in edit mode; "prayer" is a spot only where the
 #     new look shows;
-#   - nothing a member can do on Home is lost: check-in, the news block
-#     after Also for you, Today, the message, groups, prayer, the foot cards;
+#   - nothing a member can do on Home is lost: check-in, the news block,
+#     then Also for you, Today, the message, groups, prayer, the foot cards;
 #   - the reads: warm, the same as today's Home; cold, only the two kept
 #     reads (what a new person told us, who's coming to the gathering);
 #   - the sheet: every rule under body.lm, the type block still last, the
@@ -138,8 +141,8 @@ def _text(html):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).replace("&#x27;", "'")
 
 
-def _up(html):
-    m = html[html.index('class="lm-up"'):]
+def _week(html):
+    m = html[html.index('class="lm-wk5"'):]
     return m[:m.index("</section>") + 10]
 
 
@@ -150,7 +153,7 @@ def test_the_greeting_by_the_churchs_clock(church, fake, monkeypatch):  # noqa: 
     html = _client(fake, monkeypatch).get("/my").text
     brief = html[html.index('<header class="lm-brief">'):html.index("</header>", html.index('<header class="lm-brief">'))]
     assert lh.MOON in brief and lh.SUN not in brief                          # evening
-    assert f"{TODAY:%A}, {TODAY:%B} {TODAY.day}" in brief
+    assert f"{TODAY:%A} · {TODAY:%B} {TODAY.day}" in brief
     assert '<h1 class="lm-disp lm-hi4">Good evening, <em>Ana.</em></h1>' in brief
     church["now"] = datetime.combine(TODAY, time(9, 15), tzinfo=NY)
     html = _client(fake, monkeypatch).get("/my").text
@@ -188,8 +191,8 @@ def test_no_sentence_without_records(church, fake, monkeypatch):  # noqa: F811
     church["checkin"] = {"state": "off"}
     html = _client(fake, monkeypatch).get("/my").text
     assert "lm-line4" not in html
-    up = _up(html)
-    assert "Welcome home" in up and "Watch a message" in up and "Up next" not in up
+    assert 'class="lm-wk5"' not in html and "This week" not in html          # nothing this week: no section
+    assert 'class="lm-doors"' in html                                        # the doors stay, with quiet lines
 
 
 def test_the_line_parts():
@@ -212,6 +215,7 @@ def test_the_line_parts():
 
 
 def test_which_card_is_featured():
+    # The pick names what the greeting's sentence talks about (Look 5.1 has no featured card).
     sun = _sunday_after(TODAY)
     occ = [_occ("Food Drive", TODAY + timedelta(days=1), tm="09:00")]
     g_today = {"group": {"id": "g"}, "day": TODAY, "time": time(19, 0)}
@@ -234,23 +238,27 @@ def test_the_group_card(church, fake, monkeypatch):  # noqa: F811
     _group(fake)
     fake.biz[tct.BIZ]["settings"]["messaging"] = {"enabled": True}
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert '<div class="lm-up4"><h2 class="lm-h2" id="lm-up-h">Up next</h2><span class="lm-cp4">2 for you</span></div>' in up
-    assert f'<span class="lm-leaf4" aria-hidden="true"><small>{TODAY:%a}</small><b>{TODAY.day}</b><small>7 PM</small></span>' in up
-    assert '<p class="lm-f4k">Tonight · 7:00 PM</p>' in up
-    assert '<h3 class="lm-f4t" id="lm-f4-t">Young Adults</h3>' in up and "The Johnsons&#x27; home" in up
-    assert "<b>11</b> going" in up                                           # members only; never faces
-    assert "<img" not in up.split('class="lm-f4b')[1]                        # no faces anywhere on the card
-    form = up[up.index('<form method="post" action="/my/groups/meet/rsvp">'):]
+    up = _week(html)
+    assert '<h2 id="lm-wk-h">This week</h2><a href="/my/events">See all</a>' in up
+    card = up[up.index('<article class="lm-wk">'):]
+    card = card[:card.index("</article>")]
+    assert f'<span class="lm-wkl" aria-hidden="true"><small>{TODAY:%a}</small><b>{TODAY.day}</b></span>' in card
+    assert '<p class="lm-wkk">Tonight · 7:00 PM</p>' in card                 # soonest first
+    assert f'<h3 class="lm-wkt"><a href="/my/groups/{tct.GROUP}">Young Adults</a></h3>' in card
+    assert "The Johnsons&#x27; home" in card
+    assert "<b>11</b> going" in card                                         # members only; never faces
+    assert "<img" not in card.split('class="lm-wkbd')[1]                     # no faces anywhere on the card
+    form = card[card.index('<form method="post" action="/my/groups/meet/rsvp">'):]
     form = form[:form.index("</form>")]
     for field in (f'name="group_id" value="{tct.GROUP}"', 'name="answer" value="going"', 'name="back" value="/my"'):
         assert field in form
     assert "I&#x27;ll be there" in form
-    assert f'<a class="lm-q4" href="/my/groups/{tct.GROUP}/chat">Chat</a>' in up
+    # The group's chat is its moment's reply (member_lumen_stories).
+    assert f'<a class="lm-mvre" href="/my/groups/{tct.GROUP}/chat">Message the group…</a>' in html
     # The church's own picture for the group, through its spot.
     fake.biz[tct.BIZ]["settings"]["member_portal"]["pictures"] = {
         f"group:{tct.GROUP}": {"url": "https://example.org/ya.jpg", "look": "colour"}}
-    up = _up(_client(fake, monkeypatch).get("/my").text)
+    up = _week(_client(fake, monkeypatch).get("/my").text)
     assert 'src="https://example.org/ya.jpg"' in up and "mb-ph is-colour" in up
 
 
@@ -268,7 +276,7 @@ def test_ill_be_there_comes_back_to_home_and_is_read_fresh(church, fake, monkeyp
     fake.gets.clear()
     html = c.get("/my?done=rsvp_going").text
     assert [g for g in fake.gets if g.startswith("/group_rsvps")]            # read fresh
-    up = _up(html)
+    up = _week(html)
     assert "You&#x27;re going" in up and "You and 11 others" in up and "/my/groups/meet/rsvp" not in up
     assert "You&#x27;re going. See you there!" in html                       # the flash
     # From the group's own page, the answer still goes back to its Meet tab.
@@ -280,13 +288,17 @@ def test_the_sooner_event_is_featured_with_im_coming(church, fake, monkeypatch):
     _group(fake, meets_today=False)
     church["occ"].insert(0, _occ("Food Drive", TODAY + timedelta(days=1), n=12, tm="09:00",
                                  eid="00000000-0000-4000-8000-000000000303"))
+    church["occ"][-1] = _occ("Prayer Night", TODAY + timedelta(days=12), eid="00000000-0000-4000-8000-000000000302")
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert "Food Drive" in up and '<p class="lm-f4k">Tomorrow · 9:00 AM</p>' in up and "<b>12</b> going" in up
-    assert 'action="/my/rsvp"' in up and 'name="back" value="/my"' in up and "I&#x27;m coming" in up
+    up = _week(html)
+    cards = re.findall(r'<article class="lm-wk">.*?</article>', up, re.S)
+    food = next(c for c in cards if "Food Drive" in c)
+    assert cards.index(food) == 0                                            # tomorrow comes first
+    assert '<p class="lm-wkk">Tomorrow · 9:00 AM</p>' in food and "<b>12</b> going" in food
+    assert 'action="/my/rsvp"' in food and 'name="back" value="/my"' in food and "I&#x27;m coming" in food
     coming = html[html.index('id="lm-cu-h"'):]
     assert "Food Drive" not in coming[:coming.index("</section>")]           # not twice
-    assert "Prayer Night" in coming
+    assert "Prayer Night" in coming                                          # past this week: a row
 
 
 def test_sunday_morning_carries_check_in(church, fake, monkeypatch):  # noqa: F811
@@ -300,18 +312,18 @@ def test_sunday_morning_carries_check_in(church, fake, monkeypatch):  # noqa: F8
     c = _client(fake, monkeypatch)
     html = c.get("/my").text
     assert "It&#x27;s Sunday, <em>Ana.</em>" in html and "Service starts at <b>10:30</b>." in html
-    up = _up(html)
-    assert '<p class="lm-f4k">Today · 10:30 AM</p>' in up and "Sunday Worship" in up and "Sanctuary" in up
+    up = _week(html)
+    assert '<p class="lm-wkk">Today · 10:30 AM</p>' in up and "Sunday Worship" in up and "Sanctuary" in up
     assert up.count('action="/my/here"') == 2
     assert 'name="where" value="in"' in up and 'name="where" value="online"' in up
     assert f'name="people" value="{tct.ANA}"' in up and f'name="people" value="{tct.BEN}"' in up
-    assert 'href="/my/here?from=home">Choose who' in up and "One tap counts you and your family." in up
+    assert 'href="/my/here?from=home">Choose who' in up and "One tap counts you and your family" in up
     assert 'class="lm-ck"' not in html                                       # the card is the check-in
     # Checked in: Welcome home, and Change it.
     church["checkin"]["marks"] = {tct.ANA: {"method": "self"}}
-    up = _up(c.get("/my").text)
+    up = _week(c.get("/my").text)
     assert "Welcome home." in up and 'href="/my/here?change=1&amp;from=home"' in up and 'action="/my/here"' not in up
-    # A check-in that didn't go through: the full card under Up next, as today.
+    # A check-in that didn't go through: the full card under This week, as today.
     church["checkin"]["marks"] = {}
     html = c.get("/my?ck=closed").text
     assert 'class="lm-ck"' in html and "Check-in has closed for today" in html
@@ -320,10 +332,9 @@ def test_sunday_morning_carries_check_in(church, fake, monkeypatch):  # noqa: F8
 def test_live(church, fake, monkeypatch):  # noqa: F811
     church["live"] = {"id": "l1", "title": "Sunday Worship"}
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert "Live now" in up and 'href="/my/live"' in up and "Join the room" in up
-    assert 'class="lm-lv4"' not in html                                      # the card is the live room
-    # While check-in is open too: the slim bar carries Join, the card check-in.
+    bar = html[html.index('<a class="lm-lv4"'):]
+    assert bar.startswith('<a class="lm-lv4" href="/my/live">') and "Live now · Sunday Worship" in bar[:200]
+    # While check-in is open too: the slim bar carries Join, This week check-in.
     sun = _sunday_after(TODAY)
     church["now"] = datetime.combine(sun, time(10, 40), tzinfo=NY)
     church["checkin"] = {"state": "open", "w": {"day": sun, "start": datetime.combine(sun, time(10, 30), tzinfo=NY)},
@@ -332,7 +343,7 @@ def test_live(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     bar = html[html.index('<a class="lm-lv4"'):]
     assert bar.startswith('<a class="lm-lv4" href="/my/live">') and "Live now · Sunday Worship" in bar[:200]
-    assert 'action="/my/here"' in _up(html)
+    assert 'action="/my/here"' in _week(html)
 
 
 def test_someone_new_sees_their_first_sunday(church, fake, monkeypatch):  # noqa: F811
@@ -342,9 +353,9 @@ def test_someone_new_sees_their_first_sunday(church, fake, monkeypatch):  # noqa
     html = _client(fake, monkeypatch).get("/my").text
     assert "Welcome, <em>Ana.</em>" in html
     assert "We&#x27;re so glad you found us. Your first Sunday is <b>Sunday at 10:30</b>." in html
-    up = _up(html)
-    assert '<p class="lm-f4k">Your first Sunday · 10:30 AM</p>' in up and "Sunday Worship" in up
-    assert '<a class="lm-btn sm" href="/my/new"' in up and "Your path" in up
+    up = _week(html)
+    assert '<p class="lm-wkk">Your first Sunday · 10:30 AM</p>' in up and "Sunday Worship" in up
+    assert '<a class="lm-wkb" href="/my/new">Your path</a>' in up
     also = html[html.index('class="lm-also"'):]
     assert "Find your people" in also and "Groups to join" in also and "Women of Grace" in also
     # Someone who's been coming a while: not new.
@@ -389,7 +400,7 @@ def test_edit_mode_puts_change_on_every_picture(church, fake, monkeypatch):  # n
     fake.biz[tct.BIZ]["settings"]["member_portal"]["photo_editors"] = [tct.ANA]
     html = _client(fake, monkeypatch).get("/my?edit=pictures").text
     assert "Changing pictures" in html
-    up = _up(html)
+    up = _week(html)
     assert f'<a class="mb-pin" href="/my/pictures/spot?key=group:{tct.GROUP}&amp;back=home">' in up
     also = html[html.index('<section class="lm-also"'):]
     assert 'href="/my/pictures/spot?key=prayer&amp;back=home"' in also and 'class="mb-pin" aria-hidden="true"' in also
@@ -416,6 +427,7 @@ def test_nothing_on_home_is_lost(church, fake, monkeypatch):  # noqa: F811
          "preached_on": (TODAY - timedelta(days=4)).isoformat()}]})
     fake.add("group_members", group_id=tct.GROUP2, business_id=tct.BIZ, contact_id=tct.ANA, role="member")
     fake.biz[tct.BIZ]["settings"]["member_portal"]["tiles"] = [{"title": "Food pantry", "href": "/my/events"}]
+    church["occ"][-1] = _occ("Prayer Night", TODAY + timedelta(days=12), eid="00000000-0000-4000-8000-000000000302")
     import church_news as cn
     now = datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(cn, "home_view", lambda b, me, **kw: ([{
@@ -425,13 +437,14 @@ def test_nothing_on_home_is_lost(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     main = _main(html)
     news = 'class="lm-feed"' if 'class="lm-feed"' in main else 'id="nw-home-h"'   # the news block (the feed's own)
-    order = [main.index(s) for s in ('class="lm-brief"', 'id="lm-up-h"', 'class="lm-also"', news,
-                                     'id="lm-cu-h"', 'id="lm-today-h"', "Verse of the day", "Food pantry", "Choir")]
+    order = [main.index(s) for s in ('class="lm-brief"', 'class="lm-doors"', 'id="lm-wk-h"', 'class="lm-hcp"', news,
+                                     'class="lm-also"', 'id="lm-cu-h"', 'id="lm-today-h"', "Verse of the day",
+                                     "Food pantry", "Choir")]
     assert order == sorted(order)
-    also = main[main.index('class="lm-also"'):main.index(news)]
+    also = main[main.index('class="lm-also"'):main.index('id="lm-cu-h"')]
     assert "Hope Has a Name" in also and "How can we pray for you?" in also  # the message and prayer are tiles
     assert "Prayer Night" in main[main.index('id="lm-cu-h"'):]               # Coming up
-    assert ">Young Adults<" not in main[main.index('id="lm-today-h"'):]      # the featured group isn't repeated
+    assert ">Young Adults<" not in main[main.index('id="lm-today-h"'):]      # a group in This week isn't repeated
     assert "Put Grace Fellowship on your home screen" in main or "Ask the church" in main   # the foot cards
 
 
@@ -448,6 +461,8 @@ def test_the_reads(church, fake, monkeypatch):  # noqa: F811
     warm_on = base(fake.gets)
     for kept in (gg._ANSWERS, mim._TOLD, mim._NOT_YET):
         kept.clear()
+    import member_cache
+    member_cache.feed.clear()                   # Look 5.1's group items (member_feed_more), kept 30 s
     fake.gets.clear()
     c.get("/my")
     cold_on = base(fake.gets)
@@ -457,7 +472,10 @@ def test_the_reads(church, fake, monkeypatch):  # noqa: F811
     c.get("/my")
     off = base(fake.gets)
     assert warm_on == off, warm_on - off                                    # warm: today's Home's reads
-    assert cold_on - off == Counter({"/group_rsvps": 1, "/contacts": 1})   # cold: the two kept reads
+    # cold: the two kept reads, and the feed's group items (the member's
+    # groups, their Board posts, their prayer walls: member_feed_more)
+    assert cold_on - off == Counter({"/group_rsvps": 1, "/contacts": 1, "/group_members": 1, "/group_posts": 1,
+                                     "/group_prayers": 1})
 
 
 def test_the_sheet():

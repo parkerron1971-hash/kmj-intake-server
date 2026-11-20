@@ -121,15 +121,20 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
 
 
 def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str = "", bible: str = "kjv",
-                   live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None) -> str:
+                   live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None,
+                   view: str = "", show_all: bool = False, service: Optional[Dict[str, Any]] = None) -> str:
     """Watch (the Subsplash app's Messages and On Demand, together): live
     or the next gathering, the latest message, the series, every message.
-    In the new look (member_lumen) Watch is member_lumen_give.watch; a
-    series keeps this page."""
+    In the new look (member_lumen) Watch, its Series and a series are
+    member_lumen_watch's (Look 5.1): `view` "series" shows the series,
+    `show_all` every message, `service` the church's weekly service time."""
     import member_lumen
-    if member_lumen.page() and not (series_id and lib and series_id in _titles(lib)):
-        import member_lumen_give as mlg
-        return mlg.watch(biz, site, who, lib, live=live, next_occ=next_occ, bible=bible)
+    if member_lumen.page():
+        import member_lumen_watch as mlw
+        if series_id and lib and series_id in _titles(lib):
+            return mlw.series_page(biz, site, who, lib, series_id)
+        return mlw.watch_page(biz, site, who, lib, live=live, next_occ=next_occ, bible=bible, view=view,
+                              show_all=show_all, service=service)
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e, _shell, palette_for
@@ -208,9 +213,17 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
 
 
 def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
-                  give_url: str = "", bible: str = "kjv") -> Optional[str]:
+                  give_url: str = "", bible: str = "kjv", listen: bool = False,
+                  groups: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
     """One message, or None when it isn't published here (the caller
-    sends the member back to Watch)."""
+    sends the member back to Watch). In the new look it is
+    member_lumen_watch.message_page (Look 5.1): `listen` opens the audio,
+    `groups` the member's groups whose chat is open to them."""
+    import member_lumen
+    if member_lumen.page() and lib is not None:
+        import member_lumen_watch as mlw
+        return mlw.message_page(biz, site, who, lib, sermon_id, give_url=give_url, bible=bible, listen=listen,
+                                groups=groups)
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e, _shell, palette_for
@@ -229,6 +242,13 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
     player = player_html(s).replace('class="sm-video"', 'class="mb-video"').replace(
         'class="sm-go"', 'class="mp-go" style="margin:12px 20px 0;width:calc(100% - 40px)"').replace(
         '<audio class="sm-audio"', '<audio id="listen" class="sm-audio"')
+    import member_mini
+    if member_mini.here():
+        # The mini player (member_mini): the player marked, so the message
+        # plays on while the member moves around the app.
+        player = member_mini.mark(player, title=s.get("title") or "", sub=s.get("speaker") or series,
+                                  thumb=member_mini.thumb(biz, site, series, s.get("title") or ""),
+                                  href=f"/my/sermons/{s['id']}")
     if not (s.get("video_url") or "").strip():
         # Audio only, or nothing posted yet: the series art holds the space.
         player = _art(lib, s, pal, site, photos.photos(biz, site)) + player
@@ -240,12 +260,21 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
     if s.get("scripture"):
         import member_portal_bible as mpb
         scrip = f'<span class="mb-scrip">{ui.icon("book", 15)}{mpb.scripture_links(s["scripture"])}</span>'
+    share = (f'<button class="mp-go mp-go-2" type="button" data-share="/sermons/{_e(s["id"])}" '
+             f'data-title="{_e(s.get("title"))}">{ui.icon("share", 17)}<span>Share</span></button>')
+    import member_lumen
+    lumen = member_lumen.page()
+    if lumen:
+        # The new look's share sheet (member_lumen_share): the same public
+        # link, with Your story, Text a friend, Copy link and More apps.
+        import member_lumen_share as mls
+        share = mls.message_link(lib, s, site, photos.photos(biz, site), f'{ui.icon("share", 17)}<span>Share</span>',
+                                 cls="mp-go mp-go-2")
     parts += [f'<div class="mb-player">{player}</div>',
               f'<p class="mb-kick" style="margin-top:18px">{_e(eyebrow)}</p>',
               f'<h1 style="margin:4px 0 4px">{_e(s.get("title"))}</h1>',
               f'<p class="mb-meta">{_e(s.get("speaker") or "")}</p>{scrip}',
-              f'<div class="mb-acts">{give}<button class="mp-go mp-go-2" type="button" data-share="/sermons/{_e(s["id"])}" '
-              f'data-title="{_e(s.get("title"))}">{ui.icon("share", 17)}<span>Share</span></button></div>']
+              f'<div class="mb-acts">{give}{share}</div>']
     if not (s.get("video_url") or s.get("audio_url") or "").strip():
         parts.append('<p class="mp-muted" style="margin-top:14px">The recording for this message isn\'t posted yet.</p>')
     if s.get("summary"):
@@ -263,7 +292,7 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
                          f'<ul class="mb-list mb-cards" style="--inset:124px">{"".join(_row(x, lib, pal, site) for x in others)}</ul>')
     back = (f"/my/sermons?series={sid}", series) if series else ("/my/sermons", "Watch")
     return _shell(biz, site, s.get("title") or "Message", "".join(parts), tab="watch", who=who,
-                  script=SHARE_SCRIPT, back=back)
+                  script="" if lumen else SHARE_SCRIPT, back=back)
 
 
 def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,

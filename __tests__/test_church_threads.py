@@ -173,7 +173,20 @@ class Fake:
         limit = dict(params).get("limit")
         if limit:
             rows = rows[:int(limit)]
-        return json.loads(json.dumps(rows))
+        rows = json.loads(json.dumps(rows))
+        # PostgREST's embeds the member app asks for (member_feed_more): a
+        # member's group with its row, a prayer request with its marks.
+        sel = dict(params).get("select") or ""
+        if table == "group_members" and "groups(" in sel:
+            gs = {str(x["id"]): x for x in self.t.get("groups", [])}
+            for r in rows:
+                x = gs.get(str(r.get("group_id")))
+                r["groups"] = ({k: x.get(k) for k in ("id", "name", "name_display", "active")} if x else None)
+        if table == "group_prayers" and "group_prayer_marks(" in sel:
+            for r in rows:
+                r["group_prayer_marks"] = [{"contact_id": m["contact_id"], "kind": m["kind"], "created_at": m.get("created_at")}
+                                           for m in self.t.get("group_prayer_marks", []) if str(m["prayer_id"]) == str(r["id"])]
+        return rows
 
     def post(self, path, body, prefer=None, **kw):
         table, params = self._split(path)

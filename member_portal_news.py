@@ -74,7 +74,7 @@ REACT_LABEL = {"love": "Love", "pray": "Praying", "amen": "Amen", "cheer": "Cele
 CARD_RX = {"message": ("amen", "pray"), "celebration": ("cheer", "love"), "milestone": ("cheer", "love"),
            "good_news": ("cheer", "love"), "praise": ("amen", "love")}
 CARD_RX_DEFAULT = ("love", "amen")
-_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share|/write)?)?$")
+_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share|/write|/saved)?|/groups/[0-9a-fA-F-]{36})?$")
 
 # The canvas's sheet (news.css) on the member app's tokens: the church colour
 # is --acc-fill / --acc / --acc-deep; gold, teal, violet and coral are the
@@ -617,7 +617,8 @@ def _row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
 def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: Optional[List[Dict[str, Any]]],
                open_: bool, rights: Optional[Dict[str, Any]] = None, *, title: str = "From the church",
                more: str = "All news", me: Optional[Dict[str, Any]] = None, site=None,
-               new_n: Optional[int] = None, total: Optional[int] = None) -> str:
+               new_n: Optional[int] = None, total: Optional[int] = None, extras: Optional[Dict[str, Any]] = None,
+               library: Optional[Dict[str, Any]] = None) -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
     never says "nothing yet"), except to someone who posts (`rights`,
@@ -627,12 +628,15 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
     at <church>": every post as a card with its comments under it
     (member_lumen_feed; `me` for the write pill's face, `site` for the
     church's pictures, `new_n` how many are new, `total` how many posts See
-    all posts opens)."""
+    all posts opens; Look 5.1: `extras` the member's groups' posts and
+    prayer requests, member_feed_more.gather, and `library` Home's sermon
+    library, for the newest message)."""
     import member_app_ui as ui
     import member_lumen
     if member_lumen.page():
         import member_lumen_feed
-        return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n, total=total)
+        return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n, total=total,
+                                           extras=extras, library=library)
     if not posts:
         return home_first(biz, rights, heading=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
@@ -865,6 +869,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if rest == "write":
         import member_portal_write as mpw
         return await mpw.serve_write(request, biz, site, me)
+    if rest == "saved":
+        return await _saved(request, biz, site, me)
     m = _PHOTO_RE.match(rest)
     if m:
         return await _photo(biz, me, m.group(1), int(m.group(2)))
@@ -918,6 +924,31 @@ async def _all_posts(request: Request, biz: Dict[str, Any], site, me: Dict[str, 
     return member_lumen_feed.all_posts(biz, site, request, me, got, filt, occ, open_, poster)
 
 
+async def _saved(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any]):
+    """GET /my/news/saved: Saved posts, in the new look only (today's look
+    has no Save: to News). The member's own list, read fresh from their
+    record (member_feed_more.saved_view), the posts as the feed draws them."""
+    import member_feed_more as fm
+    import member_lumen
+    import member_lumen_feed
+    import member_portal_church as mpc
+    if not member_lumen.page():
+        from member_portal import _SECURE_HEADERS
+        return RedirectResponse("/my/news", status_code=303, headers=_SECURE_HEADERS)
+    business_id, me_id = str(biz["id"]), str(me["id"])
+    rec = await asyncio.to_thread(mpc.load_me, business_id, me_id)
+    ids = fm.saved_ids(rec) if rec else []
+    posts, occ, open_ = await asyncio.gather(
+        asyncio.to_thread(fm.saved_view, business_id, me_id, ids) if rec else _none(),
+        asyncio.to_thread(mpc.upcoming_for, business_id, me) if ids else _none(),
+        asyncio.to_thread(cn.comments_open, biz) if ids else _none())
+    return member_lumen_feed.saved_page(biz, site, request, me, posts, occ, bool(open_))
+
+
+async def _none():
+    return None
+
+
 # ─── routes ──────────────────────────────────────────────────────────
 
 
@@ -955,6 +986,57 @@ async def react_route(request: Request):
     ok, code, pid = await asyncio.to_thread(cn.react, str(church["business"]["id"]), str(me["id"]),
                                             str(form.get("id") or ""), str(form.get("kind") or ""))
     return _go(back, f"p-{pid}" if pid and not back.startswith("/my/news/") else "", **({} if ok else {"err": code}))
+
+
+@router.post("/my/news/save", include_in_schema=False)
+async def save_route(request: Request):
+    """Save, or unsave, a post on the member's own list (member_feed_more
+    .toggle_saved: contacts.metadata, guarded by updated_at). Signed in,
+    from the member's own page (the session and the same-origin check:
+    member_portal_church._signed_in), the per-person limit, a post they may
+    see. JSON for the feed's script (Accept: application/json): {ok, saved};
+    else back where it came from, at the post."""
+    import member_feed_more as fm
+    import member_instant_send as mis
+    import member_portal_church as mpc
+    from fastapi.responses import JSONResponse
+    wants = mis.wants_json(request)
+    church, me, unavailable = await mpc._signed_in(request)
+    form = await request.form()
+    back = str(form.get("back") or "/my")
+    pid = str(form.get("id") or "")
+
+    def answer(ok: bool, code: str = "", status: int = 200, saved: Optional[bool] = None):
+        if wants:
+            body: Dict[str, Any] = {"ok": ok}
+            if ok:
+                body["saved"] = bool(saved)
+            else:
+                body.update(code=code, error=ERRORS.get(code, ERRORS["error"]))
+            return JSONResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
+        anchor = f"p-{pid}" if cn.UUID.match(pid) and not back.startswith("/my/news/") else ""
+        return _go(back, anchor, **({} if ok else {"err": code}))
+
+    if unavailable:
+        return answer(False, "preview" if unavailable == "preview" else "error", 403 if unavailable == "preview" else 503)
+    if not me:
+        return mpc._back("/my") if not wants else JSONResponse(
+            {"ok": False, "code": "signed_out", "error": "Please sign in again, then try once more."}, status_code=401)
+    if not mpc._allowed(church, me):
+        return answer(False, "slow", 429)
+    business_id, me_id = str(church["business"]["id"]), str(me["id"])
+    p = await asyncio.to_thread(cn._live_post, business_id, me_id, pid)
+    if p is None:
+        return answer(False, "error", 503)
+    have = set(fm.saved_ids(me))
+    if not p and pid not in have:
+        return answer(False, "news_gone", 404)
+    # A post taken down can still come off the list.
+    on = await asyncio.to_thread(fm.toggle_saved, business_id, me_id, str(p["id"]) if p else pid)
+    if on is None:
+        return answer(False, "error", 503)
+    fm.forget_record(business_id, me)
+    return answer(True, saved=on)
 
 
 async def _comment_json(request: Request):

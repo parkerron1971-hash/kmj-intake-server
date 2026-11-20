@@ -8,20 +8,40 @@ pages read (member_portal_bible, member_portal_devotionals,
 member_portal_reading, member_bible_marks). Who sees it: member_lumen.py
 (MEMBER_LUMEN). Off, every page here is today's, byte for byte.
 
-  /my/bible ......... "The Word": the translation switcher beside the
-                      heading, today's devotional on top (Lumen Next:
-                      member_lumen_devotional.card; the rail below keeps the
-                      church's others), find a passage or a word, pick up where you
-                      left off (a book spine), Today (the ivory verse card),
-                      the church's devotionals as cards with progress dots,
-                      reading plans (the church's, yours, the four to start),
-                      your highlights and notes, the books.
-  /my/bible/<b>/<n> . the reader: a plain bar (Bible · the chapter, which
-                      opens the book picker · Aa), the chapter's number large
-                      in gold, the text in a calm serif, the previous and
-                      next chapter at the foot; tap a verse for the
-                      highlighter. No tab bar while reading. Aa holds the
-                      text size, the font and the translation.
+Look 5.1 (Kevin, 2026-11-20: "when someone click bible the bible should
+open directly with devotional tabs at the top"): the Bible tab opens
+straight into reading. Its top is a sticky segmented control, Read ·
+Devotional · Plans · Saved, with a search button beside it and a small dot
+on Devotional while today's day of the devotional on top isn't read yet.
+Every tab is a real address, so it works without script and the back
+button stays sane (with script, switching tabs replaces the page in the
+history instead of stacking it):
+
+  /my/bible ................. Read: the reader, at the chapter read last
+                              (the sol_bible cookie); someone who has read
+                              nothing yet starts at today's reading of the
+                              church's plan, else John 1.
+  /my/bible/<b>/<n> ......... Read at that chapter (every old link works).
+  /my/bible?tab=devotional .. today's devotional (member_lumen_devotional's
+                              green card), this week's days as circles,
+                              the verse of the day, more devotionals.
+  /my/bible?tab=plans ....... the reading plans running for this member as
+                              rings (today's reading, Read), then the plans
+                              to start.
+  /my/bible?tab=saved ....... their highlights, notes and saved verses, each
+                              back into the reader at that verse.
+  /my/bible?tab=search ...... find a passage or a word, recently read, the
+                              books (the search itself is today's ?q=).
+
+The reader: the chapter pill (opens the book picker), the translation pill,
+Aa (size and font), Listen (the phone reads the chapter aloud with its own
+voice; nothing is sent anywhere, and the button shows only on a phone that
+can), the moon; the chapter's number large in the church's colour, the
+book in small capitals, the verses in the reading face; the previous and
+next chapter at the end. Tapping a verse opens the verse bar: Share (the
+shared share sheet, .lm-share kind=verse), the five highlighters, Note,
+Copy, Save, Make a card. The tab bar stays while reading.
+
   /my/bible/books, ?q=, /notes ... today's pages under the new heading.
   /my/bible/plans ... plans and devotionals, in the same cards.
   /my/reading ....... a reading plan: how far, this week, catch up.
@@ -35,8 +55,10 @@ are, a highlight that sweeps across the verse like ink, and Make a card
 sent anywhere). See READER_MORE_JS. A devotional's day reads at night by
 the same moon and cookie (NIGHT_JS, member_lumen_devotional).
 
-The mock's "Listen to this chapter" is not built (Kevin never approved
-it). Nothing here is made up: a block with nothing real in it is left out.
+Nothing here is made up: a block with nothing real in it is left out.
+The tabs read no more than the old Bible tab did (each reads only what it
+shows; the dot is kept for the day in a cookie, lm_dv, so a chapter page
+reads nothing for it).
 
 The look is CSS (below), joined into the Lumen sheet by member_lumen_ui.css;
 every rule sits under body.lm.
@@ -45,6 +67,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from functools import lru_cache
 from html import escape
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -85,21 +108,6 @@ def _src(tr: str) -> str:
 def _short(biz: Dict[str, Any]) -> str:
     import member_portal_church as mpc
     return mpc._short_name(biz.get("name") or "") or "your church"
-
-
-def continue_block(where: Optional[Tuple[str, int]], tr: str) -> str:
-    """Pick up where you left off: the book as a spine, the chapter large.
-    With nothing read yet, John 1."""
-    import bible_text as bt
-    import member_lumen_ui as lm
-    import member_portal_bible as mpb
-    code, ch = where if where else ("JOH", 1)
-    kick = "Pick up where you left off" if where else "Start here"
-    go = f"Continue reading · {bt.TRANSLATIONS[tr]['short']}" if where else "Start reading"
-    return (f'<a class="lm-cont" href="/my/bible/{bt.slug(code)}/{ch}"><span class="lm-spine" aria-hidden="true">'
-            f'<b>{_e(bt.NAME[code])}</b></span><span class="lm-cont-t"><span class="lm-kicker">{kick}</span>'
-            f'<span class="lm-ct">{_e(mpb.where_label(code, ch))}</span>'
-            f'<span class="lm-go">{_e(go)}{lm.ic("chevron", 15)}</span></span></a>')
 
 
 # ─── devotionals and plans as cards ──────────────────────────────────
@@ -165,28 +173,6 @@ def _sts(devs, done, mine, today, preview):
                           preview=preview)) for d in (devs or [])]
 
 
-def dev_rail(biz, site, sts) -> str:
-    """The church's devotionals, running ones first, as cards in a rail."""
-    import member_app_photos as photos
-    import member_portal_devotionals as mpd
-    if not sts:
-        return ""
-    pool = photos.photos(biz, site)
-    used: set = set()
-    ordered = [x for x in sts if x[1]["kind"] == "running"] + [x for x in sts if x[1]["kind"] != "running"]
-    cards = []
-    for i, (d, st) in enumerate(ordered[:8]):
-        bold, quiet = dev_words(d, st)
-        cards.append(f'<a class="lm-dev" href="{_e(mpd._target(d, st))}">{cover(biz, d, pool, used, i, st["count"])}'
-                     f'{dots(st)}<span class="lm-dvt">{_e(bold)}</span><span class="lm-dvp">{_e(quiet)}</span></a>')
-    return f'<div class="lm-rail lm-devs">{"".join(cards)}</div>'
-
-
-def plan_title(title: str) -> str:
-    """'The Gospels in 30 days' → 'The Gospels' (the days are said beside it)."""
-    return re.sub(r"\s+in (\d+ days|a month)$", "", title or "") or title
-
-
 def _ring(n: int, of: int, label: str) -> str:
     arc = round(119.4 * max(0, min(n, of)) / max(1, of), 1)
     return (f'<span class="lm-ring" aria-hidden="true"><svg viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" '
@@ -194,137 +180,10 @@ def _ring(n: int, of: int, label: str) -> str:
             f'stroke-width="3.5" stroke-linecap="round" stroke-dasharray="{arc} 120"/></svg><b>{_e(label)}</b></span>')
 
 
-def plan_rows(church_today: Optional[Dict[str, Any]], church_done: Optional[set], mine: Optional[Dict[str, date]],
-              today: date) -> str:
-    """Today's reading on the plans running for this member: the church's,
-    then their own."""
-    import member_app_samples as samples
-    import member_app_ui as ui
-    import member_lumen_ui as lm
-    import member_portal_devotionals as mpd
-    import reading_plans as rp
-    rows = []
-    if church_today:
-        t = church_today
-        tag = ui.sample_tag() if samples.is_sample(t) else ""
-        read = bool(church_done) and t["day"] in church_done
-        rows.append(f'<a class="lm-prow" href="{_e(t["href"])}">{_ring(t["day"], t["of"], str(t["day"]))}'
-                    f'<span class="lm-prow-t"><span class="lm-kicker lm-gk">The church is reading{tag}</span>'
-                    f'<b>{_e(t["label"])}</b><span class="m">{_e(t["title"])} · day {t["day"]} of {t["of"]}'
-                    f'{" · read today" if read else ""}</span></span>'
-                    f'{lm.ic("chevron", 18).replace("lm-ic", "lm-ic lm-chev")}</a>')
-    for key, meta in rp.PLANS.items():
-        plan = mpd.own_plan(key, (mine or {}).get(f"reading:{key}"))
-        if not plan:
-            continue
-        now = rp.day_number(plan, today)
-        if not now:
-            continue
-        reading = rp.schedule(key)[now - 1]
-        rows.append(f'<a class="lm-prow" href="/my/bible/plans/{key}">{_ring(now, plan["days"], str(now))}'
-                    f'<span class="lm-prow-t"><span class="lm-kicker lm-tk">Your plan</span>'
-                    f'<b>{_e(rp.label(reading))}</b><span class="m">{_e(meta["title"])} · day {now} of {plan["days"]}</span></span>'
-                    f'{lm.ic("chevron", 18).replace("lm-ic", "lm-ic lm-chev")}</a>')
-    return "".join(rows)
-
-
-def plan_grid(mine: Optional[Dict[str, date]], today: date) -> str:
-    """The four plans anyone can start, as panes: the days large in gold.
-    One the member started says so and opens it; the others open the list
-    where Start is."""
-    import member_portal_devotionals as mpd
-    import reading_plans as rp
-    panes = []
-    for key, meta in rp.PLANS.items():
-        plan = mpd.own_plan(key, (mine or {}).get(f"reading:{key}"))
-        if plan:
-            now = rp.day_number(plan, today)
-            tag = f'<em class="lm-yours">Yours · day {now}</em>' if now else '<em class="lm-yours">Yours</em>'
-            href = f"/my/bible/plans/{key}"
-        else:
-            tag, href = "", "/my/bible/plans?show=reading"
-        panes.append(f'<a class="lm-plan" href="{href}"><b>{meta["days"]}</b><small>days</small>'
-                     f'<span>{_e(plan_title(meta["title"]))}</span>{tag}</a>')
-    return f'<div class="lm-plans">{"".join(panes)}</div>'
-
-
-def marks_block(marks: Optional[Sequence[Dict[str, Any]]], preview: bool) -> str:
-    """Your highlights & notes: how many of each, a tap to see them."""
-    import member_bible_marks as mbm
-    import member_lumen_ui as lm
-    if preview:
-        return ""
-    head = lm.section("Your highlights & notes", hid="lm-marks-h")
-    if marks is None:
-        return (f'<section aria-labelledby="lm-marks-h">{head}<p class="mp-err" role="alert">Your highlights and notes '
-                f'couldn\'t load just now. They\'re still saved.</p></section>')
-    if not marks:
-        return (f'<section aria-labelledby="lm-marks-h">{head}<p class="lm-quiet">Tap any verse while you read to highlight '
-                f'it, add a private note, or save it. They show up here.</p></section>')
-    n = mbm.counts(marks)
-
-    def one(k: int, word: str, cls: str) -> str:
-        return f'<span><i class="{cls}"></i>{k} {word}{"" if k == 1 else "s"}</span>'
-    return (f'<section aria-labelledby="lm-marks-h">{head}<a class="lm-marks" href="/my/bible/notes">'
-            f'{one(n["highlights"], "highlight", "mk-hl")}{one(n["notes"], "note", "mk-note")}'
-            f'<span><i class="mk-saved"></i>{n["bookmarks"]} saved</span>'
-            f'{lm.ic("chevron", 18).replace("lm-ic", "lm-ic lm-chev")}</a></section>')
-
-
 BOOKS = ('<div class="lm-books">'
          '<a class="lm-book" href="/my/bible/books?t=ot"><b>Old Testament</b><span>39 books · Genesis to Malachi</span></a>'
          '<a class="lm-book" href="/my/bible/books?t=nt"><b>New Testament</b><span>27 books · Matthew to Revelation</span></a>'
          '</div>')
-
-
-# ─── /my/bible ───────────────────────────────────────────────────────
-
-
-def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool = False, slow: bool = False,
-                data: Optional[Dict[str, Any]] = None, church_today: Optional[Dict[str, Any]] = None,
-                church_done: Optional[set] = None, marks: Optional[Sequence[Dict[str, Any]]] = (),
-                preview: bool = False, today: Optional[date] = None) -> str:
-    """The Bible tab. `data` is member_portal_devotionals.bible_home_data
-    (None when it couldn't be read: the church's reading plan alone then,
-    `church_today`/`church_done`, as today's page does)."""
-    import member_lumen_ui as lm
-    import member_portal_lumen as mlp
-    from member_portal import _shell
-    today = today or date.today()
-    err = ('<p class="mp-err" role="alert">We couldn\'t find that passage or word. Try something like John 3:16, '
-           'Psalm 23 or shepherd.</p>' if missed else
-           '<p class="mp-err" role="alert">That\'s a lot of searching at once. Wait a minute, then try again.</p>'
-           if slow else "")
-    head = (f'<header class="lm-mast lm-bmast"><div class="lm-mastrow"><p class="lm-eyebrow">Bible</p>{trs(tr, "/my/bible")}</div>'
-            f'<h1 class="lm-disp">The <em>Word</em></h1></header>')
-    verse = mlp.verse_page(tr)
-    today_html = f'<section aria-labelledby="lm-today-h">{lm.section("Today", hid="lm-today-h")}{verse}</section>' if verse else ""
-    if data is not None:
-        church_today, church_done = data.get("church_today"), data.get("church_done")
-    mine = (data or {}).get("mine") or {}
-    sts = _sts((data or {}).get("devs"), (data or {}).get("done"), mine, today, preview)
-    # Lumen Next: today's devotional on top (member_lumen_devotional); the
-    # rail below keeps the church's others.
-    import member_lumen_devotional as mld
-    devo, shown = "", None
-    if sts:
-        import devotional_voice as dvv
-        devo, shown = mld.card(biz, sts, listen=dvv.can_speak())
-    rail = dev_rail(biz, site, [x for x in sts if x[0] is not shown])
-    devs_html = (f'<section aria-labelledby="lm-from-h">{lm.section(f"From {_short(biz)}", "/my/bible/plans", "All", hid="lm-from-h")}'
-                 f'{rail}</section>') if rail else ""
-    rows = plan_rows(church_today, church_done, mine, today)
-    grid = plan_grid(mine, today) if data is not None else ""
-    plans_html = ""
-    if rows or grid:
-        link = ("/my/bible/plans?show=reading", "See all") if data is not None else ("/my/reading", "See the plan")
-        plans_html = (f'<section aria-labelledby="lm-plans-h">{lm.section("Reading plans", link[0], link[1], hid="lm-plans-h")}'
-                      f'{f"<div class=lm-list>{rows}</div>" if rows else ""}{grid}</section>')
-    books = f'<section aria-labelledby="lm-books-h">{lm.section("Books", hid="lm-books-h")}{BOOKS}</section>'
-    body = (f'{head}{devo}{field(query)}{err}{continue_block(where, tr)}{today_html}{devs_html}{plans_html}'
-            f'{marks_block(marks, preview)}{books}{_src(tr)}')
-    return _shell(biz, site, "Bible", body, tab="bible", who=me,
-                  script=mld.CARD_JS if "data-devo-listen" in devo else "")
 
 
 # ─── the reader ──────────────────────────────────────────────────────
@@ -345,6 +204,11 @@ _GLYPHS = {
     "moon": '<path d="M20.5 13.4A8.5 8.5 0 1 1 10.6 3.5a6.6 6.6 0 0 0 9.9 9.9z"/>',
     "card": '<rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8.5 8.5c1.2-1.4 2.6-1.4 3.5 0s2.3 1.4 3.5 0"/>'
             '<path d="M8.5 15.5h7"/>',
+    # Look 5.1's: text size, listen, share (out of a tray)
+    "type": '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
+    "listen": '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2'
+              'v-3a2 2 0 0 1 2-2h3"/>',
+    "up": '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>',
 }
 
 
@@ -378,16 +242,66 @@ def card_sheet(biz: Dict[str, Any], site, photo: str, logo: str) -> str:
 </div>"""
 
 
+# A shared verse's public page (member_lumen_share.VERSE_HREF): the church's
+# own site, where the member app lives too, so relative.
+VERSE_HREF = "/"
+
+
+def verse_share(label: str, words: str, tr: str, sid: str = "", *, cls: str = "", inner: str = "Share",
+                aria: str = "") -> str:
+    """A verse's share control (contract 1, kind=verse), its attributes as
+    the share sheet reads them: the reference and version, the words cut
+    short, the story picture's id (BOOK.CH.V[-W]), the words for the message
+    and the translation for the picture (member_lumen_share.link, which
+    escapes it all)."""
+    import bible_text as bt
+    import member_lumen_share as mls
+    short = bt.TRANSLATIONS[tr]["short"]
+    cut = words if len(words) <= 96 else re.sub(r"\s+\S*$", "", words[:94]) + "…"
+    return mls.link("verse", mls.VERSE_HREF, f"{label} · {short}", inner, sub=f"“{cut}”", sid=sid,
+                    text=f"“{words}” {label} ({short})", tr=tr, cls=cls, label=aria)
+
+
+def verse_id(ref_label: str, tr: str) -> str:
+    """'Lamentations 3:22-23' → 'LAM.3.22-23' (the story picture's id); ''
+    when it isn't one passage within a chapter."""
+    import bible_text as bt
+    found = bt.find_refs(ref_label or "", tr)
+    if not found:
+        return ""
+    r = found[0][2]
+    if not r.start or r.end_chapter:
+        return ""
+    return f"{r.book}.{r.chapter}.{r.start}" + (f"-{r.end}" if r.end and r.end != r.start else "")
+
+
+def version_pick(tr: str, here: str) -> str:
+    """The translation pill: KJV, and the four to choose from (a link each,
+    back to this page). A <details>, so it opens without script."""
+    import bible_text as bt
+    sep = "&" if "?" in here else "?"
+    items = "".join(
+        f'<a href="{_e(here)}{sep}t={k}"{" aria-current=\"true\"" if k == tr else ""}><b>{_e(v["short"])}</b>'
+        f'<span>{_e(v["name"])}</span></a>' for k, v in bt.TRANSLATIONS.items())
+    cur = bt.TRANSLATIONS[tr]
+    return (f'<details class="lm-ver"><summary aria-label="Translation: {_e(cur["name"])}">{_e(cur["short"])}</summary>'
+            f'<nav class="lm-verpop" aria-label="Translation">{items}</nav></details>')
+
+
 def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
                    marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False,
-                   night: Optional[bool] = False) -> str:
-    """Reading a chapter: the same reader (member_portal_bible.READER_JS:
-    tap a verse to highlight it, add a note, copy, share or save it; Aa),
-    laid out calm: no tab bar, the chapter's number large, the chapters
-    before and after floating at the foot. Lumen Next adds the moon in the
-    bar (night reading: `night` whether the page arrives at night,
-    member_lumen_look.reader_night; None when the phone decides), the line
-    of how far you've read, the ink sweep and Make a card
+                   night: Optional[bool] = False, *, dot: bool = False, home: bool = False, lead: str = "") -> str:
+    """Read: the Bible tab's first tab (Look 5.1), at a chapter. Today's
+    reader underneath (member_portal_bible.READER_JS: tap a verse to
+    highlight it, add a note, copy or save it; Aa) in the tab's frame: the
+    segmented control on top (`dot`: today's devotional day isn't read
+    yet), the chapter and translation pills, Aa, Listen and the moon, the
+    chapter's number large, the previous and next chapter at the end, the
+    tab bar below. `home`: the page is /my/bible itself (its translation
+    links come back there); `lead` a quiet line over the chapter (why a
+    first reader starts where they do). Lumen Next stays: the moon
+    (`night`, member_lumen_look.reader_night; None when the phone decides),
+    the line of how far you've read, the ink sweep, Make a card
     (READER_MORE_JS)."""
     import json
     import bible_text as bt
@@ -399,20 +313,25 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     from public_form_theme import resolve_theme
     prev, nxt = bt.neighbours(code, ch, tr)
     name = "Psalm" if code == "PSA" else bt.NAME[code]
-    here = f"/my/bible/{bt.slug(code)}/{ch}"
+    chap = f"/my/bible/{bt.slug(code)}/{ch}"
+    here = "/my/bible" if home else chap
     editable = marks is not None and not preview
     found = {str(v): {"colour": m.get("colour"), "note": m.get("note"), "bookmarked": bool(m.get("bookmarked"))}
              for v, m in (marks or {}).items()}
     swatches = "".join(f'<button type="button" class="bb-sw sw-{c}" data-colour="{c}" aria-pressed="false" '
                        f'aria-label="Highlight {c}"></button>' for c in SWATCHES)
-    dock = "" if not editable else f"""<div class="bb-dock" id="bb-dock" role="group" aria-label="This verse" hidden>
-  <div class="bb-dock-h"><strong class="bb-dock-ref"></strong><button type="button" class="bb-x" data-act="close" aria-label="Close">{ui.icon('plus', 18)}</button></div>
+    # The share sheet reads the verse the member tapped (data-share-from="reader");
+    # READ_JS keeps the same verse on the attributes as well.
+    shared = (f'<a class="lm-share" data-share-kind="verse" data-share-from="reader" href="{VERSE_HREF}" '
+              f'data-share-title="" data-share-sub="" data-share-id="" data-share-text="" data-share-tr="{_e(tr)}">'
+              f'{_glyph("up", 16)}<span>Share</span></a>')
+    dock = "" if not editable else f"""<div class="bb-dock lm-sel" id="bb-dock" role="group" aria-label="This verse" hidden>
+  <div class="bb-dock-h"><strong class="bb-dock-ref"></strong>{shared}<button type="button" class="bb-x" data-act="close" aria-label="Close">{ui.icon('plus', 18)}</button></div>
   <div class="bb-dock-acts">
     <div class="bb-sws">{swatches}<button type="button" class="mp-link bb-clear" data-act="clear" hidden>Remove</button></div>
     <div class="bb-acts">
       <button type="button" data-act="note">{lm.ic('doc', 16)}<span>Note</span></button>
       <button type="button" data-act="copy">{lm.ic('share', 16)}<span>Copy</span></button>
-      <button type="button" data-act="share">{lm.ic('out', 16)}<span>Share</span></button>
       <button type="button" data-act="bookmark" aria-pressed="false">{lm.ic('star', 16)}<span>Save</span></button>
       <button type="button" data-act="card" aria-haspopup="dialog">{_glyph('card', 16)}<span>Make a card</span></button>
     </div>
@@ -431,50 +350,54 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     sheet = card_sheet(biz, site, pool[0] if pool else "", theme.get("logo_url") or "") if editable else ""
     day = ui.palette(biz, theme)["bg"]
     moon = moon_button(day, NIGHT_BG, night)
-    prog = '<span class="lm-rprog" aria-hidden="true"></span>'
     note = ('<p class="mp-muted bb-pv">Highlights and notes are private, so a preview doesn\'t show them.</p>'
             if preview else ('<p class="mp-err" role="alert">Your highlights couldn\'t load just now. Reading still works.</p>'
                              if marks is None else ""))
     data = json.dumps(found).replace("</", "<\\/")
-    pill = f'<a class="lm-pill" href="/my/bible/{bt.slug(code)}">{_e(name)} {ch}{lm.ic("down", 15)}</a>'
+    pill = (f'<a class="lm-pill lm-chpill" href="/my/bible/{bt.slug(code)}" aria-label="{_e(name)} {ch}: choose a book '
+            f'or chapter">{_e(name)} {ch}{lm.ic("down", 15)}</a>')
     aa = ("" if not editable else
-          '<button type="button" class="lm-aa" id="bb-aa" aria-expanded="false" aria-controls="bb-aa-panel" '
-          'aria-label="Text size, font and translation">Aa</button>')
+          f'<button type="button" class="lm-aa" id="bb-aa" aria-expanded="false" aria-controls="bb-aa-panel" '
+          f'aria-label="Text size and font">{_glyph("type", 21)}</button>')
+    say = (f'<button type="button" class="lm-aa lm-say" id="lm-say" aria-pressed="false" aria-label="Listen to this '
+           f'chapter" hidden>{_glyph("listen", 21)}</button>')
+    bar = f'<div class="lm-rbar">{pill}{version_pick(tr, here)}<span class="lm-sp"></span>{aa}{say}{moon}</div>'
     panel = ("" if not editable else
              '<div class="bb-aa-panel lm-aapanel" id="bb-aa-panel" hidden><div class="bb-aa-row"><span>Text size</span>'
              '<span class="bb-aa-btns"><button type="button" data-size="down" aria-label="Smaller text">A−</button>'
              '<button type="button" data-size="up" aria-label="Larger text">A+</button></span></div>'
              '<div class="bb-aa-row"><span>Font</span><span class="bb-aa-btns"><button type="button" data-font="serif">Book</button>'
-             '<button type="button" data-font="sans">Clean</button></span></div>'
-             f'<div class="bb-aa-row"><span>Translation</span>{trs(tr, here)}</div></div>')
+             '<button type="button" data-font="sans">Clean</button></span></div></div>')
 
     def step(to, cls: str) -> str:
         if not to:
             return "<span></span>"
         c, n = to
         label = mpb.where_label(c, n)
-        inner = (f'{lm.ic("back", 15)}<span>{_e(label)}</span>' if cls == "prev" else
-                 f'<span>{_e(label)}</span>{lm.ic("chevron", 15)}')
-        return f'<a class="lm-chstep {cls}" href="/my/bible/{bt.slug(c)}/{n}" aria-label="{"Previous" if cls == "prev" else "Next"}: {_e(label)}">{inner}</a>'
+        inner = (f'{lm.ic("back", 16)}<span>{_e(label)}</span>' if cls == "prev" else
+                 f'<span>{_e(label)}</span>{lm.ic("chevron", 16)}')
+        return (f'<a class="lm-rstep {cls}" href="/my/bible/{bt.slug(c)}/{n}" aria-label="{"Previous" if cls == "prev" else "Next"}: '
+                f'{_e(label)}">{inner}</a>')
     book = "Psalms" if code == "PSA" else bt.NAME[code]
     head = (f'<h1 class="lm-chap"><span class="mp-sr">{_e(name)} {ch}</span><b aria-hidden="true">{ch}</b>'
-            f'<span aria-hidden="true">{_e(book)} · {_e(bt.TRANSLATIONS[tr]["short"])}</span></h1>')
-    foot = _src(tr) + ("" if editable else f'<div class="lm-trfoot">{trs(tr, here)}</div>')
-    body = f"""<a class="mb-back" href="/my/bible">{ui.icon('back', 16)}Bible</a>
+            f'<span aria-hidden="true">{_e(book)}</span></h1>')
+    first = f'<p class="lm-rlead">{_e(lead)}</p>' if lead else ""
+    body = f"""{seg("read", dot, prog=True)}
+{bar}
 {panel}
-{head}
 {note}
+{first}
+{head}
 <div class="bb-read lm-read" data-book="{code}" data-ch="{ch}" data-tr="{tr}" data-label="{_e(name)} {ch}">
 {mpb.chapter_html(code, ch, tr, rng, marks=marks if editable else None)}
 </div>
-{foot}
-<nav class="lm-chnav" aria-label="Chapters">{step(prev, "prev")}{step(nxt, "next")}</nav>
+<nav class="lm-rnav" aria-label="Chapters">{step(prev, "prev")}{step(nxt, "next")}</nav>
+{_src(tr)}
 {dock}
 {sheet}
 <script type="application/json" id="bb-marks">{data}</script>"""
-    return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, bar=False,
-                  lumen_bar=(pill, aa + moon + prog), lumen_reader=True,
-                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS)
+    return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, lumen_reader=True,
+                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS + READ_JS + SEG_JS)
 
 
 def moon_button(day: str, night_bg: str, night: Optional[bool]) -> str:
@@ -600,6 +523,461 @@ vc.addEventListener('keydown',function(e){
 READER_MORE_JS = "<script>(function(){" + _NIGHT + _CARD + "})();</script>"
 # Night reading alone: the moon and the line of how far you've read.
 NIGHT_JS = "<script>(function(){" + _NIGHT + "})();</script>"
+
+
+# ─── the Bible tab: Read · Devotional · Plans · Saved (Look 5.1) ──────
+
+# (key, label, address) for each tab of the segmented control.
+TABS = (("read", "Read", "/my/bible"), ("devotional", "Devotional", "/my/bible?tab=devotional"),
+        ("plans", "Plans", "/my/bible?tab=plans"), ("saved", "Saved", "/my/bible?tab=saved"))
+# ?tab= values the server knows; anything else is Read.
+TAB_KEYS = ("read", "devotional", "plans", "saved", "search")
+# Whether today's day of the devotional on top is unread, kept for the day
+# on the member's phone ("2026-11-20.1"), so a chapter page shows the dot
+# without reading anything. The tabs that read the devotionals anyway write
+# it; opening a devotional's day clears it (member_portal_bible.serve).
+DEVO_COOKIE = "lm_dv"
+# The plans' letter squares in the mock: a letter and a family colour each.
+PLAN_MARKS = {"bible-year": ("B", "violet"), "nt-260": ("N", "teal"), "gospels-30": ("G", "coral"),
+              "psalms-proverbs-31": ("P", "gold")}
+# About how many words a minute a chapter is read at (devotionals.minutes reads 170).
+WPM = 170
+# The newest saved verses shown on Saved; the rest are on /my/bible/notes.
+SAVED_MAX = 40
+
+
+def dot_cookie(raw: Any, today: date) -> Optional[bool]:
+    """The dot from its cookie: True/False when it was decided today, None
+    when there is nothing kept for today (the tab reads it)."""
+    d, _, v = str(raw or "").partition(".")
+    if d != today.isoformat() or v not in ("0", "1"):
+        return None
+    return v == "1"
+
+
+def dot_value(dot: bool, today: date) -> str:
+    return f"{today.isoformat()}.{1 if dot else 0}"
+
+
+def devo_unread(sts) -> bool:
+    """Whether the devotional on top of the Devotional tab is running and
+    today's day of it isn't read (member_lumen_devotional.pick)."""
+    import member_lumen_devotional as mld
+    got = mld.pick(sts or [])
+    if not got or got[0] != "today":
+        return False
+    st = got[2]
+    return bool(st.get("now")) and st["now"] not in st["done"]
+
+
+def seg(active: str, dot: bool, *, prog: bool = False) -> str:
+    """The segmented control on top of every Bible tab, and the search
+    button. The dot on Devotional says today's day isn't read; it isn't
+    shown on the Devotional tab itself. `prog`: the reader's line of how
+    far you've read rides on its lower edge."""
+    import member_lumen_ui as lm
+    links = []
+    for key, label, href in TABS:
+        cur = ' aria-current="page"' if key == active else ""
+        nd = ('<span class="lm-nd" aria-hidden="true"></span><span class="mp-sr"> (today\'s day isn\'t read yet)</span>'
+              if key == "devotional" and dot and active != "devotional" else "")
+        links.append(f'<a class="lm-bsg" href="{href}"{cur}>{label}{nd}</a>')
+    find = ' aria-current="page"' if active == "search" else ""
+    line = '<span class="lm-rprog" aria-hidden="true"></span>' if prog else ""
+    return (f'<div class="lm-bseg"><nav class="lm-bsegs" aria-label="Bible">{"".join(links)}</nav>'
+            f'<a class="lm-icb lm-bfind" href="/my/bible?tab=search" aria-label="Search the Bible"{find}>'
+            f'{lm.ic("search", 22)}</a>{line}</div>')
+
+
+def _shell_tab(biz, site, me, title: str, body: str, script: str = "") -> str:
+    from member_portal import _shell
+    return _shell(biz, site, title, body, tab="bible", who=me, script=script + SEG_JS)
+
+
+def _plain(html_text: str) -> str:
+    """A verse's markup (escaped words, the translators' words in <i>) as text."""
+    from html import unescape
+    return unescape(re.sub(r"<[^>]+>", "", html_text or "")).strip()
+
+
+def _words(reading, tr: str) -> int:
+    """The words in a day of a reading plan ([(book, first, last)])."""
+    import bible_text as bt
+    return sum(t.count(" ") + 1 for code, a, b in reading for n in range(a, b + 1) for _, t in (bt.chapter(code, n, tr) or []))
+
+
+def chapters_minutes(reading, tr: str) -> int:
+    """About how long a day of a reading plan takes: its words at WPM."""
+    return max(1, round(_words(reading, tr) / WPM))
+
+
+def _when(raw: Any, today: date) -> str:
+    """'today', 'yesterday', 'Tuesday' (this week), 'Nov 3', 'Nov 3, 2025'."""
+    from datetime import datetime
+    try:
+        d = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        return ""
+    days = (today - d).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return d.strftime("%A")
+    return f"{d.strftime('%b')} {d.day}" + ("" if d.year == today.year else f", {d.year}")
+
+
+# ─── Devotional ──────────────────────────────────────────────────────
+
+
+def week(dev: Dict[str, Any], st: Dict[str, Any], today: date) -> str:
+    """This week of the devotional on top, Monday to Sunday: a circle a day,
+    its number, filled once read, ringed today, plain ahead (and plain on a
+    day missed: it's still there to read). A day of the week outside the
+    devotional is an empty place."""
+    from datetime import timedelta
+    start, count = st.get("start"), int(st.get("count") or 0)
+    if not start or not count:
+        return ""
+    monday = today - timedelta(days=today.weekday())
+    cells = []
+    for i in range(7):
+        d = monday + timedelta(days=i)
+        n = (d - start).days + 1
+        wd = d.strftime("%a")
+        if not 1 <= n <= count:
+            cells.append(f'<li class="lm-wd is-none"><b aria-hidden="true"></b><span aria-hidden="true">{wd}</span></li>')
+            continue
+        done = n in st["done"]
+        cls = "is-done" if done else ("is-today" if d == today else ("is-ahead" if d > today else ""))
+        said = f"Day {n}, {d.strftime('%A')}" + (", read" if done else "") + (", today" if d == today else "")
+        inner = f'<b>{n}</b><span>{wd}</span>'
+        if n <= st["upto"]:
+            cur = ' aria-current="date"' if d == today else ""
+            cells.append(f'<li class="lm-wd {cls}"><a href="/my/bible/plans/{_e(dev["id"])}/{n}" aria-label="{_e(said)}"{cur}>'
+                         f'{inner}</a></li>')
+        else:
+            cells.append(f'<li class="lm-wd {cls}"><span class="lm-wdx" role="img" aria-label="{_e(said)}">{inner}</span></li>')
+    return f'<ol class="lm-week" aria-label="This week of {_e(dev.get("title") or "the devotional")}">{"".join(cells)}</ol>'
+
+
+def vod(tr: str) -> str:
+    """The verse of the day (member_portal_bible.verse_of_day) on the ivory
+    card, opening its chapter, with Share (kind=verse) by its heading."""
+    import bible_text as bt
+    import member_portal_bible as mpb
+    v = mpb.verse_of_day(tr)
+    if not v:
+        return ""
+    name = bt.TRANSLATIONS[tr]["name"]
+    share = verse_share(v["label"], _plain(v["html"]), tr, verse_id(v["label"], tr), cls="lm-more lm-vodshare",
+                        aria="Share the verse of the day")
+    return (f'<section aria-labelledby="lm-vod-h"><div class="lm-sec"><h2 class="lm-h2" id="lm-vod-h">Verse of the day</h2>'
+            f'{share}</div><a class="lm-vod" href="{_e(v["href"])}"><span class="lm-vod-k">{_e(v["label"])}</span>'
+            f'<q>{v["html"]}</q><small>{_e(name)}</small></a></section>')
+
+
+def more_devotionals(biz, site, sts, shown_id: Optional[str]) -> str:
+    """The church's other devotionals the member can read now (running,
+    any-time, ended: not one still to come), as covers, two a row."""
+    import member_app_photos as photos
+    import member_app_ui as ui
+    import member_portal_devotionals as mpd
+    order = {"running": 0, "new": 1, "over": 2, "finished": 3}
+    rest = sorted((x for x in sts or [] if str(x[0].get("id")) != str(shown_id) and x[1]["kind"] in order),
+                  key=lambda x: order[x[1]["kind"]])[:4]
+    if not rest:
+        return ""
+    pool = photos.photos(biz, site)
+    used: set = set()
+    covers = []
+    for i, (d, st) in enumerate(rest):
+        title = d.get("title") or "Devotional"
+        url, look = photos.choose(biz, f"devotional:{d['id']}", pool, title=title, look="church", used=used)
+        art = ui.photo(url, look=look) if url else ""
+        n = st["count"]
+        small = f"{n} day{'' if n == 1 else 's'}" if n else (d.get("kind") or "Devotional")
+        if st["kind"] == "running" and st.get("now"):
+            small = f"Day {st['now']} of {n}"
+        cls = "has-ph" if url else f"cv-{COVERS[i % len(COVERS)]}"
+        covers.append(f'<a class="lm-cv lm-mcov {cls}" href="{_e(mpd._target(d, st))}">{art}<b>{_e(title)}</b>'
+                      f'<small>{_e(small)}</small></a>')
+    import member_lumen_ui as lm
+    return (f'<section aria-labelledby="lm-mdev-h">{lm.section("More devotionals", "/my/bible/plans", "All", hid="lm-mdev-h")}'
+            f'<div class="lm-mcovs">{"".join(covers)}</div></section>')
+
+
+def render_devotional(biz, site, me, tr: str, sts, *, dot: bool = False, preview: bool = False,
+                      today: Optional[date] = None) -> str:
+    """Devotional: today's devotional (member_lumen_devotional.card, with its
+    fallbacks: what's next, the last one again, one to start), this week's
+    days, the verse of the day, more devotionals. `sts` None: the
+    devotionals couldn't load (said so; the verse still shows)."""
+    import devotional_voice as dvv
+    import member_lumen_devotional as mld
+    import member_lumen_ui as lm
+    today = today or date.today()
+    parts: List[str] = []
+    script = ""
+    if sts is None:
+        parts.append('<p class="mp-err lm-btabmsg" role="alert">The church\'s devotionals couldn\'t load just now. '
+                     'Please try again in a moment.</p>')
+        shown = None
+    else:
+        card, shown = mld.card(biz, sts, listen=dvv.can_speak()) if sts else ("", None)
+        if card:
+            parts.append(card)
+            if "data-devo-listen" in card:
+                script = mld.CARD_JS
+            got = mld.pick(sts)
+            if got and got[0] == "today":
+                wk = week(got[1], got[2], today)
+                if wk:
+                    parts.append(f'<section aria-labelledby="lm-week-h">{lm.section("This week", hid="lm-week-h")}{wk}</section>')
+        else:
+            parts.append(f'<p class="lm-quiet lm-btabmsg">When {_e(_short(biz))} shares a devotional, it opens here, a day at a '
+                         f'time.</p>')
+    parts.append(vod(tr))
+    if sts:
+        parts.append(more_devotionals(biz, site, sts, shown["id"] if shown else None))
+    body = seg("devotional", dot) + '<h1 class="mp-sr">Devotional</h1>' + "".join(p for p in parts if p)
+    return _shell_tab(biz, site, me, "Devotional", body, script)
+
+
+# ─── Plans ───────────────────────────────────────────────────────────
+
+
+def _bigring(n: int, of: int) -> str:
+    """The plan's ring in the mock: 64px, how far round, the day inside."""
+    arc = round(175.9 * max(0, min(n, of)) / max(1, of), 1)
+    return (f'<span class="lm-ringp" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="none" '
+            f'stroke="var(--s2)" stroke-width="5"/><circle cx="32" cy="32" r="28" fill="none" stroke="var(--lm-gold)" '
+            f'stroke-width="5" stroke-linecap="round" stroke-dasharray="{arc} 176"/></svg><b>{n}</b></span>')
+
+
+def plan_title(title: str) -> str:
+    """'The Gospels in 30 days' → 'The Gospels' (the days are said beside it)."""
+    return re.sub(r"\s+in (\d+ days|a month|a year)$", "", title or "") or title
+
+
+def _aplan(kicker: str, href: str, n: int, of: int, reading, read_href: str, tr: str, *, read: bool = False,
+           sample: str = "") -> str:
+    """A plan running today: the ring (day n), what it is and the day, today's
+    reading, about how long, Read."""
+    import reading_plans as rp
+    mins = chapters_minutes(reading, tr)
+    quiet = f"About {mins} minute{'' if mins == 1 else 's'}" + (" · read today" if read else "")
+    return (f'<div class="lm-aplan">{_bigring(n, of)}<a class="lm-aplan-t" href="{_e(href)}"><small>{_e(kicker)} · day {n}'
+            f'{sample}</small><b>Today: {_e(rp.label(reading))}</b><small>{_e(quiet)}</small></a>'
+            f'<a class="lm-btn sm lm-aplan-go" href="{_e(read_href)}" aria-label="Read {_e(rp.label(reading))}">Read</a></div>')
+
+
+def render_plans_tab(biz, site, me, tr: str, mine: Optional[Dict[str, date]], church_today: Optional[Dict[str, Any]],
+                     church_done: Optional[set], *, dot: bool = False, preview: bool = False,
+                     today: Optional[date] = None) -> str:
+    """Plans: the reading plans running for this member (the church's, then
+    their own) as rings with today's reading and Read, then the plans to
+    start (member_portal_devotionals' start). `mine` None: their plans
+    couldn't load (said so; the plans to start still show)."""
+    import member_app_samples as samples
+    import member_app_ui as ui
+    import member_lumen_ui as lm
+    import member_portal_devotionals as mpd
+    import reading_plans as rp
+    today = today or date.today()
+    active: List[str] = []
+    if church_today:
+        t = church_today
+        reading = rp.schedule(t["key"])[t["day"] - 1]
+        tag = ui.sample_tag() if samples.is_sample(t) else ""
+        read = bool(church_done) and t["day"] in church_done
+        active.append(_aplan("With your church", "/my/reading", t["day"], t["of"], reading, t["href"], tr, read=read,
+                             sample=tag))
+    starts: List[str] = []
+    for key, meta in rp.PLANS.items():
+        started = (mine or {}).get(f"reading:{key}")
+        plan = mpd.own_plan(key, started)
+        if plan:
+            now = rp.day_number(plan, today)
+            if now:
+                reading = rp.schedule(key)[now - 1]
+                active.append(_aplan(plan_title(meta["title"]), f"/my/bible/plans/{key}", now, plan["days"], reading,
+                                     rp.href(reading), tr))
+            else:
+                done = rp.readable_upto(plan, today) >= plan["days"]
+                active.append(f'<a class="lm-aplan is-quiet" href="/my/bible/plans/{key}">{_bigring(plan["days"] if done else 0, plan["days"])}'
+                              f'<span class="lm-aplan-t"><small>{_e(meta["title"])}</small>'
+                              f'<b>{"You finished it" if done else "It starts today"}</b><small>See the plan</small></span>'
+                              f'{lm.ic("chevron", 18).replace("lm-ic", "lm-ic lm-chev")}</a>')
+            continue
+        letter, hue = PLAN_MARKS.get(key, (meta["title"][:1], "gold"))
+        per = _plan_minutes(key, tr)
+        starts.append(f'<form class="lm-pstart" method="post" action="/my/bible/plans/start"><input type="hidden" name="plan" '
+                      f'value="reading:{key}"><button type="submit" aria-label="Start {_e(meta["title"])}">'
+                      f'<span class="lm-pc h-{hue}" aria-hidden="true">{letter}</span><span class="lm-pstart-t"><b>{_e(meta["title"])}</b>'
+                      f'<small>{meta["days"]} days · {per} min a day</small></span>'
+                      f'<span class="lm-pstart-go">Start</span></button></form>')
+    parts: List[str] = []
+    if mine is None and not preview:
+        parts.append('<p class="mp-err lm-btabmsg" role="alert">Your plans couldn\'t load just now. Please try again in a moment.</p>')
+    if active:
+        parts.append(f'<section aria-label="Your reading plans">{"".join(active)}</section>')
+    elif mine is not None:
+        parts.append('<p class="lm-quiet lm-btabmsg">A plan reads the Bible a little each day. Start one below, and today\'s '
+                     'reading waits here.</p>')
+    if starts:
+        parts.append(f'<section aria-labelledby="lm-pstart-h">{lm.section("Start a plan", hid="lm-pstart-h")}'
+                     f'<div class="lm-pstarts">{"".join(starts)}</div></section>')
+    parts.append('<p class="lm-bmore"><a class="lm-more" href="/my/bible/plans">Plans &amp; devotionals'
+                 f'{lm.ic("chevron", 15)}</a></p>')
+    return _shell_tab(biz, site, me, "Plans", seg("plans", dot) + '<h1 class="mp-sr">Reading plans</h1>' + "".join(parts))
+
+
+@lru_cache(maxsize=None)
+def _plan_minutes(key: str, tr: str) -> int:
+    """About how long a day of a plan takes, on average (its words at WPM)."""
+    import reading_plans as rp
+    days = rp.schedule(key)
+    return max(1, round(sum(_words(r, tr) for r in days) / max(1, len(days)) / WPM))
+
+
+# ─── Saved ───────────────────────────────────────────────────────────
+
+
+def render_saved(biz, site, me, tr: str, marks: Optional[Sequence[Dict[str, Any]]], *, dot: bool = False,
+                 preview: bool = False, today: Optional[date] = None) -> str:
+    """Saved: the member's highlights, notes and saved verses, newest first
+    (member_bible_marks), each a colour bar, the verse, the reference and
+    when, and their note; a tap opens the reader at that verse."""
+    import bible_text as bt
+    import member_lumen_ui as lm
+    import member_portal_bible as mpb
+    today = today or date.today()
+    head = seg("saved", dot)
+    if preview:
+        return _shell_tab(biz, site, me, "Saved", head + '<p class="lm-quiet lm-btabmsg">Highlights and notes are private to '
+                          'each member, so a preview doesn\'t show them.</p>')
+    if marks is None:
+        return _shell_tab(biz, site, me, "Saved", head + '<p class="mp-err lm-btabmsg" role="alert">Your highlights and notes '
+                          'couldn\'t load just now. They\'re still saved.</p>')
+    if not marks:
+        return _shell_tab(biz, site, me, "Saved", head + (
+            '<div class="lm-saved0"><p class="lm-saved0-t">Nothing saved yet</p><p class="lm-quiet">Tap any verse while you '
+            'read to highlight it, add a private note, or save it. It shows up here.</p>'
+            '<a class="lm-btn sm" href="/my/bible">Start reading</a></div>'))
+    rows = []
+    for m in list(marks)[:SAVED_MAX]:
+        try:
+            code, ch, v = str(m["book"]), int(m["chapter"]), int(m["verse"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if code not in bt.NAME:
+            continue
+        text = dict(bt.chapter(code, ch, tr) or []).get(v, "")
+        if not text:
+            continue
+        note = (m.get("note") or "").strip()
+        colour = m.get("colour") if m.get("colour") in SWATCHES else ""
+        what = "highlighted" if colour else ("noted" if note else "saved")
+        when = _when(m.get("updated_at"), today)
+        ref = f"{mpb.where_label(code, ch)}:{v}"
+        meta = " · ".join(p for p in (ref, f"{what} {when}".strip()) if p)
+        bar = f'<i class="sw-{colour}" aria-hidden="true"></i>' if colour else '<i class="is-plain" aria-hidden="true"></i>'
+        rows.append(f'<li><a class="lm-hlr" href="/my/bible/{bt.slug(code)}/{ch}#v{v}">{bar}<span class="lm-hlr-t">'
+                    f'<span class="lm-hlr-v">{mpb._verse_html(text, tr)}</span>'
+                    + (f'<span class="lm-hlr-n">{_e(note)}</span>' if note else "")
+                    + f'<small>{_e(meta)}</small></span></a></li>')
+    more = (f'<p class="lm-bmore"><a class="lm-more" href="/my/bible/notes">Every highlight and note'
+            f'{lm.ic("chevron", 15)}</a></p>')
+    body = (f'{head}<h1 class="mp-sr">Saved</h1><ul class="lm-hls">{"".join(rows)}</ul>{more}'
+            f'<p class="lm-bpriv">Only you can see these.</p>')
+    return _shell_tab(biz, site, me, "Saved", body)
+
+
+# ─── Search ──────────────────────────────────────────────────────────
+
+
+def render_find(biz, site, me, tr: str, *, query: str = "", places=None, missed: bool = False, slow: bool = False,
+                dot: bool = False) -> str:
+    """The search button's page: find a passage or a word (today's ?q=),
+    the chapters read lately, the books."""
+    import member_lumen_ui as lm
+    import member_portal_bible as mpb
+    err = ('<p class="mp-err" role="alert">We couldn\'t find that passage or word. Try something like John 3:16, '
+           'Psalm 23 or shepherd.</p>' if missed else
+           '<p class="mp-err" role="alert">That\'s a lot of searching at once. Wait a minute, then try again.</p>'
+           if slow else "")
+    recent = mpb._chips(places or [])
+    body = (f'{seg("search", dot)}<h1 class="mp-sr">Search the Bible</h1>{field(query, autofocus=not query)}{err}'
+            + (f'<section aria-labelledby="lm-recent-h">{lm.section("Recently read", hid="lm-recent-h")}{recent}</section>'
+               if recent else "")
+            + f'<section aria-labelledby="lm-books-h">{lm.section("Books", hid="lm-books-h")}{BOOKS}</section>{_src(tr)}')
+    return _shell_tab(biz, site, me, "Search", body)
+
+
+# The tabs' own script: switching tabs replaces the page in the history (the
+# back button leaves the Bible instead of walking back through its tabs;
+# tapping the tab you're on goes back to the top), and the segmented control
+# sits under whatever top bar the page has.
+SEG_JS = r"""<script>(function(){var s=document.querySelector('.lm-bseg');if(!s)return;
+var t=document.querySelector('.mb-top');
+function place(){s.style.top=(t?Math.round(t.getBoundingClientRect().height):0)+'px';}
+place();window.addEventListener('resize',place);
+s.addEventListener('click',function(e){var a=e.target.closest?e.target.closest('a.lm-bsg,a.lm-bfind'):null;
+ if(!a||e.defaultPrevented||e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();
+ if(a.getAttribute('aria-current')==='page'){var q=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  window.scrollTo({top:0,behavior:q?'auto':'smooth'});return;}
+ location.replace(a.href);});
+})();</script>"""
+
+# The reader's Look 5.1 moments, beside today's reader script and Lumen
+# Next's (which it leaves alone): the verse bar sits just over the tab bar
+# and the mini player when one is showing (member_mini; measured as the bar
+# opens; its CSS place is the fallback); its Share carries
+# the verse it was opened on (data-share-*, as the share sheet,
+# member_lumen_share, reads it); the translation pill closes on a
+# tap outside it; Listen reads the chapter aloud with the phone's own voice,
+# verse by verse from the one picked (or the first), marking the one being
+# read; nothing is sent anywhere, and the button shows only where the phone
+# can speak.
+READ_JS = r"""<script>(function(){
+var read=document.querySelector('.bb-read');if(!read)return;
+var dock=document.getElementById('bb-dock'),sh=dock?dock.querySelector('.bb-dock-h .lm-share'):null;
+var nav=document.querySelector('.mb-nav'),toast=document.getElementById('bb-toast');
+function lift(){if(!dock)return;var r=nav?nav.getBoundingClientRect():null,up=0,m=document.querySelector('.lm-mini');
+ if(r&&r.height&&r.top<window.innerHeight&&r.width>window.innerWidth*.6)up=Math.round(window.innerHeight-r.top);
+ if(m&&!m.hidden){var q=m.getBoundingClientRect();if(q.height&&q.top<window.innerHeight)up=Math.max(up,Math.round(window.innerHeight-q.top));}
+ dock.style.bottom=up?(up+8)+'px':'';if(toast)toast.style.bottom=up?(up+184)+'px':'';}
+lift();window.addEventListener('resize',lift);
+if(dock&&window.MutationObserver)new MutationObserver(function(){if(!dock.hidden)lift();}).observe(dock,{attributes:true,attributeFilter:['hidden']});
+var label=read.getAttribute('data-label')||'',tr=(read.getAttribute('data-tr')||'').toUpperCase(),bk=read.getAttribute('data-book')||'',
+ ch=read.getAttribute('data-ch')||'';
+function words(s){var c=s.cloneNode(true);c.querySelectorAll('sup,.bb-nm,.bb-bm').forEach(function(x){x.remove();});return c.textContent.replace(/\s+/g,' ').trim();}
+if(sh&&window.MutationObserver){var put=function(){var s=read.querySelector('.bb-v.is-sel');if(!s)return;
+  var v=s.getAttribute('data-v'),t=words(s),ref=label+':'+v,cut=t.length>96?t.slice(0,94).replace(/\s+\S*$/,'')+'\u2026':t;
+  sh.setAttribute('data-share-title',ref+' \u00b7 '+tr);sh.setAttribute('data-share-sub','\u201c'+cut+'\u201d');
+  sh.setAttribute('data-share-id',bk+'.'+ch+'.'+v);sh.setAttribute('data-share-text','\u201c'+t+'\u201d '+ref+' ('+tr+')');};
+ new MutationObserver(put).observe(read,{subtree:true,attributes:true,attributeFilter:['class']});}
+document.addEventListener('click',function(e){[].forEach.call(document.querySelectorAll('details.lm-ver[open]'),function(d){if(!d.contains(e.target))d.open=false;});});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')[].forEach.call(document.querySelectorAll('details.lm-ver[open]'),function(d){d.open=false;d.querySelector('summary').focus();});});
+var say=document.getElementById('lm-say'),ss=window.speechSynthesis;
+if(!say||!ss||!window.SpeechSynthesisUtterance)return;
+say.hidden=false;var on=false,items=[],i=0,now=null,calm=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+function mark(el){if(now)now.classList.remove('is-say');now=el;if(el){el.classList.add('is-say');var r=el.getBoundingClientRect();
+ if(r.top<120||r.bottom>window.innerHeight-120)el.scrollIntoView({block:'center',behavior:calm?'auto':'smooth'});}}
+function list(){var vs=[].slice.call(read.querySelectorAll('.bb-v'));
+ if(vs.length)return vs.map(function(s){return{el:s,text:words(s)};});
+ return [].slice.call(read.querySelectorAll('.bb-text p')).map(function(p){return{el:p,text:words(p)};});}
+function stop(){on=false;ss.cancel();mark(null);say.setAttribute('aria-pressed','false');say.setAttribute('aria-label','Listen to this chapter');}
+function next(){if(!on)return;if(i>=items.length){stop();return;}var it=items[i++];if(!it.text){next();return;}mark(it.el);
+ var u=new SpeechSynthesisUtterance(it.text);u.lang='en-US';u.rate=.95;u.onend=function(){if(on)next();};
+ u.onerror=function(ev){if(ev&&(ev.error==='interrupted'||ev.error==='canceled'))return;stop();};ss.speak(u);}
+say.addEventListener('click',function(){if(on){stop();return;}items=list();var s=read.querySelector('.bb-v.is-sel');
+ i=s?Math.max(0,items.map(function(x){return x.el;}).indexOf(s)):0;on=true;say.setAttribute('aria-pressed','true');
+ say.setAttribute('aria-label','Stop listening');ss.cancel();next();});
+window.addEventListener('pagehide',function(){if(on)stop();});
+})();</script>"""
 
 
 # ─── the book picker, search, highlights & notes ─────────────────────
@@ -829,8 +1207,6 @@ body.lm{--lm-gold-8:var(--s1);--lm-gold-9:var(--s1);}
 @supports (background:color-mix(in srgb,red 50%,blue)){
   body.lm{--lm-gold-8:color-mix(in srgb,var(--gold-ink) 8%,var(--bg));--lm-gold-9:color-mix(in srgb,var(--gold-ink) 9%,var(--bg));}
 }
-body.lm .lm-mastrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}
-body.lm .lm-bmast{margin-top:10px;}
 body.lm .lm-trs{display:inline-flex;gap:2px;padding:3px;border-radius:12px;background:var(--s1);flex:none;}
 body.lm .lm-trs a{display:grid;place-items:center;height:30px;padding:0 10px;border-radius:9px;color:var(--fg2);text-decoration:none;
   font:700 11.5px/1 var(--mb-ui);letter-spacing:.04em;}
@@ -843,21 +1219,7 @@ body.lm .lm-field-go{width:40px;height:40px;flex:none;border:0;border-radius:12p
   cursor:pointer;padding:0;}
 body.lm .lm-find{padding-left:16px;gap:10px;margin-top:16px;}
 body.lm .lm-field:focus-within{box-shadow:inset 0 0 0 1.5px var(--lm-ring);}
-/* pick up where you left off */
-body.lm .lm-cont{display:grid;grid-template-columns:70px minmax(0,1fr);gap:18px;align-items:center;margin:6px -20px 0;padding:20px;
-  background:var(--lm-gold-8);color:var(--fg);text-decoration:none;}
-body.lm .lm-spine{position:relative;display:block;height:96px;border-radius:6px 12px 12px 6px;background:#D9A13B;overflow:hidden;}
-body.lm .lm-spine::before{content:"";position:absolute;left:0;top:0;bottom:0;width:8px;background:#9C6A12;}
-body.lm .lm-spine::after{content:"";position:absolute;left:16px;right:10px;top:14px;height:1px;background:rgba(40,25,0,.4);
-  box-shadow:0 5px 0 rgba(40,25,0,.4);}
-body.lm .lm-spine b{position:absolute;left:14px;right:6px;bottom:10px;font:italic 500 15px/1.05 var(--mb-serif);color:#2a1a02;
-  overflow-wrap:anywhere;}
-body.lm .lm-cont-t{min-width:0;}
-body.lm .lm-ct{display:block;margin:6px 0 8px;font:400 34px/1 var(--mb-serif);letter-spacing:-.02em;}
-body.lm .lm-go{display:inline-flex;align-items:center;gap:6px;font:650 14px/1 var(--mb-ui);color:var(--lm-gold);}
-/* the church's devotionals */
-body.lm .lm-devs{gap:14px;}
-body.lm .lm-dev{width:150px;color:var(--fg);text-decoration:none;}
+/* a devotional's cover */
 body.lm .lm-cv{position:relative;display:block;height:190px;border-radius:14px;overflow:hidden;isolation:isolate;}
 body.lm .lm-cv b{position:absolute;left:14px;right:12px;bottom:14px;z-index:2;font:italic 400 26px/1 var(--mb-serif);letter-spacing:-.02em;
   display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
@@ -883,22 +1245,6 @@ body.lm .lm-prow-t{flex:1;min-width:0;}
 body.lm .lm-prow-t b{margin-top:6px;}
 body.lm .lm-gk{color:var(--lm-gold);}
 body.lm .lm-tk{color:var(--lm-teal);}
-body.lm .lm-plans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px;}
-body.lm .lm-list+.lm-plans{margin-top:18px;}
-body.lm .lm-plan{position:relative;display:block;padding:16px;border-radius:18px;background:var(--s1);color:var(--fg);text-decoration:none;}
-body.lm .lm-plan b{display:block;font:italic 300 44px/.85 var(--mb-serif);color:var(--lm-gold);letter-spacing:-.04em;}
-body.lm .lm-plan small{display:block;margin-top:4px;font:700 10px/1 var(--mb-ui);letter-spacing:.16em;text-transform:uppercase;color:var(--fg3);}
-body.lm .lm-plan span{display:block;margin-top:14px;font:650 14px/1.25 var(--mb-ui);}
-body.lm .lm-yours{display:block;margin-top:8px;font:normal 650 12px/1.2 var(--mb-ui);color:var(--lm-teal);}
-/* your highlights & notes */
-body.lm .lm-marks{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:16px 0;border-top:1px solid var(--lm-line);
-  border-bottom:1px solid var(--lm-line);color:var(--fg2);text-decoration:none;}
-body.lm .lm-marks>span{display:inline-flex;align-items:center;gap:7px;font:600 13.5px/1 var(--mb-ui);}
-body.lm .lm-marks i{width:10px;height:10px;border-radius:50%;}
-body.lm .lm-marks .lm-chev{margin-left:auto;}
-body.lm .mk-hl{background:#E3A92B;}
-body.lm .mk-note{background:#17A894;}
-body.lm .mk-saved{background:#6D57E8;}
 body.lm .lm-quiet{margin:0;font:400 14.5px/1.5 var(--mb-ui);color:var(--fg2);}
 /* the books */
 body.lm .lm-books{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
@@ -906,30 +1252,66 @@ body.lm .lm-book{display:block;padding:18px 16px;border-radius:18px;background:v
 body.lm .lm-book b{display:block;font:400 22px/1.05 var(--mb-serif);}
 body.lm .lm-book span{display:block;margin-top:6px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-src{margin:28px 0 0;font:500 12px/1.4 var(--mb-ui);color:var(--fg3);}
-/* the reader: no tab bar, a plain bar with the chapter in the middle */
+/* a devotional's day keeps the bar's middle (member_lumen_devotional) */
 body.lm .mb-top.lm-mid .mb-top-right{flex:1;justify-content:flex-end;}
 body.lm .lm-barmid{flex:none;}
+/* the Bible tab (Look 5.1): the segmented control on top, under the bar; the search button beside it */
+body.lm{--lm-wk:#10261C;--lm-wk-ink:#BDE3C2;}
+body.lm .lm-bseg{position:sticky;top:max(62px,calc(52px + env(safe-area-inset-top,0px)));z-index:12;display:flex;align-items:center;gap:6px;
+  margin:0 -20px;padding:8px 8px 10px 20px;background:var(--bg);box-shadow:0 1px 0 var(--lm-line);}
+body.lm.lm-tab .mp-shell>.lm-bseg{animation:none;}
+body.lm .lm-bsegs{flex:1;display:flex;padding:3px;border-radius:14px;background:var(--s1);}
+body.lm .lm-bsg{flex:1 1 0;height:36px;padding:0 8px;border-radius:11px;display:flex;align-items:center;justify-content:center;gap:6px;
+  color:var(--fg2);font:650 14px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;-webkit-tap-highlight-color:transparent;}
+body.lm .lm-bsg[aria-current]{background:var(--lm-raise);color:var(--fg);box-shadow:0 1px 3px var(--lm-shadow),0 0 0 .5px var(--lm-line);}
+body.lm .lm-nd{width:6px;height:6px;flex:none;border-radius:50%;background:var(--acc-fill);}
+body.lm .lm-bfind{width:44px;height:44px;}
+body.lm .lm-bfind[aria-current]{color:var(--acc);}
+body.lm .lm-btabmsg{margin-top:24px;}
+body.lm .lm-bmore{margin:22px 0 0;}
+body.lm .lm-bpriv{margin:12px 0 0;font:500 12.5px/1.4 var(--mb-ui);color:var(--fg3);}
+/* Read: the chapter and translation pills, Aa, Listen, the moon */
+body.lm .lm-rbar{display:flex;align-items:center;gap:6px;margin:14px -12px 0 0;}
 body.lm .lm-pill{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:18px;background:var(--s1);color:var(--fg);
   font:650 14px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;}
+body.lm .lm-chpill{height:40px;padding:0 12px 0 14px;gap:4px;border-radius:20px;font:700 15px/1 var(--mb-ui);}
+body.lm .lm-ver{position:relative;flex:none;}
+body.lm .lm-ver>summary{display:grid;place-items:center;height:40px;padding:0 12px;border-radius:20px;box-shadow:inset 0 0 0 1.5px var(--lm-line);
+  color:var(--fg);font:700 12.5px/1 var(--mb-ui);letter-spacing:.06em;list-style:none;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+body.lm .lm-ver>summary::-webkit-details-marker{display:none;}
+body.lm .lm-ver[open]>summary{background:var(--s1);box-shadow:none;}
+body.lm .lm-verpop{position:absolute;z-index:13;top:calc(100% + 8px);left:0;width:250px;padding:6px;border-radius:16px;background:var(--bg);
+  box-shadow:0 0 0 1px var(--lm-line),0 14px 36px var(--lm-shadow);}
+body.lm .lm-verpop a{display:flex;align-items:baseline;gap:10px;padding:12px;border-radius:11px;color:var(--fg2);text-decoration:none;}
+body.lm .lm-verpop b{width:36px;flex:none;font:700 12.5px/1 var(--mb-ui);letter-spacing:.06em;color:var(--fg);}
+body.lm .lm-verpop span{font:500 14px/1.2 var(--mb-ui);}
+body.lm .lm-verpop a[aria-current]{background:var(--s1);color:var(--fg);}
+body.lm .lm-sp{flex:1;}
 body.lm .lm-aa{width:40px;height:40px;border:0;border-radius:50%;background:none;color:var(--fg);font:600 16px/1 var(--mb-serif);cursor:pointer;}
+body.lm .lm-rbar .lm-aa{width:44px;height:44px;display:grid;place-items:center;padding:0;}
 body.lm .lm-aa[aria-expanded=true]{background:var(--lm-gold-9);color:var(--lm-gold);}
+body.lm .lm-say[hidden]{display:none;}
+body.lm .lm-say[aria-pressed=true]{background:var(--lm-tint-10);color:var(--acc);}
 body.lm .lm-aapanel{position:fixed;z-index:16;top:calc(64px + env(safe-area-inset-top,0px));left:12px;right:12px;max-width:420px;margin:0 auto;
   padding:14px 16px;border-radius:18px;background:var(--bg);box-shadow:0 0 0 1px var(--lm-line),0 14px 36px var(--lm-shadow);gap:12px;}
 body.lm .lm-aapanel[hidden]{display:none;}
 body.lm .lm-aapanel .bb-aa-btns button{background:var(--s1);border-radius:11px;font:650 13.5px/1 var(--mb-ui);}
-body.lm .lm-aapanel .lm-trs a{height:32px;}
-body.lm .lm-chap{display:flex;align-items:flex-end;gap:14px;margin:8px 0 22px;}
-body.lm .lm-chap b{font:300 104px/.78 var(--mb-serif);color:var(--lm-gold);letter-spacing:-.05em;}
-body.lm .lm-chap>span:last-child{max-width:12em;padding-bottom:6px;font:650 11px/1.4 var(--mb-ui);letter-spacing:.18em;text-transform:uppercase;
-  color:var(--fg2);}
-body.lm .lm-read{padding-bottom:8px;}
-body.lm .lm-read .bb-text{font-size:20px;line-height:1.65;letter-spacing:0;color:var(--fg);}
+body.lm .lm-rbar+.lm-aapanel{position:static;max-width:none;margin:12px 0 0;box-shadow:inset 0 0 0 1px var(--lm-line);}
+body.lm .lm-rlead{margin:18px 0 0;font:500 13.5px/1.45 var(--mb-ui);color:var(--fg2);}
+/* the chapter: its number large in the church's colour, the book in small capitals, the verses in the reading face */
+body.lm .lm-chap{display:block;margin:14px 0 14px;}
+body.lm .lm-chap b{display:block;font:300 92px/1 var(--mb-serif);color:var(--acc);letter-spacing:-.04em;}
+body.lm .lm-chap>span:last-child{display:block;margin-top:2px;font:700 11px/1.3 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fg3);}
+body.lm .lm-read{padding-bottom:4px;}
+body.lm .lm-read .bb-text{margin:0;color:var(--fg);}
 body.lm .lm-read .bb-text.sz-s{font-size:17px;}
 body.lm .lm-read .bb-text.sz-l{font-size:23px;}
 body.lm .lm-read .bb-text.f-sans{font-family:var(--mb-ui);}
-body.lm .lm-read .bb-n{font:700 10px/1 var(--mb-ui);color:var(--lm-gold);margin:0 4px 0 2px;vertical-align:7px;}
-body.lm .lm-read .bb-v{border-radius:4px;transition:background-color .3s;}
-body.lm .lm-read .bb-v.is-sel{text-decoration:underline;text-decoration-color:var(--lm-gold);text-decoration-thickness:2px;text-underline-offset:6px;}
+body.lm .lm-read .bb-n{font:700 10.5px/1 var(--mb-ui);color:var(--fg3);margin:0 4px 0 2px;vertical-align:4px;}
+body.lm .lm-read .bb-v{border-radius:3px;transition:background-color .3s;}
+body.lm .lm-read .bb-v.is-sel{text-decoration:underline;text-decoration-color:var(--acc);text-decoration-thickness:2px;text-underline-offset:5px;}
+body.lm .lm-read .is-say{text-decoration:underline dotted;text-decoration-color:var(--fg3);text-decoration-thickness:2px;text-underline-offset:5px;}
 body.lm .lm-read .bb-hl{background:var(--lm-gold-9);box-shadow:0 0 0 3px var(--lm-gold-9);}
 body.lm .hl-gold{background:rgba(227,169,43,.28);}
 body.lm .hl-pink{background:rgba(236,72,153,.22);}
@@ -941,27 +1323,99 @@ body.lm .sw-pink{background:#EC4899;}
 body.lm .sw-teal{background:#17A894;}
 body.lm .sw-violet{background:#6D57E8;}
 body.lm .sw-coral{background:#F07A43;}
-body.lm .lm-trfoot{margin-top:10px;}
 body.lm .lm-read~.lm-src{margin-top:18px;}
-body.lm main:has(.lm-read){padding-bottom:calc(110px + env(safe-area-inset-bottom,0px));}
-body.lm .lm-chnav{position:fixed;z-index:14;left:14px;right:14px;bottom:calc(18px + env(safe-area-inset-bottom,0px));max-width:572px;margin:0 auto;
-  display:flex;justify-content:space-between;pointer-events:none;}
-body.lm .lm-chstep{pointer-events:auto;display:inline-flex;align-items:center;gap:6px;height:42px;padding:0 16px;border-radius:21px;
-  background:var(--bg);color:var(--fg);font:650 13px/1 var(--mb-ui);text-decoration:none;box-shadow:0 0 0 1px var(--lm-line),0 6px 18px var(--lm-shadow);}
-body.lm.bb-docked .lm-chnav{display:none;}
-body.lm .bb-dock{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:576px;padding:12px 14px 14px;border-radius:20px;
-  background:var(--bg);box-shadow:0 0 0 1px var(--lm-line),0 14px 36px var(--lm-shadow);}
-body.lm .bb-dock-ref{font:650 14px/1.2 var(--mb-ui);}
+/* the chapters before and after, at the end */
+body.lm .lm-rnav{display:flex;gap:10px;margin:26px 0 0;}
+body.lm .lm-rnav>*{flex:1;min-width:0;}
+body.lm .lm-rstep{height:48px;padding:0 14px;border-radius:24px;background:var(--s1);color:var(--fg);display:flex;align-items:center;
+  justify-content:center;gap:4px;font:650 14px/1 var(--mb-ui);text-decoration:none;}
+body.lm .lm-rstep span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* the verse bar: the verse, Share, the highlighters, the rest; over the tab bar */
+body.lm .bb-dock{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:576px;padding:12px 12px 14px 16px;
+  border-radius:18px;background:var(--bg);box-shadow:0 0 0 1px var(--lm-line),0 12px 32px var(--lm-shadow);}
+body.lm.lm-tab .bb-dock{bottom:calc(76px + env(safe-area-inset-bottom,0px));}
+body.lm.lm-tab.lm-mini-pad .bb-dock{bottom:calc(158px + env(safe-area-inset-bottom,0px));}
+body.lm .bb-dock-h{gap:8px;}
+body.lm .bb-dock-ref{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 14px/1.2 var(--mb-ui);}
+body.lm .bb-dock-h .lm-share{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;border-radius:18px;
+  box-shadow:inset 0 0 0 1.5px var(--lm-line);color:var(--fg);font:650 13.5px/1 var(--mb-ui);text-decoration:none;}
 body.lm .bb-x{width:32px;height:32px;background:var(--s1);}
-body.lm .bb-sws{gap:10px;margin-top:10px;}
-body.lm .bb-sw{width:32px;height:32px;box-shadow:none;}
+body.lm .bb-sws{gap:10px;margin-top:12px;}
+body.lm .bb-sw{width:30px;height:30px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}
+body.lm .bb-dock .bb-sw.sw-gold{background:rgba(233,182,90,.6);}
+body.lm .bb-dock .bb-sw.sw-pink{background:rgba(246,112,150,.5);}
+body.lm .bb-dock .bb-sw.sw-teal{background:rgba(46,196,160,.45);}
+body.lm .bb-dock .bb-sw.sw-violet{background:rgba(150,135,255,.48);}
+body.lm .bb-dock .bb-sw.sw-coral{background:rgba(255,140,90,.52);}
 body.lm .bb-sw[aria-pressed=true]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--fg);}
-body.lm .bb-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
-body.lm .bb-acts button{flex-direction:row;gap:6px;height:36px;padding:0 12px;border-radius:11px;background:var(--s1);color:var(--fg);
-  font:650 12.5px/1 var(--mb-ui);}
+body.lm .bb-acts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:12px;}
+body.lm .bb-acts button{flex-direction:column;justify-content:center;gap:5px;min-height:52px;padding:8px 2px;border-radius:14px;
+  background:var(--s1);color:var(--fg);font:650 12px/1.1 var(--mb-ui);}
+body.lm .bb-acts button span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 body.lm .bb-acts button .lm-ic{color:var(--fg);}
 body.lm .bb-acts button[aria-pressed=true] .lm-ic{color:var(--lm-gold);fill:var(--gold);}
 body.lm .bb-toast{bottom:calc(200px + env(safe-area-inset-bottom,0px));}
+body.lm.lm-tab .bb-toast{bottom:calc(264px + env(safe-area-inset-bottom,0px));}
+@media (min-width:1100px){
+  body.lm.lm-tab .bb-dock{bottom:calc(12px + env(safe-area-inset-bottom,0px));}
+  body.lm.lm-tab .bb-toast{bottom:calc(200px + env(safe-area-inset-bottom,0px));}
+}
+/* Devotional: this week, the verse of the day, more devotionals */
+body.lm .lm-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin:0;padding:0;list-style:none;}
+body.lm .lm-wd>a,body.lm .lm-wd>.lm-wdx,body.lm .lm-wd.is-none{display:flex;flex-direction:column;align-items:center;gap:6px;padding:4px 0;
+  border-radius:14px;color:var(--fg3);font:650 11.5px/1 var(--mb-ui);text-decoration:none;}
+body.lm .lm-wd b{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--s1);color:var(--fg);
+  font:600 14px/1 var(--mb-ui);}
+body.lm .lm-wd.is-done b{background:var(--lm-wk);color:var(--lm-wk-ink);}
+body.lm .lm-wd.is-today b{background:var(--bg);box-shadow:0 0 0 2px var(--lm-wk);}
+body.lm .lm-wd.is-today span{color:var(--fg);}
+body.lm .lm-wd.is-none b{background:none;box-shadow:inset 0 0 0 1px var(--lm-line);}
+body.lm .lm-vod{display:block;padding:20px;border-radius:20px;background:var(--lm-paper);color:var(--lm-ink);text-decoration:none;}
+body.lm .lm-vod-k{display:block;font:700 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--lm-ink2);}
+body.lm .lm-vod q{display:block;margin:12px 0 10px;font:400 20px/1.5 var(--lm-read);quotes:none;text-wrap:pretty;}
+body.lm .lm-vod q::before,body.lm .lm-vod q::after{content:none;}
+body.lm .lm-vod small{display:block;font:650 13px/1.3 var(--mb-ui);color:var(--lm-ink2);}
+body.lm .lm-mcovs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+body.lm .lm-cv.lm-mcov{height:150px;border-radius:16px;text-decoration:none;}
+body.lm .lm-cv.lm-mcov b{bottom:30px;left:12px;right:12px;font-style:normal;font-size:20px;line-height:1.05;-webkit-line-clamp:3;}
+body.lm .lm-cv.lm-mcov small{top:auto;bottom:12px;left:12px;font:500 12px/1 var(--mb-ui);letter-spacing:0;text-transform:none;opacity:.85;}
+body.lm .lm-cv.lm-mcov.has-ph::after{background:linear-gradient(180deg,rgba(0,0,0,0) 35%,rgba(0,0,0,.7));}
+/* Plans: a plan running as a ring, the plans to start */
+body.lm .lm-aplan{display:flex;align-items:center;gap:16px;margin-top:16px;padding:16px;border-radius:20px;box-shadow:inset 0 0 0 1px var(--lm-line);
+  color:var(--fg);text-decoration:none;}
+body.lm .lm-aplan+.lm-aplan{margin-top:10px;}
+body.lm .lm-ringp{position:relative;width:64px;height:64px;flex:none;}
+body.lm .lm-ringp svg{display:block;width:64px;height:64px;transform:rotate(-90deg);}
+body.lm .lm-ringp b{position:absolute;inset:0;display:grid;place-items:center;font:500 22px/1 var(--mb-serif);color:var(--fg);}
+body.lm .lm-aplan-t{flex:1;min-width:0;color:var(--fg);text-decoration:none;}
+body.lm .lm-aplan-t small{display:block;font:400 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-aplan-t b{display:block;margin:2px 0;font:700 16px/1.25 var(--mb-ui);}
+body.lm .lm-aplan .lm-aplan-go{flex:none;background:var(--fg);color:var(--bg);}
+body.lm .lm-aplan .lm-chev{color:var(--fg3);}
+body.lm .lm-pstarts{border-radius:18px;box-shadow:inset 0 0 0 1px var(--lm-line);overflow:hidden;}
+body.lm .lm-pstart+.lm-pstart{border-top:1px solid var(--lm-line);}
+body.lm .lm-pstart button{display:flex;align-items:center;gap:14px;width:100%;padding:12px 16px;border:0;background:none;color:var(--fg);
+  text-align:left;font:inherit;cursor:pointer;}
+body.lm .lm-pc{width:48px;height:48px;flex:none;border-radius:12px;display:grid;place-items:center;background:var(--h,var(--acc-fill));
+  color:var(--on-h,var(--on-acc));font:italic 500 18px/1 var(--mb-serif);}
+body.lm .lm-pstart-t{flex:1;min-width:0;}
+body.lm .lm-pstart-t b{display:block;font:650 15px/1.25 var(--mb-ui);}
+body.lm .lm-pstart-t small{display:block;margin-top:2px;font:400 13px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-pstart-go{flex:none;height:32px;padding:0 14px;border-radius:16px;background:var(--s1);display:grid;place-items:center;
+  font:650 13px/1 var(--mb-ui);color:var(--fg);}
+/* Saved: a colour bar, the verse, the reference and when, the note */
+body.lm .lm-hls{margin:6px -20px 0;padding:0;list-style:none;}
+body.lm .lm-hlr{display:flex;gap:14px;padding:14px 20px;border-bottom:1px solid var(--lm-line);color:var(--fg);text-decoration:none;}
+body.lm .lm-hlr>i{width:4px;flex:none;border-radius:2px;}
+body.lm .lm-hlr>i.is-plain{background:var(--s3);}
+body.lm .lm-hlr-t{flex:1;min-width:0;}
+body.lm .lm-hlr-v{display:block;font:400 16.5px/1.55 var(--lm-read);text-wrap:pretty;}
+body.lm .lm-hlr-n{display:-webkit-box;margin-top:8px;padding:10px 12px;border-radius:12px;background:var(--s1);overflow:hidden;
+  -webkit-line-clamp:3;-webkit-box-orient:vertical;font:400 14px/1.45 var(--mb-ui);color:var(--fg);}
+body.lm .lm-hlr small{display:block;margin-top:6px;font:650 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-saved0{margin-top:44px;text-align:center;}
+body.lm .lm-saved0-t{margin:0 0 8px;font:400 26px/1.15 var(--mb-serif);color:var(--fg);}
+body.lm .lm-saved0 .lm-btn{margin-top:18px;}
 /* the book picker */
 body.lm .mb-seg{margin:20px 0 0;border-radius:14px;}
 body.lm .mb-seg a{min-height:36px;border-radius:11px;font:650 13px/1 var(--mb-ui);}
@@ -1050,13 +1504,17 @@ body.lm .lm-catch>summary::-webkit-details-marker{display:none;}
 body.lm .lm-catch[open]>summary .lm-ic{transform:rotate(180deg);}
 body.lm .lm-stop{margin-top:24px;}
 @media (prefers-reduced-motion:no-preference){
-  body.lm .lm-cont,body.lm .lm-dev,body.lm .lm-plan,body.lm .lm-book,body.lm .lm-marks,body.lm .lm-dfeat,body.lm .lm-drow,body.lm .lm-chstep{transition:transform .15s ease;}
-  body.lm .lm-cont:active,body.lm .lm-dev:active,body.lm .lm-plan:active,body.lm .lm-book:active,body.lm .lm-marks:active,body.lm .lm-dfeat:active,
-  body.lm .lm-drow:active,body.lm .lm-chstep:active{transform:scale(.985);}
+  body.lm .lm-book,body.lm .lm-dfeat,body.lm .lm-drow,body.lm .lm-rstep,body.lm .lm-vod,body.lm .lm-mcov,body.lm .lm-aplan-t,
+  body.lm .lm-pstart button,body.lm .lm-hlr,body.lm .lm-wd>a{transition:transform .15s ease;}
+  body.lm .lm-book:active,body.lm .lm-dfeat:active,body.lm .lm-drow:active,body.lm .lm-rstep:active,body.lm .lm-vod:active,body.lm .lm-mcov:active,
+  body.lm .lm-aplan-t:active,body.lm .lm-pstart button:active,body.lm .lm-hlr:active,body.lm .lm-wd>a:active{transform:scale(.985);}
+  body.lm .lm-bsg{transition:background-color .2s ease,color .2s ease,box-shadow .2s ease;}
 }
-body.lm .lm-trs a:focus-visible,body.lm .lm-cont:focus-visible,body.lm .lm-dev:focus-visible,body.lm .lm-plan:focus-visible,
-body.lm .lm-book:focus-visible,body.lm .lm-marks:focus-visible,body.lm .lm-pill:focus-visible,body.lm .lm-aa:focus-visible,
-body.lm .lm-chstep:focus-visible,body.lm .lm-dfeat:focus-visible,body.lm .lm-drow:focus-visible,body.lm .lm-field-go:focus-visible,
+body.lm .lm-trs a:focus-visible,body.lm .lm-bsg:focus-visible,body.lm .lm-ver>summary:focus-visible,body.lm .lm-verpop a:focus-visible,
+body.lm .lm-book:focus-visible,body.lm .lm-pill:focus-visible,body.lm .lm-aa:focus-visible,body.lm .lm-rstep:focus-visible,
+body.lm .bb-dock-h .lm-share:focus-visible,body.lm .lm-wd>a:focus-visible,body.lm .lm-vod:focus-visible,body.lm .lm-mcov:focus-visible,
+body.lm .lm-aplan-t:focus-visible,body.lm .lm-pstart button:focus-visible,body.lm .lm-hlr:focus-visible,
+body.lm .lm-dfeat:focus-visible,body.lm .lm-drow:focus-visible,body.lm .lm-field-go:focus-visible,
 body.lm .lm-chips a:focus-visible,body.lm .lm-catch>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 /* Lumen Next, the reader: how far you've read, the moon, the ink, night, the card */
 body.lm .lm-rprog{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--lm-gold);transform:scaleX(0);
@@ -1086,7 +1544,14 @@ body.lm.lm-dark .lm-read .bb-v.hl-pink{--hlc:rgba(246,112,150,.3);}
 body.lm.lm-dark .lm-read .bb-v.hl-teal{--hlc:rgba(46,196,160,.28);}
 body.lm.lm-dark .lm-read .bb-v.hl-violet{--hlc:rgba(150,135,255,.3);}
 body.lm.lm-dark .lm-read .bb-v.hl-coral{--hlc:rgba(255,140,90,.3);}
-body.lm.lm-dark .lm-chstep,body.lm.lm-dark .bb-dock,body.lm.lm-dark .lm-aapanel{box-shadow:0 0 0 1px var(--lm-line),0 14px 36px rgba(0,0,0,.6);}
+body.lm.lm-dark .lm-verpop,body.lm.lm-dark .bb-dock,body.lm.lm-dark .lm-aapanel{box-shadow:0 0 0 1px var(--lm-line),0 14px 36px rgba(0,0,0,.6);}
+body.lm.lm-dark .lm-rbar+.lm-aapanel{box-shadow:inset 0 0 0 1px var(--lm-line);}
+body.lm.lm-dark{--lm-wk:#BDE3C2;--lm-wk-ink:#10261C;}
+body.lm.lm-dark .bb-dock .bb-sw.sw-gold{background:rgba(233,182,90,.82);}
+body.lm.lm-dark .bb-dock .bb-sw.sw-pink{background:rgba(246,112,150,.78);}
+body.lm.lm-dark .bb-dock .bb-sw.sw-teal{background:rgba(46,196,160,.75);}
+body.lm.lm-dark .bb-dock .bb-sw.sw-violet{background:rgba(150,135,255,.78);}
+body.lm.lm-dark .bb-dock .bb-sw.sw-coral{background:rgba(255,140,90,.78);}
 body.lm.lm-dark .lm-moon{background:var(--lm-gold-9);color:var(--lm-gold);}
 """) + """body.lm.lm-vc-on{overflow:hidden;}
 body.lm.lm-vc-on .bb-toast{z-index:70;}
@@ -1112,7 +1577,7 @@ body.lm .lm-vc-looks button:focus-visible,body.lm .lm-vc-go .lm-btn:focus-visibl
 @media (prefers-reduced-motion:no-preference){
   body.lm .lm-read .bb-v{transition:background-size .9s cubic-bezier(.2,.8,.2,1);}
   body.lm:has(.lm-read),body.lm:has(.lm-read) .mb-top,body.lm .lm-pill{transition:background-color .5s ease,color .5s ease;}
-  body.lm .lm-chstep{transition:background-color .5s ease,color .5s ease,transform .15s ease;}
+  body.lm .lm-rstep{transition:background-color .5s ease,color .5s ease,transform .15s ease;}
   body.lm .lm-vc:not([hidden]) .lm-vc-scrim{animation:lm-vcfade .3s both;}
   body.lm .lm-vc:not([hidden]) .lm-vc-sheet{animation:lm-vcup .55s cubic-bezier(.2,.8,.2,1) both;}
   body.lm .lm-vc-cv.is-pop{animation:lm-vcpop .6s cubic-bezier(.34,1.56,.64,1) both;}
