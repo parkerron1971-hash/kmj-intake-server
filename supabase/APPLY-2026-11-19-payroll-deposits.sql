@@ -87,10 +87,11 @@ commit;
 -- 'payroll' since 2026-11-19. The settings guard keeps the app's own logins
 -- from writing a server key straight to the row; its list is the function
 -- below. Pre-check: when the guard (APPLY-2026-11-17-settings-server-keys.sql)
--- is already in, its list gains 'payroll' here (the same 44 keys, the same
+-- is already in, its list gains 'payroll' here (the same 45 keys, the same
 -- function signature, so its grants and the trigger stay as they are); when
 -- it isn't, nothing happens here, and that file brings 'payroll' itself (it
--- was added there before that file was applied). Either order ends with 44.
+-- was added there before that file was applied). Either order ends with 45.
+-- (guest_calls joined both lists on 2026-11-20, before either was applied.)
 begin;
 
 set local lock_timeout = '5s';
@@ -115,7 +116,8 @@ language sql immutable parallel safe set search_path = public as $body$
     'client_sources', 'concierge', 'doc_defaults', 'giving', 'journeys', 'member_portal',
     'messaging', 'new_here', 'news', 'reading_plan', 'site_prefs', 'sms_replies', 'studio',
     'superbill', 'texting_hours',
-    'payroll'
+    'payroll',
+    'guest_calls'
   ]::text[]
 $body$
 $fn$;
@@ -146,7 +148,7 @@ notify pgrst, 'reload schema';
 --   select count(*) from public.payroll_reminders_sent;  -- 0
 --   -- Only when the settings guard is in (to_regprocedure('public.business_settings_server_keys()') is not null):
 --   select cardinality(public.business_settings_server_keys()),
---          'payroll' = any(public.business_settings_server_keys());                   -- 44, true
+--          'payroll' = any(public.business_settings_server_keys());                   -- 45, true
 --
 -- Rollback (loses which deposits were marked sent, and the reminders may repeat once; no money record,
 -- run or person changes):

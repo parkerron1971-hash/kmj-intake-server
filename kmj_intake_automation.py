@@ -765,6 +765,10 @@ app.include_router(kids_station_router)
 # public_site_router.
 from church_router import router as church_router
 app.include_router(church_router)
+# Who calls our guests (guest_calls.py): the church's own way of handing a
+# first-time guest's welcome call, behind GUEST_PATH.
+from guest_calls import router as guest_calls_router
+app.include_router(guest_calls_router)
 # The leaders map's office routes (/church/map; CHURCH_MAP). BEFORE
 # public_site_router.
 from church_map_router import router as church_map_router
