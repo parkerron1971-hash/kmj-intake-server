@@ -600,6 +600,14 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 70,
     },
     "quickbooks": {
+        # OFF THE SETUP LIST (Kevin, 2026-11-20: "everyone might not have
+        # that setup because they might not have quickbooks"). A list item
+        # nobody without QuickBooks can tick sat in "Final touches" for
+        # good. It stays in the catalog because its probe is how Chief
+        # knows the books are connected (business_knowledge, money), and
+        # QuickBooks itself is still on Integrations for whoever keeps
+        # their books there.
+        "listed": False,
         "chief": ('DOOR. navigate build/integrations; only offer if they already keep books there — never push it on someone without an accountant.'),
         "title": "Connect QuickBooks",
         "why": "Keeps the books you already keep — your accountant never has "
@@ -837,6 +845,11 @@ def words_for(key: str, business_type: Optional[str]) -> Dict[str, str]:
     return dict(table.get(key) or {})
 
 
+def is_listed(spec: Dict[str, Any]) -> bool:
+    """Whether a catalog step may appear on a setup list at all."""
+    return spec.get("listed", True) is not False
+
+
 def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
     """Catalog keys applicable to this vertical, most valuable first.
 
@@ -855,6 +868,10 @@ def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
     except Exception:
         canonical = raw
     def applies(v: Dict[str, Any]) -> bool:
+        # `listed: False` keeps a step in the catalog (its probe still
+        # answers) but off every setup list and the coach's menu.
+        if not is_listed(v):
+            return False
         # `not_verticals` carves a vertical out of an all-verticals step
         # (a ministry is not asked what it charges).
         if raw in v.get("not_verticals", ()) or canonical in v.get("not_verticals", ()):
