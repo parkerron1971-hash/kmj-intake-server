@@ -291,8 +291,9 @@ def _e(s: Any) -> str:
 
 def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, Any]]]:
     """Everyone at this church with exactly this address (a household can
-    share one), each with their photo record and their Look in the new look
-    (member_lumen_look: read here so a page needs no read for it). An exact, case-insensitive match — wildcards escaped.
+    share one), each with their photo record, their Look in the new look
+    (member_lumen_look) and where they are in the church's messages
+    (member_lumen_watch): read here so a page needs no read for them. An exact, case-insensitive match — wildcards escaped.
     None when the read FAILED: that is "try again", never "not on the
     list". Reads one past MAX_HOUSEHOLD so an over-shared address shows."""
     em = norm_email(email)
@@ -302,7 +303,7 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
-        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look"
+        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch"
         f"&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
@@ -320,7 +321,7 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
-        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look"
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch"
         f"&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
@@ -1933,20 +1934,38 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         rest = sub[len("/my/sermons"):].strip("/")
         import member_portal_bible as mpb
+        import member_lumen
+        lumen = member_lumen.page()
         if not rest:
             series = str(request.query_params.get("series") or "")
             # Watch leads with live, or the next gathering: all three at once.
+            # The new look also shows the church's weekly service time
+            # (member_lumen_watch.service_slot: kept ten minutes).
             import live_router as lr
-            lib, live, occ = await asyncio.gather(asyncio.to_thread(mps.load_library, biz["id"]),
-                                                  asyncio.to_thread(lr.current, biz["id"]),
-                                                  asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
+            import member_lumen_watch as mlw
+            lib, live, occ, service = await asyncio.gather(
+                asyncio.to_thread(mps.load_library, biz["id"]), asyncio.to_thread(lr.current, biz["id"]),
+                asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+                asyncio.to_thread(mlw.service_slot, biz)
+                if lumen and not series and request.query_params.get("view") != "series" else _nothing())
             lib, occ = fill(lib, "library"), fill(occ, "occasions")
+            extra = ({"view": str(request.query_params.get("view") or ""), "service": service,
+                      "show_all": request.query_params.get("all") == "1"} if lumen else {})
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
                                             bible=mpb.prefs(request)[0], live=live or None,
-                                            next_occ=(occ or [None])[0]),
+                                            next_occ=(occ or [None])[0], **extra),
                          200 if lib is not None else 503)
         lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
-        page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
+        extra = {}
+        if lumen and lib is not None and UUID_RE.match(rest):
+            # A message with questions shows "Talk about it in <group>" for a
+            # group whose chat is open to the member (kept a minute).
+            import member_lumen_watch as mlw
+            s = next((x for x in lib["sermons"] if str(x["id"]) == rest), None)
+            groups = (await asyncio.to_thread(mlw.talk_groups, biz, me)
+                      if s and mlw.questions(s.get("questions")) else [])
+            extra = {"listen": request.query_params.get("listen") == "1", "groups": groups}
+        page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0], **extra)
                 if UUID_RE.match(rest) else None)
         if page is None:
             return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)

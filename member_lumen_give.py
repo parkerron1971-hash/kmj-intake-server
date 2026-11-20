@@ -1,5 +1,5 @@
-"""member_lumen_give.py — Give, Watch and Live in the member app's new look
-("Lumen").
+"""member_lumen_give.py — Give and Live in the member app's new look
+("Lumen"). Watch is member_lumen_watch.py (Look 5.1, 2026-11-20).
 
 Kevin, 2026-11-18, on the member app: Give "looks generic and not top tier.
 this should be update to be the best", and Live has "no wow factor". He
@@ -25,11 +25,6 @@ today; with an email on record they fold under "Receipt to ...".
   Before online giving is on (render_give_off): the church's giving photo
   edge to edge, Every gift matters, Give online (the church's own page)
   when it has one, Your giving and In person.
-
-WATCH (/my/sermons): Watch & listen; the next live gathering (or Live now)
-on a soft church-colour row; the latest message's art edge to edge with
-Watch, Listen (when it has audio) and Share; the series two across; every
-message as a row. A series and a message keep today's pages.
 
 LIVE (/my/live, the live room): the video edge to edge with a round Back
 and "Live · N here" on it (N is the count the room already reads; left out
@@ -219,105 +214,6 @@ def give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool = F
     return _shell(biz, site, "Give", body, tab="give", who=me)
 
 
-# ─── Watch ───────────────────────────────────────────────────────────
-
-
-def live_row(live: Optional[Dict[str, Any]], next_occ: Optional[Dict[str, Any]] = None) -> str:
-    """Watch's first row, on a soft church-colour band: Live now while the
-    church is live, else the next gathering; both open the live page."""
-    import member_lumen_ui as lm
-    if live:
-        kick, title, line, cls = ('<span class="lm-dotlive" aria-hidden="true"></span>Live now',
-                                  live.get("title") or "Live now", "Watch and chat with your church", " is-live")
-    else:
-        import member_portal_church as mpc
-        when, title = "", "Live services"
-        if next_occ:
-            d = mpc._day(next_occ.get("date") or "")
-            title = next_occ.get("title") or title
-            if d:
-                soon = mpc._in_days(d, date.today())
-                when = soon if soon in ("Today", "Tomorrow") else f"{d.strftime('%A')} · {soon}"
-        kick, line, cls = "Next live", when or "It plays right here", ""
-    return (f'<a class="lm-nrow{cls}" href="/my/live"><span class="lm-halo">{lm.ic("live", 22)}</span>'
-            f'<span class="lm-wt"><span class="lm-kicker">{kick}</span><b>{_e(title)}</b><span>{_e(line)}</span></span>'
-            f'{_chev()}</a>')
-
-
-def watch(biz: Dict[str, Any], site, who: Dict[str, Any], lib: Optional[Dict[str, Any]], *,
-          live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None,
-          bible: str = "kjv") -> str:
-    """Watch in the new look: the same library, live and next gathering
-    today's Watch reads (member_portal_sermons.render_library)."""
-    import member_app_photos as photos
-    import member_app_samples as samples
-    import member_app_ui as ui
-    import member_lumen_share as mls
-    import member_lumen_ui as lm
-    import member_portal_sermons as mps
-    from member_portal import _shell, palette_for
-    from sermons_public import day_label
-    pal = palette_for(biz, site)
-    pool = photos.photos(biz, site)
-    # Lumen Next: a cinema (member_lumen_motion). The bar says whose it is;
-    # the page opens on the next live, then the latest message edge to edge.
-    parts = ['<h1 class="mp-sr">Watch &amp; listen</h1>', live_row(live, next_occ)]
-    if lib is None:
-        parts.append('<p class="mp-err" role="alert" style="margin-top:24px">Messages couldn\'t load just now. '
-                     'Please try again in a moment.</p>')
-        return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who)
-    if not lib["sermons"]:
-        import member_portal_lumen as mlp
-        church = (biz.get("name") or "").strip() or "the church"
-        parts.append(f'<section class="lm-soon" aria-labelledby="lm-soon-h"><p class="lm-eyebrow">Coming soon</p>'
-                     f'<h2 class="lm-disp s" id="lm-soon-h">Messages are on the <em>way</em></h2>'
-                     f'<p class="lm-meta">When {_e(church)} posts a message, it shows up here, ready to watch or listen, '
-                     f'with the scripture and notes.</p></section>{mlp.verse_page(bible)}')
-        return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who)
-    used: set = set()
-    titles = mps._titles(lib)
-    s = lib["sermons"][0]
-    sample = samples.is_sample(s)
-    href = f"/my/sermons/{_e(s['id'])}"
-    listen = (f'<a class="lm-btn ghost" href="{href}#listen">{ui.icon("headphones", 17)}Listen</a>'
-              if (s.get("audio_url") or "").strip() else "")
-    meta = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x)
-    parts.append(
-        f'<section class="lm-feat" aria-labelledby="lm-feat-h">'
-        f'{ui.sample_hint(samples.WHERE["sermons"]) if sample else ""}'
-        f'<a class="lm-bleed lm-poster" href="{href}" tabindex="-1" aria-hidden="true">{mps._art(lib, s, pal, site, pool, used)}'
-        f'{ui.sample_tag() if sample else ""}</a>'
-        f'<p class="lm-eyebrow lm-featk"><span class="lm-dot"></span>Latest message · {_e(day_label(s.get("preached_on")))}</p>'
-        f'<h2 class="lm-disp m" id="lm-feat-h"><a href="{href}">{lm.italic_last(s.get("title"))}</a></h2>'
-        f'{f"<p class=lm-meta>{_e(meta)}</p>" if meta else ""}'
-        f'<div class="lm-acts"><a class="lm-btn lm-light" href="{href}">{ui.icon("play", 15)}Watch</a>{listen}'
-        f'{mls.message_link(lib, s, site, pool, ui.icon("share", 18), cls="lm-btn ghost lm-sq", label="Share")}</div></section>')
-    by_series: Dict[str, List[Dict[str, Any]]] = {}
-    for x in lib["sermons"]:
-        sid = str(x.get("series_id") or "")
-        if sid in titles:
-            by_series.setdefault(sid, []).append(x)
-    order = sorted(by_series, key=lambda k: str(by_series[k][0].get("preached_on")), reverse=True)
-    if order:
-        # The series as posters on a rail: the art over the name in serif.
-        tiles = "".join(
-            f'<a class="lm-spost" href="/my/sermons?series={_e(sid)}"><span class="img">'
-            f'{mps._art(lib, by_series[sid][0], pal, site, pool, used)}</span><span class="lm-sptx">'
-            f'<span class="lm-kicker">{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}</span>'
-            f'<span class="tt">{lm.italic_last(titles[sid])}</span></span></a>'
-            for sid in order)
-        parts.append(f'<section aria-labelledby="lm-ser-h">{lm.section("Series", hid="lm-ser-h")}'
-                     f'<div class="lm-rail lm-sposts">{tiles}</div></section>')
-    rows = "".join(
-        f'<a class="lm-lrow" href="/my/sermons/{_e(x["id"])}"><span class="lm-th">{mps._art(lib, x, pal, site, pool)}</span>'
-        f'<span class="lm-wt"><b>{_e(x.get("title"))}</b><span>{mps.meta(x)}</span></span>{_chev()}</a>'
-        for x in lib["sermons"])
-    parts.append(f'<section aria-labelledby="lm-all-h">{lm.section("All messages", hid="lm-all-h")}'
-                 f'<div class="lm-list">{rows}</div></section>')
-    # Share is the new look's sheet (member_lumen_share, which _shell adds).
-    return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who)
-
-
 # ─── Live ────────────────────────────────────────────────────────────
 
 
@@ -498,43 +394,9 @@ CSS = Template("""
 @keyframes lmup{from{transform:translateY(100%)}to{transform:none}}
 @keyframes lmring{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}
 
-/* Watch: the next live on a soft band, the latest edge to edge, series two across */
-.lm .lm-nrow{display:flex;align-items:center;gap:14px;margin:14px -20px 0;padding:16px 20px;color:var(--fg);text-decoration:none;
-  background:var(--lm-tint-6);border-top:1px solid var(--lm-line);border-bottom:1px solid var(--lm-line);}
-.lm .lm-nrow .lm-kicker{display:flex;align-items:center;gap:7px;color:var(--lm-violet);}
-.lm .lm-nrow.is-live .lm-kicker{color:var(--acc);}
-.lm .lm-nrow .lm-wt b{margin-top:6px;}
-.lm .lm-halo{width:42px;height:42px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--lm-violet);background:var(--lm-tint);}
-.lm .lm-feat{margin-top:24px;}
-.lm .lm-poster{display:block;aspect-ratio:16/9;}
-.lm .lm-poster>.mb-ph,.lm .lm-poster>.mb-art,.lm .lm-th>.mb-ph,.lm .lm-th>.mb-art,.lm .lm-stile .img>.mb-art{position:absolute;inset:0;
-  width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
-.lm .lm-poster .mb-art{padding:18px;}
-.lm .lm-poster .mb-art-title{font:400 40px/.98 var(--mb-serif);letter-spacing:-.02em;}
-.lm .lm-poster .mb-titled b{padding:40px 18px 16px;font:400 36px/1 var(--mb-serif);letter-spacing:-.02em;}
-.lm .lm-featk{margin:18px 0 0;}
-.lm .lm-tl{margin:6px 0 0;font:700 24px/1.2 var(--mb-ui);letter-spacing:-.015em;}
-.lm .lm-tl a{color:inherit;text-decoration:none;}
-.lm .lm-feat .lm-meta{margin-top:4px;}
-.lm .lm-acts{display:flex;gap:10px;margin-top:16px;}
-.lm .lm-acts .lm-btn:first-child{flex:1;}
-.lm .lm-btn.lm-sq{width:46px;padding:0;flex:none;}
-.lm .lm-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 14px;}
-.lm .lm-stile .img{height:auto;aspect-ratio:16/9;}
-.lm .lm-stile .tt{font-size:16px;}
-.lm .lm-stile .mb-art{padding:10px 12px;}
-.lm .lm-stile .mb-art-title{font:400 22px/1 var(--mb-serif);letter-spacing:-.015em;}
-.lm .lm-stile .mb-titled b{padding:24px 12px 10px;font:400 20px/1 var(--mb-serif);letter-spacing:-.01em;}
 .lm .lm-lrow{display:flex;align-items:center;gap:14px;padding:12px 0;color:var(--fg);text-decoration:none;border-bottom:1px solid var(--lm-line);}
 .lm .lm-lrow .lm-wt b{font:650 15px/1.25 var(--mb-ui);}
 .lm .lm-lrow .lm-wt>span{font-size:12.5px;line-height:1.3;}
-.lm .lm-th{position:relative;width:80px;height:45px;flex:none;overflow:hidden;border-radius:10px;background:var(--s2);}
-.lm .lm-th .mb-art{padding:5px 7px;}
-.lm .lm-th .mb-art-title{font:400 12px/1 var(--mb-serif);letter-spacing:0;}
-.lm .lm-th .mb-titled b{padding:12px 6px 4px;font:600 10.5px/1 var(--mb-ui);letter-spacing:-.01em;}
-.lm .lm-soon{margin:24px -20px 0;padding:22px 20px;background:var(--lm-tint);}
-.lm .lm-soon+.lm-page{margin-top:24px;}
-
 /* Live: the room. The video edge to edge with Back and Live · N here on it; names over the words */
 .lm .lv-stage{position:relative;}
 .lm .lm-lvtop{position:absolute;z-index:3;left:12px;right:12px;top:10px;display:flex;align-items:center;justify-content:space-between;
@@ -602,7 +464,7 @@ CSS = Template("""
 .lm .lv-amts input:checked+span{background:var(--acc-fill);color:var(--on-acc);}
 .lm .lv-go{height:56px;border-radius:18px;}
 .lm .lv-done-ic{background:none;color:var(--acc);box-shadow:inset 0 0 0 1.5px var(--acc-fill);}
-.lm .lm-lvback:focus-visible,.lm .lm-lvgive:focus-visible,.lm .lm-fchip:focus-visible,.lm .lm-nrow:focus-visible,.lm .lm-lrow:focus-visible,
+.lm .lm-lvback:focus-visible,.lm .lm-lvgive:focus-visible,.lm .lm-fchip:focus-visible,.lm .lm-lrow:focus-visible,
 .lm .lm-gtlink:focus-visible,.lm .lm-linkrow:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 @media (max-width:999px){
   /* a phone: the room starts at the video (the mock's), Back sits on it */
@@ -622,8 +484,8 @@ CSS = Template("""
   .lm .lv-pin{margin:0 16px;}
 }
 @media (prefers-reduced-motion:no-preference){
-  .lm .lm-nrow,.lm .lm-lrow,.lm .lm-fchip,.lm .lm-pre .gv-amt{transition:transform .15s ease,background-color .25s,color .25s;}
-  .lm .lm-nrow:active,.lm .lm-lrow:active{transform:scale(.985);}
+  .lm .lm-lrow,.lm .lm-fchip,.lm .lm-pre .gv-amt{transition:transform .15s ease,background-color .25s,color .25s;}
+  .lm .lm-lrow:active{transform:scale(.985);}
   .lm .lm-pre .gv-amt:active,.lm .lm-fchip:active{transform:scale(.96);}
 }
 """)

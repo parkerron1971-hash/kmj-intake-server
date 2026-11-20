@@ -674,6 +674,12 @@ app.include_router(member_photos_router)
 # Light, Dark or Same as my phone. BEFORE public_site_router.
 from member_lumen_look import router as member_lumen_look_router
 app.include_router(member_lumen_look_router)
+# Watch in the new look (member_lumen_watch.py): POST /my/sermons/progress
+# and /my/sermons/save (where a member is in a message, and Save), and the
+# church's weekly service for the calendar (GET /my/sermons/live.ics, public).
+# BEFORE public_site_router.
+from member_lumen_watch import router as member_lumen_watch_router
+app.include_router(member_lumen_watch_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.

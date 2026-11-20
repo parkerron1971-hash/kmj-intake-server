@@ -351,7 +351,8 @@ def test_the_message_page_opens_the_sheet_and_reads_nothing_more(share, fake, mo
     on, reads_on = _reads(fake, c, f"/my/sermons/{SERMON}")
     a = on[on.index('<a class="lm-share'):]
     a = a[:a.index("</a>")]
-    assert a.startswith(f'<a class="lm-share mp-go mp-go-2" href="/sermons/{SERMON}" data-share-kind="message" ')
+    # The message page is Watch's (Look 5.1, member_lumen_watch): Share in its row of four.
+    assert a.startswith(f'<a class="lm-share lw-pa" href="/sermons/{SERMON}" data-share-kind="message" ')
     assert 'data-share-title="Hope Has a Name"' in a and 'data-share-sub="Pastor James · Light Has Come"' in a
     assert f'data-share-id="{SERMON}"' in a and "<span>Share</span>" in a
     assert 'data-share="/sermons/' not in on and mps.SHARE_SCRIPT not in on
@@ -368,9 +369,10 @@ def test_watch_shares_the_latest_message(share, fake, monkeypatch):
     import member_portal_sermons as mps
     c = _app(fake, monkeypatch)
     on, reads_on = _reads(fake, c, "/my/sermons")
-    feat = on[on.index('class="lm-feat"'):]
-    assert f'<a class="lm-share lm-btn ghost lm-sq" href="/sermons/{SERMON}" data-share-kind="message"' in feat[:4000]
-    assert 'aria-label="Share"' in feat[:4000] and mps.SHARE_SCRIPT not in on and mls.js_url() in on
+    # Watch is Look 5.1's (member_lumen_watch): Share under the latest message.
+    feat = on[on.index('<div class="lw-btns">'):]
+    assert f'<a class="lm-share lw-pill" href="/sermons/{SERMON}" data-share-kind="message"' in feat[:4000]
+    assert ">Share</a>" in feat[:4000] and mps.SHARE_SCRIPT not in on and mls.js_url() in on
     monkeypatch.setenv("MEMBER_LUMEN", "off")
     off, reads_off = _reads(fake, c, "/my/sermons")
     assert reads_on == reads_off and mps.SHARE_SCRIPT in off and "lm-share" not in off

@@ -177,6 +177,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # (a chapter can be many taps), and word searches (each reads a whole
     # translation).
     "bible_mark": (int(os.environ.get("RL_BIBLE_MARK_PER_10MIN", "120")), 600),
+    # Watch (member_lumen_watch.py), per member: where they are in a message
+    # (on pause, on leaving, at most once a minute while it plays) and Save.
+    "member_watch": (int(os.environ.get("RL_MEMBER_WATCH_PER_10MIN", "60")), 600),
     "bible_search": (int(os.environ.get("RL_BIBLE_SEARCH_PER_MIN", "20")), 60),
     # Listen on a devotional's day (devotional_voice.py), per member: a day
     # is read aloud once and kept, so this only bounds taps.

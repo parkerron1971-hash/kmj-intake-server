@@ -8,8 +8,9 @@
 #     pages is named only while a page change runs;
 #   - every move waits on prefers-reduced-motion: no-preference (a still
 #     phone gets none), and the springs fall back to plain curves;
-#   - the Watch tab's pages are a cinema: dark tokens, the phone's bar black,
-#     the church's colour its readable-on-black shade;
+#   - Live is the cinema: dark tokens, the phone's bar black, the church's
+#     colour its readable-on-black shade; Watch's own pages (Look 5.1,
+#     member_lumen_watch) wear the member's look;
 #   - the live room: reactions over the video from the room's own hearts and
 #     chat (its script untouched), who's here, Amen · heart · Praying only
 #     while the box is open; the same reads on and off.
@@ -90,7 +91,7 @@ def test_what_travels_is_named_only_during_a_page_change():
     # The tab bar is flat since Look 5.1 (member_lumen_ui): no highlight slides, so no tab travels on its own.
     assert "lm-t-home" not in names and "lm-ind" not in names
     # The script names a clicked message's picture or a conversation's face and name.
-    for bit in (".lm-irow", "'lm-face'", "'lm-ttl'", ".lm-poster", ".lm-th", "'lm-sermon'", "pagereveal", "data-vt"):
+    for bit in (".lm-irow", "'lm-face'", "'lm-ttl'", ".lw-img", ".lw-th", "'lm-sermon'", "pagereveal", "data-vt"):
         assert bit in mlm.JS
 
 
@@ -108,17 +109,20 @@ def test_every_move_waits_on_no_preference():
     assert "@supports (transition-timing-function:linear(0,1)){body.lm{--lm-spring:linear(" in text
 
 
-def test_watch_is_a_cinema(church, fake, monkeypatch):  # noqa: F811
-    html = _get(fake, monkeypatch, "/my/sermons")
-    assert "pg-watch" in _body_class(html).split()
+def test_live_is_the_cinema_and_watch_wears_her_look(church, fake, monkeypatch):  # noqa: F811
+    html = _get(fake, monkeypatch, "/my/live")
+    assert "pg-watch" in _body_class(html).split() and "lm-dark" in _body_class(html).split()
     assert '<meta name="theme-color" content="#050506">' in html
-    home = _get(fake, monkeypatch, "/my")
-    assert '<meta name="theme-color" content="#ffffff">' in home and "pg-watch" not in _body_class(home)
-    assert "lm-dark" in _body_class(html).split()                         # the new look's one dark switch
+    # Watch (Look 5.1): Ana picked Light, so it's white like Home.
+    watch = _get(fake, monkeypatch, "/my/sermons")
+    assert "pg-watch" in _body_class(watch).split() and "lm-dark" not in _body_class(watch).split()
+    assert '<meta name="theme-color" content="#ffffff">' in watch
     sheet = ui.sheet("lumen")[0]
     assert "body.lm.lm-dark.pg-watch{--bg:#050506;" in sheet and "--acc:var(--acc-lit)" in sheet
     assert "html:has(>body.lm.lm-dark.pg-watch){background:#050506;" in sheet
-    assert mlm.cine("live") and mlm.cine("sermons") and mlm.cine("watch") and not mlm.cine("bible")
+    # The tab bar is Look 5.1's flat bar on Watch too (no cinema colour of its own).
+    assert ".pg-watch .mb-nav.lm-nav{" not in sheet
+    assert mlm.cine("live") and not mlm.cine("sermons") and not mlm.cine("watch") and not mlm.cine("bible")
 
 
 def test_the_room_has_reactions_over_the_video(church, fake, monkeypatch):  # noqa: F811
