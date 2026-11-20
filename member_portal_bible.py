@@ -402,17 +402,18 @@ var hash=location.hash.match(/^#v(\\d+)$/);if(hash){var s=span(+hash[1]);if(s)s.
 
 def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
                    marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False,
-                   night: bool = False) -> str:
+                   night: bool = False, dot: bool = False) -> str:
     """Reading a chapter (approved board 8): the chapter's name opens the
     book picker; tap a verse to highlight it in one of five colours, add a
     private note, copy, share or save it; Aa sets the text size and font.
     `marks` None = they couldn't load (or a preview): the text, no editing.
     `night` (the member's night reading, a cookie on their phone) is the new
-    look's dark reader; today's reader ignores it."""
+    look's dark reader, and `dot` its Devotional tab's dot (today's day
+    unread); today's reader ignores both."""
     import member_lumen
     if member_lumen.page():
         import member_lumen_bible as mlb
-        return mlb.render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night)
+        return mlb.render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night, dot=dot)
     import json
     import member_app_ui as ui
     from member_portal import _e, _shell
@@ -617,24 +618,93 @@ def passage_card(text: str, tr: str) -> str:
             f'{"".join(parts)}<p class="mp-muted bb-src">{_e(bt.TRANSLATIONS[tr]["short"])}</p></section>')
 
 
-async def _lumen_home(biz, site, me, tr: str, where, q: str, preview: bool) -> str:
-    """The Bible tab in the new look (member_lumen_bible): the same reads as
-    today's tab, the devotionals and plans as data instead of markup."""
+def _first_chapter(biz) -> Tuple[Tuple[str, int], str]:
+    """Where someone who has read nothing yet starts: today's reading of the
+    church's plan (and a line saying so), else John 1. No read: the plan is
+    in the church's settings."""
+    import reading_plans as rp
+    t = rp.today_for(biz)
+    if t:
+        code, a, _ = rp.schedule(t["key"])[t["day"] - 1][0]
+        return (code, a), f"Your church is reading {t['label']} today."
+    return ("JOH", 1), ""
+
+
+async def _lumen_tab(request: Request, biz, site, me, tr: str, where, places, tab: str, *, q: str = "",
+                     missed: bool = False, slow: bool = False, preview: bool = False):
+    """The Bible tab in Look 5.1 (member_lumen_bible): Read, Devotional,
+    Plans, Saved or Search. Each reads only what it shows, every read one
+    today's Bible tab already made: Read the chapter's marks, Devotional
+    the devotionals (one devotional's days, the one on top when it is
+    running), Plans the member's plans and the church plan's ticks, Saved
+    the member's marks, Search nothing. The Devotional dot reads the
+    devotionals' catalog and the member's starts and days only when its
+    cookie (member_lumen_bible.DEVO_COOKIE) holds nothing for today.
+    Returns (html, the chapter to remember, the dot to keep: True/False,
+    or None to leave the cookie alone)."""
     import asyncio
+    import devotionals as dv
     import member_bible_marks as mbm
     import member_lumen_bible as mlb
     import member_portal_devotionals as mpd
-    data, marks = await asyncio.gather(
-        mpd.bible_home_data(biz, me, preview=preview),
-        asyncio.to_thread(lambda: None if preview else mbm.all_marks(biz["id"], str(me["id"]))))
-    church_today, church_done = None, None
-    if data is None:
-        import reading_plans as rp
-        plan = rp.current(biz)
-        church_done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan and not preview else set()
-        church_today = rp.today_for(biz) if plan else None
-    return mlb.render_home(biz, site, me, tr, where, query=q, missed=bool(q), data=data, church_today=church_today,
-                           church_done=church_done, marks=marks, preview=preview)
+    import reading_plans as rp
+    tab = tab if tab in mlb.TAB_KEYS else "read"
+    today = date.today()
+    bid, cid = biz["id"], str(me["id"])
+    kept = None if preview else mlb.dot_cookie(request.cookies.get(mlb.DEVO_COOKIE), today)
+    want_dot = tab == "devotional" or (tab in ("read", "plans", "saved") and kept is None)
+    church_today = rp.today_for(biz)
+    at, lead = where, ""
+    if tab == "read" and not (where and bt.chapter(where[0], where[1], tr)):
+        at, lead = _first_chapter(biz)
+    jobs: Dict[str, Any] = {}
+    if want_dot:
+        jobs["devs"] = asyncio.to_thread(dv.catalog, bid)
+        jobs["done"] = asyncio.to_thread(mpd._or_empty, mpd.done_days, preview, bid, cid)
+    if want_dot or tab == "plans":
+        jobs["mine"] = asyncio.to_thread(mpd._or_empty, mpd.starts, preview, bid, cid)
+    if tab == "read" and not preview:
+        jobs["marks"] = asyncio.to_thread(mbm.chapter_marks, bid, cid, at[0], at[1])
+    if tab == "saved" and not preview:
+        jobs["marks"] = asyncio.to_thread(mbm.all_marks, bid, cid)
+    if tab == "plans" and church_today and not preview:
+        jobs["cdone"] = asyncio.to_thread(rp.read_days, bid, me["id"], rp.current(biz))
+    got = dict(zip(jobs, await asyncio.gather(*jobs.values(), return_exceptions=True)))
+    got = {k: (None if isinstance(v, BaseException) else v) for k, v in got.items()}
+    sts = None
+    if want_dot and got.get("devs") is not None and got.get("done") is not None and got.get("mine") is not None:
+        sts = mlb._sts(got["devs"], got["done"], got["mine"], today, preview)
+    keep = None
+    dot = bool(kept)
+    if want_dot:
+        dot = mlb.devo_unread(sts) if sts is not None else False
+        keep = dot if sts is not None and not preview else None
+    if tab == "read":
+        import member_lumen_look
+        marks = None if preview else got.get("marks")
+        html = mlb.render_chapter(biz, site, me, at[0], at[1], tr, None, marks=marks, preview=preview,
+                                  night=member_lumen_look.reader_night(), dot=dot, home=True, lead=lead)
+        return html, at, keep
+    if tab == "devotional":
+        if sts:
+            import member_lumen_devotional as mld
+            top = mld.pick(sts)
+            if top and top[0] == "today" and not top[1].get("days"):
+                try:
+                    full, _ok = await asyncio.to_thread(dv.one, bid, str(top[1]["id"]))
+                except Exception:  # noqa: BLE001
+                    full = None
+                if full:
+                    sts = [((full if d is top[1] else d), st) for d, st in sts]
+        return mlb.render_devotional(biz, site, me, tr, sts, dot=dot, preview=preview, today=today), where, keep
+    if tab == "plans":
+        cdone = got.get("cdone") if church_today and not preview else set()
+        return mlb.render_plans_tab(biz, site, me, tr, got.get("mine"), church_today, cdone or set(), dot=dot,
+                                    preview=preview, today=today), where, keep
+    if tab == "saved":
+        return mlb.render_saved(biz, site, me, tr, None if preview else got.get("marks"), dot=dot, preview=preview,
+                                today=today), where, keep
+    return mlb.render_find(biz, site, me, tr, query=q, places=places, missed=missed, slow=slow, dot=dot), where, keep
 
 
 async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = False):
@@ -656,6 +726,16 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
         resp = HTMLResponse(html, status_code=status, headers=_SECURE_HEADERS)
         _remember(resp, tr, at, places)
         return resp
+
+    async def tab_page(tab: str, **kw):
+        # The new look's Bible tab (Look 5.1); its Devotional dot kept for the day.
+        import member_lumen_bible as mlb
+        html, at, keep = await _lumen_tab(request, biz, site, me, tr, where, places, tab, preview=preview, **kw)
+        resp = page(html, at=at)
+        if keep is not None:
+            resp.set_cookie(mlb.DEVO_COOKIE, mlb.dot_value(keep, date.today()), max_age=2 * 86400, path="/my",
+                            secure=True, httponly=True, samesite="lax")
+        return resp
     if not parts:
         q = str(request.query_params.get("q") or "").strip()[:60]
         if q:
@@ -670,10 +750,7 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
             if not rate_limit.allow("bible_search", f"{biz['id']}|{me['id']}"):
                 import member_lumen
                 if member_lumen.page():
-                    import member_lumen_bible as mlb
-                    return page(mlb.render_home(
-                        biz, site, me, tr, where, query=q, slow=True, preview=preview,
-                        marks=() if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"]))))
+                    return await tab_page("search", q=q, slow=True)
                 return page(render_home(biz, site, me, tr, where, query=q, places=places, slow=True,
                                         marks=() if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"])),
                                         preview=preview))
@@ -683,7 +760,9 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
         import member_portal_devotionals as mpd
         import member_lumen
         if member_lumen.page():
-            return page(await _lumen_home(biz, site, me, tr, where, q, preview))
+            if q:
+                return await tab_page("search", q=q, missed=True)
+            return await tab_page(str(request.query_params.get("tab") or "read"))
         plans, marks = await asyncio.gather(
             mpd.bible_home(biz, site, me, preview=preview),
             asyncio.to_thread(lambda: None if preview else mbm.all_marks(biz["id"], str(me["id"]))))
@@ -702,7 +781,13 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
         got = await mpd.serve(request, biz, site, me, parts[1:], tr=tr, preview=preview)
         if not isinstance(got, tuple):
             return got
-        return page(got[0], got[1])
+        resp = page(got[0], got[1])
+        import member_lumen
+        import member_lumen_bible as mlb
+        if len(parts) == 3 and member_lumen.page() and request.cookies.get(mlb.DEVO_COOKIE):
+            # A devotional's day opened: the Bible tab asks again whether today's is read.
+            resp.delete_cookie(mlb.DEVO_COOKIE, path="/my", secure=True, httponly=True, samesite="lax")
+        return resp
     if parts == ["books"]:
         t = str(request.query_params.get("t") or "")
         if t not in ("ot", "nt"):
@@ -728,5 +813,11 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
     marks = None if preview else await asyncio.to_thread(mbm.chapter_marks, biz["id"], str(me["id"]), code, ch)
     import member_lumen_look
     night = member_lumen_look.reader_night()
-    return page(render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night),
+    dot = False
+    import member_lumen
+    if member_lumen.page() and not preview:
+        # The Devotional tab's dot, as the Bible tab last kept it today (no read).
+        import member_lumen_bible as mlb
+        dot = bool(mlb.dot_cookie(request.cookies.get(mlb.DEVO_COOKIE), date.today()))
+    return page(render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night, dot=dot),
                 at=(code, ch))

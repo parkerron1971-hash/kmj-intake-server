@@ -4,13 +4,13 @@
 # look (member_lumen_bible, member_lumen_classes), behind MEMBER_LUMEN.
 # Pins:
 #   - off: every Bible and Classes page is today's markup (no Lumen class);
-#   - on: the Bible tab is "The Word" with the translation switcher beside
-#     the heading, find, pick up where you left off, the ivory verse card, the
-#     church's devotionals with progress dots, the reading plans, your
-#     highlights and notes, the books, from the same reads as today's tab;
-#   - the reader: no tab bar, the chapter and Aa in the bar, the chapter's
-#     number large, the highlighter (today's reader script), the chapters
-#     around it; same reads as today; no "Listen to this chapter";
+#   - on (Look 5.1): the Bible tab opens straight into the reader, Read ·
+#     Devotional · Plans · Saved on top (test_member_lumen_bible_tabs), at the
+#     chapter read last or today's reading of the church's plan; it reads
+#     less than today's tab and nothing it doesn't;
+#   - the reader: the tab bar stays, the chapter and translation pills, Aa,
+#     Listen, the moon, the chapter's number large, the highlighter (today's
+#     reader script), the chapters around it at the end; same reads as today;
 #   - plans, a reading plan, search, the book picker, highlights & notes;
 #   - Classes: the next class night, the path, your classes, classes to join,
 #     from the same read;
@@ -104,93 +104,106 @@ def test_off_every_bible_and_classes_page_is_todays(bible, fake, monkeypatch, pa
 # ─── the Bible tab ───────────────────────────────────────────────────
 
 
-def test_the_bible_tab_is_the_word(bible, fake, monkeypatch):  # noqa: F811
-    on, off = _same_reads(fake, monkeypatch, "/my/bible")
+def test_the_bible_tab_opens_into_reading(bible, fake, monkeypatch):  # noqa: F811
+    """Look 5.1: /my/bible is the reader (no "The Word" page in between),
+    with Read · Devotional · Plans · Saved on top; it reads less than
+    today's Bible tab, and nothing today's tab doesn't."""
+    c = _client(fake, monkeypatch)
+    on, reads_on = _reads(fake, c, "/my/bible")
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    _, reads_off = _reads(fake, c, "/my/bible")
+    monkeypatch.setenv("MEMBER_LUMEN", "on")
+    assert not reads_on - reads_off, reads_on - reads_off
     assert _body_class(on).split()[:2] == ["lm", "lm-tab"]
-    mast = on[on.index('class="lm-mast lm-bmast"'):]
-    mast = mast[:mast.index("</header>")]
-    assert "The <em>Word</em>" in mast
-    trs = re.findall(r'<a href="/my/bible\?t=(\w+)"( aria-current="true")?', mast)
-    assert [t for t, _ in trs] == ["kjv", "web", "bsb", "asv"] and trs[0][1]          # the switcher, KJV on
-    assert 'action="/my/bible" role="search"' in on and 'name="q"' in on             # find a passage or a word
-    assert 'class="lm-cont" href="/my/bible/john/1"' in on and "Start here" in on   # nothing read yet: John 1
-    assert 'class="lm-page"' in on and "Verse of the day" in on                       # the ivory card
-    # Lumen Next: the running devotional on top with its days as dots
-    # (test_member_lumen_devotional); the rail keeps the church's others.
-    devo = on[on.index('<section class="lm-devo"'):]
-    devo = devo[:devo.index("</section>")]
-    assert "Seven Days of <em>Rest</em>" in devo and "Today: Unhurried" in devo
-    assert devo.count('<i class="d"></i>') == 2 and devo.count("<i") == 7
-    rail = on[on.index('class="lm-rail lm-devs"'):]
-    rail = rail[:rail.index("</div>")]
-    assert "Seven Days of Rest" not in rail and "Psalms at Night" in rail and "Start any time" in rail
-    assert "From Grace Fellowship" in on
-    # Reading plans: the church's, hers, then the four to start.
-    assert "The church is reading" in on and "Your plan" in on
-    assert re.findall(r'<a class="lm-plan" href="[^"]+"><b>(\d+)</b>', on) == ["365", "260", "30", "31"]
-    assert "Yours · day 5" in on
-    # Highlights & notes, and the books.
-    marks = on[on.index('class="lm-marks"'):]
-    assert "1 highlight<" in marks and "1 note<" in marks and "1 saved" in marks
-    assert 'href="/my/bible/books?t=ot"' in on and 'href="/my/bible/books?t=nt"' in on
-    assert "Listen to this chapter" not in on                                         # the devotional's Listen only
+    assert '<nav class="mb-nav' in on                                                  # the tab bar stays
+    seg = on[on.index('<div class="lm-bseg">'):]
+    seg = seg[:seg.index("</div>")]
+    assert re.findall(r'<a class="lm-bsg" href="([^"]+)"', seg) == [
+        "/my/bible", "/my/bible?tab=devotional", "/my/bible?tab=plans", "/my/bible?tab=saved"]
+    assert '<a class="lm-bsg" href="/my/bible" aria-current="page">Read</a>' in seg
+    assert 'href="/my/bible?tab=search" aria-label="Search the Bible"' in seg
+    # nothing read yet, the church reading its plan: today's reading, said so (once: then it's where she left off)
+    first = _client(fake, monkeypatch).get("/my/bible")
+    assert 'class="bb-read lm-read" data-book="PSA" data-ch="54"' in first.text
+    assert "Your church is reading Psalms 54–58; Proverbs 12 today." in first.text
+    assert "kjv|psalms/54" in first.headers["set-cookie"]
+    assert 'data-book="PSA" data-ch="54"' in on and "Your church is reading" not in on
+    assert "The <em>Word</em>" not in on and 'class="lm-cont"' not in on
 
 
 def test_the_bible_tab_picks_up_where_you_left_off(bible, fake, monkeypatch):  # noqa: F811
     c = _client(fake, monkeypatch)
     c.cookies.set("sol_bible", "web|romans/8~psalms/23", path="/my")
     html = c.get("/my/bible").text
-    cont = html[html.index('class="lm-cont"'):]
-    cont = cont[:cont.index("</a>")]
-    assert 'href="/my/bible/romans/8"' in cont and "Romans 8" in cont and "Pick up where you left off" in cont
-    assert '<a href="/my/bible?t=web" aria-current="true"' in html
+    assert 'class="bb-read lm-read" data-book="ROM" data-ch="8" data-tr="web"' in html
+    assert '<a class="lm-pill lm-chpill" href="/my/bible/romans"' in html and "Romans 8" in html
+    ver = html[html.index('<details class="lm-ver">'):html.index("</details>")]
+    assert '<summary aria-label="Translation: World English Bible">WEB</summary>' in ver
+    assert '<a href="/my/bible?t=web" aria-current="true">' in ver                     # back to the Bible tab itself
+    assert "Your church is reading" not in html
 
 
-def test_a_failed_plans_read_leaves_the_church_plan_alone(bible, fake, monkeypatch):  # noqa: F811
+def test_a_failed_devotionals_read_leaves_the_rest(bible, fake, monkeypatch):  # noqa: F811
     import devotionals as dv
 
     def boom(*a, **k):
         raise RuntimeError("down")
     monkeypatch.setattr(dv, "catalog", boom)
-    html = _client(fake, monkeypatch).get("/my/bible").text
-    assert 'class="lm-rail lm-devs"' not in html and 'class="lm-plans"' not in html
-    assert "The church is reading" in html and 'href="/my/reading"' in html
+    c = _client(fake, monkeypatch)
+    read = c.get("/my/bible").text
+    assert 'class="bb-read lm-read"' in read and 'class="lm-nd"' not in read          # reading still works, no dot
+    devo = c.get("/my/bible?tab=devotional").text
+    assert "devotionals couldn't load just now" in devo and 'class="lm-vod"' in devo   # the verse still shows
+    plans = c.get("/my/bible?tab=plans").text
+    assert "Today: Psalms 54–58; Proverbs 12" in plans and 'href="/my/reading"' in plans
 
 
 # ─── the reader ──────────────────────────────────────────────────────
 
 
-def test_the_reader_is_calm(bible, fake, monkeypatch):  # noqa: F811
+def test_the_reader_is_the_read_tab(bible, fake, monkeypatch):  # noqa: F811
+    import member_lumen_bible as mlb
     import member_portal_bible as mpb
     on, off = _same_reads(fake, monkeypatch, "/my/bible/john/1")
-    assert _body_class(on).split()[:2] == ["lm", "lm-push"]
-    assert '<nav class="mb-nav' not in on                                            # no tab bar while reading
-    top = on[on.index('<header class="mb-top lm-mid">'):on.index("</header>")]
-    assert 'class="mb-back" href="/my/bible"' in top and "Bible" in top
-    assert '<a class="lm-pill" href="/my/bible/john">John 1' in top                   # opens the book picker
-    assert 'id="bb-aa"' in top and ">Aa</button>" in top
-    assert '<b aria-hidden="true">1</b>' in on and "John · KJV" in on
-    # Today's reader: tap a verse, the dock, its marks.
-    assert mpb.READER_JS in on
-    for act in ("note", "copy", "bookmark", "clear", "close", "save-note"):
+    assert _body_class(on).split()[:2] == ["lm", "lm-tab"]
+    assert '<nav class="mb-nav' in on                                                  # the tab bar stays while reading
+    assert '<a class="lm-bsg" href="/my/bible" aria-current="page">Read</a>' in on
+    bar = on[on.index('<div class="lm-rbar">'):on.index('<h1 class="lm-chap">')]
+    assert '<a class="lm-pill lm-chpill" href="/my/bible/john"' in bar and "John 1" in bar   # opens the book picker
+    assert '<summary aria-label="Translation: King James Version">KJV</summary>' in bar
+    assert 'href="/my/bible/john/1?t=web"' in bar and 'href="/my/bible/john/1?t=asv"' in bar
+    assert 'id="bb-aa"' in bar and 'aria-label="Text size and font"' in bar
+    assert re.search(r'id="lm-say" aria-pressed="false" aria-label="Listen to this chapter" hidden>', bar)
+    assert 'id="lm-moon"' in bar
+    assert '<b aria-hidden="true">1</b><span aria-hidden="true">John</span>' in on
+    # Today's reader: tap a verse, the bar, its marks.
+    assert mpb.READER_JS in on and mlb.READ_JS in on and mlb.SEG_JS in on
+    for act in ("note", "copy", "bookmark", "clear", "close", "save-note", "card"):
         assert f'data-act="{act}"' in on, act
     # Share opens the new look's share sheet with the tapped verse (member_lumen_share).
     assert 'class="lm-share" data-share-kind="verse" data-share-from="reader"' in on and 'data-act="share"' not in on
     assert 'class="bb-v hl-gold" data-v="5"' in on and "bb-nm" in on and "bb-bm" in on
-    # Aa holds the size, the font and the translation.
+    # Share is the shared share sheet's: a verse
+    dock = on[on.index('id="bb-dock"'):on.index('id="bb-note"')]
+    assert ('<a class="lm-share lm-selshare" href="/" data-share-kind="verse" data-share-from="reader" '
+            'data-share-title="" data-share-sub="" data-share-id="" data-share-text="" data-share-tr="kjv">') in dock
+    assert 'data-act="share"' not in on                                                # the sheet's, not the old dock's
+    # Aa holds the size and the font; the translation is its own pill
     panel = on[on.index('id="bb-aa-panel"'):]
-    panel = panel[:panel.index('class="lm-chap"')]
-    assert 'data-size="up"' in panel and 'data-font="sans"' in panel and 'href="/my/bible/john/1?t=web"' in panel
-    nav = on[on.index('class="lm-chnav"'):]
+    panel = panel[:panel.index("</div></div>")]
+    assert 'data-size="up"' in panel and 'data-font="sans"' in panel and "?t=" not in panel
+    nav = on[on.index('class="lm-rnav"'):]
+    nav = nav[:nav.index("</nav>")]
     assert 'href="/my/bible/luke/24"' in nav and 'href="/my/bible/john/2"' in nav
-    assert "Listen to this chapter" not in on and ">Listen<" not in on
+    assert "lm-chnav" not in on and "lm-mid" not in on
 
 
 def test_the_preview_reader_keeps_the_translation_without_aa(bible, fake, monkeypatch):  # noqa: F811
     fake.down.add("bible_marks")
     html = _client(fake, monkeypatch).get("/my/bible/john/1").text
-    assert 'id="bb-aa"' not in html and "couldn't load" in html
-    assert 'class="lm-trfoot"' in html and 'href="/my/bible/john/1?t=asv"' in html
+    assert 'id="bb-aa"' not in html and "couldn't load" in html and 'id="bb-dock"' not in html
+    assert '<details class="lm-ver">' in html and 'href="/my/bible/john/1?t=asv"' in html
+    assert 'id="lm-say"' in html                                                       # Listen reads it all the same
 
 
 # ─── Lumen Next: the reader at night, the ink, Make a card ────────────
@@ -202,19 +215,21 @@ def test_night_reading_arrives_dark_from_its_cookie(bible, fake, monkeypatch):  
     day = c.get("/my/bible/john/1").text
     assert "lm-dark" not in _body_class(day).split()
     assert '<meta name="theme-color" content="#ffffff">' in day
-    top = day[day.index('<header class="mb-top lm-mid">'):day.index("</header>")]
-    assert 'id="lm-moon"' in top and 'aria-pressed="false"' in top and 'aria-label="Night reading"' in top
-    assert f'data-night="{mlb.NIGHT_BG}"' in top and 'data-day="#ffffff"' in top
-    assert '<span class="lm-rprog" aria-hidden="true"></span>' in top                 # how far you've read
+    bar = day[day.index('<div class="lm-rbar">'):day.index('<h1 class="lm-chap">')]
+    assert 'id="lm-moon"' in bar and 'aria-pressed="false"' in bar and 'aria-label="Night reading"' in bar
+    assert f'data-night="{mlb.NIGHT_BG}"' in bar and 'data-day="#ffffff"' in bar
+    seg = day[day.index('<div class="lm-bseg">'):day.index('<div class="lm-rbar">')]
+    assert '<span class="lm-rprog" aria-hidden="true"></span></div>' in seg            # how far you've read
     assert mlb.READER_MORE_JS in day and "lm_night=" in mlb.READER_MORE_JS and "Path=/my" in mlb.READER_MORE_JS
     c.cookies.set(mlb.NIGHT_COOKIE, "1")
     night = c.get("/my/bible/john/1").text
-    assert _body_class(night).split()[:2] == ["lm", "lm-push"] and "lm-dark" in _body_class(night).split()
+    assert _body_class(night).split()[:2] == ["lm", "lm-tab"] and "lm-dark" in _body_class(night).split()
     assert f'<meta name="theme-color" content="{mlb.NIGHT_BG}">' in night
     assert 'id="lm-moon" aria-pressed="true"' in night
-    # only the reader reads it: the Bible tab and Home stay white
-    assert "lm-dark" not in _body_class(c.get("/my/bible").text).split()
-    assert "lm-dark" not in _body_class(c.get("/my").text).split()
+    assert "lm-dark" in _body_class(c.get("/my/bible").text).split()                  # Read is the reader
+    # only the reader reads it: the other tabs and Home stay white
+    for p in ("/my/bible?tab=devotional", "/my/bible?tab=plans", "/my/bible?tab=saved", "/my/bible?tab=search", "/my"):
+        assert "lm-dark" not in _body_class(c.get(p).text).split(), p
     # a reader that can't edit (a preview, marks down) keeps the moon
     fake.down.add("bible_marks")
     assert 'id="lm-moon"' in c.get("/my/bible/john/1").text
