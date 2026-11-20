@@ -462,3 +462,54 @@ def test_with_the_new_look_off_nothing_writes_or_shows(world, monkeypatch):
     r = _as(world, PASTOR).get("/my/moment/new", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/my"
     assert "Only in the new look" not in _home(world, tmm.ANA)
+
+
+# ─── the review's three (#2022) ──────────────────────────────────────
+
+
+def test_love_never_moves_when_they_first_saw_it(world):
+    m = _moment(world, PASTOR)
+    early = "2026-11-20T09:00:00+00:00"
+    world.t["church_moment_marks"].append({"moment_id": m["id"], "business_id": tmm.BIZ, "contact_id": tmm.ANA,
+                                           "seen_at": early, "loved_at": None})
+    js = {**tmm.ORIGIN, "accept": "application/json"}
+    c = _as(world, tmm.ANA)
+    assert c.post("/my/moment/love", data={"id": m["id"], "on": "1"}, headers=js).status_code == 204
+    (row,) = world.t["church_moment_marks"]
+    assert row["seen_at"] == early and row["loved_at"]
+    assert c.post("/my/moment/love", data={"id": m["id"], "on": "0"}, headers=js).status_code == 204
+    (row,) = world.t["church_moment_marks"]
+    assert row["seen_at"] == early and row["loved_at"] is None
+    # Loving before any seen row: the seen row is written first, then the love.
+    n = _moment(world, PASTOR, line="Another")
+    assert c.post("/my/moment/love", data={"id": n["id"], "on": "1"}, headers=js).status_code == 204
+    got = [r for r in world.t["church_moment_marks"] if r["moment_id"] == n["id"]]
+    assert len(got) == 1 and got[0]["seen_at"] and got[0]["loved_at"]
+
+
+def test_a_failed_count_read_shows_no_numbers_never_zero(world, monkeypatch):
+    _moment(world, PASTOR, line="Our word")
+    monkeypatch.setattr(mmo, "counts_for", lambda business_id, ids: None)
+    html = _home(world, PASTOR)
+    i = html.index('class="lm-mvsheet"')
+    sheet = html[i:html.index("</section>", i)]
+    assert "Seen by" not in sheet and "loved it" not in sheet
+    assert "Replies come to your Messages" in sheet and "Take it down" in sheet
+
+
+def test_a_failed_held_read_is_unavailable_never_nothing_held(world, monkeypatch):
+    from fastapi import HTTPException
+    _moment(world, PASTOR, status="held", reason="harm", line="Held words")
+    world.t.setdefault("church_post_comments", [])
+    world.t.setdefault("church_posts", [])
+    monkeypatch.setattr(cn, "_need", lambda b, u, minimum: "owner")
+    monkeypatch.setattr(mr, "require_officer", lambda b, u: None)
+    monkeypatch.setattr(mmo, "_read", lambda path: None)
+    monkeypatch.setattr(mmo, "missing", lambda: False)
+    assert mmo.held(tmm.BIZ) is None
+    with pytest.raises(HTTPException) as e:
+        cn.held_words(business_id=tmm.BIZ, user=None)
+    assert e.value.status_code == 503
+    # Before the tables are there it's simply none.
+    monkeypatch.setattr(mmo, "missing", lambda: True)
+    assert mmo.held(tmm.BIZ) == []

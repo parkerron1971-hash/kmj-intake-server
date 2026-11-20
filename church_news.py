@@ -948,6 +948,10 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     # Members' group posts the check held (member_posts), beside the comments.
     import member_posts
     held_posts = member_posts.held_posts(biz_id)
+    # ...and leaders' moments the check held (member_moments). None: the
+    # read failed, so the room says the list may be missing some (held_partial).
+    import member_moments
+    held_moments = member_moments.held(biz_id)
     reports = _get(f"/church_post_reports?business_id=eq.{b}&status=eq.open&select=comment_id&limit=500")
     titles = {p["id"]: p["title"] for p in posts}
     posters = _get(f"/church_news_posters?business_id=eq.{b}&select=contact_id,added_at&limit=200")
@@ -980,10 +984,13 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         "held": [{"id": h["id"], "post_id": h["post_id"], "post_title": titles.get(str(h["post_id"]), ""),
                   "created_at": h["created_at"]} for h in held]
         + [{"id": h["id"], "post_id": h["post_id"], "post_title": h["post_title"], "created_at": h["created_at"],
-            "kind": "post"} for h in held_posts],
+            "kind": "post"} for h in held_posts]
+        + [{"id": h["id"], "post_id": h["post_id"], "post_title": h["post_title"], "created_at": h["created_at"],
+            "kind": "moment"} for h in (held_moments or [])],
         "safety": {"comments_open": comments_open(business), "officers": mr.officer_count(biz_id),
                    "min_officers": mr.MIN_OFFICERS,
-                   "held_week": sum(1 for h in held + held_posts if str(h["created_at"]) >= week),
+                   "held_week": sum(1 for h in held + held_posts + (held_moments or []) if str(h["created_at"]) >= week),
+                   "held_partial": held_moments is None,
                    "reports_open": len(reports)},
         "posters": [{"contact_id": str(p["contact_id"]), "name": (poster_people.get(str(p["contact_id"])) or {}).get("name") or ""}
                     for p in posters],
@@ -1186,8 +1193,12 @@ def held_words(business_id: str = Query(...), user: AuthedUser = Depends(require
     import member_posts
     posts = member_posts.held_posts(biz)
     # Leaders' own moments the check held (member_moments), with their line.
+    # A failed read is "we couldn't look", never "nothing is held".
     import member_moments
-    posts += member_moments.held(biz)
+    moments = member_moments.held(biz)
+    if moments is None:
+        raise _unavailable()
+    posts += moments
     people = _people(biz, [r["contact_id"] for r in rows] + [p["contact_id"] for p in posts]) or {}
     return {"held": [{"id": r["id"], "post_id": r["post_id"], "body": r.get("body") or "", "created_at": r["created_at"],
                       "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]

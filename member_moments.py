@@ -381,7 +381,7 @@ async def home_data(biz: Dict[str, Any], me: Dict[str, Any], *, preview: bool = 
             asyncio.to_thread(counts_for, bid, own) if own else _nothing({}),
             *[asyncio.to_thread(mlp.may_write, biz, me, p) for p in (posters if not preview else [])])
         return {**church, "moments": mine_or_shown, "pastors": set(people["pastors"]),
-                "picked": set(people["picked"]), "marks": marks or {}, "counts": counts or {},
+                "picked": set(people["picked"]), "marks": marks or {}, "counts": counts,
                 "write": dict(zip(posters if not preview else [], (bool(w) for w in writes)))}
     except Exception:  # noqa: BLE001 — leaders' moments are left out; Home is as before
         logger.warning("home: leaders' moments skipped", exc_info=True)
@@ -614,23 +614,35 @@ def mark(business_id: str, me_id: str, moment_id: str, *, love: Optional[bool] =
     if str(m.get("posted_by")) == str(me_id):
         return "gone"
     now = _now().isoformat()
+    # The seen row, written once: a later one never moves when they first saw it.
     row: Dict[str, Any] = {"moment_id": str(m["id"]), "business_id": str(business_id), "contact_id": str(me_id),
                            "seen_at": now}
+    got = sb_clients.sb_post_as_service("/church_moment_marks?on_conflict=moment_id,contact_id", row,
+                                        prefer="resolution=ignore-duplicates,return=minimal")
+    if got is None and _failed():
+        return "error"
     if love is None:
-        prefer = "resolution=ignore-duplicates,return=minimal"
-    else:
-        row["loved_at"] = now if love else None
-        prefer = "resolution=merge-duplicates,return=minimal"
-    got = sb_clients.sb_post_as_service("/church_moment_marks?on_conflict=moment_id,contact_id", row, prefer=prefer)
-    if got is None:
-        try:
-            err = sb_clients.last_error()
-        except Exception:  # noqa: BLE001
-            err = None
-        if err is not None:
-            _saw(None)
-            return "error"
+        return "ok"
+    # Love, or taking it back: only loved_at changes on that row (seen_at stays as it was).
+    got = sb_clients.sb_patch_as_service(
+        f"/church_moment_marks?moment_id=eq.{_q(str(m['id']))}&contact_id=eq.{_q(str(me_id))}"
+        f"&business_id=eq.{_q(str(business_id))}", {"loved_at": now if love else None})
+    if got is None and _failed():
+        return "error"
     return "ok"
+
+
+def _failed() -> bool:
+    """Whether the write just made was refused (sb_clients.last_error); a
+    quiet answer (return=minimal) is not a failure."""
+    try:
+        err = sb_clients.last_error()
+    except Exception:  # noqa: BLE001
+        err = None
+    if err is not None:
+        _saw(None)
+        return True
+    return False
 
 
 def may_take_down(biz: Dict[str, Any], me: Optional[Dict[str, Any]], *, owner: bool = False) -> Optional[bool]:
@@ -686,16 +698,16 @@ def remove(biz: Dict[str, Any], me: Optional[Dict[str, Any]], moment_id: str, *,
 # ─── the safety officers' held list (church_news) ────────────────────
 
 
-def held(business_id: str) -> List[Dict[str, Any]]:
+def held(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """Moments the check held that haven't ended, newest first, for the
     safety officers beside the held comments: {id, post_id, body,
     contact_id, created_at, kind: 'moment', post_title}. [] before the
-    tables are there."""
+    tables are there; None on a failed read (never "nothing is held")."""
     rows = _read(f"/church_moments?business_id=eq.{_q(business_id)}&status=eq.held"
                  f"&ends_at=gt.{_q(_now().isoformat())}&select=id,posted_by,group_id,line,created_at"
                  f"&order=created_at.desc&limit=50")
     if not isinstance(rows, list):
-        return []
+        return [] if missing() else None
     gids = sorted({str(r["group_id"]) for r in rows if r.get("group_id")})
     names: Dict[str, str] = {}
     if gids:
@@ -837,9 +849,10 @@ def _down(mid: str) -> str:
             f'<button class="lm-mvac" type="submit" aria-label="Take it down">{_svg(TRASH, 22)}</button></form>')
 
 
-def _sheet(m: Dict[str, Any], counts: Dict[str, int]) -> str:
+def _sheet(m: Dict[str, Any], counts: Optional[Dict[str, int]]) -> str:
     """The poster's own sheet: how many saw it and loved it (counts only),
-    where replies go, and Take it down. A held one says it's held."""
+    where replies go, and Take it down. A held one says it's held. Counts
+    None (the read failed): no numbers at all, never a made-up zero."""
     mid = str(m["id"])
     down = (f'<form method="post" action="/my/moment/remove"><input type="hidden" name="id" value="{_e(mid)}">'
             f'<button class="lm-mvrow red" type="submit">{_svg(TRASH, 22)}<span>Take it down</span></button></form>')
@@ -848,12 +861,14 @@ def _sheet(m: Dict[str, Any], counts: Dict[str, int]) -> str:
     if m.get("status") == "held":
         say = CARE if m.get("held_reason") == "self_harm" else HELD
         return f'{head}<p class="lm-mvnote">{_e(say)}</p>{down}</div>'
+    replies = (f'<div class="lm-mvrow">{_ic("chat", 22)}<span>Replies come to your Messages<small>One conversation each, '
+               f'only you and them</small></span></div>')
+    if counts is None:
+        return f'{head}{replies}{down}</div>'
     seen, loved = int(counts.get("seen") or 0), int(counts.get("loved") or 0)
     nobody = "A count only. Nobody&#x27;s name is shown."
     return (f'{head}<div class="lm-mvrow">{_svg(EYE, 22)}<span>Seen by {seen}<small>{nobody}</small></span></div>'
-            f'<div class="lm-mvrow">{_ic("chat", 22)}<span>Replies come to your Messages<small>One conversation each, '
-            f'only you and them</small></span></div>'
-            f'<div class="lm-mvrow">{_ic("heart", 22)}<span>{loved} loved it</span></div>{down}</div>')
+            f'{replies}<div class="lm-mvrow">{_ic("heart", 22)}<span>{loved} loved it</span></div>{down}</div>')
 
 
 def circles(data: Dict[str, Any], *, me: Dict[str, Any], groups: Optional[Dict[str, Any]], now: datetime,
@@ -910,7 +925,7 @@ def circles(data: Dict[str, Any], *, me: Dict[str, Any], groups: Optional[Dict[s
                 s = mls.moment(mid=f"lm:{m['id']}", label="Your moment", ring=face, bg=bg, face=face, name="Your moment",
                                href=photo_href(m["id"]), kicker="Only you can see this" if held_ else kicker,
                                line=m.get("line") or "", when=f"{when} · {left(_at(m.get('ends_at')), now)} left")
-                s.update(sheet=_sheet(m, counts.get(str(m["id"])) or {}), mine=True)
+                s.update(sheet=_sheet(m, None if counts is None else (counts.get(str(m["id"])) or {})), mine=True)
             else:
                 mk = marks.get(str(m["id"])) or {}
                 reply = (f"/my/messages/to/{pid}", f"Send {first} a note…") if write.get(pid) else None
