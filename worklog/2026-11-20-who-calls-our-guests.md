@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20, on the Welcome Path mock: "by default the calls goes to people and care until we get a welcome team. of course allow this to be selected by any church as to how they want it done so there structure is unique to them", then "build"'
 status: in review
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#2007]
 migrations: []
 left_undone:
   - "The frontend sheet (GuestCallsSheet, opened from Text > New here and the Follow-up board) ships in its own solutionist-studio PR"
