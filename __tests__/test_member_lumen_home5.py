@@ -119,17 +119,21 @@ def test_fewer_than_two_moments_draw_no_row(church, fake, monkeypatch):  # noqa:
 def test_share_only_on_the_churchs_own(church, fake, monkeypatch):  # noqa: F811
     _group(fake)
     _devotional(monkeypatch)
-    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    html = _client(fake, monkeypatch).get("/my").text
+    ids, slides = _moments(html)
     sv, gr, devo = slides[ids[1]], slides[ids[2]], slides[ids[0]]
+    assert "/my/share." not in html                                          # no share control: no sheet script
     assert "lm-share" not in sv + gr + devo         # no public page: the service off the public events page, a
     assert "nw-rxf" not in sv + gr + devo           # group's gathering, a devotional; Love is a post's reaction only
     # The service on the public events page: shared as that event (contract 1, member_lumen_share).
     church["occ"][0]["public"] = True
     fake.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": True}
-    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    html = _client(fake, monkeypatch).get("/my").text
+    ids, slides = _moments(html)
     sv = slides[ids[1]]
     assert ('<a class="lm-share lm-mvac" href="/events" data-share-kind="moment" data-share-title="Sunday Worship"'
             in sv)
+    assert html.count('<script src="/my/share.') == 1                         # the sheet's script, once
     assert f'data-share-id="event:{church["occ"][0]["entry_id"]}"' in sv and 'aria-label="Share"' in sv
     # Its message, when one is dated that day: shared as the message.
     import member_portal_sermons as mps
