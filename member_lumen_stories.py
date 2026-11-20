@@ -221,28 +221,35 @@ function step(n){var i=at+n;if(i<0)i=0;if(i>=ss.length){close();return;}held=fal
 function open(i,c){from=c;held=false;v.hidden=false;d.body.classList.add('lm-mvon');
  try{history.pushState({lmmv:1},'');pushed=true;}catch(e){pushed=false;}
  show(i);var x=v.querySelector('.lm-mvx');try{x.focus({preventScroll:true});}catch(e){x.focus();}}
-function shut(){stop();v.hidden=true;d.body.classList.remove('lm-mvon');at=-1;
+function shut(){stop();gs.forEach(function(g){g.className='';});v.hidden=true;d.body.classList.remove('lm-mvon');at=-1;
  if(from){try{from.focus({preventScroll:true});}catch(e){}}}
 function close(){if(pushed){pushed=false;history.back();return;}shut();}
 window.addEventListener('popstate',function(){if(v.hidden)return;pushed=false;shut();
  if(go2){var g=go2;go2=null;g();}});
 window.addEventListener('pageshow',function(e){if(e.persisted&&!v.hidden){pushed=false;shut();}});
+// Leaving the page: nothing left moving in it (a page kept for Back comes back still).
+window.addEventListener('pagehide',function(){stop();gs.forEach(function(g){g.className='';});});
 cs.forEach(function(c,i){c.addEventListener('click',function(e){
  if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey||e.button)return;e.preventDefault();open(i,c);});});
 v.querySelector('.lm-mvx').addEventListener('click',close);
 v.querySelector('.lm-mvl').addEventListener('click',function(){step(-1);});
 v.querySelector('.lm-mvr').addEventListener('click',function(){step(1);});
 function hold(){held=true;stop();if(gs[at])gs[at].className='full';}
-// Leaving from inside: the viewer's history entry goes first, then the page.
+// Leaving from inside: a link takes the viewer's own history entry (Back from
+// its page comes to Home); a form, which can't, lets the entry go first.
 function leave(fn){if(!pushed){fn();return;}pushed=false;go2=fn;history.back();}
+function away(u){if(pushed){pushed=false;location.replace(u);}else{location.href=u;}}
 v.addEventListener('click',function(e){var a=e.target.closest?e.target.closest('a[href]'):null;
  if(!a||e.defaultPrevented)return;hold();
  if(a.classList.contains('lm-share'))return;
- if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();var u=a.href;leave(function(){location.href=u;});});
+ if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();away(a.href);});
 v.addEventListener('submit',function(e){var f=e.target;hold();if(e.defaultPrevented||f.classList.contains('nw-rxf'))return;
  e.preventDefault();leave(function(){HTMLFormElement.prototype.submit.call(f);});});
-v.addEventListener('pointerdown',function(e){if(e.target.closest&&e.target.closest('button,a,form'))hold();});
-v.addEventListener('keydown',function(e){
+v.addEventListener('pointerdown',function(e){var b=e.target.closest?e.target.closest('button,a,form'):null;
+ if(b&&!b.matches('.lm-mvl,.lm-mvr,.lm-mvx'))hold();});
+// Keys anywhere while it's open (Safari leaves focus on the page when a button is tapped).
+d.addEventListener('keydown',function(e){if(v.hidden)return;
+ if(!v.contains(d.activeElement)&&e.key==='Tab'){e.preventDefault();var x=v.querySelector('.lm-mvx');if(x)x.focus();return;}
  if(e.key==='Escape'){e.preventDefault();close();return;}
  if(e.key==='ArrowRight'){step(1);return;}if(e.key==='ArrowLeft'){step(-1);return;}
  if(e.key!=='Tab')return;var f=[].filter.call(v.querySelectorAll('a[href],button'),function(x){return x.offsetParent!==null;});
@@ -264,7 +271,7 @@ CSS = Template("""
 @supports (background:color-mix(in srgb,red 50%,blue)){.lm-mo.seen .lm-mor{background:color-mix(in srgb,var(--fg) 16%,var(--bg));}}
 .lm-mor>span{display:block;width:100%;height:100%;border-radius:50%;padding:3px;background:var(--bg);}
 .lm-mop{position:relative;display:block;width:100%;height:100%;border-radius:50%;overflow:hidden;background:var(--s2);}
-.lm-mop>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm-mop>*{position:absolute;inset:0;z-index:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-mop img{display:block;width:100%;height:100%;object-fit:cover;}
 .lm-mop .mb-def-ic{top:50%;left:50%;right:auto;width:26px;height:26px;transform:translate(-50%,-50%);}
 .lm-moini{display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);font:italic 500 21px/1 var(--mb-serif);}
@@ -284,7 +291,7 @@ body.lm.lm-mvon{overflow:hidden;}
 .lm-mvst{position:relative;height:100%;max-width:520px;margin:0 auto;overflow:hidden;}
 .lm-mvs{position:absolute;inset:0;}
 .lm-mvbg{position:absolute;inset:0;background:#111;}
-.lm-mvbg>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm-mvbg>*{position:absolute;inset:0;z-index:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-mvbg img{display:block;width:100%;height:100%;object-fit:cover;}
 .lm-mvbg .mb-def-ic{top:34%;left:50%;right:auto;width:88px;height:88px;transform:translate(-50%,-50%);opacity:.8;}
 .lm-mvsh{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.5) 0,rgba(0,0,0,0) 20%,rgba(0,0,0,0) 40%,rgba(0,0,0,.8) 100%);}
@@ -298,7 +305,7 @@ body.lm.lm-mvon{overflow:hidden;}
   gap:10px;height:44px;padding:0 56px 0 14px;}
 .lm-mvf{position:relative;width:34px;height:34px;flex:none;border-radius:50%;overflow:hidden;background:#222;
   box-shadow:0 0 0 1.5px rgba(255,255,255,.75);}
-.lm-mvf>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm-mvf>*{position:absolute;inset:0;z-index:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-mvf img{display:block;width:100%;height:100%;object-fit:cover;}
 .lm-mvf .lm-moini{font-size:14px;}
 .lm-mvlogo{display:block;padding:4px;background:#fff;}
