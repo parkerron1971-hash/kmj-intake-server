@@ -674,6 +674,12 @@ app.include_router(member_photos_router)
 # Light, Dark or Same as my phone. BEFORE public_site_router.
 from member_lumen_look import router as member_lumen_look_router
 app.include_router(member_lumen_look_router)
+# Watch in the new look (member_lumen_watch.py): POST /my/sermons/progress
+# and /my/sermons/save (where a member is in a message, and Save), and the
+# church's weekly service for the calendar (GET /my/sermons/live.ics, public).
+# BEFORE public_site_router.
+from member_lumen_watch import router as member_lumen_watch_router
+app.include_router(member_lumen_watch_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.
@@ -688,6 +694,11 @@ app.include_router(member_pastor_router)
 # BEFORE public_site_router.
 from member_posts import router as member_posts_router
 app.include_router(member_posts_router)
+# Share in the new look (member_lumen_share.py): the sheet's script
+# (GET /my/share.<hash>.js) and a story picture of the church's own content
+# (GET /my/story/<kind>/<id>.png). BEFORE public_site_router.
+from member_lumen_share import router as member_lumen_share_router
+app.include_router(member_lumen_share_router)
 # A member's own highlights, notes and bookmarks in the Bible
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router

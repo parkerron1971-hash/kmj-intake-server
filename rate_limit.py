@@ -177,10 +177,17 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # (a chapter can be many taps), and word searches (each reads a whole
     # translation).
     "bible_mark": (int(os.environ.get("RL_BIBLE_MARK_PER_10MIN", "120")), 600),
+    # Watch (member_lumen_watch.py), per member: where they are in a message
+    # (on pause, on leaving, at most once a minute while it plays) and Save.
+    "member_watch": (int(os.environ.get("RL_MEMBER_WATCH_PER_10MIN", "60")), 600),
     "bible_search": (int(os.environ.get("RL_BIBLE_SEARCH_PER_MIN", "20")), 60),
     # Listen on a devotional's day (devotional_voice.py), per member: a day
     # is read aloud once and kept, so this only bounds taps.
     "devotional_listen": (int(os.environ.get("RL_DEVOTIONAL_LISTEN_PER_10MIN", "30")), 600),
+    # Story pictures from the member app's share sheet (member_lumen_share),
+    # per member: each one drawn is a picture made on the server (kept after),
+    # and a sheet asks for one as it opens.
+    "member_story": (int(os.environ.get("RL_MEMBER_STORY_PER_10MIN", "40")), 600),
     # Joining a free class from its public page (academy_join.py) mails a
     # class link, so the same shape as member sign-in: per network
     # (generous: a church lobby is one address), then per business +

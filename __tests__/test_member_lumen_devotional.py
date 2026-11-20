@@ -4,10 +4,10 @@
 # behind MEMBER_LUMEN. Pins:
 #   - off: a devotional's day is today's markup, byte for byte, with or
 #     without the night cookie;
-#   - the Bible tab: today's devotional on top (its day, title, a dot a day,
-#     Read today, Listen only when Listen can work), the rail below without
-#     it; with nothing running, what's next, the last one again, or one to
-#     start; nothing made up;
+#   - the Bible tab's Devotional tab (Look 5.1): today's devotional on top
+#     (its day, title, a dot a day, Read today, Listen only when Listen can
+#     work), More devotionals below without it; with nothing running, what's
+#     next, the last one again, or one to start; nothing made up;
 #   - a day: the church's picture (only when it chose one or a photo is
 #     named for it), the green plate (Day N of M, the title, who and how
 #     long, the days as dots, Listen, Share), the scripture, the words, the
@@ -83,15 +83,14 @@ def test_the_bible_tab_has_todays_devotional_on_top(full, fake, monkeypatch):  #
     import member_lumen_devotional as mld
     _speak(monkeypatch, False)
     c = _client(fake, monkeypatch)
-    on, reads_on = _reads(fake, c, "/my/bible")
+    on, reads_on = _reads(fake, c, "/my/bible?tab=devotional")
     monkeypatch.setenv("MEMBER_LUMEN", "off")
     _, reads_off = _reads(fake, c, "/my/bible")
-    assert reads_on == reads_off                                                        # nothing new read
+    assert not reads_on - reads_off, reads_on - reads_off                               # nothing new read
     monkeypatch.setenv("MEMBER_LUMEN", "on")
     card = on[on.index('<section class="lm-devo"'):]
     card = card[:card.index("</section>")]
-    assert on.index('class="lm-devo"') < on.index('role="search"') < on.index('class="lm-cont"')
-    assert on.index('class="lm-mast lm-bmast"') < on.index('class="lm-devo"')
+    assert on.index('class="lm-bseg"') < on.index('class="lm-devo"') < on.index('class="lm-week"')
     assert "Devotional · Day 3 of 7" in card
     assert 'id="lm-devo-h">Seven Days of <em>Rest</em></h2>' in card
     assert "Today: Planted by the Water · 2 min" in card
@@ -100,16 +99,16 @@ def test_the_bible_tab_has_todays_devotional_on_top(full, fake, monkeypatch):  #
     assert re.findall(r'<i(?: class="(\w)")?></i>', dots.group(2)) == ["d", "d", "t", "", "", "", ""]
     assert f'<a class="lm-devo-go" href="/my/bible/plans/{D1}/3">Read today</a>' in card
     assert "data-devo-listen" not in on and mld.CARD_JS not in on                       # Listen can't work here
-    # the rail below keeps the church's others
-    rail = on[on.index('class="lm-rail lm-devs"'):]
-    rail = rail[:rail.index("</div>")]
-    assert "Psalms at Night" in rail and "Seven Days of Rest" not in rail
+    # More devotionals keeps the church's others
+    more = on[on.index('class="lm-mcovs"'):]
+    more = more[:more.index("</div>")]
+    assert "Psalms at Night" in more and "Seven Days of Rest" not in more
 
 
 def test_the_bible_tabs_listen_plays_the_day_where_it_is(full, fake, monkeypatch):  # noqa: F811
     import member_lumen_devotional as mld
     _speak(monkeypatch, True)
-    on = _client(fake, monkeypatch).get("/my/bible").text
+    on = _client(fake, monkeypatch).get("/my/bible?tab=devotional").text
     card = on[on.index('<section class="lm-devo"'):]
     card = card[:card.index("</section>")]
     assert f'data-devo-listen data-dev="{D1}" data-day="3"' in card and "<span>Listen</span>" in card
@@ -118,7 +117,7 @@ def test_the_bible_tabs_listen_plays_the_day_where_it_is(full, fake, monkeypatch
     # read today: Read again
     fake.add("devotional_progress", business_id=tct.BIZ, contact_id=tct.ANA, devotional_id=D1, day=3,
              done_at=datetime.now(timezone.utc).isoformat(), checks=[], journal="")
-    on = _client(fake, monkeypatch).get("/my/bible").text
+    on = _client(fake, monkeypatch).get("/my/bible?tab=devotional").text
     assert ">Read again</a>" in on and "Day 3 of 7. 3 days read." in on
 
 
@@ -304,9 +303,9 @@ def test_night_reading_arrives_dark_and_reads_nothing_new(full, fake, monkeypatc
     assert _body_class(night).split()[:2] == ["lm", "lm-push"] and "lm-dark" in _body_class(night).split()
     assert 'id="lm-moon" aria-pressed="true"' in night
     assert f'<meta name="theme-color" content="{mld.GREEN}">' in night                   # the green bar stays green
-    # only the reader and the day read it: the Bible tab stays white
+    # only the reader and the day read it: the Devotional tab stays white
     c.cookies.set(mlb.NIGHT_COOKIE, "1")
-    assert "lm-dark" not in _body_class(c.get("/my/bible").text).split()
+    assert "lm-dark" not in _body_class(c.get("/my/bible?tab=devotional").text).split()
 
 
 def test_the_readers_script_is_the_moon_and_the_card_unchanged():

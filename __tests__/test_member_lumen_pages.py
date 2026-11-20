@@ -5,13 +5,15 @@
 #   - off: no Lumen class, sheet or bar; the church's base still applies;
 #   - on: the Lumen sheet is linked (a hashed, immutable file), the page is
 #     white whatever the church's base, the top bar of a main tab carries the
-#     logo and name, the message bubble (with the unread count), the bell and
-#     the picture; a pushed page gets a plain back bar; the tab bar is
-#     Home · Watch · Bible · Connect · Give with Messages not a tab;
+#     logo and name, the bell, the message bubble (with the unread count) and
+#     the picture (Look 5.1's order); a pushed page gets a plain back bar; the
+#     tab bar is Look 5.1's flat Home · Watch · Connect · Bible · Give with
+#     Messages not a tab;
 #   - the bubble's count costs no read of its own (same reads as off);
-#   - Home (Look 4.1, member_lumen_home; its own pins are
-#     test_member_lumen_home.py): Up next features the next gathering with
-#     I'm coming, carries check-in on the day, and Live wins;
+#   - Home (Look 5.1, member_lumen_home; its own pins are
+#     test_member_lumen_home.py and test_member_lumen_home5.py): This week
+#     carries the next gathering with I'm coming, check-in on the day, and
+#     the live bar while live;
 #   - Connect (/my/connect) is built from today's readers, and goes to
 #     Groups when the switch is off;
 #   - the bell's dot and the "I'm new here" slot are hooks that default to
@@ -119,7 +121,7 @@ def test_the_lumen_sheet_is_a_hashed_immutable_file():
     app.include_router(mp.router)
     r = TestClient(app, base_url=f"https://{tct.HOST}").get(ui.sheet_url("lumen"))
     assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=31536000, immutable"
-    assert "body.lm" in r.text and "lm-ind" in r.text
+    assert "body.lm" in r.text and "lm-nav" in r.text and "lm-ind" not in r.text
     assert re.fullmatch(r"/my/lumen\.[0-9a-f]{12}\.css", ui.sheet_url("lumen"))
     import custom_domain_cache
     assert custom_domain_cache.SHARED_SHEET_RE.match(ui.sheet_url("lumen"))
@@ -150,8 +152,8 @@ def test_the_top_bar_of_a_main_tab(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     top = html[html.index('<header class="mb-top">'):html.index("</header>")]
     assert 'class="mb-brand lm-brand"' in top and "Grace Fellowship" in top
-    order = [top.index(s) for s in ('href="/my/messages"', 'href="/my/notifications"', 'href="/my/me"')]
-    assert order == sorted(order)                                          # bubble, bell, picture
+    order = [top.index(s) for s in ('href="/my/notifications"', 'href="/my/messages"', 'href="/my/me"')]
+    assert order == sorted(order)                                          # bell, bubble, picture (Look 5.1)
     assert "lm-bdot" not in top                                            # the bell's dot waits for its list
 
 
@@ -181,10 +183,10 @@ def test_the_tab_bar(church, fake, monkeypatch):  # noqa: F811
     nav = html[html.index('<nav class="mb-nav lm-nav'):]
     nav = nav[:nav.index("</nav>")]
     labels = re.findall(r'<a class="mb-tab" href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav)
-    assert labels == [("/my", "Home"), ("/my/sermons", "Watch"), ("/my/bible", "Bible"),
-                      ("/my/connect", "Connect"), ("/my/give", "Give")]
+    assert labels == [("/my", "Home"), ("/my/sermons", "Watch"), ("/my/connect", "Connect"),
+                      ("/my/bible", "Bible"), ("/my/give", "Give")]
     assert "Messages" not in nav
-    assert 'style="--n:5;--i:0"' in nav and 'class="lm-ind"' in nav
+    assert 'style="--n:5"' in nav and "lm-ind" not in nav                 # flat: no sliding line
     assert re.search(r'href="/my" aria-current="page"', nav)
     # The early loading and the cross-fade still find it.
     assert ui.EARLY_JS in html
@@ -202,19 +204,19 @@ def test_a_pushed_page_gets_a_back_bar(church, fake, monkeypatch):  # noqa: F811
     assert "aria-current" not in nav[:nav.index("</nav>")]                       # Messages sits over no tab
 
 
-def _up(html):
-    up = html[html.index('class="lm-up"'):]
+def _week(html):
+    up = html[html.index('class="lm-wk5"'):]
     return up[:up.index("</section>")]
 
 
 def test_home_leads_with_the_next_gathering(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert '<h3 class="lm-f4t" id="lm-f4-t">Sunday Worship</h3>' in up
-    assert f'<p class="lm-f4k">This {(TODAY + timedelta(days=4)):%A}</p>' in up
+    up = _week(html)
+    assert '<a href="/my/events">Sunday Worship</a></h3>' in up
+    assert f'<p class="lm-wkk">This {(TODAY + timedelta(days=4)):%A}</p>' in up
     assert 'action="/my/rsvp"' in up and "I&#x27;m coming" in up
     assert "<b>40</b> going" in up
-    assert "Coming up" in html and "Prayer Night" in html
+    assert "Prayer Night" in up                                              # this week: a card, not a row
     assert 'class="lm-page"' in html and "Verse of the day" in html          # the ivory verse card
     assert "How can we pray for you?" in html
     assert 'class="lm-ck"' not in html and 'action="/my/here"' not in html  # check-in is off
@@ -227,8 +229,10 @@ def test_home_on_the_day_says_today_and_shows_check_in(church, fake, monkeypatch
                          "occasion": {"id": "o", "title": "Sunday Worship"}, "marks": {}, "settings": {},
                          "family": [{"id": tct.ANA, "name": "Ana Rivera", "me": True}]}
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert '<p class="lm-f4k">Today · ' in up and "Sunday Worship" in up
+    up = _week(html)
+    # The check-in window opened "now", so after 5 PM in the church's zone the
+    # card says "Tonight ·" (member_lumen_home.when): either is on the day.
+    assert ('<p class="lm-wkk">Today · ' in up or '<p class="lm-wkk">Tonight · ' in up) and "Sunday Worship" in up
     assert 'action="/my/here"' in up and 'name="where" value="in"' in up and 'name="where" value="online"' in up
     assert f'name="people" value="{tct.ANA}"' in up
 
@@ -236,8 +240,8 @@ def test_home_on_the_day_says_today_and_shows_check_in(church, fake, monkeypatch
 def test_home_while_live(church, fake, monkeypatch):  # noqa: F811
     church["live"] = {"id": "l1", "title": "Sunday Worship"}
     html = _client(fake, monkeypatch).get("/my").text
-    up = _up(html)
-    assert "Live now" in up and '<a class="lm-btn sm" href="/my/live" aria-describedby="lm-f4-t">Join the room</a>' in up
+    assert '<a class="lm-lv4" href="/my/live">' in html and "Live now · Sunday Worship" in html
+    assert html.index('class="lm-lv4"') < html.index('class="lm-brief"')   # over the greeting
 
 
 def test_connect_is_the_people_hub(church, fake, monkeypatch):  # noqa: F811

@@ -136,7 +136,8 @@ def test_off_no_marks_no_script(church, fake, monkeypatch):  # noqa: F811
 def test_the_message_page_marks_its_player_and_carries_the_script_once(church, fake, monkeypatch):  # noqa: F811
     html = _get(fake, monkeypatch, MSG)
     audio = re.search(r"<audio[^>]*>", html).group(0)
-    assert "data-lm-media" in audio and 'data-title="Hope Has a Name"' in audio and 'data-sub="Pastor James"' in audio
+    # The message page is Watch's (Look 5.1, member_lumen_watch): it marks its own player.
+    assert "data-lm-media" in audio and 'data-title="Hope Has a Name"' in audio and 'data-sub="Pastor James' in audio
     assert f'data-href="{MSG}"' in audio and 'data-thumb="' in audio
     assert html.count(member_mini.JS) == 1
     # at the foot, after the page (never in the head)
