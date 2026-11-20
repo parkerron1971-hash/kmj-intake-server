@@ -82,6 +82,10 @@ ASSIGN: ContextVar[bool] = ContextVar("lead_assign", default=False)
 # from what church_schedule keeps (section); None for everyone else, and
 # while the switch is closed or its tables aren't there: no Dates entry.
 DATES: ContextVar[Optional[Dict[str, int]]] = ContextVar("lead_dates", default=None)
+# Chief's call brief (guest_brief, the Welcome Path): the brief for the guest
+# the page shows, when that is a guest's welcome call and the path is on;
+# read once per request in serve(). None everywhere else: the file is as it was.
+BRIEF: ContextVar[Optional[Dict[str, Any]]] = ContextVar("lead_brief", default=None)
 
 
 def _word() -> str:
@@ -169,6 +173,7 @@ DONE = {
     "pastor": "Saved. The Lead Pastor has been told.",
     "pastor_unsent": "Saved, but no pastor could be emailed. Please tell the office.",
     "task_done": "Done. The church office can see it.",
+    "handed": "Saved. Chief handed on what they asked for: its notes below say to whom.",
 }
 ERRORS = {
     "error": "That didn’t save. Please try again.",
@@ -295,6 +300,32 @@ body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
 .ld-pass select{flex:1 1 180px;min-height:44px;border-radius:12px;border:.5px solid var(--line);background:var(--s2);color:var(--fg);
   padding:0 12px;font:inherit;font-size:15px;}
 .ld-pass .ld-ghost{width:auto;padding:0 18px;}
+/* Chief's call brief (guest_brief, the Welcome Path) */
+.ld-reach a[data-main]{background:var(--mb-fill);color:var(--mb-on-fill);}
+.ld-brief{gap:10px;}
+.ld-bhead{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.ld-bvisit{margin:0;font-size:14px;color:var(--fg2);}
+.ld-bchips{display:flex;flex-wrap:wrap;gap:6px;}
+.ld-bsum{margin:0;font-size:15.5px;line-height:1.5;}
+.ld-open{background:var(--s2);border-radius:var(--r-sm);padding:12px 14px;}
+.ld-open small,.ld-ment small,.ld-will small{display:block;font-size:11px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--fg3);}
+.ld-open p{margin:6px 0 0;font-family:var(--mb-serif);font-style:italic;font-size:17px;line-height:1.45;}
+.ld-ment ul,.ld-will ul{margin:6px 0 0;padding:0 0 0 18px;display:flex;flex-direction:column;gap:6px;font-size:14.5px;
+  line-height:1.45;}
+.ld-texts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--fg2);}
+.ld-texts li{display:flex;align-items:center;gap:9px;}
+.ld-tdot{width:14px;height:14px;border-radius:50%;flex:none;border:1.5px solid var(--s3);box-sizing:border-box;}
+.ld-texts li[data-state=done] .ld-tdot{background:#5fd08a;border-color:#5fd08a;}
+.ld-bnote{margin:0;font-size:13.5px;color:var(--fg3);}
+.ld-will{display:none;background:var(--s2);border-radius:var(--r-sm);padding:12px 14px;margin-top:10px;}
+.ld-pickrow{list-style:none;margin-left:-18px;}
+.ld-pick{width:100%;min-height:44px;border-radius:10px;border:.5px solid var(--line);background:var(--s1);color:var(--fg);
+  padding:0 10px;font:inherit;font-size:14.5px;box-sizing:border-box;}
+form:has(input[name=outcome][value=talked]:checked) .ld-will[data-for=talked],
+form:has(input[name=outcome][value=message]:checked) .ld-will[data-for=message],
+form:has(input[name=outcome][value=noanswer]:checked) .ld-will[data-for=noanswer],
+form:has(input[name=outcome][value=notnow]:checked) .ld-will[data-for=notnow]{display:block;}
 """
 
 
@@ -518,9 +549,13 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
     reach = []
     phone = re.sub(r"[^\d+]", "", p.get("phone") or "")
     from member_app_ui import icon
+    b = BRIEF.get()
+    b = b if b and b["follow_up"]["id"] == i["id"] else None
     if phone:
-        reach.append(f'<a href="tel:{_e(phone)}">{icon("phone", 20)}Call</a>')
-        reach.append(f'<a href="sms:{_e(phone)}">{icon("chat", 20)}Text</a>')
+        call = f'<a href="tel:{_e(phone)}">{icon("phone", 20)}Call</a>'
+        text = f'<a href="sms:{_e(phone)}"{" data-main" if b and b.get("prefers_text") else ""}>{icon("chat", 20)}Text</a>'
+        # "Text me instead" on their card: Text comes first.
+        reach += [text, call] if b and b.get("prefers_text") else [call, text]
     if p.get("email"):
         reach.append(f'<a href="mailto:{_e(p["email"])}">{icon("mail", 20)}Email</a>')
     rows = []
@@ -538,6 +573,7 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
     chips = "".join(
         f'<label><input type="radio" name="outcome" value="{k}"{" checked" if k == "talked" else ""}><span>{_e(v)}</span></label>'
         for k, v in cfu.OUTCOMES.items() if k != "note")
+    will = _will_html(b) if b else ""
     answers = "".join(f'<div><dt>{_e(a["q"])}</dt><dd>{_e(a["a"])}</dd></div>' for a in i.get("answers") or []) or \
         '<div><dd>They left the rest of the card blank.</dd></div>'
     me_name = (me.get("name") or "").strip()
@@ -549,11 +585,12 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
     return f"""<div class="ld-person"><span class="ld-av" aria-hidden="true">{_e(p['initials'])}</span>
 <div><h2>{_e(p['name'])}</h2><small>{_e(i.get('card_name') or 'Card')} · {_e(_day(i.get('created_at'), biz))}</small></div></div>
 {f'<div class="ld-reach">{"".join(reach)}</div>' if reach else ''}
+{_brief_html(b) if b else ''}
 <p class="ld-why"><b>Why you:</b> {_e(i.get('reason') or '')}</p>
 <section class="ld-card" aria-label="The path"><h3>The path</h3><ol class="ld-steps">{''.join(rows)}</ol>{advance}</section>
 <section class="ld-card" aria-label="Log a conversation"><h3>Log a conversation</h3>
 <form method="post" action="/my/lead/note"><input type="hidden" name="fid" value="{_e(i['id'])}">
-<fieldset class="ld-chips"><legend>How did it go?</legend>{chips}</fieldset>
+<fieldset class="ld-chips"><legend>How did it go?</legend>{chips}</fieldset>{will}
 <p><label class="mp-sr" for="ld-text-{_e(i['id'])}">What did you talk about?</label>
 <textarea class="ld-ta" id="ld-text-{_e(i['id'])}" name="text" maxlength="2000" placeholder="What did you talk about? Anything the next person should know?"></textarea></p>
 <label class="ld-check"><input type="checkbox" name="pastors_only" value="yes">Pastors only</label>
@@ -565,6 +602,64 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
 <p><label class="mp-sr" for="ld-why-{_e(i['id'])}">Why?</label>
 <textarea class="ld-ta" id="ld-why-{_e(i['id'])}" name="text" maxlength="2000" placeholder="Why? (optional) The office will hand them to someone else."></textarea></p>
 <button class="ld-btn" type="submit">Hand back</button></form></details>"""
+
+
+def _brief_html(b: Dict[str, Any]) -> str:
+    """Chief's call brief (guest_brief): who they are, what they asked for,
+    an opening line, the church's real things worth mentioning, and the
+    texts so far. Never a prayer's words."""
+    fu = b["follow_up"]
+    chips = "".join(f'<span class="ld-tag">{_e(c)}</span>' for c in b.get("chips") or [])
+    due = (f'<span class="ld-due{" late" if fu.get("late") else ""}">Call by {_e(fu["due_words"])}</span>'
+           if fu.get("status") == "open" and fu.get("step") == 0 and fu.get("due_words") else "")
+    ment = "".join(f"<li>{_e(m['line'])}</li>" for m in b.get("mentions") or [])
+    tx = b.get("texts") or {}
+    steps = "".join(
+        f'<li data-state="{_e(t["state"])}"><span class="ld-tdot" aria-hidden="true"></span>'
+        f'{_e(t["label"])}{(" · " + _e(t["when"])) if t.get("when") else ""}{_TEXT_STATE.get(t["state"], "")}</li>'
+        for t in tx.get("steps") or [])
+    if steps:
+        texts = f'<ul class="ld-texts">{steps}</ul>'
+    elif tx.get("note"):
+        texts = f'<p class="ld-bnote">{_e(tx.get("note"))}</p>'
+    elif tx.get("unread"):
+        texts = '<p class="ld-bnote">The texts couldn’t be read just now.</p>'
+    else:
+        texts = ""
+    g = b.get("guest") or {}
+    return (f'<section class="ld-card ld-brief" aria-label="Chief’s brief"><div class="ld-bhead"><h3>Chief’s brief</h3>{due}</div>'
+            f'<p class="ld-bvisit">{_e(g.get("visit") or "")}</p>'
+            + (f'<div class="ld-bchips">{chips}</div>' if chips else "")
+            + f'<p class="ld-bsum">{_e(b.get("summary") or "")}</p>'
+            f'<div class="ld-open"><small>Open with</small><p>“{_e(b.get("opening") or "")}”</p></div>'
+            + (f'<div class="ld-ment"><small>Worth mentioning</small><ul>{ment}</ul></div>' if ment else "")
+            + texts + "</section>")
+
+
+_TEXT_STATE = {"skipped": " · skipped", "missed": " · didn’t go", "waiting": " · next"}
+
+
+def _will_html(b: Dict[str, Any]) -> str:
+    """What Chief will do for each tap (the server's words): for Talked,
+    each thing they asked for as a choice of what Chief does with it."""
+    out = []
+    for o in b.get("outcomes") or []:
+        rows = []
+        if o["key"] == "talked":
+            for a in b.get("asks") or []:
+                if a.get("done"):
+                    rows.append(f"<li>{_e(a['line'])}</li>")
+                    continue
+                opts = ([("", a["line"])] + [(c["id"], c["line"]) for c in a.get("choices") or []]
+                        + [("skip", a.get("skip_line") or f"Leave “{a['label']}” for now")])
+                options = "".join(f'<option value="{_e(v)}"{" selected" if v and v == a.get("pick") else ""}>{_e(t)}</option>'
+                                  for v, t in opts)
+                rows.append(f'<li class="ld-pickrow"><label class="mp-sr" for="ld-pick-{_e(a["key"])}">{_e(a["label"])}</label>'
+                            f'<select class="ld-pick" id="ld-pick-{_e(a["key"])}" name="pick_{_e(a["key"])}">{options}</select></li>')
+        rows += [f"<li>{_e(w)}</li>" for w in o.get("will") or []]
+        if rows:
+            out.append(f'<div class="ld-will" data-for="{_e(o["key"])}"><small>Chief will</small><ul>{"".join(rows)}</ul></div>')
+    return "".join(out)
 
 
 def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
@@ -616,9 +711,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
                 f'Please try again in a moment.</p>')
         return _shell(biz, site, "Lead", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
     items = view["follow_ups"]
-    order = sorted(items, key=lambda i: (not i.get("late"), not _is_new(i, now), i.get("due_at") or ""))
-    sel = next((i for i in order if i["id"] == selected), None)
-    shown = sel or (order[0] if order else None)
+    order, sel, shown = _shown(items, selected, now)
     links = "".join(_person_link(i, biz, (shown or {}).get("id", ""), now, auto=sel is None) for i in order)
     finished = view.get("done_30") or 0
     from member_app_ui import icon
@@ -637,6 +730,13 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     return _shell(biz, site, title,
                   f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
                   tab="lead", who=me, back=("/my/lead", _word()) if sel else None)
+
+
+def _shown(items: List[Dict[str, Any]], selected: str, now: datetime):
+    """(the list in its order, the one picked, the one the page shows)."""
+    order = sorted(items, key=lambda i: (not i.get("late"), not _is_new(i, now), i.get("due_at") or ""))
+    sel = next((i for i in order if i["id"] == selected), None)
+    return order, sel, sel or (order[0] if order else None)
 
 
 def _room_door(room: bool) -> str:
@@ -672,6 +772,25 @@ async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) ->
     # The leaders schedule (member_portal_dates): Dates, for someone on it.
     import church_schedule
     DATES.set(await asyncio.to_thread(church_schedule.section, biz, str(me["id"])))
+
+
+async def _brief_for_shown(biz: Dict[str, Any], me: Dict[str, Any], view: Optional[Dict[str, Any]],
+                           selected: str) -> None:
+    """Chief's call brief for the person the page shows, when they are a
+    guest's welcome call and the Welcome Path is on (guest_brief). A brief
+    that can't be read leaves the file as it always was."""
+    BRIEF.set(None)
+    items = (view or {}).get("follow_ups") or []
+    if not items:
+        return
+    _o, _s, shown = _shown(items, selected, datetime.now(timezone.utc))
+    import guest_path
+    if not shown or not guest_path.is_guest_follow_up(shown):
+        return
+    import guest_brief
+    got = await asyncio.to_thread(guest_brief.brief_for, biz, shown["id"], viewer_cid=str(me["id"]))
+    if got and got["follow_up"]["id"] == shown["id"]:
+        BRIEF.set(got)
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
@@ -749,6 +868,7 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         fv = await asyncio.to_thread(shep.my_families, biz["id"], str(me["id"]))
         fams = len((fv or {}).get("families") or [])
         view = await asyncio.to_thread(cfu.leader_view, biz["id"], str(me["id"]))
+        await _brief_for_shown(biz, me, view, selected if tab == "people" else "")
         prayer = await asyncio.to_thread(church_prayer.leader_prayers, biz["id"], str(me["id"]))
         if any(_is_prayer(r) for r in my_roles if r["status"] == "active"):
             targets = await asyncio.to_thread(church_prayer.pass_targets, biz["id"], me) or []
@@ -1322,9 +1442,17 @@ async def _act(request: Request, what: str):
     biz_id = church["business"]["id"]
     try:
         if what == "note":
-            await asyncio.to_thread(cfu.leader_note, biz_id, me, fid, str(form.get("outcome") or "talked"),
+            outcome = str(form.get("outcome") or "talked")
+            await asyncio.to_thread(cfu.leader_note, biz_id, me, fid, outcome,
                                     str(form.get("text") or ""), str(form.get("pastors_only") or "") == "yes")
-            return _go(here, done="saved")
+            # A guest's welcome call (guest_brief): Talked hands on what they
+            # asked for, as the brief said it would.
+            import guest_brief
+            picks = {k[5:]: str(form.get(k) or "") for k in form.keys() if str(k).startswith("pick_")}
+            did = await asyncio.to_thread(guest_brief.after_call, biz_id, fid, outcome, picks,
+                                          by_name=str(me.get("name") or ""))
+            return _go(here, done="handed" if any(d.startswith("Handed") or d.startswith("Noted") for d in did)
+                       else "saved")
         if what == "step":
             row = await asyncio.to_thread(cfu.leader_advance, biz_id, me, fid)
             return _go("/my/lead", done="finished") if row.get("status") == "done" else _go(here, done="step")

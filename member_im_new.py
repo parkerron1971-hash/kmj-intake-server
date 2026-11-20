@@ -110,6 +110,13 @@ WANT_WORDS: Dict[str, str] = {
 # The boxes two by two on a phone, the long one last across the row.
 SHOWN_ORDER = ("group", "serve", "baptism", "pastor", "class")
 ANSWERS = ("first_time", "heard", "kids", "ages", "wants")
+# The Welcome Path's two more (asked only while it's on; guest_brief reads
+# them for the caller's brief): who invited them, and the best way to reach
+# them. Kept beside ANSWERS, so a member whose church doesn't ask them saves
+# exactly what they saved before.
+PATH_ANSWERS = ("invited", "reach")
+REACH = {"call": "A call is fine", "text": "Text me instead"}
+INVITED_MAX = 120
 
 _TOLD = member_cache.Kept("im_new_told", TOLD_SECONDS)
 _NOT_YET = member_cache.Kept("im_new_not_yet", NOT_YET_SECONDS)
@@ -234,15 +241,17 @@ def told_state(business_id: str, contact_id: str) -> Optional[Dict[str, Any]]:
 # ─── the form ─────────────────────────────────────────────────────────
 
 
-def clean(form: Mapping[str, Any], wants: Optional[List[str]] = None) -> Dict[str, Any]:
+def clean(form: Mapping[str, Any], wants: Optional[List[str]] = None, *, path: bool = False) -> Dict[str, Any]:
     """The answers, tidied: anything that isn't one of the choices is dropped.
-    `wants` is the form's checked boxes (a form posts one value per box)."""
+    `wants` is the form's checked boxes (a form posts one value per box).
+    `path`: the Welcome Path is on, so who invited them and the best way to
+    reach them are read too."""
     import new_here
     first = str(form.get("first") or "yes") != "no"
     heard = str(form.get("heard") or "")
     kids = "yes" if str(form.get("kids") or "") == "yes" else "no"
     picked = set(str(w) for w in (wants or []))
-    return {
+    out = {
         "first_time": first,
         "heard": heard if heard in new_here.HEARD else "",
         "kids": kids,
@@ -250,6 +259,10 @@ def clean(form: Mapping[str, Any], wants: Optional[List[str]] = None) -> Dict[st
         "wants": [k for k in WANTS if k in picked],
         "prayer": _words(form.get("prayer"), PRAYER_MAX),
     }
+    if path:
+        reach = str(form.get("reach") or "")
+        out.update(invited=_plain(form.get("invited"), INVITED_MAX), reach=reach if reach in REACH else "")
+    return out
 
 
 def answers_for(a: Mapping[str, Any]) -> List[Dict[str, str]]:
@@ -265,6 +278,10 @@ def answers_for(a: Mapping[str, Any]) -> List[Dict[str, str]]:
     if wants:
         said = ", ".join(wants[:-1]) + (" and " if len(wants) > 1 else "") + wants[-1]
         out.append({"q": "They'd like to", "a": said[0].upper() + said[1:]})
+    if a.get("invited"):
+        out.append({"q": "Who invited them", "a": str(a["invited"])})
+    if a.get("reach") in REACH:
+        out.append({"q": "Best way to reach them", "a": REACH[str(a["reach"])]})
     out.append({"q": "Where", "a": "Told the church in the member app"})
     return out
 
@@ -376,7 +393,8 @@ def save(business: Mapping[str, Any], me: Mapping[str, Any], a: Dict[str, Any]) 
         meta = dict(person.get("metadata") or {}) if isinstance(person.get("metadata"), dict) else {}
         mine = dict(meta.get("new_here") or {}) if isinstance(meta.get("new_here"), dict) else {}
         before = _clean_app(mine.get("app"))
-        changed = not before or any(before.get(k) != a.get(k) for k in ANSWERS)
+        changed = not before or any(before.get(k) != a.get(k) for k in ANSWERS) or any(
+            (before.get(k) or "") != (a.get(k) or "") for k in PATH_ANSWERS if k in a)
         tags = [t for t in (person.get("tags") or []) if isinstance(t, str)]
         tag = FIRST_TAG if a["first_time"] else NEW_TAG
         was_handed = bool(before.get("follow_up"))
@@ -392,7 +410,9 @@ def save(business: Mapping[str, Any], me: Mapping[str, Any], a: Dict[str, Any]) 
             app = before
         else:
             now = _iso(_now())
-            app = {**{k: a.get(k) for k in ANSWERS}, "at": before.get("at") or now,
+            app = {**{k: a.get(k) for k in ANSWERS},
+                   **{k: a[k] if k in a else before.get(k) for k in PATH_ANSWERS if k in a or k in before},
+                   "at": before.get("at") or now,
                    "changed_at": now if changed else (before.get("changed_at") or before.get("at") or now),
                    "prayer": bool(before.get("prayer") or prayer), "follow_up": handed}
             mine["app"] = app
@@ -719,6 +739,18 @@ def render_form(business: Mapping[str, Any], site: Any, request: Request, me: Ma
     if preview and not shown:
         shown = f'<p class="ln-err" role="note">{_e(ERRORS["preview"])}</p>'
     words, phone = text_me(business, me)
+    # The Welcome Path's two more questions, while it's on.
+    path = new_here.path_on(business.get("id"))
+    ages_label = "Their names and ages (optional)" if path else "Their ages (optional)"
+    more = ""
+    if path:
+        reach = app.get("reach") if app.get("reach") in REACH else "call"
+        more = (f'<label class="ln-q" for="imn-invited">Who invited you? <span class="ln-hint">Optional</span></label>'
+                f'<input class="ln-field" id="imn-invited" name="invited" maxlength="{INVITED_MAX}" autocomplete="off" '
+                f'value="{_e(app.get("invited") or "")}">'
+                f'<fieldset><legend class="ln-q">Best way to reach you</legend><div class="ln-choice">'
+                f'{_radio("reach", "call", REACH["call"], "", reach == "call")}'
+                f'{_radio("reach", "text", REACH["text"], "", reach == "text")}</div></fieldset>')
     texts = (f'<label class="ln-ch ln-texts"><input type="checkbox" name="{TEXTS_NAME}" value="yes">'
              f'<span><b>Text me</b><span>{_e(words)} We\u2019ll text {_e(new_here.pretty_phone(phone))}.'
              '</span></span></label>') if words else ""
@@ -738,11 +770,11 @@ def render_form(business: Mapping[str, Any], site: Any, request: Request, me: Ma
 <fieldset class="ln-kidsq"><legend class="ln-q">Do you have kids?</legend><div class="ln-kids">
 <label class="ln-chip"><input type="radio" name="kids" value="no"{"" if kids else " checked"}>No</label>
 <label class="ln-chip"><input type="radio" name="kids" value="yes"{" checked" if kids else ""}>Yes</label></div>
-<div class="ln-ages"><label for="imn-ages">Their ages (optional)</label>
+<div class="ln-ages"><label for="imn-ages">{ages_label}</label>
 <input class="ln-field" id="imn-ages" name="ages" maxlength="{AGES_MAX}" autocomplete="off" placeholder="Like 4 and 7" value="{_e(app.get("ages") or "")}"></div>
 </fieldset>
 <fieldset class="ln-wants"><legend class="ln-q">I'd like to…</legend><p class="ln-hint">Pick any. You can change these later.</p>
-<div class="ln-choice">{boxes}</div></fieldset>
+<div class="ln-choice">{boxes}</div></fieldset>{more}
 <label class="ln-q" for="imn-prayer">Anything we can pray for?</label>
 <textarea class="ln-ta" id="imn-prayer" name="prayer" rows="4" maxlength="{PRAYER_MAX}" placeholder="Only our pastors see this."></textarea>
 {texts}<div class="ln-send"><button class="ln-btn block" type="submit">Tell the church</button></div>
@@ -873,7 +905,9 @@ async def post_new(request: Request):
         return _go("/my")
     if not await asyncio.to_thread(_allowed, biz, me):
         return _go(PATH, err="slow", edit="1")
-    answers = clean(form, form.getlist("wants") if hasattr(form, "getlist") else form.get("wants") or [])
+    import new_here
+    answers = clean(form, form.getlist("wants") if hasattr(form, "getlist") else form.get("wants") or [],
+                    path=await asyncio.to_thread(new_here.path_on, biz.get("id")))
     ok, code = await asyncio.to_thread(save, biz, me, answers)
     if not ok:
         return _go(PATH, err=code, edit="1")

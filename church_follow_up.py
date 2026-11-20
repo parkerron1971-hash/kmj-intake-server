@@ -537,13 +537,17 @@ def _guest_path_on(biz: str, card_key: str, kind: str) -> bool:
 
 def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, kind: str,
           answers: List[Dict[str, str]], source_event: str = "", what: str = "",
-          route_answers: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Any]]:
+          route_answers: Optional[List[Dict[str, str]]] = None,
+          pick: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Open a follow-up for this person and hand it to a leader. Returns the
     row, or None when it already exists (a retried card) or could not be
     saved. Never raises: a card is saved whether or not this works.
     `route_answers` is what choose() reads when it isn't what the leader
     reads (a first check-in's line names the occasion, and a "Community
-    Meal" must not read as a care need)."""
+    Meal" must not read as a care need). `pick` is a hand-off already
+    decided ({leader: {contact_id, name}, role, reason}: a guest's group
+    step from their welcome call, to the group's leader; guest_brief), in
+    place of choose()'s."""
     biz, cid = str(business_id), str(contact_id)
     try:
         # Every read here decides something, so a read that failed stops the
@@ -584,7 +588,8 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
             logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
             return None
         route_by = answers if route_answers is None else route_answers
-        pick = choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp)
+        decided = pick
+        pick = decided if decided else choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         assigned_by, due = "chief", now + timedelta(days=int(steps[0]["days"]))
@@ -644,17 +649,25 @@ def on_intake_form(business: Dict[str, Any], form: Dict[str, Any], submission: D
     card, or the bulletin's guest card: new_here.form_door) puts the guest on
     the path, door "form", with texts when they ticked "Text me" (`texts_ok`,
     for `phone`); and a guest already handed on by another door gets a note
-    there instead of a second follow-up."""
+    there instead of a second follow-up.
+
+    The bulletin's guest card is the church's own pick (settings.new_here.
+    guest_form), whatever its name: one whose name gives no path of its own
+    (general, or none) opens as a connect card, so it is a guest's welcome
+    follow-up (guest_path.is_guest_follow_up) and Who calls our guests hands
+    it, like every other door."""
     if not is_church(business) or not contact_id:
         return None
+    import new_here
+    door = new_here.form_door(business, form)
     kind = kind_for_form(form)
+    if door and kind in (None, "general"):
+        kind = "connect"
     if not kind:
         return None
     biz, card_key = str(business["id"]), f"form:{form.get('id')}"
     card_name = _plain(form.get("name")) or "Card"
     answers = answers_from_form(form, submission or {})
-    import new_here
-    door = new_here.form_door(business, form)
     if door and new_here.second_door(biz, contact_id, card_key, answers, f"Also sent the {card_name}."):
         row = None
     else:
@@ -906,16 +919,25 @@ def reassign(business_id: str, follow_up_id: str, leader_contact_id: Optional[st
 
 
 def office_note(business_id: str, follow_up_id: str, text: str, *, pastors_only: bool,
-                by_user: str, by_name: str = "") -> Dict[str, Any]:
+                by_user: str, by_name: str = "", outcome: Optional[str] = None) -> Dict[str, Any]:
+    """The office's note. With `outcome` (a call, logged from the office:
+    Talked, Left a message, No answer, Not right now) it is that
+    conversation, the note optional, and one that reached the person
+    finishes "Reach out" on its own, as a leader's does (leader_note)."""
     biz, fid = _uid(business_id, "business"), _uid(follow_up_id, "follow-up")
     body = (text or "").strip()
-    if not body:
+    kind = outcome if outcome in OUTCOMES and outcome != "note" else "note"
+    if outcome and kind == "note" and outcome != "note":
+        raise HTTPException(400, "Pick how the call went")
+    if not body and kind == "note":
         raise HTTPException(400, "Write the note first")
-    _one(biz, fid)
-    note = _note(biz, fid, "office", "note", body[:MAX_NOTE], pastors_only=pastors_only,
+    row = _one(biz, fid)
+    note = _note(biz, fid, "office", kind, body[:MAX_NOTE], pastors_only=pastors_only,
                  author_user_id=by_user, author_name=by_name)
     if not note:
         raise HTTPException(503, "That note didn’t save. Try again.")
+    if kind in REACHED and row.get("status") == "open" and int(row.get("step") or 0) == 0:
+        advance(biz, fid, author_kind="office", author_user_id=by_user, author_name=by_name)
     return note
 
 
@@ -1626,6 +1648,19 @@ async def _guest_climb(g: Any, biz: Dict[str, Any], r: Dict[str, Any], level: in
     return True
 
 
+def _came_line(r: Dict[str, Any], pname: str, church: str) -> str:
+    """The told email's first line (HTML): the card they filled in, or for
+    a hand-off from a guest's welcome call (guest_brief, card_key "call:"),
+    what they asked for on it."""
+    reason = html.escape(r.get("reason") or "")
+    if str(r.get("card_key") or "").startswith("call:"):
+        asked = next((_plain(a.get("a")) for a in r.get("answers") or [] if isinstance(a, dict)), "")
+        return (f"{html.escape(pname)} asked for this on their welcome call at {html.escape(church)}"
+                + (f": <b>{html.escape(asked)}</b>" if asked else "") + f". Chief handed them to you. {reason}")
+    return (f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
+            f"at {html.escape(church)}, and Chief handed them to you. {reason}")
+
+
 async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     import asyncio
     bizs = await asyncio.to_thread(_rows, f"/businesses?id=eq.{_q(biz_id)}&select=id,name,type,owner_id,settings&limit=1")
@@ -1725,8 +1760,7 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 told = await _email(biz, leader["email"], leader["name"],
                                     f"{pname} is yours to follow up",
                                     _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
-                                                f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
-                                                f"at {html.escape(church)}, and Chief handed them to you. {html.escape(r.get('reason') or '')}",
+                                                _came_line(r, pname, church),
                                                 f"First step: <b>{html.escape(step_title)}</b>, "
                                                 f"{html.escape((steps[step] if step < len(steps) else {}).get('rule') or '')}."],
                                                lead_link, "Open your Lead tab"),
