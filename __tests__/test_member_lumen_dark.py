@@ -340,7 +340,7 @@ def test_dark_starts_the_reader_at_night_and_the_moon_can_say_day(church, fake, 
     day = c.get("/my/bible/john/1").text
     assert "lm-dark" not in _body_class(day).split() and 'aria-pressed="false"' in day
     assert _metas(day) == ['<meta name="theme-color" content="#ffffff">']
-    assert "lm-dark" in _body_class(c.get("/my/bible").text).split()   # the moon is the reader's alone
+    assert "lm-dark" in _body_class(c.get("/my/bible?tab=devotional").text).split()   # the moon is the reader's alone
 
 
 def test_light_keeps_the_moon_as_it_was(church, fake, monkeypatch):  # noqa: F811
