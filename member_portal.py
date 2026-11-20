@@ -292,8 +292,9 @@ def _e(s: Any) -> str:
 def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, Any]]]:
     """Everyone at this church with exactly this address (a household can
     share one), each with their photo record, their Look in the new look
-    (member_lumen_look) and where they are in the church's messages
-    (member_lumen_watch): read here so a page needs no read for them. An exact, case-insensitive match — wildcards escaped.
+    (member_lumen_look), where they are in the church's messages
+    (member_lumen_watch) and their saved posts (member_feed_more): read here
+    so a page needs no read for them. An exact, case-insensitive match — wildcards escaped.
     None when the read FAILED: that is "try again", never "not on the
     list". Reads one past MAX_HOUSEHOLD so an over-shared address shows."""
     em = norm_email(email)
@@ -303,7 +304,8 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
-        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch"
+        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
+        f"saved:metadata->member_saved"
         f"&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
@@ -321,7 +323,8 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
-        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch"
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
+        f"saved:metadata->member_saved"
         f"&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
@@ -1419,6 +1422,9 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
     if msgs_on or inbox:
         doors.append(door("/my/messages", "Messages"))
     doors.append(door("/my/prayer", "Prayer"))
+    # Look 5.1: where the feed's Save goes (member_feed_more, /my/news/saved).
+    if cfu.is_church(biz):
+        doors.append(door("/my/news/saved", "Saved posts"))
     if asks:
         doors.append(door("/my/ask", "Ask the church"))
     if give_url:
@@ -2092,8 +2098,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     devo_info: Optional[Dict[str, Any]] = {} if lumen_home else None
     fresh = str(request.query_params.get("done") or request.query_params.get("err") or "").startswith("rsvp")
     feed_kw = _feed_previews()
+    # Look 5.1's feed also carries the member's groups' posts and prayer
+    # requests (member_feed_more: kept 30 s; fresh on the Home that answers
+    # their own "I prayed").
+    import member_feed_more as mfm
+    feed_fresh = str(request.query_params.get("done") or "") in mfm.FRESH_DONE
     (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
-     told_us) = await asyncio.gather(
+     told_us, feed_more) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
         else asyncio.to_thread(mpc.groups_for, biz["id"], me),
@@ -2119,7 +2130,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(ssv.home if lumen_home else ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
         # Messages, while something there is unread (member_portal_threads).
         _inbox_card(biz, me) if church_home else _nothing(),
-        mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing())
+        mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing(),
+        mfm.gather(biz, me, fresh=feed_fresh) if lumen_home and church_home else _nothing())
     gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
     if lumen_home:
         told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
@@ -2151,7 +2163,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
-                                   "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n")}
+                                   "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n"),
+                                   "extras": feed_more, "library": lib}
                                   if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)

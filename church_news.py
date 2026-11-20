@@ -296,7 +296,8 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
     and what each post carries (an event, a sermon). `previews` (Home's feed
     in the new look): the count read also brings the comments' words, so
     each post carries its newest one or two (preview_of) with their writers
-    (in the same people read), and how many people reacted (rx_people).
+    (in the same people read), how many people reacted (rx_people), and the
+    newest person, not this member, who loved it (lover: same read).
     `batch` (the all-posts page, feed_page): whose authors are pastors in two
     reads together (pastors_among), not two for each new author."""
     if not rows:
@@ -304,7 +305,8 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
     ids = _ids(r["id"] for r in rows)
     b = _q(business_id)
     rx = sb_clients.sb_get_as_service(f"/church_post_reactions?business_id=eq.{b}&post_id=in.({ids})"
-                                      f"&select=post_id,contact_id,kind&limit=50000")
+                                      + ("&select=post_id,contact_id,kind,created_at&order=created_at.desc&limit=50000"
+                                         if previews else "&select=post_id,contact_id,kind&limit=50000"))
     cm = sb_clients.sb_get_as_service(f"/church_post_comments?business_id=eq.{b}&post_id=in.({ids})&status=eq.shown"
                                       + ("&select=post_id,id,contact_id,reply_to,body,created_at&order=created_at.desc&limit=50000"
                                          if previews else "&select=post_id&limit=50000"))
@@ -316,6 +318,15 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
         for r in rows:
             r["preview"] = preview_of(shown_by.get(str(r["id"]), []))
             writers += [c.get("contact_id") for c in r["preview"]]
+    # Look 5.1's "Loved by Maya and 156 others": the newest Love that isn't
+    # this member's, by name, in the same people read.
+    lovers: Dict[str, str] = {}
+    if previews and rx is not None:
+        for x in rx:
+            pid_ = str(x["post_id"])
+            if x["kind"] == "love" and pid_ not in lovers and str(x["contact_id"]) != str(me_id):
+                lovers[pid_] = str(x["contact_id"])
+        writers += list(lovers.values())
     authors = _people(business_id, [r.get("posted_by") for r in rows] + [r.get("person_id") for r in rows]
                       + [r.get("partner_id") for r in rows] + writers)
     gids = {str(r["group_id"]) for r in rows if r.get("group_id")} | {
@@ -352,6 +363,7 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
             r["attach"] = {}
         if previews:
             r["rx_people"] = len({str(x["contact_id"]) for x in mine})
+            r["lover"] = authors.get(lovers.get(pid, "")) or {}
             for c in r.get("preview") or []:
                 c["person"] = authors.get(str(c.get("contact_id") or "")) or {}
                 c["mine"] = str(c.get("contact_id") or "") == str(me_id)
