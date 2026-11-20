@@ -8,9 +8,9 @@ lets build this including the new still to build!"). Earlier, for Look 4.1:
 post can allow whether people can comment or not", and "show 4 post and a
 show more tab where people can see other post from another page".
 
-THE STREAM (home_feed). "Share a praise or a prayer…" with the member's face
-(it opens /my/post, the members' composer: member_posts), a thin band, then the posts edge
-to edge, a hairline between them:
+THE STREAM (home_feed). Right under Home's composer and its band
+(member_lumen_home.composer: "Share a praise or a prayer…", /my/post), the
+posts edge to edge, a hairline between them:
 
   * A POST (card): who posted (their face, or the church's mark), "Maya
     Brooks in Young Adults" for a group's post, the kind and the time, and
@@ -679,19 +679,6 @@ def _order(posts: List[Dict[str, Any]], items: Optional[List[Dict[str, Any]]] = 
     return pinned + sorted(rest + items, key=at, reverse=True)
 
 
-def composer(me: Optional[Dict[str, Any]]) -> str:
-    """"Share a praise or a prayer…" with the member's face: the new look's
-    composer (/my/post, member_posts), then a thin band."""
-    import member_app_ui as ui
-    import member_photos as ph
-    mine = ph.src(me) if me else ""
-    face = (f'<span class="lf-cface"><img src="{_e(mine)}" alt=""></span>' if mine
-            else f'<span class="lf-cface" aria-hidden="true">{_e(ui.initials((me or {}).get("name")))}</span>')
-    return (f'<div class="lf-comp">{face}<a class="lf-comp-in" href="/my/post">Share a praise or a prayer…</a>'
-            f'<a class="lf-comp-ph" href="/my/post" aria-label="Add a photo">{_i("image")}</a></div>'
-            f'<div class="lf-band" aria-hidden="true"></div>')
-
-
 def see_all(total: Optional[int]) -> str:
     """Under Home's posts: a quiet row to the all-posts page (News), with how
     many posts it lists when that is known (church_news.home_view's count,
@@ -763,7 +750,7 @@ def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], 
             out.append(card(biz, x, by, open_=open_, me=me or {}, pool=pool, used=used, tz=tz, site=site,
                             lib=library, pal=pal, saved=saved))
     more = see_all(total) if posts else ""
-    return (f'<section class="lm-feed" aria-labelledby="lm-feed-h">{_sr_head(biz)}{composer(me)}'
+    return (f'<section class="lm-feed" aria-labelledby="lm-feed-h">{_sr_head(biz)}'
             f'<div class="lf-list">{"".join(out)}</div>{more}</section>{JS}')
 
 
@@ -963,22 +950,14 @@ d.addEventListener('animationend',function(e){var h=e.target;if(h.classList&&h.c
 
 
 CSS = Template("""
-/* Home's feed, Look 5.1: one stream, posts edge to edge (member_lumen_feed) */
-.lm .lm-feed{margin:36px -20px 0;}
+/* Home's feed, Look 5.1: one stream, posts edge to edge under Home's composer and band (member_lumen_feed) */
+.lm .lm-feed{margin:0 -20px;}
+.lm .lm-feed>.lm-pray{margin:16px 20px 0;}
 .lm .lf-ic{width:24px;height:24px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;
   stroke-linejoin:round;}
 .lm .lf-ic.s{width:19px;height:19px;}
 .lm .lf-ic.xs{width:15px;height:15px;stroke-width:2;}
 .lm .lf-ic.f{fill:currentColor;stroke:none;}
-/* "Share a praise or a prayer…", then a thin band */
-.lm .lf-comp{display:flex;align-items:center;gap:10px;padding:4px 8px 16px 20px;}
-.lm .lf-cface{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--s2);
-  color:var(--fg2);font:700 13px/1 var(--mb-ui);}
-.lm .lf-cface img{display:block;width:100%;height:100%;object-fit:cover;}
-.lm .lf-comp-in{flex:1;min-width:0;height:44px;border-radius:22px;background:var(--s1);display:flex;align-items:center;padding:0 16px;
-  color:var(--fg3);font:400 15px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.lm .lf-comp-ph{width:44px;height:44px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--fg);}
-.lm .lf-band{height:8px;background:var(--s1);}
 /* a post: no frame, a hairline between */
 .lm .lf-post{display:block;padding:0 0 20px;scroll-margin-top:76px;}
 .lm .lf-post+.lf-post{border-top:1px solid var(--lm-line);}
@@ -1184,8 +1163,8 @@ CSS = Template("""
 @keyframes lfbreathe{to{opacity:.35}}
 @keyframes lfrise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .lm .lf-act:focus-visible,.lm .lf-cw-go:focus-visible,.lm .lf-pbtn:focus-visible,.lm .lf-see:focus-visible,.lm .lf-vall:focus-visible,
-.lm .lf-more:focus-visible,.lm .lf-pill:focus-visible,.lm .lf-vid:focus-visible,.lm .lf-link:focus-visible,.lm .lf-comp-in:focus-visible,
-.lm .lf-comp-ph:focus-visible,.lm .lf-prow-p:focus-visible,.lm .lf-page a:focus-visible,.lm .lf-msg h3 a:focus-visible,
+.lm .lf-more:focus-visible,.lm .lf-pill:focus-visible,.lm .lf-vid:focus-visible,.lm .lf-link:focus-visible,
+.lm .lf-prow-p:focus-visible,.lm .lf-page a:focus-visible,.lm .lf-msg h3 a:focus-visible,
 .lm .lf-ev h3 a:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 .lm .lf-cw:focus-within .lf-cw-in{box-shadow:0 1px 0 var(--acc-fill);}
 

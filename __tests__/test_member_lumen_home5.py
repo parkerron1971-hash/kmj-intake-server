@@ -23,7 +23,7 @@
 #     Events this week, Serve's next date, Kids only for someone with the
 #     Kids space (never "Check in" as if a phone could check a child in);
 #   - group RSVPs for several gatherings come in one read;
-#   - the composer opens /my/news/share; the band sits before the feed;
+#   - the composer opens /my/post (the members' composer); the band sits before the feed;
 #   - the sheet: every rule under .lm, the type block still last, the moves
 #     only with the phone's yes to motion.
 
@@ -360,8 +360,8 @@ def test_the_composer(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     comp = html[html.index('<div class="lm-hcp">'):]
     comp = comp[:comp.index('<div class="lm-band"')]
-    assert '<a class="lm-hcpin" href="/my/news/share">Share a praise or a prayer…</a>' in comp
-    assert '<a class="lm-icb" href="/my/news/share" aria-label="Share a photo">' in comp
+    assert '<a class="lm-hcpin" href="/my/post">Share a praise or a prayer…</a>' in comp
+    assert '<a class="lm-icb" href="/my/post" aria-label="Share a photo">' in comp
     assert '<span class="lm-hcpav" aria-hidden="true">AR</span>' in comp
 
 

@@ -18,7 +18,8 @@ sizes and "Thursday · November 19"), then:
     the new look shows no faces) and the record's own action, in place of
     4.1's single Up next card (pick() now only says what the sentence names);
   - the composer (composer): Share a praise or a prayer (contract 2:
-    /my/news/share), and the band before the feed.
+    /my/post, the members' composer, member_posts), and the band before
+    the feed.
 Also for you moved below the feed. What follows is Look 4.1 as first built.
 
 Kevin approved the Look 4.1 Home mock on 2026-11-19 ("build this app"): calm
@@ -402,13 +403,13 @@ def week(cards: List[str]) -> str:
 
 
 def composer(face: str) -> str:
-    """Share a praise or a prayer (contract 2: /my/news/share today), the
-    member's own circle beside it, then the band before the feed. `face` is
-    trusted markup."""
+    """Share a praise or a prayer (contract 2: the members' composer,
+    /my/post, member_posts), the member's own circle beside it, then the band
+    before the feed. `face` is trusted markup."""
     import member_lumen_ui as lm
     return (f'<div class="lm-hcp"><span class="lm-hcpav" aria-hidden="true">{face}</span>'
-            f'<a class="lm-hcpin" href="/my/news/share">Share a praise or a prayer…</a>'
-            f'<a class="lm-icb" href="/my/news/share" aria-label="Share a photo">{lm.ic("image", 22)}</a></div>'
+            f'<a class="lm-hcpin" href="/my/post">Share a praise or a prayer…</a>'
+            f'<a class="lm-icb" href="/my/post" aria-label="Share a photo">{lm.ic("image", 22)}</a></div>'
             f'<div class="lm-band" aria-hidden="true"></div>')
 
 

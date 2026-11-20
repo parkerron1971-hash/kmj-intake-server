@@ -165,7 +165,10 @@ def test_home_is_the_feed_with_comments_under_each_post(church, monkeypatch):
     html = _client(church, monkeypatch).get("/my").text
     feed = _feed(html)
     assert '<h2 class="mp-sr" id="lm-feed-h">What&#x27;s happening at Grace Fellowship</h2>' in feed
-    assert '<a class="lf-comp-in" href="/my/post">Share a praise or a prayer…</a>' in feed   # contract 2: members post
+    # One composer on Home, above the feed (member_lumen_home's): contract 2, the members' composer.
+    assert html.count("Share a praise or a prayer…") == 1 and "lf-comp" not in html
+    assert '<a class="lm-hcpin" href="/my/post">Share a praise or a prayer…</a>' in html
+    assert html.index('class="lm-hcpin"') < html.index('<section class="lm-feed"')
     order = re.findall(r'<article class="lf-post" id="p-([^"]+)"', feed)
     assert order == [P["worship"], P["noah"], P["food"], P["denise"]]           # pinned first, then newest
     noah = _card(html, "noah")
