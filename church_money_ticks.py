@@ -390,7 +390,9 @@ def plan(business: Dict[str, Any], ch: Any, st: Dict[str, Any], viewer: str, tar
         # Off: down only. A raise (or a row this save itself would make, as
         # for a login moved down from Admin) waits for the switch.
         if more:
-            raise HTTPException(400, NOT_ON)
+            # Someone who still holds a tick hears the off-mode sentence the
+            # sheet shows them (OFF_HELD); nobody else has anything to lower.
+            raise HTTPException(400, OFF_NO_RAISE if now_t else NOT_ON)
         if ed == "owner" or (ed == "admin" and level_after != "admin"):
             kind = "lower"
         elif ed == "admin":

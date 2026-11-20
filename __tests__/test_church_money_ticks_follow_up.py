@@ -394,7 +394,7 @@ def test_off_the_owner_lowers_or_takes_a_tick_away_and_raises_nothing(off):
     for raise_ in ({"bank": True}, {"level": "work"}, {"who_gave": True}):
         with pytest.raises(HTTPException) as e:
             cs.change(_biz(db), OWNER, MANAGER, {"money": raise_})
-        assert e.value.status_code == 400 and e.value.detail == cmt.NOT_ON, raise_
+        assert e.value.status_code == 400 and e.value.detail == cmt.OFF_NO_RAISE, raise_
     out, pw = _change_pw(db, OWNER, MANAGER, {"money": {"level": None}})
     assert not pw and _held(db, MANAGER) is None
     with pytest.raises(HTTPException) as e:                       # nothing held now: nothing to do but give
@@ -411,7 +411,7 @@ def test_off_an_admin_lowers_as_when_on_and_a_holder_does_not(off):
     assert (held["level"], held["who_gave"]) == ("see", False)
     with pytest.raises(HTTPException) as e:
         cs.change(_biz(db), ADMIN, MEMBER, {"money": {"level": "work"}})
-    assert e.value.detail == cmt.NOT_ON and not db.t[mh.ASKS]    # no request while off either
+    assert e.value.detail == cmt.OFF_NO_RAISE and not db.t[mh.ASKS]    # no request while off either
     assert _status(cs.change, _biz(db), HOLDER, MEMBER, {"money": {"level": None}}) == 403
     assert _held(db, MEMBER) is not None
 
