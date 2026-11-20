@@ -46,6 +46,9 @@ import test_church_threads as tct
 from test_church_threads import fake  # noqa: F401  (the fixture)
 from test_member_lumen_home import EVENING, NY, TODAY, _client, _group, _occ, church  # noqa: F401
 
+import member_portal_church as _mpc
+
+UPCOMING_FOR = _mpc.upcoming_for            # before the church fixture stands in for it
 DEV = "00000000-0000-4000-8000-0000000009d1"
 POST = "00000000-0000-4000-8000-000000000881"
 
@@ -258,6 +261,55 @@ def test_the_row_escapes_and_draws_nothing_alone():
                    datetime(2026, 1, 1, 12, tzinfo=timezone.utc)) == "2h"
 
 
+def test_a_moments_share_is_member_lumen_shares_markup():
+    # The moments write Share through member_lumen_share.link (#1986), byte for byte the markup #1994 wrote by
+    # hand: kind moment, the "<kind>:<id>" story id, the icon, the label; nothing without an id.
+    import member_lumen_share as msh
+    a = mls.share("event", "00000000-0000-4000-8000-000000000303", msh.EVENTS_HREF, 'Food "Drive"', "Sat · 9 AM",
+                  "/public/site-assets/grace/food.webp")
+    assert a == ('<a class="lm-share lm-mvac" href="/events" data-share-kind="moment" '
+                 'data-share-title="Food &quot;Drive&quot;" data-share-sub="Sat · 9 AM" '
+                 'data-share-img="/public/site-assets/grace/food.webp" '
+                 'data-share-id="event:00000000-0000-4000-8000-000000000303" aria-label="Share">'
+                 + lm.ic("share", 24) + "</a>")
+    assert mls.share("event", "", "/events", "x") == "" and mls.share("message", None, "/sermons/x", "x") == ""
+    for gone in ("share_link", "event_shareable", "event_picture", "message_art", "events_on", "message_href",
+                 "MOMENT_OF", "EVENTS_HREF"):
+        assert not hasattr(mls, gone), gone                                    # one copy: member_lumen_share's
+
+
+def test_an_event_on_the_public_events_page_is_shared_from_upcoming_for(church, fake, monkeypatch):  # noqa: F811
+    # upcoming_for's own "public" mark (#1986), not a test's: the event's visibility on the public events page.
+    _group(fake)
+    MOD, PUB, PRIV = ("00000000-0000-4000-8000-0000000003a0", "00000000-0000-4000-8000-0000000003a1",
+                      "00000000-0000-4000-8000-0000000003a2")
+    soon = (TODAY + timedelta(days=2)).isoformat() + "T09:00"
+    fake.t["custom_modules"] = [{"id": MOD, "business_id": tct.BIZ, "archetype": "event_roster", "is_active": True,
+                                 "name": "Events", "archetype_params": {}}]
+    fake.t["module_entries"] = [
+        {"id": PUB, "module_id": MOD, "business_id": tct.BIZ, "status": "active", "created_at": "2026-11-02",
+         "data": {"title": "Food Drive", "date": soon}},
+        {"id": PRIV, "module_id": MOD, "business_id": tct.BIZ, "status": "active", "created_at": "2026-11-01",
+         "data": {"title": "Serve Night", "date": soon, "_visibility": "invite",
+                  "signups": [{"contact_id": tct.ANA, "status": "yes"}]}}]
+    me = next(dict(p) for p in fake.t["contacts"] if p["id"] == tct.ANA)
+    occ = UPCOMING_FOR(tct.BIZ, me)                                            # the real one
+    assert {o["entry_id"]: o["public"] for o in occ} == {PUB: True, PRIV: False}
+    church["occ"][:0] = occ
+    fake.biz[tct.BIZ]["settings"]["member_portal"]["pictures"] = {
+        "event:food-drive": {"url": "https://example.org/food.jpg", "look": "colour"},
+        "event:serve-night": {"url": "https://example.org/serve.jpg", "look": "colour"}}
+    fake.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": True}
+    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    pub, priv = slides[f"ev:{PUB}"], slides[f"ev:{PRIV}"]
+    assert f'data-share-kind="moment" data-share-title="Food Drive"' in pub
+    assert f'data-share-id="event:{PUB}"' in pub
+    assert "lm-share" not in priv                                             # invite only: no public page
+    fake.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": False}
+    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    assert "lm-share" not in slides[f"ev:{PUB}"]                              # the public events page off
+
+
 # ─── the doors ───────────────────────────────────────────────────────
 
 
@@ -372,8 +424,14 @@ def test_the_sheet():
     import member_lumen_stories
     assert parts[-1].template == member_lumen_fonts.template().template          # the type block last
     assert parts.index(member_lumen_stories.CSS) < len(parts) - 1
+    import member_lumen_share as msh
+    for of in ("post", "news", "prayer", "photo", "group", "devotional", ""):
+        with pytest.raises(ValueError):
+            mls.share(of, "x", "/", "A member's post")                       # never anything but the church's own
+        with pytest.raises(ValueError):
+            msh.attrs("moment", "/", "x", sid=f"{of}:x")
     with pytest.raises(ValueError):
-        mls.share_link("/", "post", "x", "A member's post")                 # never anything but the church's own
+        msh.attrs("moment", "/", "x", sid="event:")                          # a moment names the thing it shows
     css = member_lumen_stories.CSS.template
     # The segments fill and the slides rise only with the phone's yes to motion.
     for anim in ("animation:lmMvFill", "animation:lmMvIn"):

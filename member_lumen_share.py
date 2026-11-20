@@ -141,9 +141,14 @@ VERSE_HREF = "/"
 def attrs(kind: str, href: str, title: Any, *, sub: Any = "", img: Any = "", sid: Any = "", text: Any = "",
           tr: str = "") -> str:
     """The share control's attributes (contract 1), escaped. `tr` is a
-    verse's translation for its story picture (kjv, web, bsb, asv)."""
+    verse's translation for its story picture (kjv, web, bsb, asv). A
+    moment's `sid` is "<message|series|event>:<id>": the thing it shows."""
     if kind not in KINDS:
         raise ValueError(f"not a church kind: {kind!r}")
+    if kind == "moment":
+        of, _, rid = str(sid or "").partition(":")
+        if of not in MOMENT_OF or not rid:
+            raise ValueError(f"not a church moment: {sid!r}")
     out = [f'class="lm-share" href="{_e(href)}" data-share-kind="{kind}" data-share-title="{_e(title)}"']
     if sub:
         out.append(f'data-share-sub="{_e(sub)}"')

@@ -13,7 +13,6 @@ left_undone:
   - "The Kids door shows only to a parent or a kids leader (the Kids space) and says 'Check-in open' while the church's check-in is open, opening the Kids space. It never says 'Check in': children are checked in by a person at the door, the station or the kiosk, never from a phone (member_spaces_kids). Kevin's call if he wants a fourth door for everyone else (today they see three)."
   - "The Prayer door's 'N new' counts requests on the member's groups' prayer walls that are unread in Messages (the notes member_push records for each request). Opening the prayer wall itself doesn't mark them read; the door opens the group's conversation in Messages, which does."
   - "Faces of who's going on This week's cards: the new look shows numbers, never faces, until Kevin decides members' photos may show to other members."
-  - "Event moments get Share once PR #1986 is on main: it marks each occasion public (member_portal_church.upcoming_for's 'public'); until then no occasion is shareable here. When #1986 lands, swap member_lumen_stories.share_link / event_shareable / event_picture / message_art for member_lumen_share's (same markup)."
   - "Not checked on a real phone: Playwright Chromium and WebKit (Windows) 390x844 at 2x."
 decisions:
   - "Behind MEMBER_LUMEN. Off is byte for byte main: 588 page x scene dumps (85 pages, 7 scenes) identical."
@@ -25,7 +24,7 @@ decisions:
   - "Doors: Prayer ('3 new' from church_threads.summary's new per-thread prayer count, carried to the page in member_portal_threads.NOW beside the badge: no read; else 'Ask for prayer' to Connect's prayer section), Events ('N this week', else 'Calendar'), Serve while the church schedules volunteers ('Sun 9:45', 'N to answer', 'Your teams' or 'Ways to serve'; Connect's serving section or My serving), Kids (see left undone)."
   - "Reads: warm Home identical to main on every scene. Cold: each group's gathering's RSVPs now come in one read for all of the member's groups (group_gatherings.answers_many, kept 30 s as before; one group costs what it did). One new kept read, inside Home's gather and only when a pastoral post is in the last three days: whether the member may write to its author (member_pastor.may_message: contacts and msg_members), kept ten minutes per member (member_portal_lumen.may_write). No new routes, no new writes, no migration."
   - "CSS: member_lumen_stories.CSS joins the sheet before the share sheet's and the type block, which stays last; every rule under .lm; tokens only, so Light, Dark and Same as my phone draw it. The viewer is a photo in the dark in every look (white words over a black scrim, as Watch's cinema). Its pictures sit on their own layer (z-index 0): the app's photo span's z-index -2 inside the fixed viewer crashed WebKit's page restore on Back."
-related: [2026-11-19-lumen-home-top.md, 2026-11-19-member-lumen-moments.md, 2026-11-19-lumen-next-motion.md]
+related: [2026-11-20-lumen-tidy-ups.md, 2026-11-19-lumen-home-top.md, 2026-11-19-member-lumen-moments.md, 2026-11-19-lumen-next-motion.md]
 ---
 `member_lumen_stories.py` (new) is the moments row, its viewer, its script and CSS. `member_lumen_home.py`
 gained the doors, This week's cards and the composer (its featured card and its CSS went).
