@@ -737,3 +737,78 @@ def test_the_wiring():
     assert app.index("from member_im_new import router") < app.index("app.include_router(public_site_router)")
     portal = (root / "member_portal.py").read_text(encoding="utf-8")
     assert 'if sub == "/my/new":' in portal and "member_im_new.serve(" in portal
+
+
+
+# ─── 13. the Welcome Path (2026-11-20) ───────────────────────────────
+
+
+@pytest.fixture
+def path(fake, monkeypatch):
+    """The Welcome Path on, New here on, the church's own number."""
+    import new_here
+    from zoneinfo import ZoneInfo
+    fake.biz["settings"]["new_here"] = {"on": True}
+    fake.t["sms_numbers"] = [{"business_id": BIZ, "status": "active", "phone_number": "+15550109999"}]
+    fake.t["sms_opt_outs"] = []
+    monkeypatch.setattr(new_here, "path_on", lambda biz: True)
+    monkeypatch.setattr(new_here, "switched_on", lambda biz: True)
+    monkeypatch.setattr(new_here, "tz_of", lambda b: ZoneInfo("America/New_York"))
+    monkeypatch.setattr(new_here, "_origin", lambda biz: f"https://{HOST}")
+    return fake
+
+
+def test_with_the_path_on_the_form_asks_text_me_unticked(path, monkeypatch):
+    page = _t(_app(path, monkeypatch, ANA).get(imn.PATH))
+    assert 'name="texts" value="yes">' in page and 'name="texts" value="yes" checked' not in page
+    for words in ("Text me", "Grace Hill Church may text me about my visit and next steps, up to 4 msgs a week.",
+                  "Msg & data rates may apply. Reply STOP to end, HELP for help.", "We’ll text (555) 010-2030.",
+                  "texts come only if you tick Text me"):
+        assert words in page, words
+    assert "nothing is sent to you from it" not in page
+
+
+def test_without_the_churchs_texts_the_form_is_as_it_was(path, monkeypatch):
+    path.t["sms_numbers"] = []
+    page = _t(_app(path, monkeypatch, ANA).get(imn.PATH))
+    assert 'name="texts"' not in page and "nothing is sent to you from it" in page
+
+
+def test_a_new_member_who_ticks_text_me_joins_the_path(path, monkeypatch):
+    c = _app(path, monkeypatch, ANA)
+    r = _post(c, {**FORM, "texts": "yes"})
+    assert r.status_code == 303 and "done=saved" in r.headers["location"]
+    mine = path.contact(ANA)["metadata"]["new_here"]
+    assert mine["door"] == "app" and mine["texts_ok"] is True and mine["texts"] == "on" and mine["app"]["at"]
+    [yes] = path.t["sms_consents"]
+    assert yes["source"] == "member_app_new" and yes["phone"] == "+15550102030" and yes["business_id"] == BIZ
+    steps = {r["action"]["step"] for r in path.t["chief_scheduled_actions"]}
+    assert {"welcome", "monday", "invite"} <= steps and "thanks" not in steps
+    assert len(path.t["church_follow_ups"]) == 1
+    # Saving again (the same answers) starts nothing more.
+    _post(c, {**FORM, "texts": "yes"})
+    assert len(path.t["chief_scheduled_actions"]) == len(steps) and len(path.t["sms_consents"]) == 1
+
+
+def test_a_new_member_who_doesnt_tick_it_is_on_the_path_and_never_texted(path, monkeypatch):
+    _post(_app(path, monkeypatch, ANA), FORM)
+    mine = path.contact(ANA)["metadata"]["new_here"]
+    assert mine["door"] == "app" and mine["texts_ok"] is False and mine["texts"] == "no_yes"
+    assert path.t.get("sms_consents", []) == [] and path.t.get("chief_scheduled_actions", []) == []
+
+
+def test_someone_coming_a_while_never_joins_the_guest_path(path, monkeypatch):
+    _post(_app(path, monkeypatch, ANA), {**FORM, "first": "no", "texts": "yes"})
+    mine = path.contact(ANA)["metadata"]["new_here"]
+    assert "door" not in mine and mine["app"]["first_time"] is False
+    assert len(path.t["sms_consents"]) == 1, "their yes is still kept"
+    assert path.t.get("chief_scheduled_actions", []) == []
+
+
+def test_a_guest_handed_on_by_another_door_gets_a_note_not_a_second_follow_up(path, monkeypatch):
+    path.add("church_follow_ups", business_id=BIZ, contact_id=ANA, card_key="checkin:first", path_kind="connect",
+             status="open", created_at="2026-11-15T15:00:00Z")
+    _post(_app(path, monkeypatch, ANA), FORM)
+    assert [f["card_key"] for f in path.t["church_follow_ups"]] == ["checkin:first"]
+    [note] = path.t["church_follow_up_notes"]
+    assert note["body"].startswith("Also told the church in the member app.")

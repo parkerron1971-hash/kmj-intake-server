@@ -1982,6 +1982,7 @@ async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None
                 html, biz_id, (biz_rows[0].get("settings") if biz_rows else {}) or {})
             html = await _fill_give_slots(client, biz_id, slug, html)
             html = await _fill_faq_slot(client, biz_id, html)
+            html = await _fill_guest_texts_slot(client, biz_id, html)
         # page_path makes this page canonical to ITSELF. Without it every
         # secondary page claimed to be the home page, telling Google the
         # site has one page and three duplicates. The clean-path handlers
@@ -2452,10 +2453,12 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                                phone_raw: str, message: str,
                                attribution: Optional[Dict[str, Any]] = None,
                                form: str = "", fields: Optional[Dict[str, Any]] = None,
-                               submission_id: str = "", receipt: Optional[str] = None) -> Optional[str]:
+                               submission_id: str = "", receipt: Optional[str] = None,
+                               texts_ok: bool = False) -> Optional[str]:
     """Bound recent metadata; retain each complete submission in an immutable event.
     Conditional updates protect concurrent cards, and receipt ids make retries safe.
     Called in a worker thread, including the synchronous database operations.
+    `texts_ok`: a church connect card's "Text me" yes (the Welcome Path).
     """
     import urllib.parse
     import uuid
@@ -2546,7 +2549,7 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
         # follows up instead. Chief hands them to a leader (church_follow_up).
         try:
             import church_follow_up
-            church_follow_up.on_connect_card(business_id, contact_id, data, receipt or "")
+            church_follow_up.on_connect_card(business_id, contact_id, data, receipt or "", texts_ok=texts_ok)
         except Exception as exc:
             print(f"[contact-submit] church follow-up skipped biz={business_id[:8]}: {type(exc).__name__}", flush=True)
         return contact_id
@@ -2607,6 +2610,17 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
             print(f"[contact-submit] ministry lookup failed biz={business_id[:8]}: {exc!r}", flush=True)
             return failure(503, "Your submission could not be saved. Please try again.")
     receipt = website_forms.receipt_id(business_id, data)
+    # The Welcome Path: a church connect card's "Text me" box (the slot
+    # _fill_guest_texts_slot fills) is a yes to the church's texts. It's kept
+    # (sms_consents, source connect_card) before the guest joins New here's
+    # path through church_follow_up.on_connect_card.
+    texts_ok = False
+    if kind == "connect_card" and body.get("sms_consent") is True and data["phone"]:
+        import new_here
+        if await asyncio.to_thread(new_here.path_on, business_id):
+            texts_ok = await asyncio.to_thread(
+                new_here.keep_yes, business_id, data["phone"], source=new_here.YES_SOURCES["web"], name=name,
+                ip=rate_limit.trusted_client_ip(request) or "", user_agent=request.headers.get("user-agent") or "")
     stored = False
     try:
         if kind == "prayer_request":
@@ -2621,7 +2635,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
             stored = bool(await asyncio.to_thread(
                 _capture_contact_from_form, business_id, name, email, data["phone"], message,
                 attribution=attribution, form=kind, fields=fields,
-                submission_id=data["submission_id"], receipt=receipt))
+                submission_id=data["submission_id"], receipt=receipt, texts_ok=texts_ok))
             if not stored:
                 raise RuntimeError("contact capture did not confirm storage")
     except Exception as exc:
@@ -5843,6 +5857,36 @@ async def _fill_faq_slot(client: httpx.AsyncClient, biz_id: Optional[str], html:
     return business_faq.fill_slots(html, settings)
 
 
+GUEST_TEXTS_SLOT = "<!--solutionist:guest-texts-->"
+
+
+async def _fill_guest_texts_slot(client: httpx.AsyncClient, biz_id: Optional[str], html: str) -> str:
+    """A hand-built church connect card's "Text me" box (the Welcome Path,
+    2026-11-20): the page marks where it goes with GUEST_TEXTS_SLOT, inside
+    its form. Filled, unticked, with the church's words (new_here
+    .text_me_words) only where a yes would bring New here's texts; else the
+    mark goes and the card is as it was. Only a page that marks the slot pays
+    for the read; a failed read leaves the box out. The card's script sends
+    it as sms_consent (contact_submit_endpoint)."""
+    if not html or GUEST_TEXTS_SLOT not in html:
+        return html
+    words = ""
+    try:
+        rows = (await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+                if biz_id else None)
+        if isinstance(rows, list) and rows:
+            import new_here
+            words = await asyncio.to_thread(new_here.text_me_words, rows[0])
+    except Exception as e:
+        logger.info(f"[manual-site] guest texts: business read failed: {e}")
+    box = ""
+    if words:
+        import html as _h
+        box = ('<label class="check texts-ok"><input type="checkbox" name="sms_consent" value="yes"> '
+               f'<span><b>Text me.</b> {_h.escape(words)}</span></label>')
+    return html.replace(GUEST_TEXTS_SLOT, box)
+
+
 async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
                         custom_domain: Optional[str] = None,
                         page_path: str = "",
@@ -5885,6 +5929,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         html = _apply_manual_source(html, biz_id, biz_settings)
         html = await _fill_give_slots(client, biz_id, slug, html)
         html = await _fill_faq_slot(client, biz_id, html)
+        html = await _fill_guest_texts_slot(client, biz_id, html)
     html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for
@@ -6122,11 +6167,14 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
             status_code=404, media_type="text/html",
             headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
     from chief_host import FALLBACK_BASE
+    import new_here
+    # A church guest card's "Text me" box (the Welcome Path), or none.
+    text_me = await asyncio.to_thread(new_here.text_me_for_form, biz_rows[0], rows[0])
     html = render_form_page(
         biz_rows[0], rows[0],
         submit_url=f"{FALLBACK_BASE.rstrip('/')}/intake/submit",
         canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}",
-        site=site_rows[0] if site_rows else None)
+        site=site_rows[0] if site_rows else None, text_me=text_me)
     return HTMLResponse(content=html, media_type="text/html",
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
