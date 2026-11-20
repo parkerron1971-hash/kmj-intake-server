@@ -115,12 +115,15 @@ def test_the_bible_tab_is_the_word(bible, fake, monkeypatch):  # noqa: F811
     assert 'action="/my/bible" role="search"' in on and 'name="q"' in on             # find a passage or a word
     assert 'class="lm-cont" href="/my/bible/john/1"' in on and "Start here" in on   # nothing read yet: John 1
     assert 'class="lm-page"' in on and "Verse of the day" in on                       # the ivory card
-    # The church's devotionals: the running one first, its days as dots.
+    # Lumen Next: the running devotional on top with its days as dots
+    # (test_member_lumen_devotional); the rail keeps the church's others.
+    devo = on[on.index('<section class="lm-devo"'):]
+    devo = devo[:devo.index("</section>")]
+    assert "Seven Days of <em>Rest</em>" in devo and "Today: Unhurried" in devo
+    assert devo.count('<i class="d"></i>') == 2 and devo.count("<i") == 7
     rail = on[on.index('class="lm-rail lm-devs"'):]
-    assert rail.index("Seven Days of Rest") < rail.index("Psalms at Night")
-    assert "Day 3 · Unhurried" in rail and "Start any time" in rail
-    first = rail[:rail.index("</a>")]
-    assert first.count("<i class=on></i>") == 2 and first.count("<i") == 7
+    rail = rail[:rail.index("</div>")]
+    assert "Seven Days of Rest" not in rail and "Psalms at Night" in rail and "Start any time" in rail
     assert "From Grace Fellowship" in on
     # Reading plans: the church's, hers, then the four to start.
     assert "The church is reading" in on and "Your plan" in on
@@ -130,7 +133,7 @@ def test_the_bible_tab_is_the_word(bible, fake, monkeypatch):  # noqa: F811
     marks = on[on.index('class="lm-marks"'):]
     assert "1 highlight<" in marks and "1 note<" in marks and "1 saved" in marks
     assert 'href="/my/bible/books?t=ot"' in on and 'href="/my/bible/books?t=nt"' in on
-    assert "Listen to this chapter" not in on and ">Listen<" not in on
+    assert "Listen to this chapter" not in on                                         # the devotional's Listen only
 
 
 def test_the_bible_tab_picks_up_where_you_left_off(bible, fake, monkeypatch):  # noqa: F811

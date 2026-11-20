@@ -9,7 +9,9 @@ member_portal_reading, member_bible_marks). Who sees it: member_lumen.py
 (MEMBER_LUMEN). Off, every page here is today's, byte for byte.
 
   /my/bible ......... "The Word": the translation switcher beside the
-                      heading, find a passage or a word, pick up where you
+                      heading, today's devotional on top (Lumen Next:
+                      member_lumen_devotional.card; the rail below keeps the
+                      church's others), find a passage or a word, pick up where you
                       left off (a book spine), Today (the ivory verse card),
                       the church's devotionals as cards with progress dots,
                       reading plans (the church's, yours, the four to start),
@@ -30,7 +32,8 @@ kept in a cookie on the member's phone that the server reads, so the next
 chapter arrives dark), a thin gold line of how far through the chapter you
 are, a highlight that sweeps across the verse like ink, and Make a card
 (the verse drawn on the phone in four looks, shared or saved; nothing is
-sent anywhere). See READER_MORE_JS.
+sent anywhere). See READER_MORE_JS. A devotional's day reads at night by
+the same moon and cookie (NIGHT_JS, member_lumen_devotional).
 
 The mock's "Listen to this chapter" is not built (Kevin never approved
 it). Nothing here is made up: a block with nothing real in it is left out.
@@ -298,7 +301,14 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
         church_today, church_done = data.get("church_today"), data.get("church_done")
     mine = (data or {}).get("mine") or {}
     sts = _sts((data or {}).get("devs"), (data or {}).get("done"), mine, today, preview)
-    rail = dev_rail(biz, site, sts)
+    # Lumen Next: today's devotional on top (member_lumen_devotional); the
+    # rail below keeps the church's others.
+    import member_lumen_devotional as mld
+    devo, shown = "", None
+    if sts:
+        import devotional_voice as dvv
+        devo, shown = mld.card(biz, sts, listen=dvv.can_speak())
+    rail = dev_rail(biz, site, [x for x in sts if x[0] is not shown])
     devs_html = (f'<section aria-labelledby="lm-from-h">{lm.section(f"From {_short(biz)}", "/my/bible/plans", "All", hid="lm-from-h")}'
                  f'{rail}</section>') if rail else ""
     rows = plan_rows(church_today, church_done, mine, today)
@@ -309,9 +319,10 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
         plans_html = (f'<section aria-labelledby="lm-plans-h">{lm.section("Reading plans", link[0], link[1], hid="lm-plans-h")}'
                       f'{f"<div class=lm-list>{rows}</div>" if rows else ""}{grid}</section>')
     books = f'<section aria-labelledby="lm-books-h">{lm.section("Books", hid="lm-books-h")}{BOOKS}</section>'
-    body = (f'{head}{field(query)}{err}{continue_block(where, tr)}{today_html}{devs_html}{plans_html}'
+    body = (f'{head}{devo}{field(query)}{err}{continue_block(where, tr)}{today_html}{devs_html}{plans_html}'
             f'{marks_block(marks, preview)}{books}{_src(tr)}')
-    return _shell(biz, site, "Bible", body, tab="bible", who=me)
+    return _shell(biz, site, "Bible", body, tab="bible", who=me,
+                  script=mld.CARD_JS if "data-devo-listen" in devo else "")
 
 
 # ─── the reader ──────────────────────────────────────────────────────
@@ -470,7 +481,9 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 # 1080×1350, in one of four looks; Share hands the picture to the phone,
 # Save downloads it; a picture from another site that won't let the canvas
 # read it is left out rather than spoiling the card).
-READER_MORE_JS = r"""<script>(function(){
+# The moon and the line are their own part (_NIGHT), so a devotional's day
+# (member_lumen_devotional) reads at night by the same switch: NIGHT_JS.
+_NIGHT = r"""
 var B=document.body,moon=document.getElementById('lm-moon'),meta=document.querySelector('meta[name="theme-color"]');
 function night(on){B.classList.toggle('lm-dark',on);
  if(moon){moon.setAttribute('aria-pressed',on?'true':'false');if(meta)meta.setAttribute('content',moon.getAttribute(on?'data-night':'data-day'));}
@@ -481,7 +494,8 @@ function far(){queued=false;var h=document.documentElement.scrollHeight-window.i
  line.style.transform='scaleX('+(h>0?Math.max(0,Math.min(1,window.scrollY/h)):0).toFixed(4)+')';}
 if(line){window.addEventListener('scroll',function(){if(!queued){queued=true;requestAnimationFrame(far);}},{passive:true});
  window.addEventListener('resize',far);far();}
-var vc=document.getElementById('lm-vc'),read=document.querySelector('.bb-read');if(!vc||!read)return;
+"""
+_CARD = r"""var vc=document.getElementById('lm-vc'),read=document.querySelector('.bb-read');if(!vc||!read)return;
 // out of the page's layer, above the verse dock and the bar
 document.body.appendChild(vc);
 var cv=vc.querySelector('canvas'),cx=cv.getContext('2d'),W=1080,H=1350,P=96;
@@ -561,7 +575,10 @@ vc.addEventListener('keydown',function(e){
  if(e.key==='Tab'){var f=[].slice.call(vc.querySelectorAll('button')).filter(function(b){return b.offsetParent!==null;});if(!f.length)return;
   if(e.shiftKey&&document.activeElement===f[0]){e.preventDefault();f[f.length-1].focus();}
   else if(!e.shiftKey&&document.activeElement===f[f.length-1]){e.preventDefault();f[0].focus();}}});
-})();</script>"""
+"""
+READER_MORE_JS = "<script>(function(){" + _NIGHT + _CARD + "})();</script>"
+# Night reading alone: the moon and the line of how far you've read.
+NIGHT_JS = "<script>(function(){" + _NIGHT + "})();</script>"
 
 
 # ─── the book picker, search, highlights & notes ─────────────────────

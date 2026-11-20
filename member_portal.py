@@ -651,7 +651,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
            wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
-           lumen_head: str = "", lumen_dark: bool = False) -> str:
+           lumen_head: str = "", lumen_dark: bool = False, lumen_bar_colour: str = "") -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -674,7 +674,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     is its face and name in the bar at the top; today's look ignores it.
     `lumen_dark` (the Bible reader at night, member_lumen_bible) draws the
     page dark under the new look, the phone's bar with it; today's look
-    ignores it."""
+    ignores it. `lumen_bar_colour` is the phone's bar colour for a page
+    whose bar has its own colour under the new look (a devotional's day,
+    member_lumen_devotional: its deep green, by day and at night); today's
+    look ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
     from public_form_theme import resolve_theme, css_vars
@@ -756,6 +759,8 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
             import member_lumen_bible
             body_cls = body_cls[:-1] + ' lm-dark"'
             bar_colour = member_lumen_motion.CINE_BG if cine else member_lumen_bible.NIGHT_BG
+        if lumen_bar_colour:
+            bar_colour = lumen_bar_colour
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
