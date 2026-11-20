@@ -39,9 +39,10 @@ a reply pill when member messaging lets this member write there (the
 pastor, when member messages allow it; the group's chat; else the church's
 conversation while church threads are open), Love when it is a real
 reaction (a post's, through /my/news/react), and Share only on the church's
-own content (Sunday, an event, the devotional: contract 1's
-<a class="lm-share">; never a group's gathering nor a post, which are for
-members only). Its buttons are today's forms posting to today's routes
+own content with a public page (Sunday's message, or the service or an
+event on the public events page: contract 1's <a class="lm-share">, through
+member_lumen_share; never a group's gathering, a members' post, nor a
+devotional, which has no public page). Its buttons are today's forms posting to today's routes
 (each with its own session, same-site and rate checks): this file adds no
 route and no write.
 
@@ -135,11 +136,15 @@ def ring_initials(name: Any) -> str:
     return f'<span class="lm-moini" aria-hidden="true">{_e(ui.initials(name))}</span>'
 
 
-def share_link(href: str, kind: str, title: str, sub: str = "", img: str = "") -> str:
-    """Contract 1's share control: a link to the PUBLIC page (it opens it
-    without script); the share sheet takes the click when it's there."""
-    return (f'<a class="lm-share lm-mvac" href="{_e(href)}" data-share-kind="{_e(kind)}" data-share-title="{_e(title)}"'
-            f' data-share-sub="{_e(sub)}" data-share-img="{_e(img)}" aria-label="Share">{_ic("share", 24)}</a>')
+def share_link(href: str, of: str, sid: str, title: str, sub: str = "", img: str = "") -> str:
+    """Contract 1's share control for a moment (member_lumen_share.link,
+    which escapes it and refuses anything but the church's own kinds): a
+    link to the PUBLIC page it stands for (it opens that page without
+    script), its id "<message|event>:<id>" for the story picture. `img`
+    must already be public (the church's website)."""
+    import member_lumen_share as share
+    return share.link("moment", href, title, _ic("share", 24), sub=sub, img=img, sid=f"{of}:{sid}", cls="lm-mvac",
+                      label="Share")
 
 
 def love_form(post_id: str, on: bool) -> str:
@@ -220,7 +225,7 @@ function show(i){at=i;ss.forEach(function(s,k){s.hidden=k!==i;});
 function step(n){var i=at+n;if(i<0)i=0;if(i>=ss.length){close();return;}held=false;show(i);}
 function open(i,c){from=c;held=false;v.hidden=false;d.body.classList.add('lm-mvon');
  try{history.pushState({lmmv:1},'');pushed=true;}catch(e){pushed=false;}
- show(i);var x=v.querySelector('.lm-mvx');try{x.focus({preventScroll:true});}catch(e){x.focus();}}
+ show(i);var x=v.querySelector('.lm-mvx');try{x.focus({preventScroll:true,focusVisible:false});}catch(e){x.focus();}}
 function shut(){stop();gs.forEach(function(g){g.className='';});v.hidden=true;d.body.classList.remove('lm-mvon');at=-1;
  if(from){try{from.focus({preventScroll:true});}catch(e){}}}
 function close(){if(pushed){pushed=false;history.back();return;}shut();}

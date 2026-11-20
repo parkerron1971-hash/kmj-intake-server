@@ -13,8 +13,10 @@
 #     where member messaging lets this member write (the pastor when member
 #     messages allow it, else the church's conversation while it's open; the
 #     group's chat while it's on); Love only on a post (its own reaction
-#     form); Share only on the church's own content (contract 1), never a
-#     group's gathering nor a members' post;
+#     form); Share only on the church's own content with a public page
+#     (contract 1: Sunday's message, or the service or an event on the public
+#     events page), never a group's gathering, a members' post nor a
+#     devotional;
 #   - whether the member may write to the pastor is read once, inside Home's
 #     gather, and kept (no read on the next Home);
 #   - the doors: Prayer's "N new" from the unread count Messages already read,
@@ -119,10 +121,26 @@ def test_share_only_on_the_churchs_own(church, fake, monkeypatch):  # noqa: F811
     _devotional(monkeypatch)
     ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
     sv, gr, devo = slides[ids[1]], slides[ids[2]], slides[ids[0]]
-    assert '<a class="lm-share lm-mvac" href="/" data-share-kind="moment" data-share-title="Sunday Worship"' in sv
-    assert 'data-share-kind="verse"' in devo and 'href="/"' in devo
-    assert "lm-share" not in gr                                              # a group's gathering is the group's
-    assert "nw-rxf" not in sv + gr + devo                                    # Love is a post's reaction only
+    assert "lm-share" not in sv + gr + devo         # no public page: the service off the public events page, a
+    assert "nw-rxf" not in sv + gr + devo           # group's gathering, a devotional; Love is a post's reaction only
+    # The service on the public events page: shared as that event (contract 1, member_lumen_share).
+    church["occ"][0]["public"] = True
+    fake.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": True}
+    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    sv = slides[ids[1]]
+    assert ('<a class="lm-share lm-mvac" href="/events" data-share-kind="moment" data-share-title="Sunday Worship"'
+            in sv)
+    assert f'data-share-id="event:{church["occ"][0]["entry_id"]}"' in sv and 'aria-label="Share"' in sv
+    # Its message, when one is dated that day: shared as the message.
+    import member_portal_sermons as mps
+    sid = "00000000-0000-4000-8000-000000000611"
+    monkeypatch.setattr(mps, "load_library", lambda b: {"series": [], "sermons": [
+        {"id": sid, "title": "Hope Has a Name", "preached_on": church["occ"][0]["date"]}]})
+    ids, slides = _moments(_client(fake, monkeypatch).get("/my").text)
+    sv = slides[ids[1]]
+    assert "Hope Has a Name" in sv and f'href="/sermons/{sid}" data-share-kind="moment"' in sv
+    assert f'data-share-id="message:{sid}"' in sv
+    assert "lm-share" not in slides[ids[2]] + slides[ids[0]]
 
 
 def test_an_event_with_a_picture_is_a_moment(church, fake, monkeypatch):  # noqa: F811
@@ -137,8 +155,14 @@ def test_an_event_with_a_picture_is_a_moment(church, fake, monkeypatch):  # noqa
     assert "ev:00000000-0000-4000-8000-000000000303" in ids
     assert "ev:00000000-0000-4000-8000-000000000304" not in ids             # no picture of its own: not a moment
     ev = slides["ev:00000000-0000-4000-8000-000000000303"]
-    assert '<a class="lm-share lm-mvac" href="/events" data-share-kind="event" data-share-title="Food Drive"' in ev
-    assert 'data-share-img="https://example.org/food.jpg"' in ev and "12 going" in ev
+    assert 'src="https://example.org/food.jpg"' in ev and "12 going" in ev
+    assert "lm-share" not in ev                                              # not on the public events page
+    church["occ"][1]["public"] = True
+    fake.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": True}
+    ev = _moments(_client(fake, monkeypatch).get("/my").text)[1]["ev:00000000-0000-4000-8000-000000000303"]
+    assert '<a class="lm-share lm-mvac" href="/events" data-share-kind="moment" data-share-title="Food Drive"' in ev
+    assert 'data-share-id="event:00000000-0000-4000-8000-000000000303"' in ev
+    assert "data-share-img" not in ev                    # its picture is only in the app, not on the website
 
 
 def test_a_pastors_post_when_no_devotional_runs(church, fake, monkeypatch):  # noqa: F811
@@ -343,7 +367,7 @@ def test_the_sheet():
     import member_lumen_fonts
     import member_lumen_stories
     assert parts[-1].template == member_lumen_fonts.template().template          # the type block last
-    assert parts.index(member_lumen_stories.CSS) == len(parts) - 2
+    assert parts.index(member_lumen_stories.CSS) < len(parts) - 1
     css = member_lumen_stories.CSS.template
     # The segments fill and the slides rise only with the phone's yes to motion.
     for anim in ("animation:lmMvFill", "animation:lmMvIn"):

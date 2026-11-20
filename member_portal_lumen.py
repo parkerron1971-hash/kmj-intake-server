@@ -359,6 +359,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_app_samples as samples
     import member_app_ui as ui
     import member_lumen_home as lh
+    import member_lumen_share as lshare
     import member_lumen_stories as mls
     import member_lumen_ui as lm
     import member_photos as ph
@@ -566,8 +567,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 ring=ui.picture(pic, lk, "word"), bg=ui.picture(pic, lk, "word", night=True),
                 face=ui.picture(pic, lk, "word"), name=author or (dv_.get("title") or "Devotional"), href=devo["href"],
                 kicker=f"A word for {now:%A}", line=mls.clip(line, 160), sub=sub,
-                action=lh.link_button(devo["href"], "Read today's", "lm-mvb"), reply=to_church,
-                share=mls.share_link("/", "verse" if verse else "moment", line, verse or church, pic)))
+                action=lh.link_button(devo["href"], "Read today's", "lm-mvb"), reply=to_church))
     elif p_post:
         a = p_post.get("author") or {}
         aid = str(p_post.get("posted_by"))
@@ -597,12 +597,20 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         kicker = ("Your first Sunday" + (f" · {lh.clock(t)}" if t else "")) if firsts else lh.when(d, t, now)[0]
         line = (msg or {}).get("title") or svc["title"] or f"See you {'Sunday' if d.weekday() == 6 else d.strftime('%A')}."
         place = (svc_o or {}).get("location") or svc.get("where") or ""
+        # Shared only as what has a public page: its message, else the service on the public events page.
+        if msg:
+            share = mls.share_link(lshare.message_href(msg["id"]), "message", str(msg["id"]), line, kicker,
+                                   lshare.message_art(library, msg, site, pool))
+        elif svc_o and lshare.event_shareable(biz, svc_o):
+            share = mls.share_link(lshare.EVENTS_HREF, "event", str(svc_o.get("entry_id") or ""), line, kicker,
+                                   lshare.event_picture(biz, site, svc_o.get("title") or ""))
+        else:
+            share = ""
         moments.append(mls.moment(
             mid=f"sv:{d.isoformat()}", label="Sunday" if d.weekday() == 6 else f"{d:%A}",
             ring=ui.picture(pic, lk, "welcome"), bg=ui.picture(pic, lk, "welcome", night=True), face=church_face,
             name=church, href="/my/events", kicker=kicker, line=line, sub=" · ".join(x for x in (series, place) if x),
-            action=main, reply=(to_church[0], "Ask the church…") if to_church else None,
-            share=mls.share_link("/", "moment", line, kicker, pic)))
+            action=main, reply=(to_church[0], "Ask the church…") if to_church else None, share=share))
     for gx in week_g:
         if gx["start"] - now > timedelta(days=mls.GROUP_DAYS):
             continue
@@ -633,7 +641,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             kicker=kicker, line=o.get("title") or "",
             sub=" · ".join(x for x in (o.get("location") or "", f"{n_going} going" if n_going >= 2 else "") if x),
             action=event_act(o, "lm-mvb")[0], reply=(to_church[0], "Ask about this…") if to_church else None,
-            share=mls.share_link("/events", "event", o.get("title") or "", kicker, pic)))
+            share=mls.share_link(lshare.EVENTS_HREF, "event", str(o.get("entry_id") or ""), o.get("title") or "", kicker,
+                                 lshare.event_picture(biz, site, o.get("title") or ""))
+            if lshare.event_shareable(biz, o) else ""))
     stories_html = mls.row(moments)
 
     # Also for you: two picture tiles, by the day and the person.
