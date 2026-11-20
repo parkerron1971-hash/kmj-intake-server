@@ -727,6 +727,10 @@ app.include_router(new_here_router)
 # they scan the bulletin's "New here?" code; the first-time guests' choice.
 from guest_card import router as guest_card_router
 app.include_router(guest_card_router)
+# The Guests room (church_guests.py): People › Guests, This week and the
+# Scorecard. Read-only; behind GUEST_PATH (guest_path.switched_on).
+from church_guests import router as church_guests_router
+app.include_router(church_guests_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)
@@ -765,14 +769,21 @@ app.include_router(kids_station_router)
 # public_site_router.
 from church_router import router as church_router
 app.include_router(church_router)
+# Who calls our guests (guest_calls.py): the church's own way of handing a
+# first-time guest's welcome call, behind GUEST_PATH.
+from guest_calls import router as guest_calls_router
+app.include_router(guest_calls_router)
 # The leaders map's office routes (/church/map; CHURCH_MAP). BEFORE
 # public_site_router.
 from church_map_router import router as church_map_router
 app.include_router(church_map_router)
 # The roll: a church's People page in one read (people, their last 8
 # Sundays, families, groups, serving, This week). Read-only; CHURCH_ROLL.
+# Changing it (edit in place, add people, Tidy up, merge): church_roll_edit, CHURCH_ROLL_EDIT.
 from church_roll import router as church_roll_router
 app.include_router(church_roll_router)
+from church_roll_edit import router as church_roll_edit_router
+app.include_router(church_roll_edit_router)
 # Live: the team runs a live service and moderates its chat (live_router);
 # members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
 from live_router import router as live_router
@@ -828,6 +839,12 @@ app.include_router(stripe_data_proxy_router)
 # All under /payments/* prefix; FastAPI merges with the other
 # /payments routers cleanly.
 app.include_router(stripe_payments_router)
+# A church's Payments page, the new Overview (payments_overview.py):
+# GET /payments/overview, /payments/feed and /payments/feed.csv. Read-only,
+# behind PAYMENTS_OVERVIEW (off | owner | on, owner when unset). BEFORE
+# public_site_router.
+from payments_overview import router as payments_overview_router
+app.include_router(payments_overview_router)
 # The invoice drawer's Void button — POST /invoices/{id}/void, the same
 # path as Chief's void_invoice (pay-link cleanup included).
 from chief_invoice_actions import router as invoice_lifecycle_router
@@ -2082,6 +2099,17 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # The Welcome Path after week one (2026-11-20): the two roads' texts
+    # (came back, not yet, the church's next step, the door is open), the
+    # held texts once a reply is answered, and Saturday's heads-up to the
+    # greeters and the kids desk. Each send claimed first and read again
+    # (guest_path_weeks.sweep_tick); GUEST_PATH=off sends nothing.
+    try:
+        import guest_path_weeks as _gpw
+        scheduler.add_job(g("guest_path_weeks_sweep", _gpw.sweep_tick), "interval", minutes=15,
+                          id="guest_path_weeks_sweep")
+    except Exception as e:
+        print(f"   [warn] guest path weeks sweep not scheduled: {e}")
     # Prayer & care handed to an office login (2026-11-18, Kevin: "build the
     # heads-up and due time for logins"): the login hears once, two minutes
     # after the hand-off; when it's due they're reminded, a day late whoever

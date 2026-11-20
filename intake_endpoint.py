@@ -394,6 +394,28 @@ def _route_condition_matches(route, submission):
     return str(got).lower() == str(want).lower() if got is not None else False
 
 
+async def church_card(business: Dict[str, Any], card: Dict[str, Any], submission: Dict[str, Any],
+                      contact_id: str, *, texts_ok: bool, phone: str, name: str, ip: str,
+                      user_agent: str) -> Optional[Dict[str, Any]]:
+    """A church card's hand-off (church_follow_up.on_intake_form). With the
+    Welcome Path on, a guest card's "Text me" yes (form_page_renderer
+    TEXTS_NAME) is kept first (sms_consents, source guest_form, with the
+    request's address and browser), and the guest joins the path with it
+    (texts only with the yes kept). A yes on a card that isn't a guest door
+    (new_here.form_door) isn't one."""
+    import church_follow_up
+    import new_here
+    if texts_ok and phone and await asyncio.to_thread(new_here.form_door, business, card):
+        # Texts go only with the yes kept.
+        texts_ok = await asyncio.to_thread(new_here.keep_yes, business.get("id"), phone,
+                                           source=new_here.YES_SOURCES["form"], name=name, ip=ip,
+                                           user_agent=user_agent)
+    else:
+        texts_ok = False
+    return await asyncio.to_thread(church_follow_up.on_intake_form, business, card, submission, contact_id,
+                                   texts_ok=texts_ok, phone=phone)
+
+
 @router.post("/intake/submit")
 async def submit_intake(req: IntakeSubmission, request: Request):
     """
@@ -420,6 +442,11 @@ async def submit_intake(req: IntakeSubmission, request: Request):
     name = submission_data.get("name", "").strip()
     email = submission_data.get("email", "").strip()
     phone = submission_data.get("phone", "").strip()
+    # A church guest card's "Text me" box (form_page_renderer TEXTS_NAME,
+    # the Welcome Path): a yes to the church's texts, never one of the
+    # card's answers.
+    from form_page_renderer import TEXTS_NAME
+    texts_ok = str(submission_data.pop(TEXTS_NAME, "") or "").strip().lower() == "yes"
 
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
@@ -582,9 +609,9 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         # the answers name, with the path's first step and its clock
         # (church_follow_up). Never blocks the submission.
         try:
-            import church_follow_up
-            await asyncio.to_thread(church_follow_up.on_intake_form, business,
-                                    dict(form_config, id=req.form_id), submission_data, contact_id)
+            await church_card(business, dict(form_config, id=req.form_id), submission_data, contact_id,
+                              texts_ok=texts_ok, phone=phone, name=name, ip=client_ip,
+                              user_agent=request.headers.get("user-agent") or "")
         except Exception as e:
             logger.warning(f"[intake] church follow-up skipped: {type(e).__name__}")
 
@@ -784,9 +811,12 @@ async def public_form_page(form_id: str, request: Request):
     local = host in ("localhost", "127.0.0.1")
     scheme = "http" if local else "https"
     port = f":{request.url.port}" if (local and request.url.port) else ""
+    import new_here
+    text_me = await asyncio.to_thread(new_here.text_me_for_form, business, form)
     html = render_form_page(business, form, submit_url=f"{scheme}://{host}{port}/intake/submit",
                             canonical_url=canonical, site=site_rows[0] if site_rows else None,
-                            embedded=str(getattr(request, "query_params", {}).get("embed", "")) == "1")
+                            embedded=str(getattr(request, "query_params", {}).get("embed", "")) == "1",
+                            text_me=text_me)
     return HTMLResponse(content=html, media_type="text/html",
                         headers={"Cache-Control": "no-store"})
 

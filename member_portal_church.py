@@ -56,6 +56,10 @@ DONE = {
     "photo_removed": "Your photo is removed.",
     "posted": "Posted to Youth.",
     "post_removed": "Your post is removed.",
+    # A member's post in one of their groups (member_posts.ON_GROUP_PAGE).
+    "group_posted": "It's up. Your group can see it now.",
+    "group_post_held": "Thanks. A safety officer looks at this one before it shows.",
+    "group_post_removed": "Taken down.",
     "released": "Released. They're on their way home.",
     "lesson_posted": "Lesson posted. Parents see it now.",
     "lesson_removed": "Your lesson is removed.",

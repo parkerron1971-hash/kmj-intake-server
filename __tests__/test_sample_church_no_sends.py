@@ -89,6 +89,9 @@ TICKS = {
     "notif_evening_summary": "notification_engine:generate_evening_summary_for_all",
     "notif_unanswered_leads": "notification_engine:unanswered_lead_sweep",
     "church_follow_up_sweep": "church_follow_up:sweep",
+    # The Welcome Path after week one: its guests' churches go through exclude() and drop_samples,
+    # and each church is read again and asks skip() before anything is sent.
+    "guest_path_weeks_sweep": "guest_path_weeks:sweep_tick",
     "care_handoff_sweep": "care_handoff:sweep_tick",
     "church_checkin_sweep": "church_checkin:sweep",
     "church_shepherd_sweep": "church_shepherd_signals:sweep",

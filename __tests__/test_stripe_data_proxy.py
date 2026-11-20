@@ -167,3 +167,79 @@ def test_refunds_owner_gate_rejects_no_connect(monkeypatch):
 
 
 import pytest  # noqa: E402  (needed for raises() blocks above)
+
+
+# ─── Refunds for a login that may not see who gave ───────────────────
+
+_REFUND_ROW = {
+    "id": "re_1", "object": "refund", "amount": 4000, "currency": "usd", "created": 1763600000,
+    "status": "succeeded", "reason": "requested_by_customer", "receipt_number": "1234-5678",
+    "metadata": {"refunded_by": "someone"},
+    "destination_details": {"type": "card", "card": {"reference": "ref_abc"}},
+    "charge": {
+        "id": "ch_1", "object": "charge", "amount": 4000, "amount_refunded": 4000, "currency": "usd",
+        "created": 1763500000, "paid": True, "refunded": True, "status": "succeeded",
+        "billing_details": {"name": "Dana Hill", "email": "dana@example.invalid", "phone": "555-0100",
+                            "address": {"line1": "1 Elm"}},
+        "receipt_email": "dana@example.invalid", "customer": "cus_123",
+        "payment_method_details": {"type": "card", "card": {"last4": "4242", "brand": "visa"}},
+        "metadata": {"source_type": "gift", "source_id": "g1", "giver_name": "Dana Hill",
+                     "covered_fee_cents": "150"},
+    },
+}
+
+
+def _refunds_as(monkeypatch, uid, sees):
+    import asyncio
+    import church_keys
+    import church_money_gate
+    import sb_clients
+    import stripe_data_proxy as sdp
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [{
+        "id": "biz1", "name": "Grace Harbor", "owner_id": "the_owner", "stripe_account_id": "acct_x"}])
+    monkeypatch.setattr(church_money_gate, "tick_admits", lambda *a, **k: True)
+    monkeypatch.setattr(church_money_gate, "sees_givers", lambda *a, **k: sees)
+    monkeypatch.setattr(church_keys, "wall", lambda *a, **k: None)
+    seen = {}
+
+    async def fake_get(path, *, stripe_account_id, params=None):
+        seen["path"], seen["acct"] = path, stripe_account_id
+        import copy
+        return {"data": [copy.deepcopy(_REFUND_ROW)], "has_more": False}
+    monkeypatch.setattr(sdp, "_stripe_get", fake_get)
+
+    class _U:
+        id = uid
+    out = asyncio.run(sdp.list_refunds(biz="biz1", user=_U()))
+    assert seen == {"path": "/refunds", "acct": "acct_x"}
+    return out["data"][0]
+
+
+def test_a_bank_holder_without_who_gave_reads_refunds_with_no_giver_in_them(monkeypatch):
+    row = _refunds_as(monkeypatch, "treasurer", sees=False)
+    text = repr(row)
+    for secret in ("Dana", "dana@", "555-0100", "1 Elm", "4242", "visa", "cus_123", "ref_abc", "1234-5678",
+                   "refunded_by", "covered_fee"):
+        assert secret not in text, secret
+    assert row["amount"] == 4000 and row["status"] == "succeeded" and row["reason"] == "requested_by_customer"
+    ch = row["charge"]
+    assert ch["metadata"] == {"source_type": "gift", "source_id": "g1"}     # the tab still labels it a Gift
+    assert ch["payment_method_details"] == {"type": "card"}
+    assert ch["amount_refunded"] == 4000 and ch["created"] == 1763500000
+
+
+def test_the_owner_and_a_login_that_sees_who_gave_read_refunds_as_before(monkeypatch):
+    assert _refunds_as(monkeypatch, "the_owner", sees=False) == _REFUND_ROW
+    assert _refunds_as(monkeypatch, "treasurer", sees=True) == _REFUND_ROW
+
+
+def test_a_failed_who_gave_check_hides_the_giver(monkeypatch):
+    import church_money_gate
+
+    def boom(*a, **k):
+        raise RuntimeError("read failed")
+    row = _refunds_as(monkeypatch, "treasurer", sees=False)
+    assert "Dana" not in repr(row)
+    monkeypatch.setattr(church_money_gate, "sees_givers", boom)
+    import stripe_data_proxy as sdp
+    assert sdp._sees_givers("biz1", object()) is False

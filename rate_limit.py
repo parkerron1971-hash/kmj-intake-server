@@ -248,6 +248,14 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # The monthly report to the pastor (church_monthly_report.py), per church:
     # once a month, a resend by name; this only stops a tap loop.
     "church_monthly_report_send": (int(os.environ.get("RL_CHURCH_MONTHLY_REPORT_SEND_PER_HOUR", "4")), 3600),
+    # A church's Payments page (payments_overview.py), per login. The feed:
+    # pages, filters and searches, mostly answered from the minute's kept
+    # read. Its download for the books can read up to 20 Stripe pages. A read
+    # that has to go to Stripe at all (nothing kept for that church and period
+    # in the last minute) takes from payments_stripe as well.
+    "payments_feed": (int(os.environ.get("RL_PAYMENTS_FEED_PER_MIN", "60")), 60),
+    "payments_feed_csv": (int(os.environ.get("RL_PAYMENTS_FEED_CSV_PER_10MIN", "6")), 600),
+    "payments_stripe": (int(os.environ.get("RL_PAYMENTS_STRIPE_PER_10MIN", "30")), 600),
 }
 _DEFAULT = (60, 60)
 

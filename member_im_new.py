@@ -45,6 +45,13 @@ signed in to the member app, and it lands in the same places.
   THE STAFF    the New here room (new_here.guests_of) lists them with this
                week's guests who texted, and Follow-up has their card ("New
                here (member app) card").
+  THE PATH     since 2026-11-20, with the Welcome Path on (guest_path), a
+               member who's new joins the same path as a guest who texts the
+               word (new_here.enroll, door "app"): the welcome texts when
+               they tick "Text me" (shown only where the church's texts would
+               go, kept as an sms_consents row, source member_app_new), and
+               the call either way (join_path). Someone already handed on by
+               another door gets a note there, never a second follow-up.
 
 WHO. Both switches must say yes:
   MEMBER_LUMEN  member_lumen.visible: the redesign's own (preview by default:
@@ -307,6 +314,10 @@ def hand_on(business_id: str, contact_id: str, a: Mapping[str, Any]) -> bool:
         if texted:
             return cfu._note(biz, str(texted["id"]), "chief", "note",
                              f"Also told the church in the member app. {said}") is not None
+        # The Welcome Path: handed on by another door (the kids desk, the
+        # website's card): a note there, never a second follow-up.
+        if new_here.second_door(biz, cid, CARD_KEY, answers, "Also told the church in the member app."):
+            return True
         row = cfu.start(biz, cid, card_key=CARD_KEY, card_name=CARD_NAME, kind="connect", answers=answers,
                         source_event=source_event(cid), what="New here cards", route_answers=[])
         if row:
@@ -612,6 +623,7 @@ PAGE_CSS = """
 .imn .ln-ta:focus{box-shadow:inset 0 0 0 1.5px var(--ln-fill);}
 .imn .ln-ta::placeholder{color:var(--fg3);}
 .imn .ln-send{margin-top:28px;}
+.imn .ln-texts{margin-top:18px;}
 .imn .ln-fine{display:flex;gap:10px;align-items:flex-start;margin:14px 0 0;font:400 12.5px/1.45 var(--mb-ui);color:var(--fg3);}
 .imn .ln-fine .ln-ico{margin-top:1px;}
 .imn .ln-err{margin:18px 0 0;padding:12px 14px;border-radius:14px;background:var(--s1);color:var(--error);font:600 14px/1.4 var(--mb-ui);}
@@ -665,6 +677,28 @@ def _radio(name: str, value: str, title: str, sub: str, checked: bool) -> str:
             f'<span><b>{_e(title)}</b>{sub_html}</span></label>')
 
 
+TEXTS_NAME = "texts"         # the "Text me" box's field
+
+
+def text_me(business: Mapping[str, Any], me: Mapping[str, Any]) -> Tuple[str, str]:
+    """(the "Text me" box's words, the mobile it texts) for this member, or
+    ("", "") for no box: the Welcome Path on, the church's texts would go
+    (new_here.text_me_words), and a mobile on their record (a member who
+    signed in by email has it read once). Never raises."""
+    try:
+        import new_here
+        words = new_here.text_me_words(dict(business))
+        if not words:
+            return "", ""
+        phone = new_here.mobile((me or {}).get("phone"))
+        if not phone and (me or {}).get("id"):
+            rows = _rows(f"/contacts?id=eq.{_q(me['id'])}&business_id=eq.{_q(business['id'])}&select=phone&limit=1")
+            phone = new_here.mobile((rows or [{}])[0].get("phone"))
+        return (words, phone) if phone else ("", "")
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
 def render_form(business: Mapping[str, Any], site: Any, request: Request, me: Mapping[str, Any],
                 app: Optional[Dict[str, Any]], *, preview: bool = False) -> str:
     """GET /my/new: the one screen."""
@@ -684,6 +718,14 @@ def render_form(business: Mapping[str, Any], site: Any, request: Request, me: Ma
     shown = f'<p class="ln-err" role="alert">{_e(ERRORS[err])}</p>' if err in ERRORS else ""
     if preview and not shown:
         shown = f'<p class="ln-err" role="note">{_e(ERRORS["preview"])}</p>'
+    words, phone = text_me(business, me)
+    texts = (f'<label class="ln-ch ln-texts"><input type="checkbox" name="{TEXTS_NAME}" value="yes">'
+             f'<span><b>Text me</b><span>{_e(words)} We\u2019ll text {_e(new_here.pretty_phone(phone))}.'
+             '</span></span></label>') if words else ""
+    fine = ("Only your church sees this, and your prayer goes only to the pastors. Nothing is posted, and texts "
+            "come only if you tick Text me." if words else
+            "Only your church sees this, and your prayer goes only to the pastors. Nothing is posted, and "
+            "nothing is sent to you from it.")
     body = f"""<header class="ln-mast"><p class="ln-eb">I'm new here</p><h1 class="ln-disp">Tell us about <em>you</em></h1>
 <p class="ln-sub">Tell {church} you're new, and get a simple path to find your place. It takes a minute.</p></header>{shown}
 <form method="post" action="{PATH}">
@@ -703,8 +745,8 @@ def render_form(business: Mapping[str, Any], site: Any, request: Request, me: Ma
 <div class="ln-choice">{boxes}</div></fieldset>
 <label class="ln-q" for="imn-prayer">Anything we can pray for?</label>
 <textarea class="ln-ta" id="imn-prayer" name="prayer" rows="4" maxlength="{PRAYER_MAX}" placeholder="Only our pastors see this."></textarea>
-<div class="ln-send"><button class="ln-btn block" type="submit">Tell the church</button></div>
-<p class="ln-fine">{icon("lock", 15)}<span>Only your church sees this, and your prayer goes only to the pastors. Nothing is posted, and nothing is sent to you from it.</span></p>
+{texts}<div class="ln-send"><button class="ln-btn block" type="submit">Tell the church</button></div>
+<p class="ln-fine">{icon("lock", 15)}<span>{_e(fine)}</span></p>
 </form>"""
     return _shell(dict(business), site, "I'm new here", _wrap(body, page=True), tab="connect", who=dict(me), back=BACK)
 
@@ -835,7 +877,45 @@ async def post_new(request: Request):
     ok, code = await asyncio.to_thread(save, biz, me, answers)
     if not ok:
         return _go(PATH, err=code, edit="1")
+    import rate_limit
+    await asyncio.to_thread(join_path, biz, me, answers, texts_ok=str(form.get(TEXTS_NAME) or "") == "yes",
+                            ip=rate_limit.trusted_client_ip(request) or "",
+                            user_agent=request.headers.get("user-agent") or "")
     return _go(PATH, done=code)
+
+
+def join_path(business: Mapping[str, Any], me: Mapping[str, Any], a: Mapping[str, Any], *, texts_ok: bool,
+              ip: str = "", user_agent: str = "") -> Optional[Dict[str, Any]]:
+    """The Welcome Path (2026-11-20): a member's "Text me" yes is kept
+    (sms_consents, source member_app_new) for the mobile on their record,
+    and a member who's new ("I'm new") joins the path, door "app": the
+    welcome texts with that yes, the call either way. One guest, one path:
+    someone already on one this week starts nothing new. New here's
+    metadata as it stands, or None (the path is off, they've been coming a
+    while, a read failed). Sync; never raises: what they told the church is
+    already saved."""
+    import new_here
+    biz = str(business["id"])
+    try:
+        if not new_here.path_on(biz):
+            return None
+        rows = _rows(f"/contacts?id=eq.{_q(me['id'])}&business_id=eq.{_q(biz)}"
+                     "&select=id,name,phone,metadata&limit=1")
+        if not rows:
+            return None
+        person = rows[0]
+        church = new_here._business(biz)
+        # The box shows only where the church's texts would go: a yes from
+        # anywhere else (an old page, a hand-made post) isn't one.
+        texts_ok = bool(texts_ok and church and new_here.can_text(church)
+                        and new_here.keep_yes(biz, person.get("phone"), source=new_here.YES_SOURCES["app"],
+                                              name=person.get("name") or "", ip=ip, user_agent=user_agent))
+        if not a.get("first_time") or not church:
+            return None
+        return new_here.enroll(church, person, door="app", texts_ok=texts_ok)
+    except Exception:  # noqa: BLE001
+        logger.warning("im new: the Welcome Path wasn't joined (business %s)", biz[:8], exc_info=True)
+        return None
 
 
 # ─── Connect's card ───────────────────────────────────────────────────
