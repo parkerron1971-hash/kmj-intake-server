@@ -286,16 +286,21 @@ def _wd(at: datetime) -> str:
     return at.strftime("%A")
 
 
-def _starts(at: datetime, first: bool = False) -> str:
+def _starts(at: datetime, first: bool = False, event: bool = False) -> str:
     """"service at 10:30 AM" on a Sunday, "starts at 7:00 PM" on any other
-    day; `first` begins a sentence ("Service at", "Starts at")."""
-    word = "service" if at.weekday() == 6 else "starts"
+    day and for an event date on a Sunday afternoon (never Sunday's
+    service); `first` begins a sentence ("Service at", "Starts at")."""
+    word = "service" if at.weekday() == 6 and not event else "starts"
     return f'{word.capitalize() if first else word} at {_at_clock(at)}'
 
 
-def _occasion(at: datetime, title: str) -> str:
+def _occasion(at: datetime, title: str, event: bool = False) -> str:
     """What an ask is for: "Easter Sunday", "Nov 22" for a plain Sunday;
-    "Outreach night, Thursday" (or "Thursday, Nov 19") on another day."""
+    "Outreach night, Thursday" (or "Thursday, Nov 19") on another day; a
+    Sunday afternoon's event date by its title, "Sunday, Dec 13 · Fellowship
+    dinner"."""
+    if at.weekday() == 6 and event:
+        return f"{_wd(at)}, {_day(at)}" + (f" · {title}" if title not in ("", "Sunday service", "An event") else "")
     if at.weekday() == 6:
         return (title + ("" if "sunday" in title.lower() else " Sunday")) if title != "Sunday service" else _day(at)
     if title in ("", "Sunday service", "An event"):
@@ -441,7 +446,7 @@ def _ask_row(a: Dict[str, Any]) -> str:
     import member_app_ui as ui
     at = a["service"]["at"]
     t = a["service"]["title"]
-    what = f'{_e(a["place"])}, {_e(_occasion(at, t))}'
+    what = f'{_e(a["place"])}, {_e(_occasion(at, t, a["service"].get("event") is True))}'
     when = _weekday(a.get("asked_at"), at.tzinfo)
     who = (f'{_e(_first(a["from"]))} asked you to cover · tap to answer' if a.get("from")
            else f'{_e(a["asked_by"] or a["team"])} asked{" " + when if when else ""} · tap to answer')
@@ -470,7 +475,7 @@ def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str, soo
     label = f"this {_wd(at)}" if this else (title if title not in ("Sunday service", "An event") else _wd(at))
     if this and c["service"].get("event") and title not in ("", "An event"):
         label = f"{title} {label}"
-    be = f'Be there {_clock(c["call_time"])}' if c["call_time"] else _starts(at, True)
+    be = f'Be there {_clock(c["call_time"])}' if c["call_time"] else _starts(at, True, c["service"].get("event") is True)
     if c.get("with"):
         be += f' · with {_names(c["with"])}'
     if c.get("swap_name"):
@@ -709,7 +714,9 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
         kicker = f'{v["team"]} · {v["asked_by"]} asked' if v["asked_by"] else v["team"]
         head = f'Can you serve on <em>{_e(v["place"])}?</em>'
     title = _wd(at)
-    su = (f'Be there by {_clock(v["call_time"])} · {_starts(at)}' if v["call_time"] else _starts(at, True))
+    ev_ = v.get("event") is True
+    su = (f'Be there by {_clock(v["call_time"])} · {_starts(at, event=ev_)}' if v["call_time"]
+          else _starts(at, True, ev_))
     if v.get("where"):
         su += f' · {v["where"]}'
     top = (f'<div class="sv-top">{_date(at)}<span class="t"><span class="ti">{_e(title)}'
@@ -793,7 +800,7 @@ def ics(biz: Dict[str, Any], v: Dict[str, Any]) -> str:
         f"DTSTART:{fmt(start)}", f"DTEND:{fmt(end)}",
         f"SUMMARY:{clean(v['place'])} · {clean(church)}" if not v.get("event")
         else f"SUMMARY:{clean(v['place'])} · {clean(v['title'])} · {clean(church)}",
-        f"DESCRIPTION:{clean(v['team'])}. {clean(_starts(at, True))}.",
+        f"DESCRIPTION:{clean(v['team'])}. {clean(_starts(at, True, v.get('event') is True))}.",
         *([f"LOCATION:{clean(v['where'])}"] if v.get("where") else []),
         "END:VEVENT", "END:VCALENDAR", ""])
 
@@ -843,7 +850,7 @@ def render_pack(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                        for r in p["roles"])
         roles = f'<div class="sv-pk-as"><nav class="sv-seg" aria-label="See the pack as">{tabs}</nav></div>'
     due = (f'Be there by {_hm(role["call"])}' if role["call"] else f'The service is at {_hm(at.strftime("%H:%M"))}'
-           if at.weekday() == 6 else f'It starts at {_hm(at.strftime("%H:%M"))}')
+           if at.weekday() == 6 and not p.get("event") else f'It starts at {_hm(at.strftime("%H:%M"))}')
     where = f'{role["place"]} · {role["team"]}' + (f' · {p["where"]}' if p.get("where") else "")
     if role["here"]:
         here = (f'<div class="sv-pk-here done h-teal"><span class="sv-pk-disc" aria-hidden="true">{ui.icon("check", 20)}</span>'

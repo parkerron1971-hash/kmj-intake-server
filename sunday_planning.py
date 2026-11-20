@@ -19,6 +19,9 @@
 #   GET    /planning/events?business_id=            upcoming Services & Events entries that could be an event date
 #   POST   /planning/dates                          an event date that isn't a Sunday, for the volunteer teams
 #   DELETE /planning/dates/{service_id}             take an event date off (only while nobody was asked)
+#   PUT    /planning/dates/{service_id}/needs       an event date's own numbers for the Volunteers' places
+#   GET    /planning/requests?business_id=          events' asks for the serving teams, waiting and lately answered
+#   POST   /planning/requests/{id}/answer           yes (the event date is made) or no, with a note back
 #   GET    /planning/candidates?business_id=&service_id=&position_id=
 #                                                   who could take a place, the most rested first
 #   POST   /planning/ask                            ask someone; it goes out on the next sweep
@@ -51,6 +54,18 @@
 # serve it: ChurchSavvy's teams are never asked, filled or shown a place on
 # it, and ChurchSavvy's door doesn't list it. It doesn't count toward a
 # team's Sundays a month. CHURCH_EVENT_VOLUNTEERS decides who may add one.
+#
+# An event's volunteers (event_volunteers.py, docs/EVENT_VOLUNTEERS.md; Kevin
+# 2026-11-20, "go"): an event in Services & Events asks the serving teams for
+# its own number of each Volunteers place, and whoever changes the
+# Volunteers' teams says yes with one tap. The yes makes the event date with
+# those numbers (worship_services.needs) through make_date, the one way an
+# event date is made, here and from an ask. Every slot loop counts a place
+# with serve_dates.needed(service, place): an event date with numbers needs
+# exactly those (0 for a place it doesn't name), anything else the place's
+# Sunday number. EVENT_VOLUNTEERS also lets an event date fall on a Sunday
+# afternoon (never within two hours of a Sunday service) and makes a typed
+# date a Services & Events entry too.
 from __future__ import annotations
 
 import logging
@@ -78,6 +93,8 @@ MAX_TRAINED = 100
 MAX_WEEKS = 8
 MAX_EVENT_DATES = 30        # event dates still to come at one church
 EVENT_AHEAD_DAYS = 180      # an event date this far ahead at most
+SUNDAY_HOURS = 2            # a Sunday event date starts at least this long from a Sunday service
+SUNDAY_CLASH = "That's during Sunday's service. Sunday services are already on Who serves when."
 TEEN_UNDER = 18
 FILLED_BY = "Chief, filling the month"
 # The places a new team can start with: shapes, never anyone's names.
@@ -892,8 +909,10 @@ def _services(biz: str, lo: datetime, hi: datetime, zone, plans: bool = False) -
                "starts_at": r["starts_at"], "day": at.date().isoformat(), "time": at.strftime("%H:%M"),
                "month": at.strftime("%Y-%m"), "kind": sd.EVENT if event else sd.SERVICE, "weekday": sd.weekday(at)}
         if event:
+            # Its own numbers for the Volunteers' places (null: their Sunday numbers).
             svc.update({"place": r.get("place") or "", "only": VOLUNTEERS,
-                        "event_entry_id": str(r["event_entry_id"]) if r.get("event_entry_id") else None})
+                        "event_entry_id": str(r["event_entry_id"]) if r.get("event_entry_id") else None,
+                        "needs": r["needs"] if isinstance(r.get("needs"), dict) else None})
         out.append(svc)
     out.sort(key=lambda x: x["starts_at"] and datetime.fromisoformat(str(x["starts_at"]).replace("Z", "+00:00")))
     return out
@@ -975,6 +994,8 @@ class _Board:
         if not team or not serves(self.service[sid], team):
             return []
         place = next(p for p in team["places"] if p["id"] == pid)
+        if sd.needed(self.service[sid], place) < 1:
+            return []           # an event date that doesn't need this place
         level = {p["contact_id"]: p["level"] for p in place["people"]}
         month = self.service[sid]["month"]
         # An event date isn't one of the team's Sundays a month: no cap.
@@ -1029,6 +1050,10 @@ def schedule(business_id: str, user: AuthedUser = Depends(require_user), weeks: 
     who = _people(biz, [r.get("contact_id") for r in rows] + [r.get("swap_to") for r in rows]
                   + [a["contact_id"] for a in board.away])
     doors = _doors(biz, user, roles)
+    # How many each shown place needs at each service (serve_dates.needed): its
+    # Sunday number, or an event date's own (0: not needed that night).
+    services = [{**s, "needed": {p["id"]: sd.needed(s, p) for t in teams if serves(s, t) for p in t["places"]}}
+                for s in services]
     return {
         "from": board.first.isoformat(), "weeks": weeks,
         "services": services,
@@ -1038,7 +1063,18 @@ def schedule(business_id: str, user: AuthedUser = Depends(require_user), weeks: 
                   "starts_on": a["starts_on"], "ends_on": a["ends_on"]} for a in board.away],
         "can_write": can(roles, "serve"),
         "owner": which, **doors, "event_dates": _may_add_dates(biz, user, doors),
+        # Events' asks for the serving teams still waiting (the band; event_volunteers).
+        "requests_waiting": _requests_waiting(biz, user, doors),
     }
+
+
+def _requests_waiting(biz: str, user: AuthedUser, doors: Dict[str, Any]) -> int:
+    """How many events' asks wait at this church: 0 outside a church whose
+    teams have owners, before the migration and with EVENT_VOLUNTEERS closed."""
+    if not doors.get("two_doors"):
+        return 0
+    import event_volunteers
+    return event_volunteers.waiting_count(biz, user)
 
 
 @router.post("/sundays")
@@ -1087,11 +1123,40 @@ def _dates_gate(biz: str, user: AuthedUser, switch: bool = True) -> Dict[str, An
     return who
 
 
-def _upcoming_events(biz: str, zone, now: datetime) -> List[Dict[str, Any]]:
+def _sunday_services(biz: str, lo: datetime, hi: datetime) -> List[datetime]:
+    """When each Sunday service (kind service, not a template) starts in the
+    window: the plans alone, never an event date."""
+    out = []
+    for r in _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+                   f"{sd.plans_only()}&starts_at=gte.{_q(lo.astimezone(timezone.utc).isoformat())}"
+                   f"&starts_at=lt.{_q(hi.astimezone(timezone.utc).isoformat())}&select=id,starts_at&limit=500"):
+        try:
+            out.append(datetime.fromisoformat(str(r["starts_at"]).replace("Z", "+00:00")))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _clashes(starts: datetime, services: Iterable[datetime]) -> bool:
+    """Starts within SUNDAY_HOURS of one of these services (either side)."""
+    return any(abs(starts - at) < timedelta(hours=SUNDAY_HOURS) for at in services)
+
+
+def during_sunday_service(biz: str, starts: datetime, zone) -> bool:
+    """Whether a Sunday event date starting then would be during a Sunday
+    service that day (docs/EVENT_VOLUNTEERS.md 6.9)."""
+    day = starts.astimezone(zone).date()
+    lo = datetime.combine(day, time(0), tzinfo=zone)
+    return _clashes(starts, _sunday_services(biz, lo, lo + timedelta(days=1)))
+
+
+def _upcoming_events(biz: str, zone, now: datetime, sundays: bool = False) -> List[Dict[str, Any]]:
     """The church's Services & Events entries from today to EVENT_AHEAD_DAYS
     out that aren't on a Sunday (a Sunday is Add the next five Sundays'),
     soonest first: {entry_id, title, day, weekday, time (or None), place,
-    taken (already an event date)}."""
+    taken (already an event date)}. `sundays` (EVENT_VOLUNTEERS open): a
+    Sunday afternoon's is one too, unless it starts within SUNDAY_HOURS of a
+    Sunday service that day or carries no time to tell."""
     import church_leaders_note as cln
     import events_rsvp_router as ev
     mods = _read(f"/custom_modules?business_id=eq.{_q(biz)}&archetype=eq.event_roster&is_active=eq.true"
@@ -1104,6 +1169,7 @@ def _upcoming_events(biz: str, zone, now: datetime) -> List[Dict[str, Any]]:
         "&event_entry_id=not.is.null&select=event_entry_id&limit=500") if r.get("event_entry_id")}
     today = now.date()
     last = today + timedelta(days=EVENT_AHEAD_DAYS)
+    plans: Optional[List[datetime]] = None
     ids = sorted(fields)
     out: List[Dict[str, Any]] = []
     for i in range(0, len(ids), 50):
@@ -1114,8 +1180,16 @@ def _upcoming_events(biz: str, zone, now: datetime) -> List[Dict[str, Any]]:
             if not f:
                 continue
             day, at = cln._when_of(data.get(f["date_field"]), zone)
-            if not day or not today <= day <= last or day.weekday() == 6 or (at is not None and at <= now):
+            if not day or not today <= day <= last or (at is not None and at <= now):
                 continue
+            if day.weekday() == 6:
+                if not sundays or at is None:
+                    continue
+                if plans is None:
+                    lo = datetime.combine(today, time(0), tzinfo=zone)
+                    plans = _sunday_services(biz, lo, lo + timedelta(days=EVENT_AHEAD_DAYS + 1))
+                if _clashes(at, plans):
+                    continue
             out.append({"entry_id": str(e["id"]), "title": " ".join(str(data.get(f["title_field"]) or "").split())[:120]
                         or "An event", "day": day.isoformat(), "weekday": sd.weekday(day),
                         "time": at.strftime("%H:%M") if at else None,
@@ -1123,6 +1197,13 @@ def _upcoming_events(biz: str, zone, now: datetime) -> List[Dict[str, Any]]:
                         "taken": str(e["id"]) in taken})
     out.sort(key=lambda x: (x["day"], x["time"] or "", x["title"].lower()))
     return out
+
+
+def _asks_open(biz: str, user: AuthedUser) -> bool:
+    """EVENT_VOLUNTEERS open here, with its migration in: Sunday afternoons
+    and typed dates becoming Services & Events entries."""
+    import event_volunteers
+    return event_volunteers.ready() and event_volunteers.open_for(biz, user)
 
 
 @router.get("/events")
@@ -1133,7 +1214,8 @@ def upcoming_events(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     _dates_gate(biz, user)
     zone = _zone(biz)
-    return {"events": [e for e in _upcoming_events(biz, zone, _now().astimezone(zone)) if not e["taken"]][:60]}
+    return {"events": [e for e in _upcoming_events(biz, zone, _now().astimezone(zone), sundays=_asks_open(biz, user))
+                       if not e["taken"]][:60]}
 
 
 @router.post("/dates")
@@ -1141,29 +1223,69 @@ def add_date(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """An event date that isn't a Sunday, for the volunteer teams: one of
     the church's upcoming Services & Events entries (entry_id: its title,
     day, place and time when it has one; a time given here wins), or typed
-    (title, day, time, place). Never a Sunday, never past, at most
-    EVENT_AHEAD_DAYS ahead; an entry once while it's on the schedule, and
-    one title once a day. It has no order of service, so ChurchSavvy's plan
-    and screens never see it."""
+    (title, day, time, place). Never past, at most EVENT_AHEAD_DAYS ahead;
+    an entry once while it's on the schedule, and one title once a day. It
+    has no order of service, so ChurchSavvy's plan and screens never see it.
+    With EVENT_VOLUNTEERS open it may be a Sunday afternoon, and a typed one
+    goes into Services & Events too (make_date)."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
     _dates_gate(biz, user)
+    entry_id = _uuid(body.get("entry_id"), "event") if body.get("entry_id") else None
+    return make_date(biz, user, entry_id=entry_id, title=body.get("title"), day=body.get("day"),
+                     at_time=body.get("time"), place=body.get("place"))
+
+
+def _typed_entry(biz: str, title: str, starts: datetime, place: str) -> Optional[Dict[str, Any]]:
+    """A typed event date's Services & Events entry (docs/EVENT_VOLUNTEERS.md
+    6.8), in the church's first events room (the oldest active event_roster
+    module), private, with no sign-ups and no roles of its own. None when the
+    church has no events room. A write that fails is a 503: the date isn't
+    made either."""
+    import events_rsvp_router as ev
+    mods = _read(f"/custom_modules?business_id=eq.{_q(biz)}&archetype=eq.event_roster&is_active=eq.true"
+                 "&select=id,archetype_params,created_at&order=created_at.asc&limit=50")
+    if not mods:
+        return None
+    mod = min(mods, key=lambda m: (str(m.get("created_at") or ""), str(m["id"])))
+    f = ev.resolve_fields(mod.get("archetype_params"))
+    data = {f["title_field"]: title, f["date_field"]: starts.strftime("%Y-%m-%dT%H:%M"), f["location_field"]: place,
+            "_visibility": "private", f["signups_field"]: [], "_roles": []}
+    got = sb_clients.sb_post_as_service("/module_entries", {
+        "business_id": biz, "module_id": str(mod["id"]), "status": "active", "created_by": "who_serves_when",
+        "data": data})
+    if not isinstance(got, list) or not got:
+        raise HTTPException(503, "The event date didn't save. Try again.")
+    return {"entry_id": str(got[0]["id"]), "module_id": str(mod["id"]), "title": title}
+
+
+def make_date(biz: str, user: AuthedUser, *, entry_id: Optional[str] = None, title: Any = None, day: Any = None,
+              at_time: Any = None, place: Any = None, needs: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """The one way an event date is made (docs/EVENT_VOLUNTEERS.md 6.3): Add
+    an event date (POST /dates) and an event's ask for the serving teams
+    (event_volunteers: a yes, or an ask put straight on), which passes its
+    numbers (`needs`). Every rule holds whichever way it comes: never past,
+    EVENT_AHEAD_DAYS ahead at most, MAX_EVENT_DATES still to come at most,
+    one live event date an entry, one title once a day. A Sunday only with
+    EVENT_VOLUNTEERS open, and never within SUNDAY_HOURS of a Sunday
+    service. The caller gates who; this gates what. {date, event}: the
+    event is the Services & Events entry a typed date made (6.8), else
+    None."""
     zone = _zone(biz)
     now = _now().astimezone(zone)
-    entry_id: Optional[str] = None
-    if body.get("entry_id"):
-        entry_id = _uuid(body.get("entry_id"), "event")
-        ev = next((e for e in _upcoming_events(biz, zone, now) if e["entry_id"] == entry_id), None)
+    asks = _asks_open(biz, user)
+    if entry_id:
+        ev = next((e for e in _upcoming_events(biz, zone, now, sundays=asks) if e["entry_id"] == entry_id), None)
         if not ev:
             raise HTTPException(404, "That event isn't coming up in Services & Events. Pick another, or type it in.")
         if ev["taken"]:
             raise HTTPException(409, "That event is already on Who serves when.")
-        title, raw_day, at_time, place = ev["title"], ev["day"], body.get("time") or ev["time"], ev["place"]
+        title, raw_day, at_time, place = ev["title"], ev["day"], at_time or ev["time"], ev["place"]
     else:
-        title = _clean_name(body.get("title"), "event", 120)
-        raw_day, at_time = body.get("day"), body.get("time")
-        place = " ".join(str(body.get("place") or "").split())
+        title = _clean_name(title, "event", 120)
+        raw_day = day
+        place = " ".join(str(place or "").split())
         if len(place) > 120:
             raise HTTPException(400, "Keep the place to 120 letters")
     if not isinstance(raw_day, str) or not _DAY.match(raw_day):
@@ -1174,7 +1296,7 @@ def add_date(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(400, "Pick the day it's on")
     if not isinstance(at_time, str) or not _HHMM.match(at_time):
         raise HTTPException(400, "Give it a start time, like 19:00")
-    if day.weekday() == 6:
+    if day.weekday() == 6 and not asks:
         raise HTTPException(400, "Sundays are already on Who serves when: add them with Add the next five Sundays.")
     if day > now.date() + timedelta(days=EVENT_AHEAD_DAYS):
         raise HTTPException(400, f"Pick a day in the next {EVENT_AHEAD_DAYS // 30} months")
@@ -1182,6 +1304,8 @@ def add_date(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     starts = datetime.combine(day, time(hh, mm), tzinfo=zone)
     if starts <= now:
         raise HTTPException(400, "That day and time have passed")
+    if day.weekday() == 6 and during_sunday_service(biz, starts, zone):
+        raise HTTPException(400, SUNDAY_CLASH)
     ahead = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&kind=eq.{sd.EVENT}"
                   f"&starts_at=gte.{_q(now.astimezone(timezone.utc).isoformat())}&select=id,title,starts_at&limit=500")
     if len(ahead) >= MAX_EVENT_DATES:
@@ -1193,16 +1317,25 @@ def add_date(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
             continue
         if same_day and str(r.get("title") or "").strip().lower() == title.lower():
             raise HTTPException(409, f"{title} is already on Who serves when for {sd.day_label(day)}.")
+    # A typed date is a Services & Events entry too (the switch open), written
+    # first: if it can't be, the date isn't made; if the date can't be, the
+    # entry comes back out. Never half of one.
+    made = _typed_entry(biz, title, starts, place) if asks and not entry_id else None
     row = {"business_id": biz, "title": title, "starts_at": starts.astimezone(timezone.utc).isoformat(), "items": [],
-           "kind": sd.EVENT, "place": place, "event_entry_id": entry_id}
+           "kind": sd.EVENT, "place": place, "event_entry_id": made["entry_id"] if made else entry_id}
+    if needs:
+        row["needs"] = needs
     saved = sb_clients.sb_post_as_service("/worship_services?select=id,title,starts_at,kind,place,event_entry_id", row)
     if not isinstance(saved, list) or not saved:
         err = sb_clients.last_error() or {}
+        if made and not sb_clients.sb_delete_as_service(
+                f"/module_entries?id=eq.{_q(made['entry_id'])}&business_id=eq.{_q(biz)}"):
+            print(f"[sunday_planning] {biz[:8]}: a typed date's entry wasn't taken back", flush=True)
         if str(err.get("code")) == "23505":
             raise HTTPException(409, "That event is already on Who serves when.")
         raise HTTPException(503, "The event date didn't save. Try again.")
     out = _services(biz, starts - timedelta(minutes=1), starts + timedelta(minutes=1), zone)
-    return {"date": next((s for s in out if s["id"] == str(saved[0]["id"])), None)}
+    return {"date": next((s for s in out if s["id"] == str(saved[0]["id"])), None), "event": made}
 
 
 @router.delete("/dates/{service_id}")
@@ -1226,6 +1359,93 @@ def drop_date(service_id: str, business_id: str, user: AuthedUser = Depends(requ
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't take the date off. Try again.")
     return {"ok": True}
+
+
+# ─── events' asks for the serving teams (event_volunteers) ───────────
+
+
+def _requests_gate(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Events' asks are answered by whoever changes the Volunteers' teams
+    (_dates_gate), with EVENT_VOLUNTEERS open here and its migration in:
+    otherwise 404, as if there were nothing here."""
+    import event_volunteers
+    if not event_volunteers.ready() or not event_volunteers.open_for(biz, user):
+        raise HTTPException(404, "Not Found")
+    return _dates_gate(biz, user, switch=False)
+
+
+@router.get("/requests")
+def event_requests(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The events' asks for the serving teams: those waiting, soonest event
+    first, and those answered in the last week (event_volunteers.requests_list)."""
+    _gate(user)
+    biz = _uuid(business_id)
+    _requests_gate(biz, user)
+    import event_volunteers
+    return {"requests": event_volunteers.requests_list(biz)}
+
+
+@router.post("/requests/{request_id}/answer")
+def answer_request(request_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Yes (the event date is made with the ask's numbers, or the ones given
+    here) or no (with a note back). event_volunteers.answer."""
+    _gate(user)
+    body = body or {}
+    biz = _uuid(body.get("business_id"))
+    _requests_gate(biz, user)
+    import event_volunteers
+    return event_volunteers.answer(biz, user, _uuid(request_id, "ask"), body)
+
+
+@router.put("/dates/{service_id}/needs")
+def set_needs(service_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """An event date's own numbers for the Volunteers' places
+    (docs/EVENT_VOLUNTEERS.md 6.4): {needs: {place_id: n}}, or null for the
+    places' Sunday numbers. Lowering a place below a spot someone was asked
+    for, or taking that place off, is refused until that ask is taken back;
+    an open spot left past the new number (offered to the team, or a no)
+    goes with it. The ask that made the date follows."""
+    _gate(user)
+    body = body or {}
+    biz = _uuid(body.get("business_id"))
+    _requests_gate(biz, user)
+    sid = _uuid(service_id, "event date")
+    if "needs" not in body:
+        raise HTTPException(400, "Give the numbers for each place, or null for the Sunday numbers.")
+    import event_volunteers
+    rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&archived_at=is.null"
+                 f"&kind=eq.{sd.EVENT}&select=id,title,starts_at{sd.fields()}&limit=1")
+    if not rows:
+        raise HTTPException(404, "That event date isn't on Who serves when")
+    svc = rows[0]
+    places = event_volunteers.volunteer_places(biz)
+    needs = None if body["needs"] is None else event_volunteers.clean_needs(biz, body["needs"], places)
+    after = {"kind": sd.EVENT, "needs": needs}
+    by_id = {p["id"]: p for p in places}
+    order = {p["id"]: n for n, p in enumerate(places)}
+    held = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}"
+                 f"&select=id,position_id,slot,status,contact_id")
+    past: List[Dict[str, Any]] = []
+    for r in sorted(held, key=lambda r: (order.get(str(r["position_id"]), len(order)), int(r.get("slot") or 1))):
+        place = by_id.get(str(r["position_id"]))
+        if not place or int(r.get("slot") or 1) <= sd.needed(after, place):
+            continue
+        if r.get("status") in ("asked", "yes") and r.get("contact_id"):
+            raise HTTPException(409, f"Someone was asked for {place['name']} {int(r.get('slot') or 1)}. "
+                                     "Take that ask back first.")
+        past.append(r)
+    if past and not sb_clients.sb_delete_as_service(
+            f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&id=in.({_ids(r['id'] for r in past)})"
+            "&status=in.(offered,no)"):
+        raise HTTPException(503, "That didn't save. Try again.")
+    saved = sb_clients.sb_patch_as_service(
+        f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&archived_at=is.null&select=id",
+        {"needs": needs})
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    event_volunteers.follow_needs(biz, sid, needs, places)
+    return {"service_id": sid, "needs": needs,
+            "needed": {p["id"]: sd.needed(after, p) for p in places}}
 
 
 @router.get("/candidates")
@@ -1265,9 +1485,16 @@ def _serves_gate(board: _Board, sid: str, pid: str) -> None:
         raise HTTPException(409, f"Only the volunteer teams serve at {svc['title']}. {team['name']} isn't scheduled for it.")
 
 
-def _slot(body: Dict[str, Any], place: Dict[str, Any]) -> int:
+def _slot(body: Dict[str, Any], place: Dict[str, Any], svc: Optional[Dict[str, Any]] = None) -> int:
+    """The spot asked for, within how many this place needs at this service
+    (serve_dates.needed). A place an event date doesn't need is a 409."""
+    n = sd.needed(svc, place) if svc is not None else (place.get("needed") or 1)
+    if n < 1:
+        import event_volunteers
+        raise HTTPException(409, f"{place.get('name') or 'That place'} isn't needed for "
+                                 f"{event_volunteers.the((svc or {}).get('title'))}.")
     slot = body.get("slot", 1)
-    if not isinstance(slot, int) or isinstance(slot, bool) or not 1 <= slot <= (place.get("needed") or 1):
+    if not isinstance(slot, int) or isinstance(slot, bool) or not 1 <= slot <= n:
         raise HTTPException(400, "That place doesn't have that many spots")
     return slot
 
@@ -1312,9 +1539,9 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
 def do_ask(biz: str, sid: str, pid: str, slot: Any, cid: str, asker: str) -> Dict[str, Any]:
     """The ask itself, for the office or a team's own leader (sunday_leading)."""
     place = _place_row(biz, pid)
-    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
     _serves_gate(board, sid, pid)
+    slot = _slot({"slot": slot}, place, board.service.get(sid))
     pick = next((c for c in board.candidates(sid, pid) if c["contact_id"] == cid), None)
     if not pick:
         raise HTTPException(409, "They aren't on this team yet. Add them to the team first.")
@@ -1344,9 +1571,9 @@ def offer(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
 
 def do_offer(biz: str, sid: str, pid: str, slot: Any, asker: str) -> Dict[str, Any]:
     place = _place_row(biz, pid)
-    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
     _serves_gate(board, sid, pid)
+    slot = _slot({"slot": slot}, place, board.service.get(sid))
     row = _put(biz, board, sid, pid, slot, {"contact_id": None, "status": "offered", "asked_by": asker})
     return {"assignment": _assignment_out(row, {})}
 
@@ -1454,7 +1681,7 @@ def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], ask
             if not serves(svc, team):
                 continue
             for place in team["places"]:
-                for slot in range(1, (place["needed"] or 1) + 1):
+                for slot in range(1, sd.needed(svc, place) + 1):
                     if board.holder(svc["id"], place["id"], slot):
                         continue
                     pick = next((c for c in board.candidates(svc["id"], place["id"])

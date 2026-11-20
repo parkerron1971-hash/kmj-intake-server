@@ -182,6 +182,23 @@ def _event_dates_columns_pinned():
     yield
 
 
+# event_volunteers asks once whether worship_services.needs and
+# event_volunteer_requests are there (supabase/APPLY-2026-11-21-event-
+# volunteers.sql) and keeps the answer for minutes. Every test starts with
+# them "not there yet", so no serving read selects `needs` and every other
+# suite reads as before that migration. The event volunteers' tests set
+# _FORCE = True.
+@pytest.fixture(autouse=True)
+def _event_volunteers_pinned():
+    try:
+        import event_volunteers as _ev
+        _ev._FORCE = False
+        _ev._STATE.update(yes=None, at=0.0)
+    except Exception:  # pragma: no cover
+        pass
+    yield
+
+
 # church_schedule asks once whether the leaders schedule's tables are there
 # and keeps the answer for minutes. Every test starts with them "not there
 # yet", so no other suite gains a read (the default `owner` mode would add a

@@ -526,6 +526,9 @@ def test_the_board_says_away_in_its_own_words_and_nothing_of_the_ask(db, office,
     assert "away that day" in as_an_ask["page"] and as_an_ask["ask"] == {"detail": "Elena Ruiz is away that Sunday"}
     sched = office.get(f"/planning/schedule?business_id={HOPE}&weeks=5").json()
     assert sched["away"] == [], "a waiting ask is never in the list of who is away: that list is what was agreed"
+    # The count of events' asks for the serving teams (event_volunteers) is
+    # named for what it counts; it says nothing of anyone's time away.
+    assert sched.pop("requests_waiting") == 0
     everything = json.dumps([as_an_ask, sched, sl.team_view(biz(db), lead["id"], TEAM)["assignments"]])
     for word in (SECRET, "Esther", *ASK_WORDS):
         assert word not in everything, word

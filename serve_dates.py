@@ -112,8 +112,13 @@ def ready() -> bool:
 
 
 def fields() -> str:
-    """',kind,place,event_entry_id' for a serving read's select, once there."""
-    return FIELDS if ready() else ""
+    """',kind,place,event_entry_id' for a serving read's select, once there,
+    and ',needs' (an event date's own numbers: event_volunteers.py) once that
+    migration is in too (event_volunteers.ready)."""
+    if not ready():
+        return ""
+    import event_volunteers
+    return FIELDS + (",needs" if event_volunteers.ready() else "")
 
 
 def plans_only() -> str:
@@ -123,6 +128,27 @@ def plans_only() -> str:
 
 def is_event(row: Optional[Dict[str, Any]]) -> bool:
     return (row or {}).get("kind") == EVENT
+
+
+# ─── how many a place needs ──────────────────────────────────────────
+
+def needed(service: Optional[Dict[str, Any]], place: Optional[Dict[str, Any]]) -> int:
+    """How many people this place needs at this service: the one rule every
+    slot loop reads (docs/EVENT_VOLUNTEERS.md 6.5). An event date with its
+    own numbers (worship_services.needs, {"<place id>": n}) needs exactly
+    those, and 0 for a place it doesn't name: that place doesn't show for the
+    date, isn't counted open, and can't be asked, offered or filled. Every
+    other service, and an event date without numbers (needs null, how every
+    date made before them reads), needs the place's Sunday number."""
+    needs = (service or {}).get("needs")
+    if isinstance(needs, dict):
+        try:
+            n = needs.get(str((place or {}).get("id")), 0)
+            return max(0, int(n)) if not isinstance(n, bool) else 0
+        except (TypeError, ValueError):
+            return 0
+    n = (place or {}).get("needed")
+    return n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else 1
 
 
 # ─── saying the day ──────────────────────────────────────────────────

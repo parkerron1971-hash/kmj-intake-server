@@ -484,7 +484,8 @@ def sunday(ctx: Dict[str, Any]) -> Lines:
             import serve_dates
             plans = _all(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false"
                          f"{serve_dates.plans_only()}"
-                         f"&starts_at=gte.{_q(_iso(ctx['lo']))}&starts_at=lt.{_q(_iso(ctx['hi']))}&select=id",
+                         f"&starts_at=gte.{_q(_iso(ctx['lo']))}&starts_at=lt.{_q(_iso(ctx['hi']))}"
+                         f"&select=id{serve_dates.fields()}",
                          "Sunday teams")
             places = _all_in(f"/serve_positions?business_id=eq.{b}&active=eq.true&select=id,group_id,needed",
                              "group_id", teams, "Sunday teams")
@@ -496,7 +497,7 @@ def sunday(ctx: Dict[str, Any]) -> Lines:
                 filled = empty = 0
                 for p in plans:
                     for place in places:
-                        for slot in range(1, int(place.get("needed") or 1) + 1):
+                        for slot in range(1, serve_dates.needed(p, {**place, "id": str(place["id"])}) + 1):
                             if held.get((str(p["id"]), str(place["id"]), slot)) == "yes":
                                 filled += 1
                             else:

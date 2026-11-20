@@ -68,16 +68,18 @@ def _at(v: Any) -> Optional[datetime]:
         return None
 
 
-def _day(at: datetime) -> str:
-    """"Nov 22" for a Sunday; "Thursday, Nov 19" for any other day (an
-    event date, serve_dates), so a note never leaves the day to guess."""
+def _day(at: datetime, event: bool = False) -> str:
+    """"Nov 22" for a Sunday service; "Thursday, Nov 19" for any other day
+    (an event date, serve_dates), and "Sunday, Dec 13" for a Sunday
+    afternoon's event date, so a note never leaves the day to guess."""
     short = f"{at.strftime('%b')} {at.day}"
-    return short if at.weekday() == 6 else f"{at.strftime('%A')}, {short}"
+    return short if at.weekday() == 6 and not event else f"{at.strftime('%A')}, {short}"
 
 
-def _for(title: str, at: datetime) -> str:
-    """" for Outreach night": what a note on another day than Sunday is for."""
-    if at.weekday() == 6 or title in ("", "Sunday service", "An event"):
+def _for(title: str, at: datetime, event: bool = False) -> str:
+    """" for Outreach night": what a note on another day than Sunday is for,
+    and a Sunday event date's too (never read as Sunday's service)."""
+    if (at.weekday() == 6 and not event) or title in ("", "Sunday service", "An event"):
         return ""
     return f" for {title}"
 
@@ -357,8 +359,9 @@ def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str
         if not asker or asker == sp.FILLED_BY:
             asker = _first(leaders[0]) if leaders else ((biz.get("name") or "").strip() or "The church")
         ctx = {"id": str(r["id"]), "at": s["at"], "place": p["name"], "team": t["name"], "title": s["title"],
-               "day": _day(s["at"]), "call": _clock(hhmm), "time": _clock(hhmm or s["at"].strftime("%H:%M")),
-               "weekday": s["at"].strftime("%A"), "for": _for(s["title"], s["at"]),
+               "day": _day(s["at"], s.get("event") is True), "call": _clock(hhmm),
+               "time": _clock(hhmm or s["at"].strftime("%H:%M")),
+               "weekday": s["at"].strftime("%A"), "for": _for(s["title"], s["at"], s.get("event") is True),
                "asker": asker,
                "from": _first((people.get(str(r["contact_id"])) or {}).get("name"))}
         if "day" in steps:
@@ -402,7 +405,7 @@ async def _office_note(biz_id: str, row: Dict[str, Any], svc: Dict[str, Any], pl
     except Exception:  # noqa: BLE001 — the note still goes, without names
         others = []
     could = (f" {sp_and(others)} could take it." if others else "")
-    return await _office(biz_id, f"No answer yet: {place['name']}, {_day(svc['at'])}",
+    return await _office(biz_id, f"No answer yet: {place['name']}, {_day(svc['at'], svc.get('event') is True)}",
                          f"{who} hasn't answered.{could}", f"serving-office-{row['id']}-{row['contact_id']}",
                          str(row["contact_id"]))
 
