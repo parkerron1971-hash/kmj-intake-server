@@ -1602,7 +1602,9 @@ async def _read_leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]
     A task the office handed them (church_leader_tasks) gives it too, and so
     does a place on the leaders schedule (church_schedule.section: someone in
     the office who leads nothing else still reaches Dates). That one costs no
-    read here: it answers from what church_schedule keeps a minute."""
+    read here: it answers from what church_schedule keeps a minute. So does
+    leading or overseeing a department (church_week.entry: My department on
+    Sundays), from who heads one, kept a minute a church."""
     import church_follow_up as cfu
     import group_lead
     roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
@@ -1623,6 +1625,14 @@ async def _read_leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]
         got, failed = await asyncio.to_thread(_counted, church_schedule.section, biz, me_id)
         known = known and not failed
         if got is not None:
+            return True, known
+        # A department's leader or overseer on the leaders map (My department,
+        # church_week.entry): one who holds no role and leads nothing else
+        # still reaches their department's week. Kept a minute a church.
+        import church_week
+        got, failed = await asyncio.to_thread(_counted, church_week.entry, biz, me_id)
+        known = known and not failed
+        if got:
             return True, known
     import member_app_ui
     if biz is None or not member_app_ui.serve_mode():
