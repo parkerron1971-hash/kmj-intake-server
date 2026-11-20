@@ -574,6 +574,43 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                              "puts it back"), "chief_only": True},
     "send_handover": {**_w("C", "sends one of the church's leaders something for their area "
                                 "(church_handovers.send): an email within the hour, no recall"), "chief_only": True},
+    # The leaders schedule (chief_church_schedule, step 5): who is away, asking for time away and answering, things
+    # that repeat, and the volunteers' week, by the same functions the pages use (church_schedule, _limits,
+    # _repeats, church_week). Each needs the signed-in login (who may read a reason or say yes is the engine's), so
+    # Chief's alone.
+    "who_is_away": {**_r("reads who is away at a church on a day or a range (the leaders and the office: names, "
+                         "days, who covers, things that repeat, asks still waiting that this login may see; a reason, "
+                         "a note or what a thing that repeats is only where church_schedule lets it)",
+                         sensitive=True), "chief_only": True},
+    "time_off_asks": {**_r("reads the asks for time away waiting for the signed-in login's yes, its own, or (the owner "
+                           "and whoever oversees the office) every one, through church_schedule.shape",
+                           sensitive=True), "chief_only": True},
+    "check_dates": {**_r("reads, for a few candidate days, who on a church's leaders schedule can't come (names and "
+                         "why: away, waiting, something that repeats); sets nothing", sensitive=True),
+                    "chief_only": True},
+    "serving_week": {**_r("reads one week of a church's volunteers by department (church_week: who is on, open "
+                          "places, away; hours and checks only where church_serving lets this login); volunteers by "
+                          "name", sensitive=True), "chief_only": True},
+    "ask_time_off": {**_w("A", "asks for time away for the signed-in person (or, by the owner or whoever oversees "
+                               "the office, for someone on the leaders schedule) through church_schedule.ask, after "
+                               "the Dates page's look; whoever it goes to is told; take_back_time_off takes it "
+                               "back, and a place a yes opened stays open"), "chief_only": True},
+    # C: the asker is told, a no is final, a yes opens the places they had agreed to serve and an exception stays
+    # on record. When asked, never on Chief's own idea.
+    "answer_time_off": {**_w("C", "says yes or not this one to an ask for time away through church_schedule.answer "
+                                  "(may_decide; an exception only over the flags it said were in the way): the "
+                                  "asker is told, and an answer is final"), "chief_only": True},
+    "take_back_time_off": {**_w("C", "takes an ask for time away back through church_schedule.withdraw (the asker, "
+                                     "the owner, whoever oversees the office): its away date goes, whoever it went "
+                                     "to may be told, and asking again starts over"), "chief_only": True},
+    "add_repeat": {**_w("A", "adds a thing that repeats for the signed-in person (or, by the owner or whoever "
+                             "oversees the office, for someone on the leaders schedule) through "
+                             "church_schedule_repeats.add_commitment; whoever an ask of theirs would go to is told "
+                             "once, never what it is; take_off_repeat removes it"), "chief_only": True},
+    "take_off_repeat": {**_w("C", "removes a thing that repeats for good through "
+                                  "church_schedule_repeats.drop_commitment (theirs; the owner and whoever oversees "
+                                  "the office anyone's); adding it again tells whoever is over them again"),
+                        "chief_only": True},
     # Church job descriptions (chief_church_jobs): everyone's job, in the church's own words, and whose job new
     # work is. Each needs the signed-in person (who may read or write whose is church_over's), so Chief's alone.
     "whose_job": {**_r("reads every person's job at a church (written job descriptions and titles, duties, "
