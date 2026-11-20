@@ -276,15 +276,23 @@ def test_switched_off_nothing_is_read_and_nothing_is_decided(db, monkeypatch):
     for part, need in gate.RULES:
         assert not _may(MANAGER, need, part), (part, need)       # a Manager is what a Manager always was
     ch = co.Church(_biz(db))
-    assert cmt.block(_biz(db), ch, cs.standing(ch, OWNER, MANAGER), MANAGER) is None
-    assert cs.compose(_biz(db), OWNER, MANAGER)["money"] is None
+    # A login with no tick: nothing new on its sheet, and nothing to give.
+    assert cmt.block(_biz(db), ch, cs.standing(ch, OWNER, MEMBER), MEMBER) is None
+    assert cs.compose(_biz(db), OWNER, MEMBER)["money"] is None
     with pytest.raises(HTTPException) as e:
-        cs.change(_biz(db), OWNER, MANAGER, {"money": {"level": "see"}})
+        cs.change(_biz(db), OWNER, MEMBER, {"money": {"level": "see"}})
     assert e.value.status_code == 400 and e.value.detail == cmt.NOT_ON
+    # A login that still holds one (the database keeps honouring it, 2026-11-20):
+    # shown, to be lowered or taken away only.
+    shown = cs.compose(_biz(db), OWNER, MANAGER)["money"]
+    assert shown["off"] is True and shown["level"] == "lead" and shown["why"] == cmt.OFF_HELD
     assert _status(cmt.list_asks, BIZ, session=_session(OWNER)) == 404
     assert cmt.sweep() == {"expired": 0, "reminded": 0}
-    assert cmt.seat_gone(BIZ, MANAGER) and cmt.seat_lowered_to_viewer(BIZ, MANAGER)
-    assert _held(db, MANAGER)["level"] == "lead"                 # off touches nothing
+    assert _held(db, MANAGER)["level"] == "lead"                 # off reads and gives nothing
+    # Taking a tick away or lowering it runs whatever the switch says
+    # (2026-11-20): rows outlive a switch that was on and was turned off.
+    assert cmt.seat_lowered_to_viewer(BIZ, MANAGER) and _held(db, MANAGER)["level"] == "see"
+    assert cmt.seat_gone(BIZ, MANAGER) and _held(db, MANAGER) is None
 
 
 def test_owner_mode_is_the_platform_owners_church_alone(db, monkeypatch):
@@ -652,7 +660,7 @@ def test_a_login_taken_off_the_team_keeps_no_tick_and_no_request(db):
     assert _held(db, MANAGER) is None
     business_users_router.hand_back_login(BIZ, MEMBER)
     assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "withdrawn"
-    assert cmt.seat_gone("nope", MANAGER) and cmt.seat_gone(BIZ, None)
+    assert not cmt.seat_gone("nope", MANAGER) and not cmt.seat_gone(BIZ, None)   # refused, never "no id" (2026-11-20)
 
 
 def test_a_login_made_a_viewer_keeps_only_see_and_work_never_comes_back(db, monkeypatch):
@@ -945,6 +953,7 @@ def test_switched_on_before_the_tables_exist_is_exactly_off(db, monkeypatch):
 
     def missing(path, **kw):
         if path.startswith(f"/{mh.HOLDERS}") or path.startswith(f"/{mh.ASKS}"):
+            db.err = {"status": 404, "code": "PGRST205", "message": "no such table"}   # what PostgREST says
             return None
         return real(path, **kw)
     monkeypatch.setattr(sb_clients, "sb_get_as_service", missing)
@@ -955,7 +964,9 @@ def test_switched_on_before_the_tables_exist_is_exactly_off(db, monkeypatch):
     assert db._active(BIZ, MANAGER)["role"] == "viewer"
     assert business_users_router.hand_back_login(BIZ, MEMBER)["failed"] == 0
     assert cmt.sweep() == {"expired": 0, "reminded": 0}
-    assert not [w for w in writes if mh.HOLDERS in w or mh.ASKS in w]
+    # The hooks still make their write (never trusting a kept answer, review of #1987); it fails, a
+    # probe made then says the table isn't there, and nothing is blocked.
+    assert writes and all(w.startswith(f"/{mh.HOLDERS}?") for w in writes)
     for mode in ("on", "owner"):
         monkeypatch.setenv("CHURCH_MONEY_TICKS", mode)
         assert not any(_may(HOLDER, need, part) for (part, need) in gate.RULES)   # a Manager, as with it off

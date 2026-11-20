@@ -91,6 +91,17 @@ def _bank_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
     require_ministry_finance(biz, user, biz_row, part="bank")
 
 
+def _bank_part(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
+    """A report that lists the bank's own rows or balances (the trust
+    reconciliation: account names, last four, balances, each bank line):
+    in a church or nonprofit the bank part (church_money_gate, 2026-11-20),
+    so a giving tick without "bank and payouts" reads none of it. Unlike
+    _bank_wall it adds no keeper: with the switch off it asks nobody
+    anything new. Any other business isn't asked."""
+    import church_money_gate
+    church_money_gate.require_money(biz, user, "see", "bank", business=biz_row, detail=church_money_gate.BANK_403)
+
+
 def _pay_records_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
     """A contractor read (the 1099 summary, the drafts with a taxpayer
     number's last four): with the giving tick switched on, a login let in
@@ -562,6 +573,10 @@ async def accountant_send(biz: str, year: Optional[int] = None,
     Financial Settings accountant_email). Returns the draft + send result."""
     # Seat-access arc (7/31 matrix): outward sends escalate to manager.
     biz_row = _owner_or_reader(biz, user)
+    # Sending the books out of the building is work, not reading: in a
+    # church a login let in only by a giving tick must hold Work (2026-11-20).
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, biz_row, need="work")
     from business_users_router import require_role
     require_role(biz, str(user.id), "manager")
     billing_limits.require_feature(biz, "accountant_package")
@@ -782,7 +797,7 @@ def trends_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
 @router.get("/trust-reconciliation")
 def trust_reconciliation(biz: str, as_of: Optional[str] = None,
                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_or_reader(biz, user)
+    _bank_part(biz, user, _owner_or_reader(biz, user))
     billing_limits.require_feature(biz, "vertical_reports")
     if not gl_reports.gl_active(biz):
         return _needs_gl("trust_reconciliation", three_way={}, by_client=[], activity=[])
@@ -1028,6 +1043,10 @@ async def customer_statement_send(biz: str, contact_id: str,
     # Seat-access arc (7/31 matrix): statements to customers are everyday
     # operator work — member+ sends.
     biz_row = _owner_or_reader(biz, user)
+    # A giving statement mailed to the giver is work, not reading: in a
+    # church a login let in only by a giving tick must hold Work (2026-11-20).
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, biz_row, need="work")
     from business_users_router import require_role
     require_role(biz, str(user.id), "member")
     _giving_wall(biz, user)
@@ -1090,6 +1109,8 @@ def export(biz: str, report: str, format: str = "csv",
         _giving_wall(biz, user)
     if report == "bank_reconciliation":
         _bank_wall(biz, user, biz_row)
+    if report == "trust_reconciliation":
+        _bank_part(biz, user, biz_row)       # as its screen: the bank's own rows
     if report in ("general_ledger", "audit_trail"):
         _names_wall(biz, user)   # as their screens: the lines can name a giver
     if report == "summary_1099":

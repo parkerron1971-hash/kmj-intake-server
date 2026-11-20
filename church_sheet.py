@@ -344,9 +344,24 @@ def _guarded(ch: co.Church, target: str, shown: Optional[List[str]]) -> List[Dic
         return full or shown is None or a in shown
 
     money = "the owner, an Admin login and the church's accountant"
+    gave, bank = full, full
+    try:
+        # Giving as its own tick (church_money_ticks): while it is on for this
+        # church the owner also gives these two on the sheet, so the sentence
+        # says so and a holder's ticks count. A read that fails says what the
+        # seat alone gives, as with the switch off.
+        import church_money_ticks as cmt
+        if cmt.open_for(ch.b):
+            money = ("the owner, an Admin login, the church's accountant and whoever the owner gives it to "
+                     "under Giving on their sheet")
+            held = cmt.holder(ch.b, target) or {}
+            gave = full or held.get("who_gave") is True
+            bank = full or held.get("bank") is True
+    except Exception:  # noqa: BLE001 — wording only; the gate decides access
+        pass
     return [
-        one("who_gave", "Who gave, and how much", "giving_money", full, money),
-        one("bank", "The bank and payouts", "giving_money", full, money),
+        one("who_gave", "Who gave, and how much", "giving_money", gave, money),
+        one("bank", "The bank and payouts", "giving_money", bank, money),
         one("kids_medical", "Kids' medical and custody notes", "kids_youth", works("kids_youth"),
             "whoever can open Kids & youth"),
         one("pastors_notes", "Pastors-only notes and prayer", "people_care", works("people_care"),

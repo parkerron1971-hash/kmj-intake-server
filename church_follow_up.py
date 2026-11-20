@@ -14,6 +14,11 @@ gets left behind." Design canvas LG4Q97HqtEM4ByyXmmSrCP; "build it".
                                        time), routed like a connect card
       → Chief picks the leader ....... choose() — the church's roles, what
                                        each job takes, and the answers
+      → a first-time guest ........... with the Welcome Path on (guest_path),
+                                       the church's own "Who calls our
+                                       guests" decides instead (guest_calls:
+                                       People & Care until it has a Welcome
+                                       Team, by default), one caller a guest
       → a follow-up with a path ...... church_follow_ups (steps + a clock)
     the leader works it .............. leader_* (member page, Lead tab)
     the office sees it all ........... board / reassign / office_note
@@ -516,18 +521,43 @@ def _note(biz: str, fid: str, author_kind: str, kind: str, body: str = "", *, pa
         "author_contact_id": author_contact_id, "author_user_id": author_user_id,
         "author_name": (author_name or "")[:120],
     })
-    return rows[0] if isinstance(rows, list) and rows else None
+    note = rows[0] if isinstance(rows, list) and rows else None
+    if note and kind in REACHED and author_kind != "chief":
+        # A guest's reply waiting on a person (the Welcome Path,
+        # guest_replies) is answered once their caller reached them: the
+        # automatic texts go on. In a thread of its own; never in the way.
+        try:
+            import guest_replies
+            guest_replies.later(guest_replies.on_outcome, biz, fid, author_name or "")
+        except Exception:  # noqa: BLE001
+            logger.info("church follow-up: guest answer hand-off skipped", exc_info=True)
+    return note
+
+
+def _guest_path_on(biz: str, card_key: str, kind: str) -> bool:
+    """A first-time guest's welcome follow-up at a church with the Welcome
+    Path on (guest_path). A switch that can't be read is off: the card is
+    handed as it always was."""
+    try:
+        import guest_path
+        return guest_path.is_guest_follow_up({"card_key": card_key, "path_kind": kind}) and guest_path.switched_on(biz)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, kind: str,
           answers: List[Dict[str, str]], source_event: str = "", what: str = "",
-          route_answers: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Any]]:
+          route_answers: Optional[List[Dict[str, str]]] = None,
+          pick: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Open a follow-up for this person and hand it to a leader. Returns the
     row, or None when it already exists (a retried card) or could not be
     saved. Never raises: a card is saved whether or not this works.
     `route_answers` is what choose() reads when it isn't what the leader
     reads (a first check-in's line names the occasion, and a "Community
-    Meal" must not read as a care need)."""
+    Meal" must not read as a care need). `pick` is a hand-off already
+    decided ({leader: {contact_id, name}, role, reason}: a guest's group
+    step from their welcome call, to the group's leader; guest_brief), in
+    place of choose()'s."""
     biz, cid = str(business_id), str(contact_id)
     try:
         # Every read here decides something, so a read that failed stops the
@@ -553,6 +583,11 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
             _note(biz, str(open_one[0]["id"]), "chief", "note",
                   "Filled in the card again." + (f" {said}" if said else ""))
             return None
+        # A first-time guest, with the Welcome Path on: "Who calls our guests"
+        # picks the caller below. One guest, one caller is the doors' own
+        # check, before they get here (new_here.second_door: a second card
+        # door is a note on the open one; a first check-in's family rule).
+        guest = _guest_path_on(biz, card_key[:80], kind)
         # The church's roles as they stand. A card never fills the library
         # (the office's first visit to Leaders & roles does); before then
         # the first version's roles its holders carry decide, as they did.
@@ -562,17 +597,34 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
         if all_roles is None or load is None or all_defs is None or mp is None:
             logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
             return None
-        pick = choose(kind, answers if route_answers is None else route_answers, all_roles, load, all_defs,
-                      what=what, m=mp)
+        route_by = answers if route_answers is None else route_answers
+        decided = pick
+        pick = decided if decided else choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
+        assigned_by, due = "chief", now + timedelta(days=int(steps[0]["days"]))
+        if guest:
+            # Who calls our guests: the church's own way (People & Care until
+            # it has a Welcome Team, by default), due in its due_days at 6 PM.
+            # A read that failed hands it as before rather than drop the card.
+            try:
+                import guest_calls
+                today_pick = pick
+                g = guest_calls.route(biz, cid, card_key=card_key[:80], kind=kind, answers=route_by,
+                                      today=lambda: today_pick, now=now)
+                lead = g["leader"] if (g.get("leader") or {}).get("contact_id") else None
+                pick = {"leader": lead, "role": g["role"] if lead else "", "reason": g["reason"]}
+                assigned_by, due = g["assigned_by"], g["due_at"]
+            except Exception as e:  # noqa: BLE001
+                print(f"[church_follow_up] guest calls couldn't decide ({type(e).__name__}, business {biz[:8]}); "
+                      "handed as before", flush=True)
         leader = pick["leader"]
         rows = sb_clients.sb_post_as_service("/church_follow_ups", {
             "business_id": biz, "contact_id": cid, "card_key": card_key[:80], "card_name": (card_name or "")[:120],
             "path_kind": kind, "answers": answers, "steps": steps, "step": 0,
             "leader_contact_id": leader["contact_id"] if leader else None,
-            "leader_role": pick["role"], "reason": pick["reason"][:400], "assigned_by": "chief",
-            "assigned_at": _iso(now), "due_at": _iso(now + timedelta(days=int(steps[0]["days"]))),
+            "leader_role": pick["role"], "reason": pick["reason"][:400], "assigned_by": assigned_by[:60],
+            "assigned_at": _iso(now), "due_at": _iso(due),
             "status": "open", "source_event": (source_event or "")[:80],
         })
         if not isinstance(rows, list) or not rows:
@@ -607,17 +659,25 @@ def on_intake_form(business: Dict[str, Any], form: Dict[str, Any], submission: D
     card, or the bulletin's guest card: new_here.form_door) puts the guest on
     the path, door "form", with texts when they ticked "Text me" (`texts_ok`,
     for `phone`); and a guest already handed on by another door gets a note
-    there instead of a second follow-up."""
+    there instead of a second follow-up.
+
+    The bulletin's guest card is the church's own pick (settings.new_here.
+    guest_form), whatever its name: one whose name gives no path of its own
+    (general, or none) opens as a connect card, so it is a guest's welcome
+    follow-up (guest_path.is_guest_follow_up) and Who calls our guests hands
+    it, like every other door."""
     if not is_church(business) or not contact_id:
         return None
+    import new_here
+    door = new_here.form_door(business, form)
     kind = kind_for_form(form)
+    if door and kind in (None, "general"):
+        kind = "connect"
     if not kind:
         return None
     biz, card_key = str(business["id"]), f"form:{form.get('id')}"
     card_name = _plain(form.get("name")) or "Card"
     answers = answers_from_form(form, submission or {})
-    import new_here
-    door = new_here.form_door(business, form)
     if door and new_here.second_door(biz, contact_id, card_key, answers, f"Also sent the {card_name}."):
         row = None
     else:
@@ -869,16 +929,25 @@ def reassign(business_id: str, follow_up_id: str, leader_contact_id: Optional[st
 
 
 def office_note(business_id: str, follow_up_id: str, text: str, *, pastors_only: bool,
-                by_user: str, by_name: str = "") -> Dict[str, Any]:
+                by_user: str, by_name: str = "", outcome: Optional[str] = None) -> Dict[str, Any]:
+    """The office's note. With `outcome` (a call, logged from the office:
+    Talked, Left a message, No answer, Not right now) it is that
+    conversation, the note optional, and one that reached the person
+    finishes "Reach out" on its own, as a leader's does (leader_note)."""
     biz, fid = _uid(business_id, "business"), _uid(follow_up_id, "follow-up")
     body = (text or "").strip()
-    if not body:
+    kind = outcome if outcome in OUTCOMES and outcome != "note" else "note"
+    if outcome and kind == "note" and outcome != "note":
+        raise HTTPException(400, "Pick how the call went")
+    if not body and kind == "note":
         raise HTTPException(400, "Write the note first")
-    _one(biz, fid)
-    note = _note(biz, fid, "office", "note", body[:MAX_NOTE], pastors_only=pastors_only,
+    row = _one(biz, fid)
+    note = _note(biz, fid, "office", kind, body[:MAX_NOTE], pastors_only=pastors_only,
                  author_user_id=by_user, author_name=by_name)
     if not note:
         raise HTTPException(503, "That note didn’t save. Try again.")
+    if kind in REACHED and row.get("status") == "open" and int(row.get("step") or 0) == 0:
+        advance(biz, fid, author_kind="office", author_user_id=by_user, author_name=by_name)
     return note
 
 
@@ -1370,19 +1439,33 @@ async def _sweep_handed() -> int:
     Every hand-off stamps the holder's role key (choose, pass_on, the office's
     hand-on), so a key they no longer hold is a role they lost. A row with no
     key stays while its leader holds any role. A church whose roles couldn't
-    be read is passed over: a failed read never means "nobody holds anything"."""
+    be read is passed over: a failed read never means "nobody holds anything".
+
+    A guest "Who calls our guests" handed (assigned_by guest_calls:…) may be
+    with an office login, who holds no role: guest_calls.recheck() decides
+    those instead, re-handing the guest by the church's own rules when the
+    caller can no longer take it (the login left, the duty moved, the person
+    or their role is gone), with a note."""
     import asyncio
+    import guest_calls
     fups = await asyncio.to_thread(
         _rows, "/church_follow_ups?status=in.(open,handed_back)&leader_contact_id=not.is.null"
-               "&select=id,business_id,leader_contact_id,leader_role&limit=2000")
+               "&select=id,business_id,leader_contact_id,leader_role,assigned_by,card_key,path_kind,status&limit=2000")
     prayers = await asyncio.to_thread(
         _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null"
                "&select=id,business_id,leader_contact_id,leader_role&limit=2000")
     import sample_church
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
+    guests: Dict[str, List[str]] = {}
     for r in sample_church.drop_samples((fups or []) + (prayers or [])):
+        if "assigned_by" in r and guest_calls.routed(r):
+            if r.get("status") == "open":
+                guests.setdefault(str(r["business_id"]), []).append(str(r["id"]))
+            continue
         by_biz.setdefault(str(r["business_id"]), []).append(r)
     n = 0
+    for biz, ids in guests.items():
+        n += await asyncio.to_thread(guest_calls.recheck, biz, ids)
     for biz, items in by_biz.items():
         held = await asyncio.to_thread(
             _rows, f"/church_leader_roles?business_id=eq.{_q(biz)}&status=eq.active&select=contact_id,role&limit=5000")
@@ -1432,12 +1515,189 @@ async def _sweep_terms(now: datetime) -> int:
     return n
 
 
+# A guest's call climbs its own ladder (guest_calls.late_step): reminded on
+# the due day, the backup a day late, the senior pastor three days late. The
+# rungs without a backup are today's (overseer_told, next_up).
+GUEST_RUNGS = ("guest_nudged", "backup_took", "pastor_told")
+
+
+async def _guest_reach(g: Any, biz: Dict[str, Any], cid: str, p: Optional[Dict[str, Any]], words: Dict[str, str],
+                       ref: str, lines: List[str], link: str) -> bool:
+    """Tell one person about a guest: an office login by a push and an email
+    (guest_calls.tell_login), a member by email, to their Lead tab. False
+    when nothing went (or there was no way to)."""
+    import asyncio
+    import guest_calls
+    uid = g.login_of(cid)
+    if uid:
+        return bool(await asyncio.to_thread(guest_calls.tell_login, g, uid, words, ref))
+    if p and p.get("email"):
+        return await _email(biz, p["email"], p.get("name") or "", words["subject"],
+                            _mail_html(lines, link, "Open your Lead tab" if link else ""), ref)
+    return False
+
+
+async def _guest_told(g: Any, r: Dict[str, Any], pname: str, leader: Optional[Dict[str, Any]], uid: str,
+                      now: datetime) -> bool:
+    """A login caller hears about a new guest: "Chief: a new guest for
+    you", where they came in, and when the call is due."""
+    import asyncio
+    import guest_calls
+    contact = await asyncio.to_thread(
+        _rows, f"/contacts?business_id=eq.{_q(r['business_id'])}&id=eq.{_q(r['contact_id'])}&select=id,metadata&limit=1")
+    door = guest_calls.door_for(str(r.get("card_key") or ""), (contact or [None])[0])
+    words = guest_calls.new_guest_words(pname, guest_calls.came_words(r, door, g.tz, now),
+                                        guest_calls.due_words(r.get("due_at"), g.tz, now), r.get("reason") or "",
+                                        first_name(leader["name"]) if leader else "")
+    return bool(await asyncio.to_thread(guest_calls.tell_login, g, uid, words, f"gc-told-{r['id']}"))
+
+
+async def _guest_climb(g: Any, biz: Dict[str, Any], r: Dict[str, Any], level: int, kind: str,
+                       person: Dict[str, Any], leader: Optional[Dict[str, Any]], now: datetime, lead_link: str,
+                       stats: Dict[str, int]) -> bool:
+    """One rung of a guest's call. Climbed only when its message went out
+    (or the office's alert stands); a failed send is tried next sweep."""
+    import asyncio
+    import guest_calls
+    biz_id, fid, pid = str(biz["id"]), str(r["id"]), str(r["contact_id"])
+    pname, lid = person["name"], str(r.get("leader_contact_id") or "")
+    lname = leader["name"] if leader else ""
+    due = guest_calls.due_words(r.get("due_at"), g.tz, now)
+    if kind == "guest_nudged":
+        if leader and (g.login_of(lid) or leader.get("email")):
+            ok = await _guest_reach(g, biz, lid, leader, guest_calls.remind_words(pname, due, first_name(lname)),
+                                    f"gc-nudge-{fid}-{r.get('due_at')}",
+                                    [f"Hi {html.escape(first_name(lname))},",
+                                     f"Your welcome call with {html.escape(pname)} is due {html.escape(due)}. "
+                                     "When you’ve talked, jot a quick note on your Lead tab."], lead_link)
+        else:
+            ok = await _office_alert(biz_id, f"{pname} is due today",
+                                     f"A welcome call is due {due}. "
+                                     + (f"{lname} has them, with no email on file." if leader else "No one has them."),
+                                     f"church-fu-due-{fid}-{r.get('due_at')}", pid)
+        if not ok:
+            return False
+        await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
+        await asyncio.to_thread(_note, biz_id, fid, "chief", "nudged",
+                                f"Reminded {lname or 'the office'}: the welcome call is due {due}.")
+        await asyncio.to_thread(church_history.note, biz_id, "church:follow_up_late",
+                                "Reminded the caller: a guest’s welcome call is due today",
+                                target_type="church_follow_up", target_id=fid)
+        stats["nudged"] = stats.get("nudged", 0) + 1
+        return True
+    if kind == "backup_took":
+        b = await asyncio.to_thread(g.backup, r)
+        if not b or not b.get("contact_id"):
+            return False
+        bname = b.get("name") or "The backup"
+        ok = await _guest_reach(g, biz, b["contact_id"], b,
+                                guest_calls.backup_words(pname, lname or "no one", first_name(bname)),
+                                f"gc-backup-{fid}-{r.get('due_at')}",
+                                [f"Hi {html.escape(first_name(bname))},",
+                                 f"{html.escape(pname)} hasn’t had a welcome call, a day past due"
+                                 + (f" with {html.escape(lname)}" if lname else "")
+                                 + ". You’re the church’s backup caller, so Chief handed them to you."], lead_link)
+        if not ok:
+            ok = await _office_alert(biz_id, f"Tell {bname} about {pname}",
+                                     f"{pname} was a day past due for a welcome call, so Chief handed them to {bname}, "
+                                     "the backup caller, who has no email on file.", f"church-fu-backup-{fid}", pid)
+        if not ok:
+            return False
+        await asyncio.to_thread(_patch, biz_id, fid, {
+            "leader_contact_id": b["contact_id"], "leader_role": guest_calls.MARK,
+            "assigned_by": f"{guest_calls.BY}:backup", "assigned_at": _iso(now), "leader_told_at": _iso(now),
+            "late_level": level,
+            "reason": (f"{lname} was a day past due, so the backup has them." if lname
+                       else "A day past due, so the backup has them.")[:400]})
+        if leader:
+            await _guest_reach(g, biz, lid, leader, guest_calls.handed_on_words(pname, bname, first_name(lname)),
+                               f"gc-handed-{fid}-{r.get('due_at')}",
+                               [f"Hi {html.escape(first_name(lname))},",
+                                f"{html.escape(pname)} was a day past due for a welcome call, so Chief handed them to "
+                                f"{html.escape(bname)}, the backup caller."], "")
+        await asyncio.to_thread(_note, biz_id, fid, "chief", "reassigned",
+                                f"A day late. Handed to {bname}, the backup" + (f", and told {lname}." if lname else "."))
+        await asyncio.to_thread(church_history.note, biz_id, "church:follow_up_late",
+                                "A guest’s welcome call is a day late. Handed it to the backup caller",
+                                target_type="church_follow_up", target_id=fid)
+        stats["backup_took"] = stats.get("backup_took", 0) + 1
+        return True
+    # pastor_told: three days late, after the backup took it.
+    seniors = [p for p in await asyncio.to_thread(g.seniors) if str(p.get("contact_id") or "") != lid]
+    words = guest_calls.pastor_words(pname, lname or "the backup")
+    told_names: List[str] = []
+    sent_any = not seniors
+    for p in seniors:
+        cid = str(p.get("contact_id") or "")
+        uid = g.login_of(cid) or (p.get("uid") if p.get("login") else None)
+        if uid:
+            ok = bool(await asyncio.to_thread(guest_calls.tell_login, g, uid, words,
+                                              f"gc-pastor-{fid}-{r.get('due_at')}-{uid}"))
+        else:
+            ok = await _guest_reach(g, biz, cid, p, words, f"gc-pastor-{fid}-{r.get('due_at')}-{cid}",
+                                    [f"{html.escape(pname)} is three days past due for a welcome call. "
+                                     f"{html.escape(lname or 'The backup')} has them, after the first caller. "
+                                     "Hand them to someone else on the Follow-up board?"], "")
+        sent_any = sent_any or ok
+        if ok:
+            told_names.append(p.get("name") or "the pastor")
+    alerted = await _office_alert(biz_id, f"Hand {pname} to someone else?",
+                                  f"Three days past the welcome call, with {lname or 'the backup'}. Told: "
+                                  f"{', '.join(told_names) or 'no one'}.",
+                                  f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+    if not (alerted and sent_any):
+        return False
+    await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
+    await asyncio.to_thread(_note, biz_id, fid, "chief", "pastors_told",
+                            f"Three days late. Told {', '.join(told_names) or 'the office'}, "
+                            "and asked the office to hand them on.")
+    await asyncio.to_thread(church_history.note, biz_id, "church:follow_up_late",
+                            "A guest’s welcome call is three days late. Told the senior pastor, and asked the "
+                            "office to hand it on", target_type="church_follow_up", target_id=fid)
+    stats["pastor_told"] = stats.get("pastor_told", 0) + 1
+    return True
+
+
+def _came_line(r: Dict[str, Any], pname: str, church: str) -> str:
+    """The told email's first line (HTML): the card they filled in, or for
+    a hand-off from a guest's welcome call (guest_brief, card_key "call:"),
+    what they asked for on it."""
+    reason = html.escape(r.get("reason") or "")
+    if str(r.get("card_key") or "").startswith("call:"):
+        asked = next((_plain(a.get("a")) for a in r.get("answers") or [] if isinstance(a, dict)), "")
+        return (f"{html.escape(pname)} asked for this on their welcome call at {html.escape(church)}"
+                + (f": <b>{html.escape(asked)}</b>" if asked else "") + f". Chief handed them to you. {reason}")
+    return (f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
+            f"at {html.escape(church)}, and Chief handed them to you. {reason}")
+
+
 async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     import asyncio
-    bizs = await asyncio.to_thread(_rows, f"/businesses?id=eq.{_q(biz_id)}&select=id,name,type&limit=1")
+    bizs = await asyncio.to_thread(_rows, f"/businesses?id=eq.{_q(biz_id)}&select=id,name,type,owner_id,settings&limit=1")
     if not bizs:
         return
     biz = bizs[0]
+    # Guests handed by "Who calls our guests" (guest_calls), while the Welcome
+    # Path is on: a login caller hears in the app and by email, and the call
+    # climbs its own ladder (the backup a day late). Who's who couldn't be
+    # read, or it's the church's quiet hours: those guests wait for the next
+    # sweep, and nobody is told wrong.
+    import guest_calls
+    gctx, gwait = None, False
+    if any(guest_calls.routed(r) for r in items):
+        try:
+            gctx = await asyncio.to_thread(guest_calls.context, biz)
+        except Exception as e:  # noqa: BLE001
+            gwait = True
+            print(f"[church_follow_up] guest calls unread this sweep ({type(e).__name__}, business {biz_id[:8]})",
+                  flush=True)
+        if gctx is not None:
+            import member_push
+            gwait = await asyncio.to_thread(member_push.quiet_hour, biz, now)
+            try:
+                await guest_calls.welcome_question(gctx, now)
+            except Exception as e:  # noqa: BLE001
+                print(f"[church_follow_up] welcome question skipped ({type(e).__name__})", flush=True)
     ids = {str(r["contact_id"]) for r in items} | {str(r["leader_contact_id"]) for r in items if r.get("leader_contact_id")}
     import church_map
     import church_roles as cr
@@ -1492,18 +1752,25 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         step = int(r.get("step") or 0)
         step_title = steps[step]["title"] if step < len(steps) else ""
         pid = str(r["contact_id"])
+        guest = guest_calls.routed(r) and (gctx is not None or gwait)
+        if guest and gwait:
+            continue
         # Said only once it was said: a leader is "told" when their email
         # went out, or — with no leader, or none we can email — when the
         # office's alert was raised. A failed send is tried again next sweep.
         if not r.get("leader_told_at"):
             card = church_history.card_words(r.get("card_name"))
-            if leader and leader.get("email"):
+            luid = gctx.login_of(lid) if guest else None
+            if luid:
+                told_line = f"Told {leader['name'] if leader else 'their caller'}: {card} is theirs to call"
+                told = await _guest_told(gctx, r, pname, leader, luid, now)
+                stats["told"] += int(told)
+            elif leader and leader.get("email"):
                 told_line = f"Emailed {leader['name']}: {card} is theirs to follow up"
                 told = await _email(biz, leader["email"], leader["name"],
                                     f"{pname} is yours to follow up",
                                     _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
-                                                f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
-                                                f"at {html.escape(church)}, and Chief handed them to you. {html.escape(r.get('reason') or '')}",
+                                                _came_line(r, pname, church),
                                                 f"First step: <b>{html.escape(step_title)}</b>, "
                                                 f"{html.escape((steps[step] if step < len(steps) else {}).get('rule') or '')}."],
                                                lead_link, "Open your Lead tab"),
@@ -1526,10 +1793,13 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 await asyncio.to_thread(_patch, biz_id, fid, {"leader_told_at": _iso(now)})
                 await asyncio.to_thread(church_history.note, biz_id, "church:leader_told", told_line,
                                         target_type="church_follow_up", target_id=fid)
-        rung = late_step(r, now)
+        rung = guest_calls.late_step(r, now, gctx) if guest else late_step(r, now)
         if not rung:
             continue
         level, kind = rung
+        if kind in GUEST_RUNGS:
+            await _guest_climb(gctx, biz, r, level, kind, person, leader, now, lead_link, stats)
+            continue
         delivered = True
         if kind == "nudged":
             if leader and leader.get("email"):

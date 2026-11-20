@@ -731,6 +731,10 @@ app.include_router(guest_card_router)
 # Scorecard. Read-only; behind GUEST_PATH (guest_path.switched_on).
 from church_guests import router as church_guests_router
 app.include_router(church_guests_router)
+# Chief's call brief for one guest (guest_brief.py, the Welcome Path step 3):
+# GET /church/guests/{biz}/brief/{follow_up_id}; behind GUEST_PATH.
+from guest_brief import router as guest_brief_router
+app.include_router(guest_brief_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)
@@ -769,6 +773,10 @@ app.include_router(kids_station_router)
 # public_site_router.
 from church_router import router as church_router
 app.include_router(church_router)
+# Who calls our guests (guest_calls.py): the church's own way of handing a
+# first-time guest's welcome call, behind GUEST_PATH.
+from guest_calls import router as guest_calls_router
+app.include_router(guest_calls_router)
 # The leaders map's office routes (/church/map; CHURCH_MAP). BEFORE
 # public_site_router.
 from church_map_router import router as church_map_router
@@ -2095,6 +2103,27 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # A Welcome Path guest's reply waiting on a person (guest_replies.py,
+    # 2026-11-20): one the quiet hours held is told, a day later the caller
+    # is reminded once, three days later the office's alert once. A hold
+    # never ends by itself. GUEST_PATH=off: reads nothing.
+    try:
+        import guest_replies as _guest_replies
+        scheduler.add_job(g("guest_replies_sweep", _guest_replies.sweep), "interval", minutes=10,
+                          id="guest_replies_sweep", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] guest replies sweep not scheduled: {e}")
+    # The Welcome Path after week one (2026-11-20): the two roads' texts
+    # (came back, not yet, the church's next step, the door is open), the
+    # held texts once a reply is answered, and Saturday's heads-up to the
+    # greeters and the kids desk. Each send claimed first and read again
+    # (guest_path_weeks.sweep_tick); GUEST_PATH=off sends nothing.
+    try:
+        import guest_path_weeks as _gpw
+        scheduler.add_job(g("guest_path_weeks_sweep", _gpw.sweep_tick), "interval", minutes=15,
+                          id="guest_path_weeks_sweep")
+    except Exception as e:
+        print(f"   [warn] guest path weeks sweep not scheduled: {e}")
     # Prayer & care handed to an office login (2026-11-18, Kevin: "build the
     # heads-up and due time for logins"): the login hears once, two minutes
     # after the hand-off; when it's due they're reminded, a day late whoever
