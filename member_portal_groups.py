@@ -881,10 +881,9 @@ def _lumen_post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_i
     if p.get("church"):
         bits.append("to every group leader" if p.get("audience") == "leaders" else "to every group")
     pinned = bool(p.get("pinned")) and not p.get("church")
-    tag = ('<span class="lm-fpin">Scheduled</span>' if later else '<span class="lm-fpin">Pinned</span>' if pinned else "")
-    face = (_face(author, "lm-fface", mode) if author else
+    face = (_face(author, "lf-face", mode) if author else
             f'<span class="lm-logo" aria-hidden="true">{_e(ui.initials(name))}</span>')
-    title = f'<h3>{_e(p["title"])}</h3>' if p.get("title") else ""
+    title = f'<b class="lf-t">{_e(p["title"])}</b>' if p.get("title") else ""
     pid = _e(p["id"])
     ack = ""
     if p.get("ask_ack") and not later:
@@ -916,9 +915,11 @@ def _lumen_post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_i
                  f'<input type="hidden" name="id" value="{pid}"><button class="gs-mini warn" type="submit">Take it down</button>'
                  f'</form></div>')
     foot = f'<div class="gs-foot">{ack}{seen}</div>' if (ack or seen) else ""
-    return (f'<article class="lm-fc lm-gpost" id="p-{pid}"><div class="lm-fsrc">{face}<span class="lm-fwho"><b>{_e(name)}</b>'
-            f'<small>{_e(" · ".join(b for b in bits if b))}</small></span>{tag}</div>'
-            f'<div class="lm-fbody">{title}<p>{_e(p.get("body") or "")}</p></div>{foot}{tools}</article>')
+    import member_lumen_feed as lf
+    head = lf._head(face, _e(name), " · ".join(b for b in bits if b), _base(g["id"], "board"),
+                    "Open the Board", chip="Scheduled" if later else "Pinned" if pinned else "")
+    return (f'<article class="lf-post lm-gpost" id="p-{pid}">{head}'
+            f'<div class="lf-txt">{title}<p>{_e(p.get("body") or "")}</p></div>{foot}{tools}</article>')
 
 
 def _lumen_posts(biz: Dict[str, Any], g: Dict[str, Any], data: Dict[str, Any], me: Dict[str, Any], *, leader: bool,
@@ -1009,8 +1010,8 @@ def _lumen_member_card(biz: Dict[str, Any], p: Dict[str, Any], g: Dict[str, Any]
         tools = (f'<form class="gs-acts lm-gtools" method="post" action="/my/post/remove"><input type="hidden" name="id" value="{pid}">'
                  f'<button class="gs-mini warn" type="submit">Take it down</button></form>')
     if p.get("held"):
-        return (f'<article class="lm-fc lm-gpost is-held" id="p-{pid}">{lf._source(biz, p, tz)}{lf._picture(p)}{lf._words(p)}'
-                f'<p class="lm-cnote lm-gheld">{lf._ic("shield", 14)}<span>{_e(member_posts.DONE["post_held"])} '
+        return (f'<article class="lf-post lm-gpost is-held" id="p-{pid}">{lf._source(biz, p, tz)}{lf._picture(p)}{lf._words(p)}'
+                f'<p class="lf-note lm-gheld">{lf._i("shield", "xs")}<span>{_e(member_posts.DONE["post_held"])} '
                 f'Only you can see it until then.</span></p>{tools}</article>')
     html = lf.card(biz, p, {}, open_=open_, me=me, pool=pool, used=used, tz=tz, back=_base(g["id"]))
     return html[:-len("</article>")] + tools + "</article>" if tools and html.endswith("</article>") else html

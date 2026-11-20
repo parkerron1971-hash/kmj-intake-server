@@ -308,7 +308,7 @@ def test_board_posts_are_feed_cards(gchurch, monkeypatch):  # noqa: F811
                                      "after_hours": False, "emailed": 0, "audience": None, "publish_at": None,
                                      "created_at": datetime.now(timezone.utc).isoformat(), "removed_at": None})
     html = group_page(gchurch, tmm.ANA, f"/my/groups/{tmm.GRP}").text
-    card = html[html.index('<article class="lm-fc lm-gpost"'):]
+    card = html[html.index('<article class="lf-post lm-gpost"'):]
     card = card[:card.index("</article>")]
     assert "Game night was a win." in card and "Leader · " in card and 'action="/my/groups/post/ack"' in card
 

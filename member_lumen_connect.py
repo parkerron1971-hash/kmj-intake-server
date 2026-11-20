@@ -683,11 +683,11 @@ CSS = Template("""
 .lm .lm-gin{flex:1;min-width:0;height:44px;border-radius:22px;background:var(--s1);display:flex;align-items:center;padding:0 16px;
   color:var(--fg3);font:400 15px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .lm .lm-gband{height:8px;margin:16px -20px 0;background:var(--s1);}
-.lm .lm-gposts .lm-fc{margin-top:14px;}
-.lm .lm-gposts .lm-fc .gs-foot,.lm .lm-gposts .lm-fc .gs-acts{padding:10px 16px 0;}
-.lm .lm-gposts .lm-fc .gs-acts{display:flex;gap:8px;flex-wrap:wrap;}
-.lm .lm-gposts .lm-fc>:last-child{padding-bottom:16px;}
-.lm .lm-gposts .lm-fbody p{-webkit-line-clamp:12;}
+/* the group's posts: Home's feed cards (member_lumen_feed), edge to edge under the band */
+.lm .lm-gposts{margin:0 -20px;}
+.lm .lm-gposts .lf-post .gs-foot,.lm .lm-gposts .lf-post .gs-acts{padding:10px 20px 0;}
+.lm .lm-gposts .lf-post .gs-acts{display:flex;gap:8px;flex-wrap:wrap;}
+.lm .lm-gposts .lf-txt p{-webkit-line-clamp:12;}
 /* a member's post: the composer (member_posts) */
 .lm .lm-mpform{margin-top:22px;}
 .lm .lm-pme{display:flex;align-items:center;gap:10px;font:650 15px/1.2 var(--mb-ui);color:var(--fg);}
@@ -727,8 +727,8 @@ CSS = Template("""
 .lm .lm-pswitch small{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
 .lm .lm-mpform.js:not(.is-church) .lm-pkinds,.lm .lm-mpform.js.is-church .lm-pcomments,
 .lm .lm-mpform.js.is-prayer .lm-pphoto,.lm .lm-mpform.js.is-prayer .lm-pcomments,.lm .lm-mpform.js.is-prayer .lm-pkinds{display:none;}
-.lm .lm-gheld{display:flex;gap:8px;align-items:flex-start;margin:12px 16px 0;}
-.lm .lm-gpost.is-held{box-shadow:0 0 0 1px var(--lm-line),inset 4px 0 0 var(--lm-gold);}
+.lm .lm-gheld{display:flex;gap:8px;align-items:flex-start;margin:12px 20px 0;}
+.lm .lm-gpost.is-held{box-shadow:inset 4px 0 0 var(--lm-gold);}
 .lm .lm-gtools{padding:10px 16px 0;}
 @media (prefers-reduced-motion:reduce){.lm .lm-cpill{transition:none;}.lm .lm-cpill:active{transform:none;}}
 """)

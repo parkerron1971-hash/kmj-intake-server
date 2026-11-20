@@ -9,7 +9,7 @@ post can allow whether people can comment or not", and "show 4 post and a
 show more tab where people can see other post from another page".
 
 THE STREAM (home_feed). "Share a praise or a prayer…" with the member's face
-(it opens /my/news/share, Share good news), a thin band, then the posts edge
+(it opens /my/post, the members' composer: member_posts), a thin band, then the posts edge
 to edge, a hairline between them:
 
   * A POST (card): who posted (their face, or the church's mark), "Maya
@@ -132,10 +132,12 @@ def _church_face(biz: Dict[str, Any], label: str = "") -> str:
     return f'<span class="lm-logo" aria-hidden="true">{_e(ui.initials(label or church))}</span>'
 
 
-def _head(face: str, who_html: str, small: str, more_href: str, more_label: str, pin: bool = False) -> str:
+def _head(face: str, who_html: str, small: str, more_href: str, more_label: str, pin: bool = False,
+          chip: str = "") -> str:
     """A post's header: the face, who (trusted markup), the kind and time,
-    Pinned, and "…" (opens the item's own page)."""
-    chip = '<span class="lf-pin">Pinned</span>' if pin else ""
+    Pinned (or `chip`'s word: a group's Scheduled), and "…" (opens the
+    item's own page)."""
+    chip = f'<span class="lf-pin">{_e(chip or "Pinned")}</span>' if (pin or chip) else ""
     return (f'<header class="lf-ph">{face}<div class="lf-who"><b>{who_html}</b><small>{_e(small)}</small></div>{chip}'
             f'<a class="lf-more" href="{_e(more_href)}" aria-label="{_e(more_label)}">{_i("more")}</a></header>')
 
@@ -262,14 +264,45 @@ def _event(biz: Dict[str, Any], site, p: Dict[str, Any], occ: Dict[str, Dict[str
               f'<input type="hidden" name="action" value="coming"><button class="lf-pill pri" type="submit">Going</button></form>')
     share = ""
     if o.get("public") and er.events_settings(biz.get("settings")).get("enabled"):
-        share = (f'<a class="lf-pill lm-share" href="/events" data-share-kind="event" data-share-title="{_e(o.get("title") or "")}" '
-                 f'data-share-sub="{_e(" · ".join(x for x in (kick, o.get("location") or "") if x))}" '
-                 f'data-share-img="{_e(pic)}">{_i("share", "xs")}Share</a>')
+        share = _share("event", "/events", o.get("title") or "",
+                       sub=" · ".join(x for x in (kick, o.get("location") or "") if x),
+                       img=_public_picture(biz, site, o.get("title") or ""), sid=o.get("entry_id") or "")
     words = (p.get("body") or "").strip()
     return (f'<div class="lf-event">{box}<div class="lf-ev"><p class="lf-kick">{_e(kick)}</p>'
             f'<h3><a href="{href}">{_e(o.get("title") or p.get("title") or "")}</a></h3>'
             f'{f"<p>{_e(meta)}</p>" if meta else ""}{f"<p class=lf-evb>{_e(words)}</p>" if words else ""}</div>'
             f'<div class="lf-btns">{go}{share}</div></div>')
+
+
+def _share(kind: str, href: str, title: Any, *, sub: Any = "", img: Any = "", sid: Any = "") -> str:
+    """Share (contract 1): <a class="lm-share lf-pill" href=PUBLIC data-share-kind data-share-title
+    data-share-sub data-share-img data-share-id>, the attributes in member_lumen_share.attrs()'s order.
+    Church content only: a message or an event."""
+    if kind not in ("message", "event"):
+        raise ValueError(f"not a church kind: {kind!r}")
+    inner = f'{_i("share", "xs")}Share'
+    try:
+        import member_lumen_share as msl   # the share helper's own (#1986), once it is on main
+    except ImportError:
+        msl = None
+    if msl is not None and hasattr(msl, "link"):
+        return msl.link(kind, href, title, inner, sub=sub, img=img, sid=sid, cls="lf-pill")
+    a = [f'class="lm-share lf-pill" href="{_e(href)}" data-share-kind="{kind}" data-share-title="{_e(title)}"']
+    for k, v in (("sub", sub), ("img", img), ("id", sid)):
+        if v:
+            a.append(f'data-share-{k}="{_e(v)}"')
+    return f'<a {" ".join(a)}>{inner}</a>'
+
+
+def _public_picture(biz: Dict[str, Any], site, title: str) -> str:
+    """An event's picture for the share sheet only when the church's website
+    already shows it (its media library, its site's files): a picture that
+    lives only in the app stays in the app."""
+    import member_app_photos as photos
+    import member_portal_church as mpc
+    pool = photos.photos(biz, site, limit=None)
+    pic, _look = photos.choose(biz, mpc.event_key(title), pool, title=title, look="colour")
+    return pic if pic and pic in pool else ""
 
 
 def _thumb(lib: Dict[str, Any], s: Dict[str, Any], site, pool: Optional[List[str]]) -> str:
@@ -310,8 +343,7 @@ def _message_body(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], s
         main, listen = f'<a class="lf-pill pri" href="{href}#listen">{_i("listen", "xs")}Listen</a>', ""
     else:
         main, listen = f'<a class="lf-pill pri" href="{href}">Open</a>', ""
-    share = (f'<a class="lf-pill lm-share" href="/sermons/{sid}" data-share-kind="message" data-share-title="{_e(title)}" '
-             f'data-share-sub="{_e(sub)}" data-share-img="{_e(thumb)}">{_i("share", "xs")}Share</a>')
+    share = _share("message", f"/sermons/{s['id']}", title, sub=sub, img=thumb, sid=s["id"])
     return (f'{pic}<div class="lf-msg"><p class="lf-kick">{_e(kick)}</p><h3><a href="{href}">{_e(title)}</a></h3>'
             f'{f"<p>{_e(sub)}</p>" if sub else ""}</div><div class="lf-btns">{main}{listen}{share}</div>')
 
@@ -350,7 +382,16 @@ def _carries(p: Dict[str, Any]) -> str:
             f'<span>{_e(rest or "Open the link")}</span></span>{_i("chevron", "xs")}</a>')
 
 
-def _words(p: Dict[str, Any], who: str, *, caption: bool) -> str:
+def _source(biz: Dict[str, Any], p: Dict[str, Any], tz: Any) -> str:
+    """A church post's header alone (the group page draws a held post with
+    it: member_portal_groups)."""
+    import member_portal_news as mpn
+    face, who, _name, bits = _who(biz, p)
+    small = " · ".join(b for b in bits + [mpn.when_label(biz, _when(p), tz=tz[0])] if b)
+    return _head(face, who, small, f"/my/news/{p['id']}", "Open the post", pin=bool(p.get("pinned")))
+
+
+def _words(p: Dict[str, Any], who: str = "", *, caption: bool = False) -> str:
     """The post's words. Under a photo (`caption`): the poster's name in
     bold, the title, then the words, as one caption. Else the title and the
     words; a praise report as a quote."""
@@ -639,15 +680,15 @@ def _order(posts: List[Dict[str, Any]], items: Optional[List[Dict[str, Any]]] = 
 
 
 def composer(me: Optional[Dict[str, Any]]) -> str:
-    """"Share a praise or a prayer…" with the member's face: Share good news
-    (/my/news/share, member_portal_share), then a thin band."""
+    """"Share a praise or a prayer…" with the member's face: the new look's
+    composer (/my/post, member_posts), then a thin band."""
     import member_app_ui as ui
     import member_photos as ph
     mine = ph.src(me) if me else ""
     face = (f'<span class="lf-cface"><img src="{_e(mine)}" alt=""></span>' if mine
             else f'<span class="lf-cface" aria-hidden="true">{_e(ui.initials((me or {}).get("name")))}</span>')
-    return (f'<div class="lf-comp">{face}<a class="lf-comp-in" href="/my/news/share">Share a praise or a prayer…</a>'
-            f'<a class="lf-comp-ph" href="/my/news/share" aria-label="Add a photo">{_i("image")}</a></div>'
+    return (f'<div class="lf-comp">{face}<a class="lf-comp-in" href="/my/post">Share a praise or a prayer…</a>'
+            f'<a class="lf-comp-ph" href="/my/post" aria-label="Add a photo">{_i("image")}</a></div>'
             f'<div class="lf-band" aria-hidden="true"></div>')
 
 

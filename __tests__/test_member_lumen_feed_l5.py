@@ -108,7 +108,7 @@ def test_your_groups_requests_and_posts_ride_in_the_feed(church, monkeypatch):
         assert hidden not in feed                                   # leaders-only, for later, another group, old…
     req = _art(feed, f"gp-{GR1}")
     assert "Elena <i>in</i> Tuesday Night Group" in req and "Elena Ruiz" not in req   # first names, as the wall says
-    assert "Prayer request · 5m" in req and "My mom&#x27;s surgery is Friday morning" in req
+    assert re.search(r"Prayer request · \d+m<", req) and "My mom&#x27;s surgery is Friday morning" in req
     assert (f'<form method="post" action="/my/groups/prayer/mark" class="lf-prayf"><input type="hidden" name="id" '
             f'value="{GR1}"><input type="hidden" name="kind" value="praying"><input type="hidden" name="back" value="/my">'
             '<button class="lf-pbtn" type="submit" aria-pressed="false">') in req
@@ -211,8 +211,8 @@ def test_the_newest_message_rides_while_it_is_new(church, monkeypatch):
             f'data-href="/my/sermons/{S1}"') in card
     # Watch · Listen · Share: the PUBLIC page to the share sheet (contract 1).
     assert f'<a class="lf-pill pri" href="/my/sermons/{S1}">' in card and f'href="/my/sermons/{S1}#listen"' in card
-    assert (f'<a class="lf-pill lm-share" href="/sermons/{S1}" data-share-kind="message" data-share-title="Hope Has a Name" '
-            f'data-share-sub="Pastor James · Isaiah 9:6" data-share-img="">') in card
+    assert (f'<a class="lm-share lf-pill" href="/sermons/{S1}" data-share-kind="message" data-share-title="Hope Has a Name" '
+            f'data-share-sub="Pastor James · Isaiah 9:6" data-share-id="{S1}">') in card    # no picture shown: none named
     # Sermons keep no running time: no duration chip is made up.
     assert "lf-dur" not in card
 
@@ -245,8 +245,8 @@ def test_an_events_share_only_when_its_public(church, monkeypatch):
     assert "lm-share" not in feed                                                   # the events page is off
     church.biz[tct.BIZ]["settings"]["events_public"] = {"enabled": True}
     food = _art(_feed(_client(church, monkeypatch).get("/my").text), f"p-{P['food']}")
-    assert ('<a class="lf-pill lm-share" href="/events" data-share-kind="event" data-share-title="Community Food Drive" '
-            'data-share-sub="Saturday, Nov 21 · 9 AM · Fellowship Hall"') in food
+    assert ('<a class="lm-share lf-pill" href="/events" data-share-kind="event" data-share-title="Community Food Drive" '
+            f'data-share-sub="Saturday, Nov 21 · 9 AM · Fellowship Hall" data-share-id="{FOOD}">') in food
     assert '<p class="lf-kick">Saturday, Nov 21 · 9 AM</p>' in food
     # Only church content: never a member's post or a prayer request.
     for key in ("worship", "noah", "denise"):
