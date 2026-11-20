@@ -431,12 +431,15 @@ def test_the_readers_share_is_the_tapped_verse():
 
 def test_the_script_rides_only_where_theres_a_share(share, fake, monkeypatch):
     c = _app(fake, monkeypatch)
-    for path in ("/my", "/my/connect", "/my/me", "/my/give"):
+    for path in ("/my/connect", "/my/me", "/my/give"):
         html = c.get(path).text
         assert "lm-share" not in html and mls.js_url() not in html, path
     # the Bible tab (Look 5.1) opens on the reader, whose verse bar has Share: the script rides there
     html = c.get("/my/bible").text
     assert 'data-share-from="reader"' in html and html.count(mls.js_url()) == 1
+    # Home's feed shares the church's newest message (member_lumen_feed, Look 5.1): the script rides there, once.
+    home = c.get("/my").text
+    assert 'data-share-kind="message"' in home and home.count(mls.js_url()) == 1
     assert mls.page_js("<p>nothing</p>") == "" and mls.js_url() in mls.page_js('<a class="lm-share" href="/">')
     r = c.get(mls.js_url())
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")

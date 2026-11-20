@@ -220,7 +220,7 @@ def _event(biz: Dict[str, Any], site, p: Dict[str, Any], occ: Dict[str, Dict[str
     and time, the title, where and how many are going, Going (the post's
     Sign me up, else the event's own RSVP), and Share when the church's
     events page and the event are public."""
-    import events_rsvp_router as er
+    import member_lumen_share as msl
     import member_app_photos as photos
     import member_lumen_home as lh
     import member_portal_church as mpc
@@ -265,10 +265,10 @@ def _event(biz: Dict[str, Any], site, p: Dict[str, Any], occ: Dict[str, Dict[str
               f'<input type="hidden" name="back" value="{"/my" if back == "/my" else "/my/events"}">'
               f'<input type="hidden" name="action" value="coming"><button class="lf-pill pri" type="submit">Going</button></form>')
     share = ""
-    if o.get("public") and er.events_settings(biz.get("settings")).get("enabled"):
+    if o.get("public") and msl.events_on(biz):
         share = _share("event", "/events", o.get("title") or "",
                        sub=" · ".join(x for x in (kick, o.get("location") or "") if x),
-                       img=_public_picture(biz, site, o.get("title") or ""), sid=o.get("entry_id") or "")
+                       img=msl.event_picture(biz, site, o.get("title") or ""), sid=o.get("entry_id") or "")
     words = (p.get("body") or "").strip()
     return (f'<div class="lf-event">{box}<div class="lf-ev"><p class="lf-kick">{_e(kick)}</p>'
             f'<h3><a href="{href}">{_e(o.get("title") or p.get("title") or "")}</a></h3>'
@@ -277,34 +277,13 @@ def _event(biz: Dict[str, Any], site, p: Dict[str, Any], occ: Dict[str, Dict[str
 
 
 def _share(kind: str, href: str, title: Any, *, sub: Any = "", img: Any = "", sid: Any = "") -> str:
-    """Share (contract 1): <a class="lm-share lf-pill" href=PUBLIC data-share-kind data-share-title
-    data-share-sub data-share-img data-share-id>, the attributes in member_lumen_share.attrs()'s order.
-    Church content only: a message or an event."""
+    """Share (contract 1): member_lumen_share.link() as a pill, its id for
+    Your story. Church content only: a message or an event (link() refuses
+    any other kind; the feed never asks for one)."""
+    import member_lumen_share as msl
     if kind not in ("message", "event"):
         raise ValueError(f"not a church kind: {kind!r}")
-    inner = f'{_i("share", "xs")}Share'
-    try:
-        import member_lumen_share as msl   # the share helper's own (#1986), once it is on main
-    except ImportError:
-        msl = None
-    if msl is not None and hasattr(msl, "link"):
-        return msl.link(kind, href, title, inner, sub=sub, img=img, sid=sid, cls="lf-pill")
-    a = [f'class="lm-share lf-pill" href="{_e(href)}" data-share-kind="{kind}" data-share-title="{_e(title)}"']
-    for k, v in (("sub", sub), ("img", img), ("id", sid)):
-        if v:
-            a.append(f'data-share-{k}="{_e(v)}"')
-    return f'<a {" ".join(a)}>{inner}</a>'
-
-
-def _public_picture(biz: Dict[str, Any], site, title: str) -> str:
-    """An event's picture for the share sheet only when the church's website
-    already shows it (its media library, its site's files): a picture that
-    lives only in the app stays in the app."""
-    import member_app_photos as photos
-    import member_portal_church as mpc
-    pool = photos.photos(biz, site, limit=None)
-    pic, _look = photos.choose(biz, mpc.event_key(title), pool, title=title, look="colour")
-    return pic if pic and pic in pool else ""
+    return msl.link(kind, href, title, f'{_i("share", "xs")}Share', sub=sub, img=img, sid=sid, cls="lf-pill")
 
 
 def _thumb(lib: Dict[str, Any], s: Dict[str, Any], site, pool: Optional[List[str]]) -> str:
