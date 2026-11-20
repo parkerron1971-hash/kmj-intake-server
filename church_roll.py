@@ -38,6 +38,18 @@ already lives somewhere; this module only gathers it, read-only:
                   /church/roll/birthdays: a church's Home, for the pastor)
     BAPTISMS .... planned baptisms in the church register, today or later
 
+NAMELESS .... a contact whose name is only a phone number (a number nobody
+                  knew texted in) is `noname`: the page keeps them in their
+                  own list, out of the people and the counts, until someone
+                  names them (2026-11-20)
+    CONFIRMED ... a member whose membership is on file: the office marked
+                  them a member, the register has the day they joined, they
+                  came over in an import, or they lead. Member is never set
+                  by anything automatic; Tidy up lists the rest once
+    MERGED ...... a record merged into another (metadata.merged_into) is kept
+                  but never on the roll
+Changing any of it is church_roll_edit.py.
+
 Care and giving stay with the logins that hold them: the roll says only
 that someone has an open care card (never its words), and giving shows on a
 person's page only for the owner, admins and accountants, and only when
@@ -219,6 +231,13 @@ def last_name(name: str, given: str = "") -> str:
     return words[-1] if len(words) > 1 else (words[0] if words else "")
 
 
+def is_number(name: Any) -> bool:
+    """A name that is only a phone number: how a number nobody knew that
+    texted in is saved (sms_service, "practitioner renames later")."""
+    s = _plain(name)
+    return bool(s) and all(ch.isdigit() or ch in "+ ().-" for ch in s) and sum(ch.isdigit() for ch in s) >= 7
+
+
 def _age(born: Optional[date], today: date) -> Optional[int]:
     if not born:
         return None
@@ -361,14 +380,23 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
     contacts = _all(f"/contacts?business_id=eq.{_q(b)}"
                     "&select=id,name,email,phone,status,tags,birthdate,created_at,source,"
                     "first_name:metadata->>first_name,last_name:metadata->>last_name,"
-                    "imported_at:metadata->>imported_at,imported_from:metadata->>imported_from")
+                    "imported_at:metadata->>imported_at,imported_from:metadata->>imported_from,"
+                    "merged_into:metadata->>merged_into,member_confirmed:metadata->member_confirmed,"
+                    "not_same:metadata->not_same")
     people: Dict[str, Dict[str, Any]] = {}
     for c in contacts:
         cid = str(c.get("id") or "")
         name = _plain(c.get("name"))
-        if not cid or not name:
-            continue
+        if not cid or not name or _meta(c, "merged_into"):
+            continue        # a merged record is kept, never on the roll
         people[cid] = c
+
+    # The day they joined, from the church register: one reason a member is a member.
+    joined: Set[str] = set()
+    for e in _soft_all(f"/church_register_entries?business_id=eq.{_q(b)}&membership=in.(joined,transferred_in)"
+                       "&removed_at=is.null&select=id,contact_ids,people") or []:
+        joined |= {str(x) for x in (e.get("contact_ids") or [])}
+        joined |= {str(p["contact_id"]) for p in (e.get("people") or []) if isinstance(p, dict) and p.get("contact_id")}
 
     # Families
     homes = {str(h["id"]): h for h in _all(f"/households?business_id=eq.{_q(b)}&select=id,name") if h.get("id")}
@@ -525,8 +553,16 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
         in_week = bool(born) and (_birthday_on(born, today.year) in week_days
                                   or _birthday_on(born, today.year + 1) in week_days)
         name = _plain(c.get("name"))
+        meta = c.get("metadata") if isinstance(c.get("metadata"), dict) else {}
+        confirmed_raw = c.get("member_confirmed") if c.get("member_confirmed") is not None else meta.get("member_confirmed")
+        not_same = c.get("not_same") if c.get("not_same") is not None else meta.get("not_same")
+        imported = bool(_meta(c, "imported_at") or _meta(c, "imported_from")
+                        or str(c.get("source") or "").lower().startswith("import"))
         rows.append({
             "id": cid, "name": name,
+            "noname": is_number(name),
+            "confirmed": status in ("member", "leader") and bool(cid in roles_of or cid in leads or confirmed_raw
+                                                                  or cid in joined or imported),
             "first": first_of(name, _meta(c, "first_name")),
             "last": last_name(name, _meta(c, "last_name")),
             "status": status,
@@ -543,6 +579,7 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
             "phone": _plain(c.get("phone")),
             "email": _plain(c.get("email")),
             "_born": born, "_bday_this_week": in_week, "_age": age,
+            "_not_same": [str(x) for x in not_same] if isinstance(not_same, list) else [],
         })
 
     # The family list (named, with a shepherd)
@@ -582,7 +619,7 @@ def _names(list_: List[str], most: int = 3) -> List[str]:
 
 def week(ctx: Dict[str, Any]) -> Dict[str, Any]:
     today: date = ctx["today"]
-    live = [p for p in ctx["people"] if p["status"] != "inactive"]
+    live = [p for p in ctx["people"] if p["status"] != "inactive" and not p.get("noname")]
     new = sorted((p for p in live if p["new_unreached"]), key=lambda p: p["first_visit"] or "", reverse=True)
     newest = ""
     if new:
@@ -810,6 +847,11 @@ def _chief(ctx: Dict[str, Any], p: Dict[str, Any], shepherd: str) -> Dict[str, A
     rule over what's on file, not a model call: it costs nothing and never
     says something the record can't back."""
     first, name = p["first"] or p["name"], p["name"]
+    if p.get("noname"):
+        return {"text": "Someone texted the church from this number, and nobody has put a name to it yet.",
+                "actions": [{"label": "Draft “Who’s this?”",
+                             "ask": f"Draft a short, friendly text to {name} asking who we have the joy of texting, "
+                                    "so we can save their name. Show me before it sends."}]}
     s = p["sundays"]
     here = sum(1 for k in s if k in "PO")
     of = sum(1 for k in s if k != "N")
@@ -953,7 +995,14 @@ def roll(business_id: str = Query(...),
     """The roll: everyone, their Sundays, families, and This week."""
     b, user, role = _gate(biz, session)
     ctx = _cached(biz, fresh=True)
-    return roll_view(ctx, can_care=_may_care(b, user), can_give=_may_give(b, user, role))
+    out = roll_view(ctx, can_care=_may_care(b, user), can_give=_may_give(b, user, role))
+    try:
+        import church_roll_edit
+        if church_roll_edit.open_to(user):
+            out["tidy"] = church_roll_edit.tidy_counts(ctx)
+    except Exception as e:                     # the roll opens without Tidy up's counts
+        print(f"[church_roll] tidy counts skipped: {type(e).__name__}")
+    return out
 
 
 @router.get("/birthdays")
@@ -967,13 +1016,23 @@ def week_birthdays(business_id: str = Query(...),
 
 
 @router.get("/person/{contact_id}")
-def person(contact_id: str, business_id: str = Query(...),
+def person(contact_id: str, business_id: str = Query(...), fresh: bool = Query(False),
            biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
            session: UserSession = Depends(sb_clients.authed_request)):
-    """One person's page on the roll."""
+    """One person's page on the roll. `fresh` after a save: the roll is
+    cached per replica, and the next read may land on another one."""
     b, user, role = _gate(biz, session)
     cid = _uuid(contact_id)
-    ctx = _cached(biz, fresh=False)
+    ctx = _cached(biz, fresh=fresh)
     if cid not in ctx["by_id"]:
         ctx = _cached(biz, fresh=True)       # someone just added
-    return person_view(ctx, cid, can_care=_may_care(b, user), can_give=_may_give(b, user, role))
+    out = person_view(ctx, cid, can_care=_may_care(b, user), can_give=_may_give(b, user, role))
+    out["can_edit"] = False
+    import church_roll_edit
+    if church_roll_edit.open_to(user):
+        try:
+            out["edit"] = church_roll_edit.edit_block(ctx, cid)
+            out["can_edit"] = True
+        except HTTPException as e:             # the page still opens, read-only
+            print(f"[church_roll] edit block skipped: {e.status_code}")
+    return out

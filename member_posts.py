@@ -41,10 +41,26 @@ WHO MAY POST IN A GROUP. Someone in the group, at a church that has member
 posting on (settings.member_portal.member_posts, on unless the church turns
 it off) and has its two safety officers (as comments and group chat need:
 messaging_router.MIN_OFFICERS). Teens follow messaging's rules
-(member_messaging_rules): we have to know their age (a birthdate on their
-record), a teen needs the church's messaging switch on for them, a group
-with a teen in it needs two approved adult leaders, and nobody shares a
-photo into a group with a teen in it (as chat photos).
+(member_messaging_rules): we have to know their age, a teen needs the
+church's messaging switch on for them, a group with a teen in it needs two
+approved adult leaders, and nobody shares a photo into a group with a teen
+in it (as chat photos).
+
+THEIR BIRTHDAY, ASKED ONCE (Kevin, 2026-11-20: "yes ask for the birthday
+when they tap post"). Posting's age is the office's birthdate
+(contacts.birthdate) when it has one, else the birthday the member gave the
+first time they posted in a group: contacts.metadata.member_birthdate on
+their own record (posting_birthdate). The composer asks for it, above Post,
+only while they have neither and a group is picked; Post saves it and the
+post in one submit (save_birthdate: their own record, guarded by updated_at,
+never changed from the app once given; the office's birthdate wins). A real
+date, not in the future, under 110; under 13 isn't kept and doesn't post
+(kids come in through a parent: member_spaces.is_child). It counts for
+posting only. Messaging, and messaging's approved adult leaders, read
+contacts.birthdate alone (member_messaging_rules is unchanged): a birthday
+a member typed never opens messaging, and never makes anyone one of a
+group's two adults. A typed birthday that says someone is a teen does make
+them a teen here (it only ever narrows what a group allows).
 
 TAKING ONE DOWN. Its writer, or a leader of its group (here); the office
 (church_news' remove, any post).
@@ -58,7 +74,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -78,6 +94,11 @@ TYPE_KEYS = tuple(k for k, _ in TYPES)
 HINT = {"praise": "What is God doing? Tell them…", "prayer": "What can we pray about?",
         "photo": "Say something about it…"}
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# The birthday a member gives once, for posting (contacts.metadata; the
+# session's record reads it as `bday`: member_portal.contacts_for_email).
+BDAY_KEY = "member_birthdate"
+BDAY_MAX_AGE = 110
+ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 DONE = {
     "posted": "It's up. Your group can see it now.",
@@ -102,7 +123,9 @@ ERRORS = {
     "post_photo": "Add a photo first.",
     "post_photos": f"Add up to {PHOTOS_MAX} photos at a time.",
     "post_teen_photos": "Photos can't be shared in a group with teens in it.",
-    "post_birthday": "Add your birthday to your details first, so your church knows which rules keep everyone safe.",
+    "post_birthday": "Add your birthday to post in a group. We ask once.",
+    "post_birthday_bad": "That date doesn't look right. Check your birthday and try again.",
+    "post_child": "Members under 13 can't post in groups. Please ask a parent or the church office.",
     "post_teen_off": "Your church hasn't turned messaging on for you yet, so you can't post in groups.",
     "post_two_adults": "This group needs two adult leaders before people can post in it.",
     "post_busy": "We couldn't check your words just now, so nothing was posted. Please try again.",
@@ -174,10 +197,102 @@ def groups_of(business_id: str, me_id: str) -> Optional[List[Dict[str, Any]]]:
                    for g in rows), key=lambda g: g["name"].lower())
 
 
+def given_birthdate(person: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The birthday a member gave when they first posted in a group
+    (contacts.metadata.member_birthdate; the session's record carries it as
+    `bday`), when it's a usable one; else None."""
+    import member_messaging_rules as mr_rules
+    person = person or {}
+    v = person.get("bday")
+    if v is None and isinstance(person.get("metadata"), dict):
+        v = person["metadata"].get(BDAY_KEY)
+    if not isinstance(v, str) or not ISO_DAY.match(v):
+        return None
+    a = mr_rules.age(v)
+    return v if a is not None and a < BDAY_MAX_AGE else None
+
+
+def posting_birthdate(person: Optional[Dict[str, Any]]) -> Any:
+    """Posting's birthdate: the office's (contacts.birthdate) when it has
+    one, else the one the member gave. For posting only: messaging
+    (member_messaging_rules) reads contacts.birthdate alone."""
+    import member_messaging_rules as mr_rules
+    office = (person or {}).get("birthdate")
+    if mr_rules.age(office) is not None:
+        return office
+    return given_birthdate(person)
+
+
+def _as_posting(person: Dict[str, Any]) -> Dict[str, Any]:
+    """A group's person as posting's teen rules see them: the office's
+    birthdate; with none, the birthday they gave only when it says they're a
+    teen. So a typed birthday can make someone a teen here (a narrower group)
+    but never one of a group's approved adults (can_message needs the
+    office's birthdate)."""
+    import member_messaging_rules as mr_rules
+    if mr_rules.age(person.get("birthdate")) is not None:
+        return person
+    given = given_birthdate(person)
+    return {**person, "birthdate": given if given and mr_rules.is_teen({"birthdate": given}) else None}
+
+
+def check_birthdate(raw: Any) -> Tuple[str, str]:
+    """(yyyy-mm-dd, '') for a birthday a member typed that posting keeps;
+    else ('', why): post_birthday (none given), post_birthday_bad (not a real
+    date, in the future, or 110 or more years ago), post_child (under 13:
+    kids come in through a parent, member_spaces.is_child, and nothing is
+    kept)."""
+    import member_messaging_rules as mr_rules
+    import member_spaces as msp
+    s = str(raw or "").strip()
+    if not s:
+        return "", "post_birthday"
+    if not ISO_DAY.match(s):
+        return "", "post_birthday_bad"
+    try:
+        d = date.fromisoformat(s)
+    except ValueError:
+        return "", "post_birthday_bad"
+    a = mr_rules.age(d)
+    if a is None or a >= BDAY_MAX_AGE:
+        return "", "post_birthday_bad"
+    if msp.is_child({"birthdate": d}):
+        return "", "post_child"
+    return d.isoformat(), ""
+
+
+def save_birthdate(business_id: str, contact_id: str, iso: str) -> Optional[str]:
+    """The birthday a member typed, on their own record only
+    (contacts.metadata.member_birthdate), guarded by updated_at so an office
+    edit at the same moment isn't lost (as member_feed_more.toggle_saved).
+    'saved'; 'kept' when the record already has one (the office's
+    birthdate, or one they gave before: never changed from the app); None
+    when it couldn't save."""
+    for _ in range(3):
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?id=eq.{_q(contact_id)}&business_id=eq.{_q(business_id)}"
+            f"&select=id,birthdate,metadata,updated_at&limit=1")
+        if not isinstance(rows, list) or not rows:
+            return None
+        rec = rows[0]
+        meta = dict(rec.get("metadata") or {}) if isinstance(rec.get("metadata"), dict) else {}
+        if posting_birthdate({"birthdate": rec.get("birthdate"), "metadata": meta}) is not None:
+            return "kept"
+        meta[BDAY_KEY] = iso
+        guard = f"eq.{_q(rec['updated_at'])}" if rec.get("updated_at") else "is.null"
+        got = sb_clients.sb_patch_as_service(
+            f"/contacts?id=eq.{_q(contact_id)}&business_id=eq.{_q(business_id)}&updated_at={guard}",
+            {"metadata": meta})
+        if isinstance(got, list) and got:
+            return "saved"
+    return None
+
+
 def rules(biz: Dict[str, Any], me: Dict[str, Any], group_id: str) -> Tuple[str, Dict[str, Any]]:
     """('', {group, teens}) when this member may post in this group; else an
     error code. Reads the group, its people, and (for teens and the leaders
-    of a group with teens) messaging's switches."""
+    of a group with teens) messaging's switches. The member's age is
+    posting's (posting_birthdate); everyone else's as _as_posting sees it."""
     import member_messaging_rules as mr_rules
     import member_portal_groups as mpg
     import member_portal_messaging as mpm
@@ -196,10 +311,12 @@ def rules(biz: Dict[str, Any], me: Dict[str, Any], group_id: str) -> Tuple[str, 
     mine = next((p for p in people if p["id"] == str(me["id"])), None)
     if not mine:
         return "post_not_member", {}
-    if mr_rules.age(mine.get("birthdate")) is None:
+    mine_born = posting_birthdate(mine)
+    if mr_rules.age(mine_born) is None:
         return "post_birthday", {}
+    people = [_as_posting(p) for p in people]
     teens = any(mr_rules.is_teen(p) for p in people)
-    if mr_rules.is_teen(mine):
+    if mr_rules.is_teen({"birthdate": mine_born}):
         full = mpm._me_profile(biz_id, me)
         if full is None:
             return "error", {}
@@ -513,6 +630,18 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], grou
     modes = (("on", "Comments on"), ("prayers", "Prayers only"), ("off", "Off"))
     comments = "".join(f'<label class="lm-pchip"><input type="radio" name="comments" value="{k}"{" checked" if k == "on" else ""}>'
                        f'<span>{_e(label)}</span></label>' for k, label in modes)
+    # Their birthday, asked once (above Post): only while posting has no
+    # age for them and a group is on offer; the script shows it only while
+    # a group is picked.
+    bday = ""
+    if group_ok and posting_birthdate(me) is None:
+        today = date.today()
+        oldest = today.replace(year=today.year - BDAY_MAX_AGE, day=min(today.day, 28))
+        bday = (f'<fieldset class="lm-pset lm-pbday" id="lm-pbday"><legend id="lm-pbday-l">Your birthday</legend>'
+                f'<div class="lm-field lm-find"><input type="date" name="birthday" autocomplete="bday" '
+                f'min="{oldest.isoformat()}" max="{today.isoformat()}" aria-labelledby="lm-pbday-l" '
+                f'aria-describedby="lm-pbday-n"></div>'
+                f'<p class="lm-pguard" id="lm-pbday-n"><span>We ask once. It keeps teens safe in groups.</span></p></fieldset>')
     switch = ""
     if owner:
         state = "on" if on(biz) else "off"
@@ -536,7 +665,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], grou
             f'<input type="file" name="photos" accept="image/jpeg,image/png,image/webp" multiple></label>'
             f'<fieldset class="lm-pset lm-pcomments"><legend>Comments</legend><div class="lm-pchips">{comments}</div></fieldset>'
             f'<p class="lm-pguard">{lc.ic("shield", 16)}<span>Every post is checked before anyone sees it. '
-            f'A prayer request goes on your group\'s prayer wall.</span></p>'
+            f'A prayer request goes on your group\'s prayer wall.</span></p>{bday}'
             f'<button class="lm-cpill pri" type="submit">Post</button></form>')
     # Back: the group it was opened from, else wherever they came from (a
     # pushed page: the browser's history, Home without it).
@@ -548,12 +677,14 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], grou
 
 
 # The words' hint follows the kind; the whole church's "what happened"
-# shows only for the whole church (without script, both always show).
+# shows only for the whole church, and the birthday only for a group, where
+# it's needed (without script, they always show).
 POST_JS = """<script>(function(){var f=document.getElementById('lm-post');if(!f)return;f.classList.add('js');
 var H={praise:"What is God doing? Tell them\\u2026",prayer:"What can we pray about?",photo:"Say something about it\\u2026"};
 function sync(){var t=f.querySelector('input[name=type]:checked'),w=f.querySelector('input[name=to]:checked');
 var k=t?t.value:'praise',c=w&&w.value==='church';f.classList.toggle('is-church',!!c);f.classList.toggle('is-prayer',k==='prayer');
-var a=f.querySelector('textarea');if(a)a.placeholder=H[k]||'';}
+var a=f.querySelector('textarea');if(a)a.placeholder=H[k]||'';
+var b=document.getElementById('lm-pbday');if(b){b.hidden=!!c;var d=b.querySelector('input');if(d){d.disabled=!!c;d.required=!c;}}}
 f.addEventListener('change',sync);sync();
 f.addEventListener('submit',function(){var b=f.querySelector('button[type=submit]');if(b){b.disabled=true;b.textContent='Posting\\u2026';}});})();</script>"""
 
@@ -626,6 +757,17 @@ async def post_route(request: Request):
         return _go(**({"done": code} if ok else {"err": code}))
     if not UUID.match(to):
         return _go(err="post_where")
+    if posting_birthdate(me) is None and str(form.get("birthday") or "").strip():
+        # Their birthday, asked once, saved with the post (posting only).
+        # Without one, the rules say so (they read the record fresh).
+        born, why = check_birthdate(form.get("birthday"))
+        if why:
+            return _go(err=why, group=to)
+        saved = await asyncio.to_thread(save_birthdate, str(biz["id"]), str(me["id"]), born)
+        if saved is None:
+            return _go(err="error", group=to)
+        import member_feed_more
+        member_feed_more.forget_record(biz["id"], me)
     ok, code, _pid = await to_group(biz, me, to, kind, text, files, str(form.get("comments") or "on"))
     if not ok:
         return _go(err=code, group=to)
