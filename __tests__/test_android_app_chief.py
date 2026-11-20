@@ -275,12 +275,18 @@ def test_as_sent_to_the_model_the_cached_blocks_are_byte_identical(monkeypatch):
     assert android_app.HEADING in app[3]["text"] and android_app.HEADING not in web[3]["text"]
 
 
-def test_the_chat_turn_adds_them_after_the_prompt_is_built():
+def test_the_chat_turn_adds_them_last_right_before_the_model_call():
+    """Last of every tail line (the action reminder, voice delivery, tone,
+    intent, the opening and headline handoffs), so nothing follows them."""
+    import re
     import chief_of_staff as cos
     src = inspect.getsource(cos.chief_chat)
-    built = src.index("system = _build_system_prompt(")
     added = src.index("system = _with_android_app_rules(system, biz, str(user_session.user.id))")
-    assert added > built
+    call = src.index("raw = await _call_claude(client, system, api_messages")
+    assert src.index("system = _build_system_prompt(") < added < call
+    appends = [m.start() for m in re.finditer(r"\bsystem (?:\+= |= system \+ )", src)]
+    assert appends and all(a < added for a in appends if a < call), "a tail line lands after the app rules"
+    assert src.count("_with_android_app_rules(") == 1
     # The stream endpoint runs the same turn (its own prompt build would need its own line).
     assert "chief_chat(req, user_session)" in inspect.getsource(cos.chief_chat_stream)
 
@@ -409,14 +415,65 @@ def test_an_answer_cached_in_a_browser_is_never_replayed_in_the_app(_router):
     assert app.cache_scope != web.cache_scope and app.cache_hit is None
 
 
-def test_the_headline_and_voice_preview_defer_plans_in_the_app():
-    for mod in ("chief_headline", "chief_voice_bridge"):
-        src = (ROOT / f"{mod}.py").read_text(encoding="utf-8")
-        assert 'android_app.defer_rule("NEED_MORE")' in src, mod
+EVIDENCE = {"context:open_invoices": {"kind": "context", "complete": True, "text": json.dumps([
+    {"invoice_number": "INV-2026-031", "client_name": "Maria Lopez", "amount": 400,
+     "status": "sent", "due_date": "2026-09-20"}])}}
+
+
+def _streamer():
+    import chief_of_staff as cos
+    import chief_truth
+    return cos._SentenceStreamer(lambda piece: None, chief_truth.stream_prover(EVIDENCE))
+
+
+def test_the_headline_defers_plans_in_the_app(monkeypatch):
+    import chief_fast_track as cft
+    import chief_headline as hl
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(hl, "_TallyOnly", lambda: type("R", (), {"tally": None})())
+    seen = []
+
+    async def stream_text(system, messages, **kw):
+        seen.append(system)
+        yield "NEED_MORE"
+    monkeypatch.setattr(cft, "stream_text", stream_text)
+
+    def say():
+        return asyncio.run(hl.say("Did Maria pay?", _streamer(), EVIDENCE))
+    assert say() == ""
     with in_app():
-        line = android_app.defer_rule("NEED_MORE")
-    assert line.rstrip().endswith("reply exactly NEED_MORE and nothing else.")
-    assert line.lstrip().upper().startswith("THIS PERSON")
+        assert say() == "", "NEED_MORE: nothing said, the full turn answers"
+    assert len(seen) == 2 and "Android app" not in seen[0]
+    assert seen[1].startswith(seen[0])
+    assert seen[1].rstrip().endswith("reply exactly NEED_MORE and nothing else.")
+
+
+def test_the_voice_preview_defers_plans_in_the_app(monkeypatch):
+    import chief_of_staff as cos
+    import chief_truth
+    import chief_voice_bridge as vb
+    seen = []
+
+    async def stream_text(system, messages, **kw):
+        seen.append(system)
+        yield "NEED_MORE, nothing to preview."
+
+    monkeypatch.setattr(vb.cft, "stream_text", stream_text)
+
+    async def run():
+        out = []
+        bridge = vb.VoiceBridge(out.append, chief_truth.stream_prover(EVIDENCE), cos._SentenceStreamer,
+                                prefix=cos.PROSE_PREFIX)
+        bridge.start("Did Maria pay?", EVIDENCE)
+        await asyncio.sleep(0.05)
+        await bridge.close()
+        return out
+    assert asyncio.run(run()) == []
+    with in_app():
+        assert asyncio.run(run()) == []
+    assert len(seen) == 2 and "Android app" not in seen[0]
+    assert "reply exactly NEED_MORE and nothing else." in seen[1]
+    assert seen[1].index("NEED_MORE and nothing else") < seen[1].index("BUSINESS RECORDS:")
 
 
 # ─── The sample church's Chief ────────────────────────────────────────
@@ -480,8 +537,52 @@ def test_the_no_card_refusal_never_says_add_a_card_in_the_app():
     assert app[0] == "Texting isn't on for this account yet."
     import sample_church
     assert sample == sample_church.MESSAGE, "a sample row keeps its own words"
-    src = inspect.getsource(__import__("chief_of_staff")._execute_actions)
-    assert 'android_app.wording("Waits for a card", "Not on yet")' in src
+
+
+def test_the_action_door_refuses_without_a_card_word_in_the_app(monkeypatch):
+    import chief_of_staff as cos
+    import no_card_trial as nct
+
+    async def fake_sb(client, method, path, body=None):
+        return []
+    monkeypatch.setattr(cos, "_sb", fake_sb)
+
+    async def blocks(client, business_id):
+        return {"id": business_id, "settings": {}}
+    monkeypatch.setattr(nct, "blocks_async", blocks)
+
+    async def must_not_run(client, biz, action):
+        raise AssertionError("send_sms must wait for a card")
+    monkeypatch.setitem(cos.ACTION_HANDLERS, "send_sms", must_not_run)
+    biz = {"id": "biz-1", "owner_id": "user-1", "name": "Test Biz", "type": "coach", "settings": {}}
+
+    def refuse():
+        out = asyncio.run(cos._execute_actions(None, biz, [
+            {"type": "send_sms", "contact_id": "c1", "body": "See you Sunday"}]))
+        assert len(out) == 1 and cos._action_failed(out[0])
+        return out[0]
+    web = refuse()
+    with in_app():
+        app = refuse()
+    assert web["label"].startswith("Waits for a card: ") and "add a card" in web["result"].lower()
+    assert app["label"].startswith("Not on yet: ")
+    assert app["result"] == "Failed: Texting isn't on for this account yet."
+    assert app["label"].split(": ", 1)[1] == web["label"].split(": ", 1)[1]
+
+
+def test_no_chief_verb_sells_our_plans_or_add_ons():
+    """Nothing Chief can do starts a checkout for Solutionist's own plans,
+    credits, storage or logins; the prompt rule is the whole guard today. A
+    verb that does must be refused inside the app (android_app.in_android_app)
+    and listed here."""
+    import re
+    import chief_of_staff as cos
+    import mcp_server
+    selling = re.compile(r"checkout|subscri|billing|upgrade_plan|change_plan|choose_plan|buy_|"
+                         r"credit_pack|top_up|topup|add_seat|seat_|storage_|add_card|start_trial")
+    verbs = set(cos.ACTION_HANDLERS) | set(getattr(mcp_server, "WRITE_TOOL_SCHEMAS", {}) or {})
+    assert len(verbs) > 100
+    assert sorted(v for v in verbs if selling.search(v)) == []
 
 
 def test_the_message_cap_lines_drop_upgrade_in_the_app(monkeypatch):
@@ -495,5 +596,24 @@ def test_the_message_cap_lines_drop_upgrade_in_the_app(monkeypatch):
     with in_app():
         said = ask()
     assert "pgrade" not in said and said.endswith("I'll see you on the 1st.")
-    src = (ROOT / "ai_proxy.py").read_text(encoding="utf-8")
-    assert 'android_app.wording(\n                                used_up + " Upgrade for unlimited Chief.", used_up)' in src
+
+
+sys.path.insert(0, str(ROOT / "__tests__"))
+from test_ai_proxy_endpoint import _FakeRequest, _req, _user, proxy_env  # noqa: E402,F401
+
+
+def test_the_ai_proxy_cap_drops_upgrade_in_the_app(proxy_env, monkeypatch):
+    import ai_proxy
+    import billing_limits
+    from fastapi import HTTPException
+    monkeypatch.setattr(billing_limits, "chief_can_send", lambda biz: False)
+
+    def capped():
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(ai_proxy.ai_proxy(_req(), _FakeRequest(), _user()))
+        assert e.value.status_code == 429 and e.value.detail["error"] == "chief_message_cap"
+        return e.value.detail["message"]
+    assert capped().endswith("Upgrade for unlimited Chief.")
+    with in_app():
+        said = capped()
+    assert said == "This month's included Chief messages are used up on your plan."

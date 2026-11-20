@@ -16017,10 +16017,6 @@ async def chief_chat(
                         system = jit_directive + system
             except Exception as _jit_err:
                 logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
-            # Inside the Android app, Chief never sells our plans or add-ons
-            # (android_app; Google Play's payments policy). The END of the
-            # prompt: the uncached turn tail, never a cached segment.
-            system = _with_android_app_rules(system, biz, str(user_session.user.id))
             effective_message = req.message
             if req.image_preferences:
                 effective_message += req.image_preferences.context()
@@ -16254,6 +16250,12 @@ async def chief_chat(
                             system += _hl.continuation_block(_headline_said)
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] headline skipped: {e}")
+            # Inside the Android app, Chief never sells our plans or add-ons
+            # (android_app; Google Play's payments policy). Added LAST, after
+            # every other tail line, so it is the final thing the model reads;
+            # the end of the prompt is the uncached turn tail, never a cached
+            # segment.
+            system = _with_android_app_rules(system, biz, str(user_session.user.id))
             _lane_token = turn_context.set_lane(lane)
             try:
                 raw = await _call_claude(client, system, api_messages,
