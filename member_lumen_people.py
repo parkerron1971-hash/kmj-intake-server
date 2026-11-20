@@ -208,6 +208,8 @@ body.lm .lm-reqt b{font-weight:650;}
 body.lm .lm-req+.lm-req{margin-top:0;border-top:0;}
 body.lm .lm-gate{flex-wrap:wrap;}
 body.lm .lm-gate .lm-reqt{flex:1 1 100%;margin:0;color:var(--fg2);}
+body.lm .lm-say .lm-reqt{overflow-wrap:anywhere;color:var(--fg2);}
+body.lm .lm-say .lm-reqt b{color:var(--fg);}
 body.lm .lm-list .lm-av{width:40px;height:40px;font-size:13px;}
 body.lm .lm-cnote{margin:14px 0 0;font:400 13px/1.45 var(--mb-ui);color:var(--fg3);}
 body.lm .lm-cnote.err{color:var(--error,var(--fg2));}

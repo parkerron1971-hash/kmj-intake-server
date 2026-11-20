@@ -7,7 +7,6 @@ status: in review
 prs: ["kmj-intake-server (Look 5.1 Share)"]
 migrations: []
 left_undone:
-  - "'Send to someone at church' (the mock's last row) isn't drawn: messages has no compose that picks a person and carries a prefilled note (/my/messages/to/<person>?say= exists only after a person is picked; the inbox's start list doesn't carry say). Two small changes in the inbox's start links would make it possible; not done here (another helper's surface)."
   - "Moments: no moments record exists yet. kind=moment takes <message|series|event>:<id> and shows that thing; a moment with no public page gets no share."
   - "A series page has no share yet (it is still today's markup; the Watch helper rebuilds it). The kind, its public link (/sermons#sm-s-<id>, the public library's heading) and its story picture are ready."
   - "Events link the public events page (/events), which has no page per event; the share text carries the event's name."
@@ -23,7 +22,7 @@ decisions:
   - "The layout: the picture under a calm scrim of the church's deep colour (a veil behind the name as deep as the picture is bright, clear through the middle, deep under the words), the church's mark and name, the small capitals in the church's lit colour, the title in the heading face (balanced lines), its line, a short rule, the public link as words; everything inside a story's safe area. A verse: the church's deep colour with one soft light, a large quote mark, the verse in the reading face's italic, its reference and version."
   - "Wired in (new look only): the message page's Share (today's button and SHARE_SCRIPT gone there), Watch's latest-message Share, Coming up (a quiet share icon beside a public occasion's title while the public events page is on; upcoming_for now marks each occasion public or not), the reader's Share (the tapped verse, data-share-from=reader). Today's look keeps its button and script byte for byte."
   - "Behind MEMBER_LUMEN. Off is byte for byte main's (dumps below). No migration."
-related: [2026-11-20-lumen-dark-light.md, 2026-11-19-member-lumen-give.md, 2026-11-19-lumen-next-bible-classes.md]
+related: [2026-11-20-lumen-tidy-ups.md, 2026-11-20-lumen-dark-light.md, 2026-11-19-member-lumen-give.md, 2026-11-19-lumen-next-bible-classes.md]
 ---
 `member_lumen_share.py` (new) holds the markup contract (`attrs`, `link`,
 `message_link`, the public links, `event_shareable`, `event_picture`), the

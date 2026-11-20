@@ -21,10 +21,12 @@ opens a bottom sheet:
                      without one copies the link instead
   the note ......... one line saying where the link opens
 
-"Send to someone at church" (the mock's last row) is not drawn: messages has
-no compose that picks a person and carries a prefilled note (only
-/my/messages/to/<person>?say=, after the person is picked), so there is
-nowhere honest for the row to go.
+"Send to someone at church" (the mock's last row: "Inside the app, to a member
+or a group") opens Messages' picker, /my/messages?say=<the title and the
+public link>: choosing a person or a group opens that conversation with the
+note in the box, unsent; the member presses Send. Only while Messages' own
+count for the page says the church's chats are on and this member may chat
+(send_open: no read); hidden otherwise.
 
 It closes on a tap on the dim, a swipe down, or Escape while the sheet has
 the focus (its own listener; nothing listens to the whole page's keys). The
@@ -243,6 +245,8 @@ _ICONS = {
     "book": '<path d="M12 6.5C10 5 7 4.5 3.5 5v13.5c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5z"/>'
             '<path d="M12 6.5V20"/>',
     "share": '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>',
+    "send": '<path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5z"/>',
+    "chev": '<path d="m9 6 6 6-6 6"/>',
 }
 
 
@@ -273,7 +277,10 @@ SHEET = (
     + _target("text", "comment", "Text a friend")
     + _target("copy", "link", "Copy link")
     + _target("more", "more", "More apps")
-    + '</div><p class="lm-shs-note"></p></div></div>'
+    + '</div><button type="button" class="lm-shs-in" data-sh="send" hidden>'
+    f'<span class="lm-shs-ini">{icon("send", 20)}</span><span class="lm-shs-int"><b>Send to someone at church</b>'
+    f'<small>Inside the app, to a member or a group</small></span>{icon("chev", 18)}</button>'
+    '<p class="lm-shs-note"></p></div></div>'
     '<p class="lm-shs-toast" role="status" aria-live="polite" hidden></p>'
 )
 
@@ -292,6 +299,7 @@ NOTES = {
 
 _JS = r"""(function(){
 if(window.__lmShare)return;window.__lmShare=1;var T=document.createElement('template');T.innerHTML=__SHEET__;
+var SC=document.currentScript,SEND=!!(SC&&SC.getAttribute('data-send')==='1'),SAY=__SAY__;
 var NOTES=__NOTES__,B=document.body,R=null,S=null,toast=null,back=null,cur=null,pic=null,picFor='',busy=null,tt=null,y0=null,dy=0;
 function q(s){return R.querySelector(s);}
 function abs(h){try{return new URL(h||'/',location.href).href;}catch(e){return location.origin+'/';}}
@@ -300,7 +308,8 @@ function build(){var n=T.content.cloneNode(true);R=n.querySelector('.lm-shs');to
  B.appendChild(R);B.appendChild(toast);S=q('.lm-shs-sheet');
  var im=q('.lm-shs-pic img');im.addEventListener('error',function(){im.hidden=true;});
  R.addEventListener('click',function(e){var b=e.target.closest('[data-sh]');if(!b)return;var a=b.getAttribute('data-sh');
-  if(a==='close')close();else if(a==='story')story(b);else if(a==='text')text();else if(a==='copy')copy();else if(a==='more')more();});
+  if(a==='close')close();else if(a==='story')story(b);else if(a==='text')text();else if(a==='copy')copy();else if(a==='more')more();
+  else if(a==='send')send();});
  S.addEventListener('keydown',function(e){if(e.key==='Escape'){e.preventDefault();close();return;}
   if(e.key!=='Tab')return;var f=[].slice.call(S.querySelectorAll('button')).filter(function(b){return !b.hidden;});if(!f.length)return;
   var i=f.indexOf(document.activeElement);
@@ -328,7 +337,7 @@ function open(a){var o=read(a);if(!o)return false;if(!R)build();cur=o;back=a;
  var p=q('.lm-shs-pic'),im=p.querySelector('img');p.setAttribute('data-k',o.kind);
  if(o.img){im.hidden=false;im.src=o.img;}else{im.hidden=true;im.removeAttribute('src');}
  q('.lm-shs-note').textContent=(NOTES[o.kind]||NOTES.moment).replace('%h',location.host);
- q('[data-sh=story]').hidden=!o.story;
+ q('[data-sh=story]').hidden=!o.story;q('[data-sh=send]').hidden=!SEND;
  R.hidden=false;B.classList.add('lm-shs-on');S.style.transform='';S.scrollTop=0;
  try{S.focus({preventScroll:true});}catch(e){S.focus();}
  if(o.story&&picFor!==o.story){pic=null;picFor=o.story;busy=null;get();}
@@ -349,6 +358,9 @@ function story(btn){if(pic){hand(pic);return;}
  (busy||(picFor?get():Promise.resolve(null))).then(function(b){btn.classList.remove('is-busy');btn.removeAttribute('aria-busy');
   if(!b){say('That picture couldn’t be made just now.');if(cur&&cur.story)picFor='';return;}hand(b);});}
 function text(){var u='sms:?&body='+encodeURIComponent(words());close();location.href=u;}
+function send(){var u=cur.url,t=(cur.title||'').replace(/\s+/g,' ').trim(),room=SAY-u.length-1;
+ if(t.length>room)t=room>1?t.slice(0,room-1).replace(/\s+\S*$/,'')+'…':'';
+ close();location.href='/my/messages?say='+encodeURIComponent((t?t+' ':'')+u);}
 function old(t){return new Promise(function(ok,no){var x=document.createElement('textarea');x.value=t;x.setAttribute('readonly','');
  x.style.position='fixed';x.style.opacity='0';B.appendChild(x);x.select();var d=false;try{d=document.execCommand('copy');}catch(e){}x.remove();d?ok():no();});}
 function put(t){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t).catch(function(){return old(t);});return old(t);}
@@ -360,8 +372,12 @@ document.addEventListener('click',function(e){if(e.defaultPrevented||e.button||e
  if(!open(a)&&a.tagName==='A'&&a.getAttribute('href'))location.href=a.href;},true);
 })();"""
 
+# "Send to someone at church" carries the title and the public link, at most
+# this long (member_portal_messaging.say_of cuts it again on the way in).
+SAY_MAX = 300
+
 JS_TEXT = (_JS.replace("__SHEET__", json.dumps(SHEET, ensure_ascii=False))
-           .replace("__NOTES__", json.dumps(NOTES, ensure_ascii=False)))
+           .replace("__NOTES__", json.dumps(NOTES, ensure_ascii=False)).replace("__SAY__", str(SAY_MAX)))
 
 
 @lru_cache(maxsize=None)
@@ -375,11 +391,26 @@ def js_url() -> str:
     return f"/my/share.{js_file()[1]}.js"
 
 
-def page_js(body: str) -> str:
+def page_js(body: str, *, send: bool = False) -> str:
     """What a new-look page adds at its foot when its markup has a share
     control: the script (its own file, kept a year by the phone; the sheet
-    is drawn on the first tap). '' otherwise, so no other page carries it."""
-    return f'\n<script src="{js_url()}" defer></script>' if "lm-share" in (body or "") else ""
+    is drawn on the first tap). '' otherwise, so no other page carries it.
+    `send` (send_open()) puts "Send to someone at church" on its sheet."""
+    if "lm-share" not in (body or ""):
+        return ""
+    mark = ' data-send="1"' if send else ""
+    return f'\n<script src="{js_url()}" defer{mark}></script>'
+
+
+def send_open() -> bool:
+    """Whether this page's sheet offers "Send to someone at church": Messages'
+    own count for the page (member_portal_threads.counts, read for the
+    header's bubble and kept 15 s) says the church's chats are on and this
+    member may chat (a birthdate, their switch on, the guidelines agreed:
+    member_messaging_rules). No read here; when that count wasn't read
+    (church threads closed, Kids, a failed read), no."""
+    import member_portal_threads as mpt
+    return bool((mpt.NOW.get() or {}).get("chats"))
 
 
 @router.get("/my/share.{tag}.js", include_in_schema=False)
@@ -398,7 +429,8 @@ CSS = Template("""
 body.lm{--lm-dim:rgba(0,0,0,.42);}
 body.lm.lm-shs-on{overflow:hidden;}
 body.lm .lm-shs{position:fixed;inset:0;z-index:400;}
-body.lm .lm-shs[hidden],body.lm .lm-shs-toast[hidden],body.lm .lm-shs-t[hidden],body.lm .lm-shs-pic img[hidden],
+body.lm .lm-shs[hidden],body.lm .lm-shs-toast[hidden],body.lm .lm-shs-t[hidden],body.lm .lm-shs-in[hidden],
+body.lm .lm-shs-pic img[hidden],
 body.lm .lm-shs-tx small[hidden]{display:none;}
 body.lm .lm-shs-dim{position:absolute;inset:0;background:var(--lm-dim);}
 body.lm .lm-shs-sheet{position:absolute;left:0;right:0;bottom:0;max-width:600px;max-height:calc(100% - 24px);margin:0 auto;overflow:auto;
@@ -427,6 +459,16 @@ body.lm .lm-shs-t.is-story>span{background:var(--acc-fill);color:var(--on-acc);}
 body.lm .lm-shs-t.is-busy>span{opacity:.62;}
 body.lm .lm-shs-t:focus-visible{outline:0;}
 body.lm .lm-shs-t:focus-visible>span{outline:2px solid var(--acc);outline-offset:3px;}
+body.lm .lm-shs-in{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);margin:16px 16px 0;padding:14px 0;border:0;
+  border-top:1px solid var(--lm-line);background:none;color:var(--fg);text-align:left;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;}
+body.lm .lm-shs-ini{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--s1);
+  color:var(--fg);}
+body.lm .lm-shs-int{flex:1;min-width:0;}
+body.lm .lm-shs-int b{display:block;font:650 14.5px/1.3 var(--mb-ui);color:var(--fg);}
+body.lm .lm-shs-int small{display:block;margin-top:1px;font:500 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-shs-in>.lm-ic{flex:none;color:var(--fg3);}
+body.lm .lm-shs-in:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:12px;}
 body.lm .lm-shs-note{margin:16px 16px 0;padding:14px 0 10px;border-top:1px solid var(--lm-line);
   font:400 12.5px/1.45 var(--mb-ui);color:var(--fg3);}
 body.lm .lm-shs-toast{position:fixed;left:50%;bottom:calc(104px + env(safe-area-inset-bottom,0px));z-index:410;transform:translateX(-50%);
@@ -453,7 +495,7 @@ body.lm .lm-evshare:focus-visible{outline:2px solid var(--acc);outline-offset:-2
 """ + "".join(_lm.dark(r) for r in (
     "body.lm.lm-dark{--lm-dim:rgba(0,0,0,.62);}"
     "body.lm.lm-dark .lm-shs-sheet{background:var(--s1);box-shadow:0 0 0 1px var(--lm-line);}"
-    "body.lm.lm-dark .lm-shs-card,body.lm.lm-dark .lm-shs-t>span{background:var(--s2);}"
+    "body.lm.lm-dark .lm-shs-card,body.lm.lm-dark .lm-shs-t>span,body.lm.lm-dark .lm-shs-ini{background:var(--s2);}"
     "body.lm.lm-dark .lm-shs-t.is-story>span{background:var(--acc-fill);}"
     "body.lm.lm-dark .lm-shs-grab{background:var(--s3);}",
 )))
