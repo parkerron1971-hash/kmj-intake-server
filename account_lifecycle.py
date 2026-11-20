@@ -269,6 +269,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # the teams' turns, all before the services they're for, the teams'
     # groups and contacts (see _IMPORT_SKIP).
     "serve_notes", "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
+    # An event's ask for the serving teams (event_volunteers.py): the event,
+    # the numbers per place, the note and the answer. It cites the event and
+    # the event date by id, so it goes before the services (see _IMPORT_SKIP).
+    "event_volunteer_requests",
     # Sundays on screens: the services (their order, notes and the songs
     # they point at; see _IMPORT_SKIP) and the look every slide wears.
     "worship_services", "worship_settings",
@@ -1092,6 +1096,10 @@ _IMPORT_SKIP = {
     # A service's items point at song ids the import mints anew; the
     # services stay in the archive, readable, and are planned again.
     "worship_services",
+    # An event's ask for the serving teams cites the event, the event date
+    # and the places by id, which a restore mints anew; the export keeps it,
+    # and the event asks again.
+    "event_volunteer_requests",
     # Who serves when cites people, services, places and teams by id; the
     # export keeps it, and the church schedules again after a restore.
     "serve_notes", "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
