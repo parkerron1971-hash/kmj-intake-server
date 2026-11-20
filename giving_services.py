@@ -113,6 +113,16 @@ def _gate(business_id: str, user: AuthedUser, need: str = "see") -> Dict[str, An
     return biz
 
 
+def _bank_part(business_id: str, user: AuthedUser, biz: Dict[str, Any]) -> None:
+    """A door here that reads the bank's own rows (plaid_transactions) also
+    takes the bank part: the owner, an Admin, the accountant, or the "bank
+    and payouts" tick (church_money_gate). With the switch off those are the
+    giving gate's own people, so nobody's answer changes."""
+    import church_money_gate
+    church_money_gate.require_money(business_id, user, "see", "bank", business=biz,
+                                    detail=church_money_gate.BANK_403)
+
+
 def zone_of(biz: Dict[str, Any]) -> ZoneInfo:
     from church_checkin import church_zone_name
     return ZoneInfo(church_zone_name(biz))
@@ -539,6 +549,11 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
         raise HTTPException(400, "Add at least one gift.")
     if len(rows) > MAX_ROWS:
         raise HTTPException(400, f"Record up to {MAX_ROWS} gifts at a time.")
+    if any(isinstance(r, dict) and str(r.get("bank_ref") or "").strip() for r in rows):
+        # A row added from a Zelle bank row reads that row (its date, its
+        # amount, whether it's Zelle money in): the bank part, as the list
+        # of suggestions it came from.
+        _bank_part(business_id, user, biz)
     import giving_router
     day = str(count["service_date"])[:10]
     # A count's day is never after the church's today; a church ahead of UTC
@@ -846,8 +861,12 @@ def bank_suggestions(biz: Dict[str, Any], count: Dict[str, Any]) -> List[Dict[st
 
 @router.get("/giving/{business_id}/counts/{count_id}/bank")
 def count_bank_suggestions(business_id: str, count_id: str, user: AuthedUser = Depends(require_user)):
-    """Zelle money in for this count's week, ready to add as gifts."""
+    """Zelle money in for this count's week, ready to add as gifts. The
+    rows are the bank's own (who sent it, the bank's words), so this takes
+    the bank part as well as giving: a giving tick without "bank and
+    payouts" reads none of it (2026-11-20)."""
     biz = _gate(business_id, user)
+    _bank_part(business_id, user, biz)
     count = _count(business_id, count_id)
     return {"suggestions": bank_suggestions(biz, count)}
 

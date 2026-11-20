@@ -425,6 +425,12 @@ def tick_admits(business_id: Any, user: Any, need: str, door: str) -> bool:
 GIVERS_403 = ("Who gave is kept for the owner, an admin, the accountant, or a login the owner ticked "
               "“who gave” for.")
 SEES_ONLY_403 = "This login sees Giving & money but doesn't change it."
+# A door that reads the bank's own rows, balances or descriptions (2026-11-20)
+# asks require_money(.., "see", "bank", detail=BANK_403). With the switch off
+# the people it admits in a church are the books' and giving's own (owner,
+# Admin, accountant), so the words only ever reach a tick holder.
+BANK_403 = ("The bank is kept for the owner, an admin, the accountant, or a login the owner ticked "
+            "“bank and payouts” for.")
 
 
 def sees_givers(business_id: Any, user: Any, business: Optional[Dict[str, Any]] = None) -> bool:

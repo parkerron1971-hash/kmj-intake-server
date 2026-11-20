@@ -29,11 +29,25 @@ without a row here.
 money_holder says exactly what the database's own church_money_tick says:
 the row counts only on the seat it was given to (seat_id), while that seat
 is active, and Work or Lead is read as See on a Viewer seat.
+
+ONE SPELLING OF AN ID (2026-11-20). Postgres reads a uuid written with or
+without hyphens, in upper or lower case, or in braces, as the same uuid, so
+a door handed any of those spellings finds the same row. _id() turns each
+of them into the one spelling these tables are filtered by (lower case,
+hyphenated), and anything else into None, never a different id.
+
+WHETHER THE TABLES ARE THERE (_READY, kept here because these reads see it
+first): a read that PostgREST answers "no such table" (404, PGRST205,
+42P01: the rollback dropped them) marks them gone at once
+(tables_gone()); church_money_ticks.tables_ready() keeps a yes for ten
+minutes at most.
 """
 from __future__ import annotations
 
 import datetime as _dt
 import re
+import time
+import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -48,12 +62,46 @@ WRITES = ("work", "lead")
 # Viewer never does, whatever its tick says.
 WORKING_SEATS = ("member", "manager", "admin")
 
-_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+# The spellings Postgres's uuid type reads: 32 hex digits, a hyphen allowed
+# after any group of four, the whole in braces or not, any case.
+_UUID = re.compile(r"\{?[0-9a-f]{4}(?:-?[0-9a-f]{4}){7}\}?", re.I)
+
+# Whether the two tables answer (church_money_ticks.tables_ready): `yes`,
+# and the monotonic time that answer is kept until.
+_READY: Dict[str, Any] = {"yes": False, "until": 0.0}
+KEEP_YES_S = 600          # a yes is asked again after ten minutes
+KEEP_NO_S = 300           # a no, after five
+# What PostgREST says for a table that isn't there: 404 with PGRST205 (v12
+# and later), or Postgres's own "relation does not exist".
+MISSING_CODES = ("PGRST205", "42P01")
 
 
 def _id(value: Any) -> Optional[str]:
-    text = str(value or "").strip()
-    return text.lower() if _UUID.match(text) else None
+    """The id in its one spelling (lower case, hyphenated), whichever of
+    Postgres's spellings it came in; None for anything that isn't a uuid."""
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    text = "" if value is None else str(value).strip()
+    if not _UUID.fullmatch(text):
+        return None
+    try:
+        return str(uuid.UUID(text))
+    except ValueError:
+        return None
+
+
+def relation_missing(err: Any) -> bool:
+    """Whether a PostgREST refusal (sb_clients.last_error()) says the table
+    isn't there."""
+    if not isinstance(err, dict):
+        return False
+    return str(err.get("code") or "") in MISSING_CODES or err.get("status") == 404
+
+
+def tables_gone() -> None:
+    """A read or write to either table was answered "no such table": no from
+    now, asked again in five minutes."""
+    _READY.update(yes=False, until=time.monotonic() + KEEP_NO_S)
 
 
 def _q(value: str) -> str:
@@ -61,12 +109,17 @@ def _q(value: str) -> str:
 
 
 def _rows(path: str) -> Optional[list]:
-    """The rows, or None when the read did not answer with a list."""
+    """The rows, or None when the read did not answer with a list. A read of
+    either table answered "no such table" marks the tables gone."""
     try:
         got = sb_clients.sb_get_as_service(path)
     except Exception:  # noqa: BLE001 — a read that raised is a read that failed
         return None
-    return got if isinstance(got, list) else None
+    if isinstance(got, list):
+        return got
+    if path.startswith((f"/{HOLDERS}?", f"/{ASKS}?")) and relation_missing(sb_clients.last_error()):
+        tables_gone()
+    return None
 
 
 def money_holder(business_id: Any, user_id: Any) -> Optional[Dict[str, Any]]:
