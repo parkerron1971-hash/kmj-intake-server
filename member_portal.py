@@ -757,6 +757,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         fonts = member_lumen_fonts.head(biz)
         # Listening before the page is first revealed (member_lumen_motion.JS).
         moves = "\n" + member_lumen_motion.JS
+        # A page with a marked player (the message) keeps it playing while the
+        # member moves around, under the mini player (member_mini); '' elsewhere.
+        import member_mini
+        script = script + member_mini.page_script(body)
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
@@ -1508,6 +1512,10 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # ...and the member's look in it (member_lumen_look: no read).
         import member_lumen_look
         member_lumen_look.decide(request, sess, biz)
+    # ...and whether a message plays on while they move around (member_mini:
+    # MEMBER_MINI_PLAYER; only in the new look, no read).
+    import member_mini
+    await member_mini.decide(sess, biz)
     if sess and sess.get("me") and not sess.get("unavailable"):
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.
@@ -1541,7 +1549,9 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
         resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
-    return resp
+    # The mini player's frame (member_mini): its own site's frame may show the
+    # page, for someone the switch shows it to; every other answer as it was.
+    return member_mini.allow_frame(request, resp)
 
 
 async def _nothing():

@@ -152,6 +152,10 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') early.clear();
   if (e.request.mode !== 'navigate') return;
+  // A page in a frame (the mini player's, member_mini.py) is left to the
+  // browser, so it goes out with the frame's own headers (a page asked for
+  // from here, or kept early, would arrive without them and be refused).
+  if (e.request.destination === 'iframe') return;
   const got = e.request.method === 'GET' ? early.get(e.request.url) : null;
   early.clear();
   const net = () => fetch(e.request).catch(() => caches.match(OFFLINE));
