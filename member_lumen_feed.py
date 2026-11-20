@@ -31,7 +31,9 @@ to edge, a hairline between them:
     16:9 picture with a play disc, "Series · Part 3 of 4", the title in
     serif, the speaker and scripture, Watch · Listen · Share (Share hands
     the message's PUBLIC page to the share sheet: contract 1, .lm-share).
-    The picture is marked for the mini-player (data-lm-media).
+    The card has no player of its own (the picture opens the message's
+    page, whose player the mini player carries on: member_mini), so it
+    carries no data-lm-media mark.
   * AN EVENT a post carries: its picture framed with the date on a leaf,
     the day and time, the title, where and how many are going, Going (the
     post's Sign me up, or the event's own RSVP) and, when the church's
@@ -306,7 +308,7 @@ def _public_picture(biz: Dict[str, Any], site, title: str) -> str:
 
 
 def _thumb(lib: Dict[str, Any], s: Dict[str, Any], site, pool: Optional[List[str]]) -> str:
-    """The picture's address for the mini-player and the share sheet: the
+    """The picture's address for the share sheet: the
     series' own art, else a photo named for it (member_portal_sermons._art's
     order); '' when the art is the church's generated poster."""
     import member_app_photos as photos
@@ -320,7 +322,7 @@ def _thumb(lib: Dict[str, Any], s: Dict[str, Any], site, pool: Optional[List[str
 
 def _message_body(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site, pool: List[str], used: set) -> str:
     """The message itself: the 16:9 picture with the play disc (marked for
-    the mini-player), "Series · Part n of m", the title in serif, speaker
+    its page), "Series · Part n of m", the title in serif, speaker
     and scripture, Watch · Listen · Share. Sermons keep no running time, so
     the picture carries no duration."""
     import member_portal_sermons as mps
@@ -332,9 +334,7 @@ def _message_body(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], s
     sub = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x)
     thumb = _thumb(lib, s, site, pool)
     video, audio = (s.get("video_url") or "").strip(), (s.get("audio_url") or "").strip()
-    media = (f' data-lm-media data-title="{_e(title)}" data-sub="{_e(sub or series)}" data-thumb="{_e(thumb)}"'
-             f' data-href="{href}"')
-    pic = (f'<a class="lf-vid" href="{href}"{media} aria-label="Play {_e(title)}">{mps._art(lib, s, pal, site, pool, used)}'
+    pic = (f'<a class="lf-vid" href="{href}" aria-label="Play {_e(title)}">{mps._art(lib, s, pal, site, pool, used)}'
            f'<span class="lf-play" aria-hidden="true">{_i("play")}</span></a>')
     if video:
         main = f'<a class="lf-pill pri" href="{href}">{_i("play", "xs")}Watch</a>'

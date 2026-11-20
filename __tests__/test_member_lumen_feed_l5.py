@@ -11,7 +11,7 @@
 #   - "I prayed" is the wall's own mark: JSON for the script, back to Home
 #     without it, and the member's kept items are forgotten;
 #   - the newest message rides while it is new (seven days), never twice,
-#     never a sample; it is marked for the mini-player and its Share hands
+#     never a sample; it has no player (no mini-player mark) and its Share hands
 #     over the PUBLIC page (contract 1); an event's Share only when the
 #     church's events page and the event are public; members' posts and
 #     prayer requests never get a Share;
@@ -206,9 +206,10 @@ def test_the_newest_message_rides_while_it_is_new(church, monkeypatch):
     card = _art(feed, f"msg-{S1}")
     assert "New message · " in card and "Light Has Come · Part 2 of 2" in card and ">Hope Has a Name</a></h3>" in card
     assert "Pastor James · Isaiah 9:6" in card
-    # Marked for the mini-player (contract 4).
-    assert (f'data-lm-media data-title="Hope Has a Name" data-sub="Pastor James · Isaiah 9:6" data-thumb="" '
-            f'data-href="/my/sermons/{S1}"') in card
+    # No player here: the picture opens the message's page, whose player the
+    # mini player carries (contract 4 marks playable elements only).
+    assert f'<a class="lf-vid" href="/my/sermons/{S1}" aria-label="Play Hope Has a Name">' in card
+    assert "data-lm-media" not in card
     # Watch · Listen · Share: the PUBLIC page to the share sheet (contract 1).
     assert f'<a class="lf-pill pri" href="/my/sermons/{S1}">' in card and f'href="/my/sermons/{S1}#listen"' in card
     assert (f'<a class="lm-share lf-pill" href="/sermons/{S1}" data-share-kind="message" data-share-title="Hope Has a Name" '
@@ -229,7 +230,7 @@ def test_no_message_when_it_is_old_a_sample_or_already_carried(church, monkeypat
     html = _client(church, monkeypatch).get("/my").text
     assert "lf-pmsg" not in html                                                    # the post carries it
     post = _art(html, f"p-{P['old1']}")
-    assert f'href="/sermons/{S1}" data-share-kind="message"' in post and "data-lm-media" in post
+    assert f'href="/sermons/{S1}" data-share-kind="message"' in post and 'class="lf-vid"' in post
 
 
 # ─── Share: church content only ──────────────────────────────────────
