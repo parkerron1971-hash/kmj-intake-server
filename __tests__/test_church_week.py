@@ -280,7 +280,7 @@ def test_the_week_as_whoever_keeps_the_volunteers_reads_it(app):
     the hours, and who can't serve with kids yet (church_serving gives that
     lane the background checks duty)."""
     body = week(app, "sunny")
-    assert body["week"] == {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": False,
+    assert body["week"] == {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": True,
                             "prev": "2026-11-15", "next": "2026-11-29"}
     assert body["counts"] == {"on": 6, "open": 7, "away": 2, "hours": 9.5}
     assert body["can"] == {"hours": True, "checks": True, "change": ["volunteers"]}
@@ -353,9 +353,9 @@ def test_a_full_week_says_so_and_a_past_week_says_it_passed(app, db):
     assert body["counts"] == {"on": 8, "open": 0, "away": 0, "hours": body["counts"]["hours"]}
     assert [x["title"] for x in body["look"]] == ["Everything is filled for Sunday."]
     assert {c["label"] for c in body["departments"]} == {"Filled"}
-    # The week we're in (Nov 15 to 21) had only Sunday the 15th: it has passed.
-    now = week(app, "sunny", None)
-    assert now["week"]["from"] == "2026-11-15" and now["week"]["this_week"] is True
+    # The week before (Nov 15 to 21) had only Sunday the 15th: it has passed.
+    now = week(app, "sunny", "2026-11-15")
+    assert now["week"]["from"] == "2026-11-15" and now["week"]["this_week"] is False
     assert [x["title"] for x in now["look"]] == ["This week's services have passed."]
     assert all(s["past"] for c in now["departments"] for s in c["services"])
     assert all(r["find"] is None for c in now["departments"] for s in c["services"] for r in s["rows"])
@@ -460,7 +460,7 @@ def test_every_read_is_this_churchs_and_every_value_is_quoted(app, db):
     # What a caller types never reaches an address.
     db.reads.clear()
     r = get(app, "sunny", f"{WEEK}&business_id=eq.{c3.GRACE}")
-    assert r.status_code == 200 and r.json()["week"]["from"] == "2026-11-15"
+    assert r.status_code == 200 and r.json()["week"]["from"] == "2026-11-22", "not a date: this week"
     assert all(c3.GRACE not in p for p in db.reads)
 
 
@@ -608,15 +608,15 @@ def test_the_latest_check_date_is_the_one_that_counts(app, db):
 
 
 def test_a_past_service_never_says_cant_serve_with_kids_yet(app, db):
-    """This week (Nov 15 to 21): Lila, unchecked, served the Nursery on
-    Sunday the 15th (past) and is on it again at Saturday's event (to come).
-    Only Saturday says it."""
+    """The week of Nov 15 to 21, read on Wednesday the 18th: Lila,
+    unchecked, served the Nursery on Sunday the 15th (past) and is on it
+    again at Saturday's event (to come). Only Saturday says it."""
     sat = "7f000000-0000-4000-8000-000000000021"
     db.t["worship_services"].append(_service(sat, date(2026, 11, 21), 10, 0, kind="event", title="Fall festival"))
     w = db.who[HOPE]
     assign(db, P3, NURSERY, 1, w["n041"], "yes")
     assign(db, sat, NURSERY, 1, w["n041"], "yes")
-    body = week(app, "sunny", None)
+    body = week(app, "sunny", "2026-11-18")
     assert row(body, "Kids", P3, "Nursery", 1)["state"] == "on", "a past day is what happened"
     assert row(body, "Kids", sat, "Nursery", 1)["state"] == "cant_serve_kids"
     assert [x["title"] for x in body["look"] if x["kind"] == "cant_serve_kids"] == [
@@ -790,12 +790,32 @@ def test_status_says_what_the_page_will(app, db):
 
 # ─── 7. Bounded ───────────────────────────────────────────────────────
 
+@pytest.mark.parametrize("at,first", [
+    (datetime(2026, 11, 18, 10, tzinfo=NY), "2026-11-22"),        # a Wednesday: the Sunday to come
+    (datetime(2026, 11, 21, 23, 30, tzinfo=NY), "2026-11-22"),    # late Saturday
+    (datetime(2026, 11, 22, 7, tzinfo=NY), "2026-11-22"),         # Sunday morning: today
+    (datetime(2026, 11, 22, 22, tzinfo=NY), "2026-11-22"),        # Sunday night, on the church's clock
+    (datetime(2026, 11, 23, 9, tzinfo=NY), "2026-11-29"),         # Monday: the next one
+])
+def test_no_start_is_the_week_of_the_coming_sunday(app, monkeypatch, at, first):
+    """The pastor's approved mock, made on a Wednesday, opened on the
+    Sunday to come (Nov 22 to 28): no start is that Sunday's week, today's
+    when it is Sunday, on the church's own clock."""
+    monkeypatch.setattr(cw, "_now", lambda: at.astimezone(timezone.utc))
+    w = week(app, "sunny", None)["week"]
+    assert (w["from"], w["this_week"]) == (first, True)
+    assert week(app, "sunny", at.date().isoformat())["week"]["from"] == cw._sunday_of(at.date()).isoformat(), \
+        "a start is the week it falls in"
+
+
 def test_one_week_a_call_and_a_bad_start_is_this_week(app):
     assert week(app, "sunny", "2026-11-25")["week"]["from"] == "2026-11-22", "any day: its week"
     assert week(app, "sunny", "2026-11-28")["week"]["to"] == "2026-11-28"
+    assert week(app, "sunny", "2026-11-18")["week"]["from"] == "2026-11-15", "today, asked for: the week it is in"
     for bad in ("", "soon", "2026-02-30", "2026-11-22T00:00"):
-        assert week(app, "sunny", bad)["week"]["from"] == "2026-11-15", bad
-    this = date(2026, 11, 15)
+        assert week(app, "sunny", bad)["week"]["from"] == "2026-11-22", bad
+    assert week(app, "sunny", None)["week"]["this_week"] is True
+    this = date(2026, 11, 22)                     # this week: the coming Sunday's, read on Wednesday Nov 18
     far = week(app, "sunny", (this + timedelta(weeks=cw.WEEKS_AHEAD)).isoformat())["week"]
     assert far["next"] is None and far["prev"]
     back = week(app, "sunny", (this - timedelta(weeks=cw.WEEKS_BACK)).isoformat())["week"]

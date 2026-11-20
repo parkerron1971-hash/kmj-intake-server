@@ -277,23 +277,26 @@ def _safe_url(url: Optional[str]) -> str:
 def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "", ring: bool = False,
          url: str = "/my", contact_ids: Optional[Iterable[str]] = None,
          ref_id: Optional[str] = None, sent_by: Optional[str] = None,
-         tag: Optional[str] = None) -> int:
+         tag: Optional[str] = None, wait: bool = False) -> int:
     """Send one note of `kind` to the church's members (or to
     `contact_ids`). Returns how many phones it reached. Quietly 0 when
     push isn't set up, the church hasn't switched this kind on, or `ref_id`
     was already sent. Never raises: a notification is never worth failing
     the thing it's about. In quiet hours a QUIET_KINDS note waits for the
     morning unless it's an after-hours alert (`ring`) and the member lets
-    those ring."""
+    those ring. `wait`: this one note waits out quiet hours the same way,
+    whatever its kind (a team's leader told of a department leader's asks,
+    sunday_leading); every other note of its kind goes as before."""
     try:
         return _send(business, kind, title=title, body=body, url=url,
-                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag, ring=ring)
+                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag, ring=ring, wait=wait)
     except Exception:
         logger.warning("member push send failed", exc_info=True)
         return 0
 
 
-def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None, ring=False) -> int:
+def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None, ring=False,
+          wait=False) -> int:
     import push_notifications as pn
     import sample_church
     biz_id = str(business.get("id") or "")
@@ -352,7 +355,7 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
         # conversation (a group's keeps its name, and opens the group's).
         payload.update(church_threads.lock_screen(business, thread, title, body))
     held: Set[str] = set()
-    if kind in QUIET_KINDS and quiet_hour(business):
+    if (kind in QUIET_KINDS or wait) and quiet_hour(business):
         prefs = {str(r["contact_id"]): r for r in off_rows}
         for c in people:
             p = prefs.get(c) or {}

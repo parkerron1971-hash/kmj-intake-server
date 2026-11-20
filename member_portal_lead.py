@@ -20,7 +20,9 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
                                   31su6kdYmYecH5b2NxjBJN boards 6-7)
     GET  /my/lead/family/<id>     one family: who's in it, log a touch
     GET  /my/lead/sundays         a Sunday team's leader schedules their team
-                                  (member_portal_leading; ChurchSavvy Planning)
+                                  (member_portal_leading; ChurchSavvy Planning),
+                                  and a department's leader or overseer reads
+                                  My department there (church_week)
     POST /my/lead/family/<id>/touch   a call, a visit, a text or a talk at
                                   church, and "needs a pastor"
     GET  /my/lead/tasks           the tasks the office handed to me (My tasks
@@ -59,8 +61,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _FID = re.compile(r"^[0-9a-fA-F-]{36}$")
-# Whether this leader leads a Sunday team (sunday_leading): read once per
-# request in serve(), so every page's section switcher can offer Sundays.
+# Whether this leader leads a Sunday team (sunday_leading), or leads or
+# oversees a department on the leaders map (My department, church_week.entry):
+# read once per request in serve(), so every page's section switcher can
+# offer Sundays.
 SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
 # Who sees what (2026-10-26): the other parts this member holds, read once per
 # request in serve() when the tab is the Serve tab, so every page's section
@@ -756,7 +760,11 @@ async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) ->
     import sunday_leading
     import member_app_ui
     import church_leader_tasks as clt
-    SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
+    import church_week
+    # Sundays: a team they lead, or My department (church_week.entry: a
+    # department's leader or overseer, from what it keeps a minute).
+    SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"]))
+                or await asyncio.to_thread(church_week.entry, biz, str(me["id"])))
     PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
     import member_portal_checks as mpck
     import member_portal_board as mpb
