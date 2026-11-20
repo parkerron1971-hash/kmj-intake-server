@@ -933,6 +933,9 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         })
     held = _get(f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id,post_id,contact_id,body,created_at"
                 f"&order=created_at.desc&limit=50")
+    # Members' group posts the check held (member_posts), beside the comments.
+    import member_posts
+    held_posts = member_posts.held_posts(biz_id)
     reports = _get(f"/church_post_reports?business_id=eq.{b}&status=eq.open&select=comment_id&limit=500")
     titles = {p["id"]: p["title"] for p in posts}
     posters = _get(f"/church_news_posters?business_id=eq.{b}&select=contact_id,added_at&limit=200")
@@ -963,9 +966,12 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         "seen_week": len({str(s["contact_id"]) for s in saw}),
         "posts_month": sum(1 for p in posts if p["status"] == "posted" and str(p.get("created_at") or "") >= (now - timedelta(days=30)).isoformat()),
         "held": [{"id": h["id"], "post_id": h["post_id"], "post_title": titles.get(str(h["post_id"]), ""),
-                  "created_at": h["created_at"]} for h in held],
+                  "created_at": h["created_at"]} for h in held]
+        + [{"id": h["id"], "post_id": h["post_id"], "post_title": h["post_title"], "created_at": h["created_at"],
+            "kind": "post"} for h in held_posts],
         "safety": {"comments_open": comments_open(business), "officers": mr.officer_count(biz_id),
-                   "min_officers": mr.MIN_OFFICERS, "held_week": sum(1 for h in held if str(h["created_at"]) >= week),
+                   "min_officers": mr.MIN_OFFICERS,
+                   "held_week": sum(1 for h in held + held_posts if str(h["created_at"]) >= week),
                    "reports_open": len(reports)},
         "posters": [{"contact_id": str(p["contact_id"]), "name": (poster_people.get(str(p["contact_id"])) or {}).get("name") or ""}
                     for p in posters],
@@ -1164,9 +1170,14 @@ def held_words(business_id: str = Query(...), user: AuthedUser = Depends(require
     mr.require_officer(biz, user)
     rows = _get(f"/church_post_comments?business_id=eq.{_q(biz)}&status=eq.held"
                 f"&select=id,post_id,contact_id,body,created_at&order=created_at.desc&limit=50")
-    people = _people(biz, [r["contact_id"] for r in rows]) or {}
+    # Members' group posts the check held (member_posts), with their words.
+    import member_posts
+    posts = member_posts.held_posts(biz)
+    people = _people(biz, [r["contact_id"] for r in rows] + [p["contact_id"] for p in posts]) or {}
     return {"held": [{"id": r["id"], "post_id": r["post_id"], "body": r.get("body") or "", "created_at": r["created_at"],
-                      "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]}
+                      "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]
+            + [{"id": p["id"], "post_id": p["post_id"], "body": p["body"], "created_at": p["created_at"], "kind": "post",
+                "name": (people.get(str(p["contact_id"] or "")) or {}).get("name") or "Someone"} for p in posts]}
 
 
 class HeldIn(BaseModel):
@@ -1185,6 +1196,13 @@ def decide_held(comment_id: str, body: HeldIn, user: AuthedUser = Depends(requir
     mr.require_officer(biz_id, user)
     rows = _get(f"/church_post_comments?id=eq.{_q(cid)}&business_id=eq.{_q(biz_id)}&status=eq.held&select=id&limit=1")
     if not rows:
+        # A member's group post the check held (member_posts) is decided the same way.
+        import member_posts
+        done = member_posts.decide_held(biz_id, cid, body.show)
+        if done is None:
+            raise _unavailable()
+        if done:
+            return {"ok": True}
         raise HTTPException(404, "That comment was already decided.")
     patch = {"status": "shown"} if body.show else {"status": "removed", "removed_by": "officer",
                                                     "removed_at": _now().isoformat()}

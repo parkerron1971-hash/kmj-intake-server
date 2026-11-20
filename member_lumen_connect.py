@@ -688,5 +688,47 @@ CSS = Template("""
 .lm .lm-gposts .lm-fc .gs-acts{display:flex;gap:8px;flex-wrap:wrap;}
 .lm .lm-gposts .lm-fc>:last-child{padding-bottom:16px;}
 .lm .lm-gposts .lm-fbody p{-webkit-line-clamp:12;}
+/* a member's post: the composer (member_posts) */
+.lm .lm-mpform{margin-top:22px;}
+.lm .lm-pme{display:flex;align-items:center;gap:10px;font:650 15px/1.2 var(--mb-ui);color:var(--fg);}
+.lm .lm-pset{margin:20px 0 0;padding:0;border:0;min-width:0;}
+.lm .lm-pset legend{padding:0;margin-bottom:10px;font:650 12px/1.2 var(--mb-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);}
+.lm .lm-pchips{display:flex;flex-wrap:wrap;gap:8px;}
+.lm .lm-pchip{position:relative;display:inline-flex;cursor:pointer;}
+.lm .lm-pchip input,.lm .lm-pwhere input{position:absolute;opacity:0;width:1px;height:1px;}
+.lm .lm-pchip span{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:20px;
+  box-shadow:inset 0 0 0 1.5px var(--lm-line);color:var(--fg);font:600 14px/1 var(--mb-ui);}
+.lm .lm-pchip input:checked+span{background:var(--lm-tint-10);box-shadow:inset 0 0 0 1.5px var(--acc-fill);color:var(--acc);}
+.lm .lm-pchip input:focus-visible+span,.lm .lm-pwhere input:focus-visible+span{outline:2px solid var(--acc);outline-offset:2px;}
+.lm .lm-pwheres{display:flex;flex-direction:column;gap:8px;}
+.lm .lm-pwhere{position:relative;display:block;cursor:pointer;}
+.lm .lm-pwhere span{display:block;padding:12px 14px;border-radius:14px;box-shadow:inset 0 0 0 1.5px var(--lm-line);}
+.lm .lm-pwhere b{display:block;font:650 15px/1.25 var(--mb-ui);color:var(--fg);}
+.lm .lm-pwhere small{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+.lm .lm-pwhere input:checked+span{background:var(--lm-tint-6);box-shadow:inset 0 0 0 1.5px var(--acc-fill);}
+.lm .lm-pbox{display:block;margin-top:20px;}
+.lm .lm-pbox textarea{display:block;width:100%;box-sizing:border-box;min-height:132px;padding:14px 16px;border:0;border-radius:16px;
+  background:var(--s1);color:var(--fg);font:400 16px/1.45 var(--mb-ui);resize:vertical;}
+.lm .lm-pbox textarea:focus{outline:2px solid var(--acc);outline-offset:1px;}
+.lm .lm-pphoto{position:relative;display:flex;align-items:center;gap:12px;margin-top:10px;padding:12px 14px;border-radius:14px;
+  background:var(--s1);color:var(--fg);cursor:pointer;}
+.lm .lm-pphoto b{display:block;font:650 15px/1.25 var(--mb-ui);}
+.lm .lm-pphoto small{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+.lm .lm-pphoto input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;}
+.lm .lm-pguard{display:flex;gap:8px;align-items:flex-start;margin:18px 0 0;font:400 13px/1.45 var(--mb-ui);color:var(--fg2);}
+.lm .lm-pguard .lm-ic{flex:none;margin-top:1px;color:var(--acc);}
+.lm .lm-mpform>button{margin-top:18px;height:48px;font-size:15.5px;}
+.lm .lm-mpform>button[disabled]{opacity:.65;}
+.lm .lm-pnote{margin:14px 0 0;padding:12px 14px;border-radius:14px;background:var(--s1);font:400 14px/1.45 var(--mb-ui);color:var(--fg2);}
+.lm .lm-pswitch{display:flex;align-items:center;gap:12px;margin:12px 0 0;padding:12px 14px;border-radius:14px;
+  box-shadow:inset 0 0 0 1px var(--lm-line);}
+.lm .lm-pswitch>span{flex:1;min-width:0;}
+.lm .lm-pswitch b{display:block;font:650 14.5px/1.25 var(--mb-ui);}
+.lm .lm-pswitch small{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+.lm .lm-mpform.js:not(.is-church) .lm-pkinds,.lm .lm-mpform.js.is-church .lm-pcomments,
+.lm .lm-mpform.js.is-prayer .lm-pphoto,.lm .lm-mpform.js.is-prayer .lm-pcomments,.lm .lm-mpform.js.is-prayer .lm-pkinds{display:none;}
+.lm .lm-gheld{display:flex;gap:8px;align-items:flex-start;margin:12px 16px 0;}
+.lm .lm-gpost.is-held{box-shadow:0 0 0 1px var(--lm-line),inset 4px 0 0 var(--lm-gold);}
+.lm .lm-gtools{padding:10px 16px 0;}
 @media (prefers-reduced-motion:reduce){.lm .lm-cpill{transition:none;}.lm .lm-cpill:active{transform:none;}}
 """)
