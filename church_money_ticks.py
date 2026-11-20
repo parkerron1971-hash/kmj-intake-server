@@ -22,7 +22,10 @@ giver) and "bank and payouts".
                      payouts land, stay the owner's alone
     THE SWITCH ..... CHURCH_MONEY_TICKS = off (the default: nothing here is
                      read by any door, today's rules exactly) | owner (the
-                     platform owner's own church) | on
+                     platform owner's own church) | on. Taking a tick away
+                     or lowering it (a login revoked, made a Viewer, moved
+                     down from Admin) runs WHATEVER the switch says, while
+                     the tables are there: rows outlive a switch turned off
     THE RULES ...... church_money_gate asks holder() and nothing else here.
                      The rows live in two server-only tables
                      (supabase/APPLY-2026-11-18-church-money-holders.sql);
@@ -51,7 +54,7 @@ import datetime as _dt
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -123,23 +126,42 @@ def holder(business_id: Any, user_id: Any) -> Optional[Dict[str, Any]]:
     return mh.money_holder(business_id, user_id)
 
 
-_READY = {"yes": False, "until": 0.0}
+# Shared with church_money_holders, whose reads mark the tables gone the
+# moment PostgREST says they aren't there.
+_READY = mh._READY
+
+
+def _tables(fresh: bool = False) -> Optional[bool]:
+    """Whether the two tables are there (APPLY-2026-11-18-church-money-holders
+    .sql applied, and not rolled back since):
+      True    they answer; kept ten minutes at most, then asked again
+      False   PostgREST said they aren't there (404, PGRST205, 42P01); kept
+              five minutes. A read or write anywhere in this module or
+              church_money_holders that gets that answer sets it at once
+      None    couldn't tell (a read that failed any other way). Never kept
+    `fresh`: ask now, whatever is kept (after a write that failed)."""
+    import time
+    now = time.monotonic()
+    if not fresh and now < _READY["until"]:
+        return bool(_READY["yes"])
+    try:
+        got = sb_clients.sb_get_as_service(f"/{mh.HOLDERS}?select=business_id&limit=1")
+    except Exception:  # noqa: BLE001 — a probe that raised can't tell (and last_error may be stale)
+        return None
+    if isinstance(got, list):
+        _READY.update(yes=True, until=now + mh.KEEP_YES_S)
+        return True
+    if mh.relation_missing(sb_clients.last_error()):
+        mh.tables_gone()
+        return False
+    return None
 
 
 def tables_ready() -> bool:
-    """Whether the two tables answer (APPLY-2026-11-18-church-money-holders
-    .sql is applied). Yes is kept for good; no is asked again in five
-    minutes. Until they are there, switching this on changes nothing: the
-    hooks below do nothing, exactly as with the switch off."""
-    import time
-    if _READY["yes"]:
-        return True
-    if time.monotonic() < _READY["until"]:
-        return False
-    ok = mh._rows(f"/{mh.HOLDERS}?select=business_id&limit=1") is not None
-    _READY["yes"] = ok
-    _READY["until"] = 0.0 if ok else time.monotonic() + 300
-    return ok
+    """Whether the two tables answer. Until they do (or after a rollback
+    dropped them), switching this on changes nothing: the hooks below have
+    nothing to clean, exactly as with the switch off."""
+    return _tables() is True
 
 
 # ─── Small things ─────────────────────────────────────────────────────
@@ -356,7 +378,10 @@ def _lower(biz: str, target: str, wants: Optional[Dict[str, Any]]) -> bool:
     the same moment: the level moves only from a higher one, and who gave
     and the bank are only ever switched off here. So two lowerings racing
     end at the lower of the two, never back at the older, higher tick."""
-    path = f"/{mh.HOLDERS}?business_id=eq.{_q(biz)}&user_id=eq.{_q(target)}"
+    ids = _hook_ids(biz, target)
+    if ids is None:
+        return False
+    path = f"/{mh.HOLDERS}?business_id=eq.{_q(ids[0])}&user_id=eq.{_q(ids[1])}"
     if wants is None:
         return bool(sb_clients.sb_delete_as_service(path))
     ok = True
@@ -372,10 +397,29 @@ def _lower(biz: str, target: str, wants: Optional[Dict[str, Any]]) -> bool:
 
 # ─── A login that leaves, or is lowered ───────────────────────────────
 
-def _hooks_on(business_id: Any, user_id: Any) -> bool:
-    """The hooks act only when there is something they could act on: the
-    switch not off AND the tables there. Before the migration, "on" is "off"."""
-    return bool(mode() != "off" and mh._id(business_id) and mh._id(user_id) and tables_ready())
+# Taking a tick away, or lowering it, is always safe, so these hooks run
+# whatever CHURCH_MONEY_TICKS says (2026-11-20): rows can be there with the
+# switch off (it was on, or `owner`, and was turned off). Giving one stays
+# behind the switch (plan, apply). They act whenever the tables are there:
+#   the tables gone (never applied, or rolled back)  nothing to clean: True
+#   couldn't tell whether they are there            not done: False
+#   an id that isn't a uuid                          refused: False, never
+#                                                    read as "no id"
+# Every id is filtered in its one spelling (church_money_holders._id), so
+# an unhyphenated, upper-case or braced id finds the same row.
+
+def _hook_ids(business_id: Any, user_id: Any) -> Optional[Tuple[str, str]]:
+    b, u = mh._id(business_id), mh._id(user_id)
+    if not b or not u:
+        logger.warning("money tick hook: an id that isn't a uuid was refused")
+        return None
+    return b, u
+
+
+def _gone_now() -> bool:
+    """After a hook's write failed: True only when that was because the
+    tables aren't there (asked again now), so there was nothing to clean."""
+    return _tables(fresh=True) is False
 
 
 def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
@@ -384,36 +428,47 @@ def seat_gone(business_id: Any, user_id: Any, seat_id: Any = None) -> bool:
     row goes (revoking a person's old, already-revoked row must not touch
     the tick on their live seat), and asks are withdrawn only when the
     person has no active seat left. True when that was done, or there was
-    nothing to do."""
-    if not _hooks_on(business_id, user_id):
-        return True
-    b, u = _q(str(business_id).lower()), _q(str(user_id).lower())
-    seat = mh._id(seat_id)
+    nothing to do. A seat id given that isn't a uuid is refused, never read
+    as "every seat"."""
+    ids = _hook_ids(business_id, user_id)
+    seat = mh._id(seat_id) if seat_id is not None else None
+    if ids is None or (seat_id is not None and not seat):
+        return False
+    ready = _tables()
+    if ready is not True:
+        return ready is False
+    b, u = (_q(x) for x in ids)
     gone = sb_clients.sb_delete_as_service(
         f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}" + (f"&seat_id=eq.{_q(seat)}" if seat else ""))
+    if not gone:
+        return _gone_now()
     live = mh._rows(f"/business_users?business_id=eq.{b}&user_id=eq.{u}&status=eq.active&select=id&limit=1")
     if live is None:
         return False
     if live:
-        return bool(gone)                    # still on the team by another seat: their asks stand
+        return True                          # still on the team by another seat: their asks stand
     stamp = {"status": "withdrawn", "answered_at": _iso(_now())}
     about = sb_clients.sb_patch_as_service(
         f"/{mh.ASKS}?business_id=eq.{b}&user_id=eq.{u}&status=eq.asked", stamp, redact=True)
     by = sb_clients.sb_patch_as_service(
         f"/{mh.ASKS}?business_id=eq.{b}&asked_by=eq.{u}&status=eq.asked", stamp, redact=True)
-    return bool(gone) and isinstance(about, list) and isinstance(by, list)
+    return (isinstance(about, list) and isinstance(by, list)) or _gone_now()
 
 
 def seat_lowered_to_viewer(business_id: Any, user_id: Any) -> bool:
     """Before a login becomes a Viewer its tick is lowered to See, so moving
     it back up later never brings Work back without the owner. True when
     that is so (or there is nothing to lower)."""
-    if not _hooks_on(business_id, user_id):
-        return True
+    ids = _hook_ids(business_id, user_id)
+    if ids is None:
+        return False
+    ready = _tables()
+    if ready is not True:
+        return ready is False
+    b, u = (_q(x) for x in ids)
     got = sb_clients.sb_patch_as_service(
-        f"/{mh.HOLDERS}?business_id=eq.{_q(str(business_id).lower())}&user_id=eq.{_q(str(user_id).lower())}"
-        "&level=in.(work,lead)", {"level": "see"}, redact=True)
-    return isinstance(got, list)
+        f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}&level=in.(work,lead)", {"level": "see"}, redact=True)
+    return isinstance(got, list) or _gone_now()
 
 
 def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
@@ -425,15 +480,24 @@ def role_lowered(business_id: Any, user_id: Any, old: Any, new: Any) -> bool:
                                password
       anything → Viewer        the tick is lowered to See
     True when that is so; False stops the save."""
-    if old == new or not _hooks_on(business_id, user_id):
+    if old == new:
         return True
+    ids = _hook_ids(business_id, user_id)
+    if ids is None:
+        return False
+    demoted = old == "admin" and new != "admin"
+    if not demoted and new != "viewer":
+        return True                          # a raise, or a move that lowers nothing here
+    ready = _tables()
+    if ready is not True:
+        return ready is False
     ok = True
-    if old == "admin" and new != "admin":
-        ok = bool(sb_clients.sb_delete_as_service(
-            f"/{mh.HOLDERS}?business_id=eq.{_q(str(business_id).lower())}&user_id=eq.{_q(str(user_id).lower())}"))
+    if demoted:
+        b, u = (_q(x) for x in ids)
+        ok = sb_clients.sb_delete_as_service(f"/{mh.HOLDERS}?business_id=eq.{b}&user_id=eq.{u}") or _gone_now()
     if new == "viewer":
-        ok = seat_lowered_to_viewer(business_id, user_id) and ok
-    return ok
+        ok = seat_lowered_to_viewer(*ids) and ok
+    return bool(ok)
 
 
 # ─── Who holds the bank, for the doors outside the gate's table ───────

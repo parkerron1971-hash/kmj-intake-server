@@ -118,6 +118,9 @@ def db(monkeypatch):
     monkeypatch.setattr(giving_ways, "switched_on", lambda b: True)
     import giving_records, church_keys, vertical_family
     monkeypatch.setattr(giving_records, "require_finance", lambda b, u, need="see": "owner")
+    # The bank part on the Zelle doors (2026-11-20), the owner's as the giving
+    # gate above is: who it admits is test_church_money_ticks_follow_up's.
+    monkeypatch.setattr(gs, "_bank_part", lambda *a, **k: None)
     monkeypatch.setattr(church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(gs.church_keys, "wall", lambda *a, **k: None)
     monkeypatch.setattr(vertical_family, "is_nonprofit_like", lambda t: True)

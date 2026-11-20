@@ -283,8 +283,11 @@ def test_switched_off_nothing_is_read_and_nothing_is_decided(db, monkeypatch):
     assert e.value.status_code == 400 and e.value.detail == cmt.NOT_ON
     assert _status(cmt.list_asks, BIZ, session=_session(OWNER)) == 404
     assert cmt.sweep() == {"expired": 0, "reminded": 0}
-    assert cmt.seat_gone(BIZ, MANAGER) and cmt.seat_lowered_to_viewer(BIZ, MANAGER)
-    assert _held(db, MANAGER)["level"] == "lead"                 # off touches nothing
+    assert _held(db, MANAGER)["level"] == "lead"                 # off reads and gives nothing
+    # Taking a tick away or lowering it runs whatever the switch says
+    # (2026-11-20): rows outlive a switch that was on and was turned off.
+    assert cmt.seat_lowered_to_viewer(BIZ, MANAGER) and _held(db, MANAGER)["level"] == "see"
+    assert cmt.seat_gone(BIZ, MANAGER) and _held(db, MANAGER) is None
 
 
 def test_owner_mode_is_the_platform_owners_church_alone(db, monkeypatch):
@@ -652,7 +655,7 @@ def test_a_login_taken_off_the_team_keeps_no_tick_and_no_request(db):
     assert _held(db, MANAGER) is None
     business_users_router.hand_back_login(BIZ, MEMBER)
     assert next(a for a in db.t[mh.ASKS] if a["id"] == aid)["status"] == "withdrawn"
-    assert cmt.seat_gone("nope", MANAGER) and cmt.seat_gone(BIZ, None)
+    assert not cmt.seat_gone("nope", MANAGER) and not cmt.seat_gone(BIZ, None)   # refused, never "no id" (2026-11-20)
 
 
 def test_a_login_made_a_viewer_keeps_only_see_and_work_never_comes_back(db, monkeypatch):
@@ -945,6 +948,7 @@ def test_switched_on_before_the_tables_exist_is_exactly_off(db, monkeypatch):
 
     def missing(path, **kw):
         if path.startswith(f"/{mh.HOLDERS}") or path.startswith(f"/{mh.ASKS}"):
+            db.err = {"status": 404, "code": "PGRST205", "message": "no such table"}   # what PostgREST says
             return None
         return real(path, **kw)
     monkeypatch.setattr(sb_clients, "sb_get_as_service", missing)

@@ -231,8 +231,15 @@ def trust_status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str
     """I.7 — IOLTA three-point check: GL trust cash (1200) vs the client-funds
     liability (2200) vs the bank's trust-account balance. All three equal =
     in-balance books. Ledger MECHANICS only — the formal per-client three-way
-    reconciliation REPORT is I.10 + SME ruling."""
-    _owner(biz, user)
+    reconciliation REPORT is I.10 + SME ruling.
+
+    It reads the bank's own accounts (names, last four, balances), so a
+    church's login takes the bank part as well as the books: a giving tick
+    without "bank and payouts" reads none of it (2026-11-20). Any other
+    business isn't asked there."""
+    row = _owner(biz, user)
+    import church_money_gate
+    church_money_gate.require_money(biz, user, "see", "bank", business=row, detail=church_money_gate.BANK_403)
     billing_limits.require_feature(biz, "vertical_ledgers")
     import gl_reports
     taccts = sb_clients.sb_get_as_service(
