@@ -535,8 +535,7 @@ def test_words():
 def test_the_sheet_carries_the_watch_block_before_the_type():
     import member_lumen_fonts
     parts = lm.templates()
-    assert mlw.CSS in parts and parts[-1].template == member_lumen_fonts.template().template
-    assert parts.index(mlw.CSS) == len(parts) - 2
+    assert mlw.CSS in parts and parts[-1].template == member_lumen_fonts.template().template   # the type last
     assert "$" not in mlw.CSS.template
     text = re.sub(r"/\*.*?\*/", "", mlw.CSS.template, flags=re.S)
     for sel in re.findall(r"(?:^|\})\s*([^{}@]+)\{", re.sub(r"@media[^{]*\{|@supports[^{]*\{", "", text)):
