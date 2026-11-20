@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20, on the Welcome Path mock: "capture visitors, place them in a flow where they receive automated texts from the church ... top tier", then "build". This is build step 1, "One path for every door" (the mock''s gaps 1, 2 and part of 7).'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (the kids desk box and New here's doors)]
+prs: [kmj-intake-server#2008, solutionist-studio#1658 (the kids desk box and New here's doors)]
 migrations: []
 left_undone:
   - "Live only where GUEST_PATH lets it (unset = owner: the platform's own church). Every church: GUEST_PATH=on. Texts also need New here on for the church (settings.new_here.on) and its own active number: until then every door puts the guest on the path with texts_ok false and texts 'new_here_off' or 'no_number', and no Text me box shows"
@@ -14,6 +14,8 @@ left_undone:
   - "The office's First time: no new UI (the app writes attendance itself), so its guests get texts only when that phone already has a yes at the church (a kids desk yes, the texts sign-up page, any sms_consents row of the church's)"
   - "A first check-in that finds an open follow-up from another door adds no note (the sweep re-reads First time rows every 10 minutes for a day; a note there would repeat)"
   - "Builder 2 (Who calls our guests) routes the follow-ups; this PR only decides one guest = one follow-up at the card doors"
+  - "Kevin's call (review of #2008): a public card's Text me box can be ticked for any number, as every website consent box here can; the welcome carries STOP. A reply-to-confirm step before the welcome would close it"
+  - "Kevin's call: at the kids desk and the welcome desk any sms_consents row of the church's for that number counts as the yes (the texts sign-up page, a booking opt-in), not only the kids desk's box"
 decisions:
   - "new_here.enroll(business, contact, door, texts_ok, phone, visit_at): metadata.new_here gets door, texted_at (the path's start for every door), texts_ok, a card code, visits, and `texts` ('on' or why not: new_here_off, no_yes, no_phone, no_number, stopped, unread), New here's own keys kept. No migration"
   - "The welcome is a new_here_text row with step 'welcome' (run_scheduled), run_at now inside the church's automatic-text hours (texting_hours) with 10 minutes to spare, else the next opening. The scheduler ticks every minute, so 'now' is within about a minute, and STOP, the switches and the hours are read again at send time like every other New here text. A welcome found outside the hours at send time is moved to the morning, never dropped"
@@ -26,6 +28,7 @@ decisions:
   - "A second card door with a guest follow-up already open adds a note there instead of a second follow-up (new_here.second_door), at the website card, church cards, the New here card and the member app"
   - "New here's list (guests_of) shows every door: door, texts_ok, texts, and the follow-up any door made. Resend refuses a guest whose texts_ok is false"
   - "GUEST_PATH off (or a failed read) = exactly the old behavior at every door; queued texts from a non-text door stop"
+  - "A yes that can't be read (tried twice) or a welcome that can't be queued is texts 'unread', never 'no yes' or 'on', and the next door this week (or the same one again) tries again; a door that says no never settles it"
 related: [2026-11-20-guest-welcome-path.md, 2026-11-14-new-here-guest-texts.md, 2026-11-17-guest-lane-new-here.md, 2026-11-17-guest-print-cards.md, 2026-10-26-checkin-welcome-handoff.md, 2026-10-13-church-website-forms.md]
 ---
 Before building I read both repos' `worklog/` (new-here 11-14, guest-lane

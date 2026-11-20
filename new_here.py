@@ -535,7 +535,7 @@ WHY_NOT = {
     "no_phone": "No mobile number",
     "no_number": "No church texting number",
     "stopped": "Said STOP",
-    "unread": "Couldn't be checked",
+    "unread": "Couldn't be checked or queued",
 }
 # A card that says they're a regular isn't a first-time guest's.
 _VISIT_Q = re.compile(r"visit|first time|been here|been before|attend|how (long|often)", re.I)
@@ -722,12 +722,14 @@ def plan_path(business: Dict[str, Any], start: datetime, settings: Dict[str, Any
     return out
 
 
-def _why_not(business: Dict[str, Any], settings: Dict[str, Any], number: str, texts_ok: bool) -> str:
+def _why_not(business: Dict[str, Any], settings: Dict[str, Any], number: str, texts_ok: Optional[bool]) -> str:
     """"" when a door's texts can go to this guest now, else why not (a
-    WHY_NOT key)."""
+    WHY_NOT key). `texts_ok` None: their yes couldn't be read ("unread")."""
     biz = str(business["id"])
     if not switched_on(biz) or not settings["on"]:
         return "new_here_off"
+    if texts_ok is None:
+        return "unread"
     if not texts_ok:
         return "no_yes"
     if not number:
@@ -741,27 +743,35 @@ def _why_not(business: Dict[str, Any], settings: Dict[str, Any], number: str, te
 
 
 def _queue(business: Dict[str, Any], contact_id: str, phone: str, plan: Dict[str, datetime], *,
-           door: str, texted_at: datetime) -> int:
-    """One chief_scheduled_actions row per planned step. How many saved."""
-    n = 0
-    for step, when in plan.items():
+           door: str, texted_at: datetime) -> List[str]:
+    """One chief_scheduled_actions row per planned step, the welcome first:
+    a welcome that doesn't save queues nothing after it. The steps saved."""
+    saved: List[str] = []
+    for step in sorted(plan, key=lambda s: s != WELCOME):
         row = sb_clients.sb_post_as_service("/chief_scheduled_actions", {
             "business_id": str(business["id"]),
             "label": f"New here: {step}",
             "action": {"type": KIND, "step": step, "contact_id": contact_id, "phone": phone,
                        "texted_at": _iso(texted_at), "door": door},
-            "run_at": when.isoformat(),
+            "run_at": plan[step].isoformat(),
         })
-        n += bool(isinstance(row, list) and row)
-    return n
+        if isinstance(row, list) and row:
+            saved.append(step)
+        elif step == WELCOME:
+            break
+    return saved
 
 
 def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]], *, door: str,
-           texts_ok: bool, phone: Optional[str] = None, visit_at: Optional[datetime] = None,
+           texts_ok: Optional[bool], phone: Optional[str] = None, visit_at: Optional[datetime] = None,
            now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """Put a guest from any door on the Welcome Path (see above). `phone` is
     the number they said yes for (the contact's own when not given);
     `visit_at` when they were at church, for a door that saw them there.
+    `texts_ok` None: whether they said yes couldn't be read. They're on the
+    path with texts "unread", never "no yes", and the next door this week
+    (or the same one again) tries again; a door that says no never settles
+    it either way. A path whose welcome couldn't be queued is "unread" too.
     New here's metadata as saved, or what it already was when they're on a
     path this week; None when it isn't this path's (not a church, the path
     is off, not a door) or the guest couldn't be saved. Sync; never raises."""
@@ -776,8 +786,12 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
         mine = guest_path.guest_meta(contact)
         last = _parse(mine.get("texted_at"))
         on_path = bool(last and now - last < timedelta(days=REVISIT_DAYS))
-        if on_path and (_texting(mine) or not texts_ok):
-            return mine                     # one guest, one path: nothing starts again
+        # One guest, one path: on a path this week nothing starts again, but
+        # for texts the earlier door had no yes for (a yes now), or couldn't
+        # read (read again now).
+        if on_path and (_texting(mine) or texts_ok is False
+                        or (texts_ok is None and mine.get("texts") != "unread")):
+            return mine
         if not on_path:
             mine.update(door=door, texted_at=_iso(now), visits=int(mine.get("visits") or 0) + 1)
             for key in ("texts", "welcome_at"):
@@ -786,7 +800,7 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
         mine["code"] = mine.get("code") or new_code()
         number = mobile(contact.get("phone") if phone is None else phone)
         settings = settings_of(business)
-        why = _why_not(business, settings, number, bool(texts_ok))
+        why = _why_not(business, settings, number, texts_ok)
         welcome = None if why else welcome_time(business, now)
         if welcome:
             mine.update(texts="on", welcome_at=_iso(welcome))
@@ -796,9 +810,16 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
             print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't saved to the path", flush=True)
             return None
         if welcome:
-            _queue(business, str(contact["id"]), number,
-                   plan_path(business, now, settings, welcome=welcome, visit_at=visit_at),
-                   door=str(mine.get("door") or door), texted_at=visit_at or now)
+            saved = _queue(business, str(contact["id"]), number,
+                           plan_path(business, now, settings, welcome=welcome, visit_at=visit_at),
+                           door=str(mine.get("door") or door), texted_at=visit_at or now)
+            if WELCOME not in saved:
+                # Nothing is queued: never "texts on" for texts that won't go.
+                print(f"[new_here] {biz[:8]}: the welcome for a guest from the {door} door wasn't queued",
+                      flush=True)
+                mine["texts"] = "unread"
+                mine.pop("welcome_at", None)
+                _keep(biz, contact, mine)
         return mine
     except Exception as e:  # noqa: BLE001 — a door never fails for the path
         print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't put on the path "
@@ -810,8 +831,9 @@ def enroll_by_id(business_id: Any, contact_id: Any, *, door: str, texts_ok: Opti
                  phone: Optional[str] = None, visit_at: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """enroll() for a door that has ids: the church and the guest read
     fresh. `texts_ok` None reads it: whether their number already has a yes
-    to the church's texts (the kids desk's box, the welcome desk's office).
-    Sync; never raises."""
+    to the church's texts (the kids desk's box, the welcome desk's office),
+    tried twice; a read that still fails is "unread", never a no. Sync;
+    never raises."""
     biz = str(business_id or "")
     try:
         if not biz or not contact_id or not path_on(biz):
@@ -822,8 +844,11 @@ def enroll_by_id(business_id: Any, contact_id: Any, *, door: str, texts_ok: Opti
         if not business or not people:
             return None
         if texts_ok is None:
-            texts_ok = bool(has_yes(biz, people[0].get("phone") if phone is None else phone))
-        return enroll(business, people[0], door=door, texts_ok=bool(texts_ok), phone=phone, visit_at=visit_at)
+            number = people[0].get("phone") if phone is None else phone
+            texts_ok = has_yes(biz, number)
+            if texts_ok is None:            # one more try: a blip shouldn't decide it
+                texts_ok = has_yes(biz, number)
+        return enroll(business, people[0], door=door, texts_ok=texts_ok, phone=phone, visit_at=visit_at)
     except Exception as e:  # noqa: BLE001
         print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't read for the path "
               f"({type(e).__name__})", flush=True)

@@ -266,6 +266,43 @@ def test_why_the_texts_didnt_start(db, why):
     assert mine["texts"] in nh.WHY_NOT and db.scheduled() == []
 
 
+def test_a_yes_that_cant_be_read_is_never_a_no_and_is_read_again(db):
+    db.person()
+    db.down.add("sms_consents")
+    mine = nh.enroll_by_id(BIZ, GUEST, door="kids", texts_ok=None, visit_at=SUNDAY)
+    assert mine["door"] == "kids" and mine["texts"] == "unread" and mine["texts_ok"] is False
+    assert db.scheduled() == []
+    # A door that says no this week never settles it; the next read does.
+    assert nh.enroll(db.biz, db.contact(), door="web", texts_ok=False)["texts"] == "unread"
+    db.down.discard("sms_consents")
+    db.t["sms_consents"].append({"business_id": BIZ, "phone": PHONE, "source": "kids_checkin"})
+    db.now = SUNDAY + timedelta(minutes=30)
+    again = nh.enroll_by_id(BIZ, GUEST, door="kids", texts_ok=None, visit_at=SUNDAY)
+    assert again["texts"] == "on" and again["texts_ok"] is True and again["texted_at"] == _iso(SUNDAY)
+    assert "welcome" in db.steps()
+
+
+def test_a_read_that_fails_once_is_tried_again(db, monkeypatch):
+    db.person()
+    db.t["sms_consents"].append({"business_id": BIZ, "phone": PHONE, "source": "kids_checkin"})
+    answers = iter([None, True])
+    monkeypatch.setattr(nh, "has_yes", lambda biz, phone: next(answers))
+    assert nh.enroll_by_id(BIZ, GUEST, door="desk", texts_ok=None)["texts"] == "on"
+
+
+def test_a_welcome_that_cant_be_queued_is_never_texts_on(db):
+    db.person()
+    db.down.add("chief_scheduled_actions")
+    mine = nh.enroll(db.biz, db.contact(), door="kids", texts_ok=True, visit_at=SUNDAY)
+    assert mine["texts"] == "unread" and "welcome_at" not in mine
+    assert db.mine()["texts"] == "unread"
+    # Nothing after the welcome was queued either; the next door with a yes tries again.
+    db.down.discard("chief_scheduled_actions")
+    assert db.scheduled() == []
+    again = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    assert again["texts"] == "on" and again["door"] == "kids" and "welcome" in db.steps()
+
+
 def test_a_stop_at_another_church_is_not_this_churchs(db):
     db.person()
     db.t["sms_opt_outs"] = [{"phone": PHONE, "business_id": OTHER}]
