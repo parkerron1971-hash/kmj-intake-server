@@ -1312,7 +1312,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 
 | PR | Contains | Tests | Migration |
 |---|---|---|---|
-| **Step 5 Chief** (built, #1995) | `chief_church_schedule.py` (`who_is_away`, `time_off_asks`, `check_dates`, `serving_week`, `ask_time_off`, `answer_time_off`, `take_back_time_off`, `add_repeat`, `take_off_repeat`, `turn_line`); its wiring in `chief_of_staff`, `action_registry`, `chief_areas`, `chief_tool_loop` and `action_inverse`; section 9 of this doc | `test_chief_church_schedule.py` (32), at New Hope through Chief's real handlers and the real engine: each verb in the pastor's own sentences; a reason, the note with an answer and what a thing that repeats is only where the engine lets that login read them; the look before sending (nothing sent, the day, the nearest open days, who can make an exception; sent on "ask anyway" with the flag it showed, never in the turn the look spoke); a protected day and a pair (never named); an exception only by whoever may give it, nothing written the first time, only over the flags it said, never in the turn that said them, and the engine still refusing one unsaid; a yes whose days filled since goes up in the engine's words; a tainted turn holds every write, other people's words read in the turn hold the write after them, and a read of only one's own words doesn't; unattended, signed out, a viewer; off, closed or before the tables the not-on words and no read of the schedule (off: no read at all); a login tied to the owner's own person never gets the owner's power, and every call into the engine is made as a login; names that are nobody or several; no id, a result and a label on every path; no title word or role key; the week only for its page's readers, with hours only where church_serving allows; the reads run mid-turn. Each rule was broken once to see its test go red (24; the PR lists them). The registry, areas, inverse, verb-parity, ledger, lean-brief, prefix, mcp and `test_chief_church_assignments.py` suites pass unchanged | no |
+| **Step 5 Chief** (built, #1995) | `chief_church_schedule.py` (`who_is_away`, `time_off_asks`, `check_dates`, `serving_week`, `ask_time_off`, `answer_time_off`, `take_back_time_off`, `add_repeat`, `take_off_repeat`, `turn_line`); its wiring in `chief_of_staff`, `action_registry`, `chief_areas`, `chief_tool_loop` and `action_inverse`; the five writes in `chief_missions._FORBIDDEN_VERBS` and `chief_plans._NOT_IN_A_PLAN`; section 9 of this doc | `test_chief_church_schedule.py` (40), at New Hope through Chief's real handlers and the real engine: each verb in the pastor's own sentences; a reason, the note with an answer and what a thing that repeats is only where the engine lets that login read them; the look before sending (nothing sent, the day, the nearest open days, who can make an exception; sent on "ask anyway" with the flag it showed, never in the turn the look spoke); a protected day and a pair (never named); an exception only by whoever may give it, nothing written the first time, only over the flags it said, never in the turn that said them, and the engine still refusing one unsaid; a yes whose days filled since goes up in the engine's words; a tainted turn holds every write, other people's words read in the turn hold the write after them, and a read of only one's own words doesn't; unattended, signed out, a viewer; off, closed or before the tables the not-on words and no read of the schedule (off: no read at all); a login tied to the owner's own person never gets the owner's power, and every call into the engine is made as a login; names that are nobody or several; no id, a result and a label on every path; no title word or role key; the week only for its page's readers, with hours only where church_serving allows; the reads run mid-turn; from the review: a yes in the turn the waiting list spelled out its exception doesn't land, the engine is handed only the flags in the way that the tag named (more is refused), a held tag sent again the next turn without reading first runs through `_execute_actions`, a tainted write where the schedule is closed says it's not on, missions and plans never carry the writes, candidate days that have passed are left out and said, the count is one to eight, the end of the calendar is plain words, and `to` alone is from today. Each rule was broken once to see its test go red (37; the PR lists them). The registry, areas, inverse, verb-parity, ledger, lean-brief, prefix, mcp and `test_chief_church_assignments.py` suites pass unchanged | no |
 
 ---
 
@@ -2819,12 +2819,12 @@ its own**: every verb calls what the pages call, and every refusal is the engine
 
 | Verb | Kind | Who | What it calls |
 |---|---|---|---|
-| `who_is_away` {day, or from and to} | read, mid-turn | whoever `calendar` lets read: on the schedule, the owner, the office overseer (anyone else gets its 403 in its words) | `church_schedule.calendar`: who is away (the facts) and which days, who covers, the asks still waiting that `me` may read, and things that repeat on those days (`standing`; what one is only where `sees_label` says). A reason and a note only as `shape()` gives them. No day named: the coming Sunday, on the church's clock |
-| `time_off_asks` {box: to_me, mine, all} | read, mid-turn | to_me and mine: any office seat; all: the owner and the office overseer | `waiting`, `mine` (a login matched to no person: the engine's `NO_PERSON` words), `everything`. For one waiting for my yes that needs an exception, what is in the way now, in the Dates page's words (`member_portal_dates._limits` and `_why_lines`) |
-| `check_dates` {days, or weekday and count, from; group} | read, mid-turn | as `who_is_away` | one `calendar` over the candidate days (eight at most, three months at most): for each, who on the leaders schedule can't come (away, an ask still waiting that this login may see, something that repeats), then the day with the fewest. Names and why only: never a reason, a note or what something that repeats is. It sets no meeting |
+| `who_is_away` {day, or from and to, or to alone} | read, mid-turn | whoever `calendar` lets read: on the schedule, the owner, the office overseer (anyone else gets its 403 in its words) | `church_schedule.calendar`: who is away (the facts) and which days, who covers, the asks still waiting that `me` may read, and things that repeat on those days (`standing`; what one is only where `sees_label` says). A reason and a note only as `shape()` gives them. No day named: the coming Sunday, on the church's clock. `to` alone: from today to that day (or from that day to today, when it has passed), three months at most as the calendar says |
+| `time_off_asks` {box: to_me, mine, all} | read, mid-turn | to_me and mine: any office seat; all: the owner and the office overseer | `waiting`, `mine` (a login matched to no person: the engine's `NO_PERSON` words), `everything`. For one waiting for my yes that needs an exception, what is in the way now, in the Dates page's words (`member_portal_dates._limits` and `_why_lines`), and the flags a yes would be given over: spelled out, so a yes over them doesn't count in the same turn (9.3) |
+| `check_dates` {days, or weekday and count, from; group} | read, mid-turn | as `who_is_away` | one `calendar` over the candidate days (one to eight, three months at most; a day named that has passed is left out and said, all of them passed is a refusal in plain words; a weekday's run never starts in the past; a run past the end of the calendar is the engine's `BAD_DAYS` words): for each, who on the leaders schedule can't come (away, an ask still waiting that this login may see, something that repeats), then the day with the fewest. Names and why only: never a reason, a note or what something that repeats is. It sets no meeting |
 | `serving_week` {week, department} | read, mid-turn | `church_week._reader`'s: the owner, an Admin, a Manager who keeps either door of Who serves when (anyone else its 403 in its words) | `church_week.week`: counts, Look at first, each department's places by service, hours and Can't serve with kids yet only where church_serving lets this login. `department` narrows it to one card (a department or a team, in words) |
-| `ask_time_off` {starts_on, ends_on, kind, reason, cover, for, ask_anyway} | write (A), tag | for oneself; `for` (a name on the schedule) only the owner and the office overseer (`NOT_FOR` otherwise) | `church_schedule_limits.look` first (9.3), then `church_schedule.ask`. `cover`: one person on the schedule when the words name exactly one, several a refusal that names them, anyone else a typed name (as Dates) |
-| `answer_time_off` {who, day, yes, note, exception} | write (C), tag | `may_decide`: whoever it went to; the owner and the office overseer; a flagged ask only whoever may give its exception | `church_schedule.answer`, with `shown` = the flags named in `exception` (9.3). A note goes with not this one only |
+| `ask_time_off` {starts_on, ends_on, kind, reason, cover, for, ask_anyway} | write (C), tag | for oneself; `for` (a name on the schedule) only the owner and the office overseer (`NOT_FOR` otherwise) | `church_schedule_limits.look` first (9.3), then `church_schedule.ask`. `cover`: one person on the schedule when the words name exactly one, several a refusal that names them, anyone else a typed name (as Dates) |
+| `answer_time_off` {who, day, yes, note, exception} | write (C), tag | `may_decide`: whoever it went to; the owner and the office overseer; a flagged ask only whoever may give its exception | `church_schedule.answer`, with `shown` = the flags in the way that `exception` named, and nothing else (9.3). A note goes with not this one only |
 | `take_back_time_off` {who, day} | write (C), tag | the asker; `who` only the owner and the office overseer (`NOT_ASKER` otherwise) | `church_schedule.withdraw` |
 | `add_repeat` {label, weekday, often, starts_on, until_on, for} | write (A), tag | for oneself; `for` only the owner and the office overseer | `church_schedule_repeats.add_commitment`. `often` is the Dates page's one list (weekly, every_other, month_1 to month_4, month_last) |
 | `take_off_repeat` {what, who} | write (C), tag | theirs; `who` only the owner and the office overseer | `commitments`, then `drop_commitment` |
@@ -2832,13 +2832,25 @@ its own**: every verb calls what the pages call, and every refusal is the engine
 Writes are action tags, never native write tools (registry `chief_only`): `mcp_server.
 WRITE_TOOL_SCHEMAS` is also the outside agent's list and carries no signed-in person. How to use
 the verbs rides the turn's tail only where the schedule (or, for its line, the week) is open for
-the church and the login has an office seat (`turn_line`); the cached manual is unchanged, so
-nothing costs a church where it is closed.
+the church and the login has an office seat (`turn_line`), about half the length it was first
+built at; the cached manual is unchanged, so the how-to costs nothing where it is closed. The week's
+line goes only to a seat that can ever read the week (the owner, an Admin, a Manager), worked out
+from the role already read: whether a Manager keeps a door of Who serves when would take
+church_week's duty reads, so a Manager who keeps none still gets the line, and the page's refusal.
+**The four read tools' definitions are not per church**: like the assignments' (and every other
+mid-turn read), they ride the tool list of every business's turn, because the tool loop has no
+per-business list (`chief_tool_loop.read_tool_definitions` is one list). With `CHIEF_BRIEF=lean`
+they are deferred, so only their names ride that list until Chief loads one.
+
+The five writes are never steps of a mission or a plan (`chief_missions._FORBIDDEN_VERBS`,
+`chief_plans._NOT_IN_A_PLAN`): each is the person's own word in the turn they say it.
 
 ### 9.2 The gate
 
 - **Signed in, never unattended.** An unattended run and a turn with nobody signed in are refused
   before anything is read.
+- **A tainted turn's hold comes last**, after the switch, the church, the tables and the seat: a
+  write at a church where the schedule is off or closed says it's not on, never "say it again".
 - **The switch first, then the church.** `CHURCH_SCHEDULE` off: the not-on words and **no read at
   all**. Then the church row (a church, or "for churches"); then `church_schedule.church_open`
   (`owner`: the platform owner's church), else this login by its email (`open_to`, through
@@ -2867,12 +2879,25 @@ nothing costs a church where it is closed.
   Dates page's `sure`. "Can't make it" and the owner's own are never looked at, as on Dates.
 - **A yes to an ask that needs an exception writes nothing the first time.** Chief hears what is
   in the way now (`_limits`, as the card says it) and the flags it said. The yes lands as an
-  exception only with `"exception"` naming every one of them, and `church_schedule.answer` gets
-  exactly those as `shown`, so the engine still refuses one over a flag nobody named (its own 409
-  words). A flagged ask the login may not answer goes straight to the engine, which says so.
+  exception only with `"exception"` naming every one of them **and nothing else**: naming a flag
+  that isn't in the way (or any flag when nothing is) is refused with nothing written, and Chief
+  says again what is (decided in the review: refused, never trimmed, so a yes is always given over
+  exactly what was put to the person). `church_schedule.answer` gets as `shown` the flags in the
+  way that the tag named, worked out on every yes, so the engine still refuses one over a flag
+  nobody named (its own 409 words). A flagged ask the login may not answer goes straight to the
+  engine, with nothing shown, which says so.
 - **Never in the same turn.** The second press (`ask_anyway`, `exception`) doesn't count in the
-  turn whose own first press said what was in the way: the reply isn't out, so the person hasn't
-  heard it. Kept on the turn's own context (`_SAID`), never across turns.
+  turn whose own first press said what was in the way, nor in the turn whose waiting list
+  (`time_off_asks`) spelled out the flags an exception would be given over: the reply isn't out,
+  so the person hasn't heard it. Kept on the turn's own context (`_SAID`), never across turns.
+- **Sent again as it was, without reading first.** Every hold and every stop tells Chief, and the
+  turn's block says, to send the same tag the next turn without reading first: a read of other
+  people's words would hold it again, and a read of the waiting list would mark it said again.
+  Tested through `chief_of_staff._execute_actions` over two turns (the hold, then the tag sent as
+  it was, which runs). A class C verb on a tainted turn is held by chief_of_staff's shared class-C
+  gate before Chief's own hold, in that gate's words, which speak of "a message in the inbox" even
+  when it was a reason or a note: a known rough edge, left as it is because that gate serves every
+  verb.
 - A yes whose days have filled since it was asked goes up in the engine's words (`WENT_UP`,
   `YOURS_NOW`); Chief never adds "Nothing changed" to those, because the ask has moved.
 
@@ -2897,24 +2922,31 @@ nothing costs a church where it is closed.
   `take_off_repeat`.
 - **The look and the exception are two presses, never one**, and never in the same turn (9.3).
   What Chief said the turn before can't be proved; what it can do is never count a second press
-  in the turn whose first one spoke, and give the engine only the flags the yes named.
-- **Classes**: asking and adding something that repeats are A (taken back or off, as on Dates); an
-  answer (the asker is told, a no is final, a yes opens their places and an exception stays on
-  record), a take-back and taking something that repeats off (for good) are C: when asked, never
-  on Chief's own idea. Undo doesn't reach the A two; Chief takes them back when asked.
+  in the turn whose first one spoke (or whose waiting list spelled it out), and give the engine only
+  the flags in the way that the yes named.
+- **Classes**: adding something that repeats is A (taken off, as on Dates). Asking is C since the
+  review: "can't make it" and the owner's own settle at once, tell the one over them and open the
+  places they had agreed to serve, and a take-back never closes those places. An answer (the asker
+  is told, a no is final, a yes opens their places and an exception stays on record), a take-back
+  and taking something that repeats off (for good) are C too: when asked, never on Chief's own
+  idea. Undo reaches none of them; Chief takes an ask back, or a thing that repeats off, when
+  asked.
+- **Never a mission's or a plan's step**: the five writes are refused in both lists.
 - **Whose words are whose**: the words on my own ask are mine, though the owner or the office
   overseer may have entered it for me, and so is my own thing that repeats (its table doesn't
   record who added it). The note with an answer is always someone else's. A cover picked from the
   schedule is a name on the church's list; a typed one is someone's words.
 - **Who covers** is a name on the leaders schedule when the words name exactly one, else typed as
   said (Dates offers the same two).
-- **`check_dates`** looks from tomorrow unless told, four of the weekday unless told, eight at most,
-  across the leaders and the office unless a group is named; it counts only what this login may
-  see and says so, and suggests the day with the fewest.
+- **`check_dates`** looks from tomorrow unless told (never before today, whatever `from` says),
+  four of the weekday unless told, one to eight, across the leaders and the office unless a group
+  is named; days named that have passed are left out and said ("Sat, Nov 14 has passed, so it is
+  left out."), and all of them passed is a refusal; it counts only what this login may see and says
+  so, and suggests the day with the fewest.
 - **`who_is_away`** with no day named is the coming Sunday on the church's clock (today when it is
-  Sunday).
+  Sunday); `to` alone is from today to that day, or from that day to today when it has passed.
 - **`serving_week`** has its own switch and its own readers, and its line in the turn's block shows
-  only where `CHURCH_WEEK` is open.
+  only where `CHURCH_WEEK` is open, to the owner, an Admin or a Manager.
 - **Take-back words**: one's own says whoever it went to hears, if they had been told of it (the
   engine tells them only then); the owner's or the overseer's says the asker hears.
 
@@ -2931,4 +2963,4 @@ nothing costs a church where it is closed.
 `__tests__/test_chief_church_schedule.py` at New Hope (church_three; every name made up), on
 church_schedule_fake's tables with step 2's file, through Chief's real handlers and the engine the
 pages use: the rows of section 6's Step 5 table. Each rule was broken once on purpose and its test
-went red, then green again (24; the PR lists them).
+went red, then green again (37 with the review's; the PR lists them).

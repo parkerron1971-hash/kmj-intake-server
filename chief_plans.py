@@ -73,6 +73,9 @@ _NOT_IN_A_PLAN = {
     "create_client_form",
     # Permissions are granted and taken back in the conversation.
     "grant_standing_permission", "revoke_standing_permission",
+    # The leaders schedule's writes are the person's own word in the turn,
+    # never a step (chief_missions._FORBIDDEN_VERBS holds them too).
+    "ask_time_off", "answer_time_off", "take_back_time_off", "add_repeat", "take_off_repeat",
 }
 
 

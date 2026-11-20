@@ -209,8 +209,12 @@ def test_the_verbs_are_wired_classified_placed_and_taught():
         taught = ccs.BLOCK.replace(" ", "")
         assert f'[ACTION:{{"type":"{verb}"' in taught, f"{verb} is taught as a tag where the schedule is open"
     assert {v: ar.reversibility(v) for v in WRITES} == {
-        "ask_time_off": "A", "add_repeat": "A", "answer_time_off": "C", "take_back_time_off": "C",
-        "take_off_repeat": "C"}, "an answer and a take-back reach a person and are final; a removal is for good"
+        "ask_time_off": "C", "add_repeat": "A", "answer_time_off": "C", "take_back_time_off": "C",
+        "take_off_repeat": "C"}, ("an ask can settle at once, tell people and open places a take-back never "
+                                  "closes; an answer and a take-back reach a person and are final; a removal is "
+                                  "for good")
+    assert ccs.AGAIN in ccs.BLOCK, "a held tag is sent again as it was, without reading first"
+    assert len(ccs.BLOCK) < 1200, "the turn's block stays short: it rides every turn where the schedule is open"
     assert set(READS) <= {t["name"] for t in ctl.read_tool_definitions()}
     ctl.reset_turn(writes_allowed=True)
     assert not set(VERBS) & {t["name"] for t in ctl.write_tool_definitions()}, "tags, never native write tools"
@@ -228,9 +232,12 @@ def test_the_turns_block_only_where_the_schedule_is_open(db, monkeypatch):
     assert ccs.turn_line(biz, "") == ""
     monkeypatch.setenv("CHURCH_WEEK", "on")
     assert "VOLUNTEERS' WEEK" in ccs.turn_line(biz, uid(db, "kira"))
+    assert "VOLUNTEERS' WEEK" in ccs.turn_line(biz, c3.church(db, HOPE)["owner_id"])
+    assert "VOLUNTEERS' WEEK" not in ccs.turn_line(biz, uid(db, "yusuf")), "a Member seat never reads the week"
     monkeypatch.setenv("CHURCH_SCHEDULE", "off")
     line = ccs.turn_line(biz, uid(db, "kira"))
     assert "LEADERS' DATES" not in line and line.startswith("VOLUNTEERS' WEEK")
+    assert ccs.turn_line(biz, uid(db, "yusuf")) == "", "nothing open for a Member seat"
     monkeypatch.setenv("CHURCH_WEEK", "off")
     assert ccs.turn_line(biz, uid(db, "kira")) == ""
     monkeypatch.setenv("CHURCH_SCHEDULE", "on")
@@ -824,3 +831,148 @@ def test_the_week_is_only_for_whoever_may_read_its_page_and_hours_only_where_all
     import chief_duties
     chief_duties._EMAILS[uid(db, "kira")] = "kira@newhope.church"
     assert run(db, "kira", "serving_week")["result"] == f"Failed: {ccs.WEEK_NOT_ON}", "another church's under owner"
+
+
+# ─── From the review of #1995 ─────────────────────────────────────────
+
+def test_a_yes_over_an_exception_never_lands_in_the_turn_the_waiting_list_spelled_it_out(db):
+    """The waiting list says what is in the way and the flags a yes would
+    be given over; a yes with them in the same turn hasn't been put to the
+    person yet. No reason on this ask, so nothing else holds the yes."""
+    full(db)
+    a = yusufs(db, reason=None)
+    assert a["flags"] == ["over_limit"] and a["to"]["name"] == "Owen Diaz"
+    read, yes = turn(db, "owen", ("time_off_asks", {}),
+                     ("answer_time_off", {"who": "Yusuf", "yes": True, "exception": ["over_limit"]}))
+    assert '"exception": ["over_limit"]' in ok(read) and "reason" not in ok(read)
+    assert yes["needs_confirmation"] and "HELD" not in yes["result"]
+    assert yes["label"].startswith("Not answered yet. Yusuf Grant's time off")
+    assert "Sun, Dec 20 is full" in yes["label"] and "without reading first" in yes["result"]
+    row = next(r for r in asks(db) if r["id"] == a["id"])
+    assert row["state"] == "asked" and row["excepted"] == [] and not any(f.get("ask_id") for f in facts(db))
+    # The next turn, sent as it was without reading first, it lands.
+    ok(run(db, "owen", "answer_time_off", who="Yusuf", yes=True, exception=["over_limit"]))
+    assert row["state"] == "yes" and row["excepted"] == ["over_limit"]
+
+
+def test_the_engine_is_handed_only_the_flags_put_to_the_person(db, monkeypatch):
+    """An ask in the way only of the number: naming more flags than that is
+    refused with nothing written (my call: refused, never trimmed), and the
+    yes that names exactly it hands the engine exactly it."""
+    a = _flagged(db)
+    handed = []
+    real = cs.answer
+
+    def spy(ch, me, ask_id, yes, note=None, *, shown=None):
+        handed.append(list(shown or []))
+        return real(ch, me, ask_id, yes, note, shown=shown)
+    monkeypatch.setattr(cs, "answer", spy)
+    got = run(db, "owen", "answer_time_off", who="Yusuf", yes=True,
+              exception=["over_limit", "protected_day", "pair"])
+    assert got["needs_confirmation"] and handed == [], "nothing reached the engine"
+    assert got["label"].startswith("Not answered yet. Yusuf Grant's time off, Sun, Dec 20 to Sun, Dec 27, needs an "
+                                   "exception. Sun, Dec 20 is full")
+    assert '["pair", "protected_day"], which isn\'t in the way' in got["result"]
+    assert next(r for r in asks(db) if r["id"] == a["id"])["state"] == "asked"
+    ok(run(db, "owen", "answer_time_off", who="Yusuf", yes=True, exception=["over_limit"]))
+    assert handed == [["over_limit"]]
+    # Nothing in the way at all: an exception named is refused too, and a plain yes is handed nothing.
+    b = cs.ask(church(db), login(db, "yusuf"), {"starts_on": "2027-01-10", "ends_on": "2027-01-10", "kind": "time_off"})
+    got = run(db, "amara", "answer_time_off", who="Yusuf", yes=True, exception=["over_limit"])
+    assert got["needs_confirmation"] and "needs no exception now: your yes is a plain yes" in got["label"]
+    assert next(r for r in asks(db) if r["id"] == b["id"])["state"] == "asked" and handed == [["over_limit"]]
+    ok(run(db, "amara", "answer_time_off", who="Yusuf", yes=True))
+    assert handed == [["over_limit"], []]
+
+
+def test_a_held_tag_sent_again_next_turn_without_reading_runs_through_the_door(db, monkeypatch):
+    """Two turns through chief_of_staff._execute_actions, as the chat runs
+    a tag: the turn that read someone's words holds it (Chief's own hold for
+    an A verb, the shared class-C gate for a C one), and the next turn,
+    which sends the same tag without reading first, runs it."""
+    import chief_of_staff as cos
+
+    async def no_sb(client, method, path, body=None):
+        return []
+    monkeypatch.setattr(cos, "_sb", no_sb)
+    yusufs(db)
+    biz, owner = c3.church(db, HOPE), uid(db, "owner")
+    add = {"type": "add_repeat", "label": "Gym", "weekday": "Monday", "often": "weekly", "for": "Celia"}
+    back = {"type": "take_back_time_off", "who": "Yusuf"}
+
+    def go(read: bool):
+        async def run_turn():
+            cos._UNTRUSTED_TAINT.set(0)
+            if read:
+                checked(await cos.ACTION_HANDLERS["who_is_away"](None, {"id": HOPE}, {"day": DEC20}))
+            return await cos._execute_actions(None, biz, [dict(add), dict(back)], user_id=owner)
+        with signed_in(owner):
+            return asyncio.run(run_turn())
+    held_add, held_back = go(read=True)
+    assert held_add["needs_confirmation"] and ccs.AGAIN in held_add["result"], held_add["result"]
+    assert held_back["needs_confirmation"] and held_back.get("failed"), held_back["result"]
+    assert db.t["church_away_commitments"] == [] and asks(db)[0]["state"] == "asked"
+    ran_add, ran_back = go(read=False)
+    assert ok(ran_add).startswith("Added for Celia Ward: “Gym”") and ok(ran_back).startswith("Took back Yusuf Grant's")
+    assert [r["label"] for r in db.t["church_away_commitments"]] == ["Gym"] and asks(db)[0]["state"] == "withdrawn"
+
+
+def test_a_tainted_write_where_the_schedule_is_closed_says_it_is_closed(db, monkeypatch):
+    import chief_of_staff as cos
+    monkeypatch.setattr(cos, "untrusted_taint", lambda: 1)
+    for how in ("off", "tables"):
+        if how == "tables":
+            monkeypatch.setenv("CHURCH_SCHEDULE", "on")
+            monkeypatch.setattr(cs, "_FORCE", False)
+        else:
+            monkeypatch.setenv("CHURCH_SCHEDULE", "off")
+        for verb in WRITES:
+            got = run(db, "yusuf", verb, starts_on=DEC20)
+            assert got["result"] == f"Failed: {ccs.NOT_ON}" and not got.get("needs_confirmation"), (how, verb)
+
+
+def test_missions_and_plans_never_carry_the_schedules_writes():
+    import chief_missions
+    import chief_plans
+    for verb in WRITES:
+        assert verb in chief_missions._FORBIDDEN_VERBS and verb in chief_plans._NOT_IN_A_PLAN, verb
+        err, _steps = chief_missions.validate_steps([{"action": {"type": verb}}])
+        assert "not allowed inside a mission" in err, (verb, err)
+        with pytest.raises(ValueError):
+            chief_plans.check_steps([{"title": "x", "action": {"type": verb}}])
+
+
+def test_candidate_days_that_have_passed_are_left_out_and_said(db):
+    said = ok(run(db, "owner", "check_dates", days=["2026-11-14", "2026-11-21", "2026-11-07", "2026-11-28"]))
+    lines = said.splitlines()
+    assert lines[1] == "Sat, Nov 7 and Sat, Nov 14 have passed, so they are left out."
+    assert [ln.split(":")[0] for ln in lines[2:4]] == ["- Sat, Nov 21", "- Sat, Nov 28"]
+    one = ok(run(db, "owner", "check_dates", days=["2026-11-14", "2026-11-21"]))
+    assert "Sat, Nov 14 has passed, so it is left out." in one
+    assert no(run(db, "owner", "check_dates", days=["2026-11-14"])) == f"Failed: {ccs.ALL_PASSED[:1].lower()}" \
+                                                                      f"{ccs.ALL_PASSED[1:]}"
+    # A weekday's run never starts in the past, whatever `from` says.
+    run_ = ok(run(db, "owner", "check_dates", weekday="Saturday", count=2, **{"from": "2026-10-01"}))
+    assert [ln.split(":")[0] for ln in run_.splitlines()[1:3]] == ["- Sat, Nov 21", "- Sat, Nov 28"]
+
+
+def test_the_count_is_one_to_eight_and_the_end_of_the_calendar_is_plain_words(db):
+    def days_in(said):
+        return [ln for ln in said.splitlines() if ln.startswith("- ")]
+    assert len(days_in(ok(run(db, "owner", "check_dates", weekday="Sunday", count=20)))) == ccs.CHECK_MAX
+    assert len(days_in(ok(run(db, "owner", "check_dates", weekday="Sunday", count=0)))) == 1
+    assert len(days_in(ok(run(db, "owner", "check_dates", weekday="Sunday", count="lots")))) == ccs.CHECK_DEFAULT
+    far = no(run(db, "owner", "check_dates", weekday="Friday", count=8, **{"from": "9999-12-20"}))
+    assert far == f"Failed: {cs.BAD_DAYS[:1].lower()}{cs.BAD_DAYS[1:]}"
+    assert "eight" not in far and no(run(db, "owner", "check_dates", days=[f"2027-01-{d:02d}" for d in range(1, 10)]))
+
+
+def test_to_alone_is_from_today_and_a_day_gone_is_up_to_today(db):
+    away(db, "kara", "2026-11-25")
+    away(db, "wren", "2026-11-10")
+    ahead = run(db, "owner", "who_is_away", to="2026-11-29")
+    assert ahead["label"] == "Who is away from Wed, Nov 18 to Sun, Nov 29"
+    assert "Kara Bell: Wed, Nov 25, away" in ok(ahead) and "Wren" not in ok(ahead)
+    back = run(db, "owner", "who_is_away", to="2026-11-08")
+    assert back["label"] == "Who is away from Sun, Nov 8 to Wed, Nov 18" and "Wren Ellis: Tue, Nov 10, away" in ok(back)
+    assert no(run(db, "owner", "who_is_away", to="2027-06-01")) == "Failed: pick up to three months"

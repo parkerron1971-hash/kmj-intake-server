@@ -591,10 +591,14 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "serving_week": {**_r("reads one week of a church's volunteers by department (church_week: who is on, open "
                           "places, away; hours and checks only where church_serving lets this login); volunteers by "
                           "name", sensitive=True), "chief_only": True},
-    "ask_time_off": {**_w("A", "asks for time away for the signed-in person (or, by the owner or whoever oversees "
+    # C, not A (#1995 review): "can't make it" and the owner's own settle at once, tell the one over them and open
+    # the places they had agreed to serve, and a take-back doesn't put those places back. When asked, never on
+    # Chief's own idea.
+    "ask_time_off": {**_w("C", "asks for time away for the signed-in person (or, by the owner or whoever oversees "
                                "the office, for someone on the leaders schedule) through church_schedule.ask, after "
-                               "the Dates page's look; whoever it goes to is told; take_back_time_off takes it "
-                               "back, and a place a yes opened stays open"), "chief_only": True},
+                               "the Dates page's look; whoever it goes to is told, and one that settles at once "
+                               "opens the places they had agreed to serve; take_back_time_off takes the ask back, "
+                               "never those places"), "chief_only": True},
     # C: the asker is told, a no is final, a yes opens the places they had agreed to serve and an exception stays
     # on record. When asked, never on Chief's own idea.
     "answer_time_off": {**_w("C", "says yes or not this one to an ask for time away through church_schedule.answer "
