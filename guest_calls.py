@@ -1027,6 +1027,13 @@ def view(business: Dict[str, Any], user: Any) -> Dict[str, Any]:
     if not seniors and ch.owner:
         seniors = [{"name": ch.login_name(ch.owner)}]
     settings = {k: v for k, v in conf.items() if k != "welcome_asked"}
+    # Whoever does First-time guests today, whatever the mode: the sheet says
+    # who "People & Care" is before a save, and who backs up the Welcome Team.
+    pc_uid = first_guests_login(ch, load)
+    pc_cid = person_for_login(ch, pc_uid, create=False) if pc_uid else None
+    people_care = (_brief(folks[pc_cid]) if pc_cid in folks else
+                   {"contact_id": pc_cid, "name": ch.login_name(pc_uid), "title": _login_title(ch, pc_uid)}
+                   if pc_uid else None)
     return {
         "on": guest_path.switched_on(biz),
         "settings": settings,
@@ -1039,6 +1046,8 @@ def view(business: Dict[str, Any], user: Any) -> Dict[str, Any]:
                     "teams": list(team_map)},
         "doors": [{"key": k, "label": v} for k, v in guest_path.DOORS.items()],
         "ladder": _ladder(caller, _brief(backup), seniors),
+        "people_care": people_care,
+        "pastor": seniors[0]["name"] if seniors else None,
         "may_edit": bool(edit),
     }
 

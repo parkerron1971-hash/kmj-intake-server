@@ -467,6 +467,8 @@ def test_the_sheet_reads_who_calls_and_the_choices(office, g):
     assert v["choices"]["teams"] == ["Hospitality Team"]
     assert v["may_edit"] is True and v["backup"] is None
     assert [s["when"] for s in v["ladder"]] == ["On the due day", "A day late", "Three days late"]
+    assert v["people_care"] == v["caller"] and v["pastor"] == "Kevin McCloud"
+    assert [d["key"] for d in v["doors"]] == list(guest_path.DOORS)
 
 
 def test_a_login_that_doesnt_do_first_guests_reads_but_cant_change(office, g):
