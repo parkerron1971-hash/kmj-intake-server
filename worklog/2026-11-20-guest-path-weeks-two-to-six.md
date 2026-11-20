@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20, on the Welcome Path mock: "capture visitors, place them in a flow where they receive automated texts from the church ... top tier", then "build"; the Monday note signed by the senior pastor; each church picks its own newcomers'' next-step event. Wave 2, builder 4: weeks two to six, the Saturday heads-up, the signature, the one-a-week limit and the hold check.'
 status: in review
-prs: [kmj-intake-server#2011, solutionist-studio (the path editor, follows)]
+prs: [kmj-intake-server#2013, "solutionist-studio: the Guests room path editor (its own PR, same day)"]
 migrations: []
 left_undone:
   - "Live only where GUEST_PATH lets it (unset = owner: the platform's own church) AND New here is on for the church (settings.new_here.on). Love City has New here OFF, so nothing here texts or heads-up there until it is switched on"
