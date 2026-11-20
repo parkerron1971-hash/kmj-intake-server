@@ -971,6 +971,10 @@ button{font:700 16px system-ui,sans-serif;padding:14px 18px;border-radius:14px;b
 .small{font-size:12px;color:var(--muted)}
 .hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
 a{color:inherit}
+.opt input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--gold)}
+.opt-tag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-left:6px}
+.kidsnames{display:grid}
+form:has(select[name=kids] option[value="None"]:checked) .kidsnames{display:none}
 """
 
 
@@ -990,10 +994,33 @@ CARD_ERRORS = {
 }
 
 
-def card_html(church_name: str, code: str, *, name: str = "", note: str = "") -> str:
+# The Welcome Path's questions on the card (guest_brief.py reads them for the
+# caller's brief): who invited them, the kids' names and ages, what they'd
+# like (the member app's own choices, member_im_new.WANTS), and the best way
+# to reach them. Shown only while the path is on (path_on).
+REACH = {"call": "A call is fine", "text": "Text me instead"}
+WANTS_SHOWN = ("group", "serve", "baptism", "class", "pastor")
+INVITED_MAX, KID_NAMES_MAX = 120, 200
+
+
+def _path_questions() -> str:
+    import member_im_new
+    wants = "".join(f'<label class="opt"><input type="checkbox" name="wants" value="{k}">'
+                    f'{_e(member_im_new.WANTS[k])}</label>' for k in WANTS_SHOWN)
+    reach = "".join(f'<label class="opt"><input type="radio" name="reach" value="{k}"{" checked" if k == "call" else ""}>'
+                    f'{_e(v)}</label>' for k, v in REACH.items())
+    return f"""<label>Who invited you?<span class="opt-tag">Optional</span>
+<input type="text" name="invited" autocomplete="off" maxlength="{INVITED_MAX}"></label>
+<label class="kidsnames">Your kids' names and ages<input type="text" name="kid_names" autocomplete="off" maxlength="{KID_NAMES_MAX}" placeholder="Like Sofia, 7 and Mateo, 4"></label>
+<fieldset><legend>What would you like?</legend><div class="two">{wants}</div></fieldset>
+<fieldset><legend>Best way to reach you</legend><div class="two">{reach}</div></fieldset>"""
+
+
+def card_html(church_name: str, code: str, *, name: str = "", note: str = "", path: bool = False) -> str:
     shown = f'<div class="note" role="alert">{_e(CARD_ERRORS[note])}</div>' if note in CARD_ERRORS else ""
     heard = "".join(f"<option>{_e(h)}</option>" for h in HEARD)
-    kids = "".join(f"<option>{_e(k)}</option>" for k in KIDS)
+    kids = "".join(f'<option value="{_e(k)}">{_e(k)}</option>' for k in KIDS)
+    more = _path_questions() if path else ""
     body = f"""<h1>We're so glad you came.</h1>
 <p>Tell us a little about you. It takes 30 seconds.</p>{shown}
 <form method="post" action="{CARD_PATH}/{_e(code)}">
@@ -1003,7 +1030,7 @@ def card_html(church_name: str, code: str, *, name: str = "", note: str = "") ->
 <label class="opt"><input type="radio" name="first" value="yes" checked>First time</label>
 <label class="opt"><input type="radio" name="first" value="no">I've been before</label></div></fieldset>
 <div class="two"><label>How did you hear?<select name="heard">{heard}</select></label>
-<label>Kids with you?<select name="kids">{kids}</select></label></div>
+<label>Kids with you?<select name="kids">{kids}</select></label></div>{more}
 <label>Anything we can pray for?<textarea name="prayer" rows="3" maxlength="1500" placeholder="Only our pastors see this."></textarea></label>
 <div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
 <button type="submit">Send</button>
@@ -1082,7 +1109,48 @@ async def page_for(business_id: str, path: str, query: str = "") -> Optional[Tup
         return thanks_html(church_name, first_name(guest.get("name"))), 200
     import text_room
     full = "" if text_room.nameless(guest.get("name")) else str(guest.get("name") or "")
-    return card_html(church_name, code, name=full, note=(q.get("note") or [""])[0]), 200
+    path = await asyncio.to_thread(path_on, str(business_id))
+    return card_html(church_name, code, name=full, note=(q.get("note") or [""])[0], path=path), 200
+
+
+def path_answers(form: Dict[str, Any]) -> Dict[str, Any]:
+    """The Welcome Path's questions from a card, tidied: invited_by,
+    kids_names, wants (the member app's keys), reach ("call" or "text").
+    Anything that isn't one of the choices is dropped; an empty answer is
+    left out."""
+    import member_im_new
+    out: Dict[str, Any] = {}
+    invited = " ".join(str(form.get("invited") or "").split())[:INVITED_MAX]
+    if invited:
+        out["invited_by"] = invited
+    names = " ".join(str(form.get("kid_names") or "").split())[:KID_NAMES_MAX]
+    if names and str(form.get("kids") or "") not in ("", "None"):
+        out["kids_names"] = names
+    raw = form.get("wants") or []
+    picked = {str(w) for w in (raw if isinstance(raw, (list, tuple)) else [raw])}
+    wants = [k for k in member_im_new.WANTS if k in picked]
+    if wants:
+        out["wants"] = wants
+    if str(form.get("reach") or "") in REACH:
+        out["reach"] = str(form.get("reach"))
+    return out
+
+
+def path_lines(asked: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What the caller reads on the follow-up for those answers."""
+    import member_im_new
+    out: List[Dict[str, str]] = []
+    if asked.get("invited_by"):
+        out.append({"q": "Who invited them", "a": asked["invited_by"]})
+    if asked.get("kids_names"):
+        out.append({"q": "Their kids", "a": asked["kids_names"]})
+    wants = [member_im_new.WANT_WORDS[k] for k in asked.get("wants") or [] if k in member_im_new.WANT_WORDS]
+    if wants:
+        said = ", ".join(wants[:-1]) + (" and " if len(wants) > 1 else "") + wants[-1]
+        out.append({"q": "They'd like to", "a": said[0].upper() + said[1:]})
+    if asked.get("reach"):
+        out.append({"q": "Best way to reach them", "a": REACH[asked["reach"]]})
+    return out
 
 
 def save_card(business: Dict[str, Any], guest: Dict[str, Any], form: Dict[str, str]) -> bool:
@@ -1102,6 +1170,11 @@ def save_card(business: Dict[str, Any], guest: Dict[str, Any], form: Dict[str, s
     mine = dict((guest.get("metadata") or {}).get("new_here") or {})
     mine["card_at"] = _iso(_now())
     mine["card"] = {"first_time": first, "heard": heard, "kids": kids, "prayer": bool(prayer)}
+    # The Welcome Path's questions (the card asks them only while it's on):
+    # who invited them, the kids' names and ages, what they'd like, and the
+    # best way to reach them. Never the prayer: that stays the pastors'.
+    asked = path_answers(form) if path_on(biz) else {}
+    mine["card"].update(asked)
     meta = dict(guest.get("metadata") or {})
     meta["new_here"] = mine
     patch: Dict[str, Any] = {"metadata": meta}
@@ -1140,6 +1213,7 @@ def save_card(business: Dict[str, Any], guest: Dict[str, Any], form: Dict[str, s
             answers.append({"q": "How they heard", "a": heard})
         if kids and kids != "None":
             answers.append({"q": "Kids with them", "a": kids})
+        answers += path_lines(asked)
         visit = str(mine.get("texted_at") or "")[:10]
         # A guest who came in by another door (the kids desk, the website's
         # card) already has someone on it: the card is a note on that one.
@@ -1180,7 +1254,9 @@ async def card_send(code: str, request: Request):
         return back(note="error")
     if not guest:
         raise HTTPException(404, "Page not found")
-    data = {k: str(form.get(k) or "") for k in ("name", "email", "first", "heard", "kids", "prayer")}
+    data = {k: str(form.get(k) or "") for k in ("name", "email", "first", "heard", "kids", "prayer",
+                                                 "invited", "kid_names", "reach")}
+    data["wants"] = [str(w) for w in (form.getlist("wants") if hasattr(form, "getlist") else [])]
     if not await asyncio.to_thread(save_card, biz, guest, data):
         return back(note="error")
     return back(done="1")

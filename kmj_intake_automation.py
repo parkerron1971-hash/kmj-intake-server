@@ -731,6 +731,10 @@ app.include_router(guest_card_router)
 # Scorecard. Read-only; behind GUEST_PATH (guest_path.switched_on).
 from church_guests import router as church_guests_router
 app.include_router(church_guests_router)
+# Chief's call brief for one guest (guest_brief.py, the Welcome Path step 3):
+# GET /church/guests/{biz}/brief/{follow_up_id}; behind GUEST_PATH.
+from guest_brief import router as guest_brief_router
+app.include_router(guest_brief_router)
 # A church's own texting hours, quiet hours and alert limit (texting_hours.py).
 from texting_hours import router as texting_hours_router
 app.include_router(texting_hours_router)

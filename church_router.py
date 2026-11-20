@@ -112,8 +112,14 @@ class _Reassign(BaseModel):
 
 
 class _Note(BaseModel):
-    text: str = Field(..., max_length=2000)
+    text: str = Field("", max_length=2000)
     pastors_only: bool = False
+    # A call logged from the office (the Welcome Path's "How did it go?"):
+    # talked | message | noanswer | notnow, the note then optional. `picks`
+    # is what the caller chose on the call for a guest's asks (a group's id,
+    # a team's name, or "skip"), keyed by the ask (guest_brief.ASK_ORDER).
+    outcome: Optional[str] = Field(None, max_length=12)
+    picks: Optional[Dict[str, str]] = Field(None, max_length=8)
 
 
 class _Role(BaseModel):
@@ -200,8 +206,16 @@ def follow_up_note(follow_up_id: str, body: _Note, business_id: str = Query(...)
                    session: UserSession = Depends(sb_clients.authed_request)):
     uid, name = _who(session)
     note = church_follow_up.office_note(_uuid(business_id), follow_up_id, body.text,
-                                        pastors_only=body.pastors_only, by_user=uid, by_name=name)
-    return {"ok": True, "note_id": str(note.get("id") or "")}
+                                        pastors_only=body.pastors_only, by_user=uid, by_name=name,
+                                        outcome=body.outcome)
+    out: Dict[str, Any] = {"ok": True, "note_id": str(note.get("id") or "")}
+    if body.outcome:
+        # A guest's welcome call (the Welcome Path): Talked hands on what they
+        # asked for (guest_brief.after_call); "did" says what Chief did.
+        import guest_brief
+        out["did"] = guest_brief.after_call(_uuid(business_id), follow_up_id, body.outcome, body.picks or {},
+                                            by_name=name)
+    return out
 
 
 @router.post("/follow-ups/{follow_up_id}/step")
