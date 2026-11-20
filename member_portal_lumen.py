@@ -20,14 +20,17 @@ card, prayer, and installing the app, phone alerts and Ask the church at the
 foot. What's a tile isn't repeated. Asks to serve and celebrations sit under
 Up next. The Messages card is gone: the bubble at the top carries the count.
 
-CONNECT (/my/connect), the people hub: your group, serving (your next date,
-with Can't make it), prayer, events, classes (with how far you've come),
-your next step (the "I'm new here" card leads it once that lands:
-member_lumen.new_here_card), find a group, the pastor (member_pastor), the
-directory and news. Read at
-once from the readers today's pages use (member_portal_church.groups_for and
-upcoming_for, member_portal_classes.classes_for, sunday_serving.mine,
-member_asks.entry).
+CONNECT (/my/connect), the people hub, "Look 5.1" (Kevin, 2026-11-20; the
+pieces are member_lumen_connect): your groups (each with its next gathering
+and its chat's unread count), serving (your next date, I'll be there and
+Can't make it), classes (Lesson n of m, and the next class to sign up for),
+prayer (this week's requests from your groups), find your people (groups
+to join), your next step (the "I'm new here" card: member_lumen
+.new_here_card), then your pastor (member_pastor), events and the
+directory. Read at once from the readers today's pages use
+(member_portal_church.groups_for and upcoming_for,
+member_portal_classes.classes_for, sunday_serving.mine, member_asks.entry,
+group_prayer.recent, member_portal_threads.counts).
 """
 from __future__ import annotations
 
@@ -581,110 +584,48 @@ async def connect_data(biz: Dict[str, Any], me: Dict[str, Any], *, preview: bool
     bid = biz["id"]
     import member_pastor
     tab = preview or await asyncio.to_thread(_quiet, mcl.tab_on, bid, me)
-    groups, occ, classes, serving, asks, pastor = await asyncio.gather(
-        asyncio.to_thread(mpc.groups_for, bid, me),
+    import member_portal_threads as mpt
+
+    async def groups_and_prayer():
+        # Look 5.1's prayer card: this week's requests on the walls of the
+        # member's groups (group_prayer.recent: kept two minutes per church
+        # and set of groups), once their groups are known.
+        got = await asyncio.to_thread(mpc.groups_for, bid, me)
+        mine = [str(g["id"]) for g in ((got or {}).get("mine") or [])]
+        pr = await asyncio.to_thread(_quiet, group_prayer.recent, bid, mine) if mine and not preview else []
+        return got, pr
+    import group_prayer
+    (groups, prayers), occ, classes, serving, asks, pastor, unread = await asyncio.gather(
+        groups_and_prayer(),
         asyncio.to_thread(mpc.upcoming_for, bid, me),
         asyncio.to_thread(_quiet, mcl.classes_for, bid, me) if tab else _nothing(),
         asyncio.to_thread(_quiet, ssv.mine, biz, str(me["id"])) if ssv.on() and not preview else _nothing(),
         _ask_entry(biz, me),
         # Meet the pastor's row (member_pastor.who: kept five minutes).
-        asyncio.to_thread(member_pastor.who, biz))
+        asyncio.to_thread(member_pastor.who, biz),
+        # Each group's unread count: the top bar's own count, read for this
+        # page already (member_portal_threads.counts keeps it 15 s).
+        mpt.counts(biz, me))
+    per: Dict[str, int] = {}
+    if unread:
+        for gid, n in (unread.get("groups") or {}).items():
+            per[str(gid).lower()] = per.get(str(gid).lower(), 0) + int(n or 0)
+        for t, v in (unread.get("notes") or {}).items():
+            if str(t).startswith("group:") and v.get("unread"):
+                gid = str(t)[len("group:"):].lower()
+                per[gid] = per.get(gid, 0) + int(v["unread"])
     return {"groups": samples.fill(groups, "groups", preview), "occasions": samples.fill(occ, "occasions", preview),
             "classes": samples.fill(classes, "classes", preview) if tab else None, "serving": serving,
-            "asks": asks or [], "pastor": pastor}
-
-
-def _group_art(biz: Dict[str, Any], g: Dict[str, Any], pool, used, *, big: bool = True) -> str:
-    """A group's picture (the one the church gave it, or a photo named for
-    it), else its name in serif on the people colour."""
-    import member_app_photos as photos
-    import member_app_ui as ui
-    pic, look = photos.choose(biz, "group:" + str(g.get("id")), pool or [], title=g.get("name") or "", used=used)
-    word = (str(g.get("meets") or "").split() or [""])[0].rstrip(",") if big else ""
-    label = word if word[:1].isupper() and word.isalpha() else (g.get("name") or "")
-    inner = ui.photo(pic, look=look) if pic else ""
-    return f'<span class="lm-gart{" has-ph" if pic else ""}">{inner}<b>{_e(label)}</b></span>'
-
-
-def _serving_block(m: Optional[Dict[str, Any]]) -> str:
-    import member_lumen_ui as lm
-    if not m:
-        return ""
-    coming = m.get("coming") or []
-    asks = m.get("asks") or []
-    out = []
-    if coming:
-        c = coming[0]
-        at = c["service"]["at"]
-        title = c["service"]["title"]
-        what = " · ".join(x for x in (c.get("place") or "", title if title not in ("Sunday service", "An event") else "") if x)
-        line = c.get("team") or ""
-        if c.get("call_time"):
-            import member_portal_serving as mpsv
-            line = " · ".join(x for x in (f"Be there {mpsv._clock(c['call_time'])}", line) if x)
-        if c.get("swap_name"):
-            act = '<span class="lm-count">Someone was asked to cover. You stay on until they say yes.</span>'
-        else:
-            act = (f'<a class="lm-btn sm ghost" href="/my/serving">Details</a>'
-                   f'<a class="lm-txtbtn" href="/my/serving?sub={_e(c["id"])}#sv-{_e(c["id"])}">Can\'t make it</a>')
-        out.append(f'<div class="lm-cblock">{lm.date_box(at, "var(--lm-violet)")}<span class="lm-wt"><b>{_e(what or "Serving")}</b>'
-                   f'<span>{_e(line)}</span><span class="lm-crow">{act}</span></span></div>')
-    if asks:
-        n = len(asks)
-        out.append(lm.row("/my/serving", lm.round_icon("give", "var(--lm-violet)"),
-                          f"{n} ask{'' if n == 1 else 's'} to serve", "Say yes, or that you can't that day",
-                          cls="lm-wrow"))
-    if not out:
-        if not m.get("teams"):
-            return ""
-        out.append(lm.row("/my/serving", lm.round_icon("give", "var(--lm-violet)"), "My serving",
-                          ", ".join(t["name"] for t in m["teams"][:3]), cls="lm-pray"))
-    return (f'<section aria-labelledby="lm-sv-h">{lm.section("Serving", "/my/serving", "My serving", hid="lm-sv-h")}'
-            f'{"".join(out)}</section>')
-
-
-def _classes_block(data: Optional[Dict[str, Any]]) -> Tuple[str, str]:
-    """(the classes card, a 'keep going' row for Your next step)."""
-    import member_lumen_ui as lm
-    import member_portal_classes as mcl
-    if not data:
-        return "", ""
-    mine = [c for c in data.get("mine") or [] if c.get("status") != "completed"]
-    tz = data.get("tz") or "UTC"
-    if mine:
-        c = mine[0]
-        total, done = int(c.get("total") or 0), int(c.get("done") or 0)
-        pct = round(100 * done / total) if total else 0
-        title = c.get("program") or c.get("title") or "Your class"
-        track = mcl.short_title(str(c.get("title") or ""), c.get("program")) if c.get("program") else ""
-        head = f'{_e(title)} · <em>{_e(track)}</em>' if track else lm.italic_last(title)
-        bits = [f"{done} of {total} lessons" if total else "Just started"]
-        n = c.get("next") or {}
-        if n.get("starts_at"):
-            bits.append(("Live now" if n.get("live") else f"Next {mcl.when_text(n.get('starts_at'), tz)}"))
-        bar = f'<span class="lm-pb"><i style="width:{pct}%"></i></span>' if total else ""
-        card = (f'<a class="lm-acad" href="/my/classes"><span class="lm-eyebrow lm-crest"><i>{lm.ic("cap", 15)}</i>Your classes</span>'
-                f'<span class="lm-acadt">{head}</span>{bar}<span class="lm-acadm">{_e(" · ".join(bits))}</span></a>')
-        step = lm.row("/my/classes", lm.round_icon("cap", "var(--lm-gold)"), f"Keep going on {c.get('title') or 'your class'}",
-                      f"{done} of {total} lessons" if total else "Open the first lesson")
-    elif data.get("open"):
-        c = data["open"][0]
-        more = len(data["open"]) - 1
-        card = (f'<a class="lm-acad" href="/my/classes"><span class="lm-eyebrow lm-crest"><i>{lm.ic("cap", 15)}</i>Classes</span>'
-                f'<span class="lm-acadt">{lm.italic_last(c.get("title") or "A class to join")}</span>'
-                f'<span class="lm-acadm">{_e("Open to join" + (f" · {more} more" if more > 0 else ""))}</span></a>')
-        step = ""
-    else:
-        return "", ""
-    return (f'<section aria-labelledby="lm-cls-h">{lm.section("Classes", "/my/classes", "All classes", hid="lm-cls-h")}'
-            f'{card}</section>'), step
+            "asks": asks or [], "pastor": pastor, "prayers": prayers, "unread": per}
 
 
 def render_connect(biz: Dict[str, Any], site, request, me: Dict[str, Any], data: Dict[str, Any],
                    *, new_card: str = "") -> str:
+    """Connect in Look 5.1 (member_lumen_connect): the title, your groups,
+    serving, classes, prayer, find your people, your next step, more."""
     import member_app_photos as photos
-    import member_app_ui as ui
     import member_directory
+    import member_lumen_connect as lc
     import member_lumen_ui as lm
     import member_portal_church as mpc
     import member_spaces as msp
@@ -693,69 +634,36 @@ def render_connect(biz: Dict[str, Any], site, request, me: Dict[str, Any], data:
     pool = photos.photos(biz, site)
     used: set = set()
     groups = data.get("groups")
-    parts = [lm.mast("Connect", "Your <em>people</em>",
-                     f"Your group, where you serve, what you're learning, and your next step at {church}."),
-             mpc._flash(request)]
+    now = church_now(biz)
+    parts = [lc.title(church), mpc._flash(request)]
     mine = (groups or {}).get("mine") or []
     if groups is None:
         parts.append('<p class="mp-err" role="alert" style="margin-top:24px">Your groups couldn\'t load just now. '
                      'Please try again in a moment.</p>')
-    elif mine:
-        g = mine[0]
-        href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else f"/my/groups/{_e(g['id'])}"
-        led = ", ".join(g.get("leaders") or [])
-        bits = ["Meeting now" if g.get("live") else (f"Next: {g['meets']}" if g.get("meets") else ""),
-                g.get("location") or "",
-                "You lead" if g.get("role") == "leader" else (f"led by {led}" if led else "")]
-        more = "".join(lm.row(f"/my/groups/{x['id']}", f'<span class="lm-gmini" aria-hidden="true">{_e(ui.initials(x.get("name")))}</span>',
-                              x.get("name") or "", x.get("meets") or x.get("location") or "") for x in mine[1:3])
-        parts.append(f'<section aria-labelledby="lm-grp-h"><div class="lm-sec" style="margin-top:28px"><h2 class="lm-h2" id="lm-grp-h">'
-                     f'{"Your group" if len(mine) == 1 else "Your groups"}</h2><a class="lm-more" href="{href}">Open</a></div>'
-                     f'<a class="lm-tile" href="{href}">{_group_art(biz, g, pool, used)}'
-                     f'<span class="tt" style="margin-top:14px">{_e(g.get("name"))}</span>'
-                     f'<span class="tm">{_e(" · ".join(b for b in bits if b))}</span></a>'
-                     f'{f"<div class=lm-list style=margin-top:16px>{more}</div>" if more else ""}</section>')
-    parts.append(_serving_block(data.get("serving")))
-    parts.append(f'<section aria-labelledby="lm-pray-h">{lm.section("Prayer", hid="lm-pray-h")}'
-                 f'{lm.row("/my/prayer", lm.round_icon("flame"), "Send a prayer request", "It goes privately to the pastors.", cls="lm-pray")}</section>')
-    occ = data.get("occasions")
-    rows = coming_rows(occ, top=3)
-    if rows:
-        parts.append(f'<section>{lm.section("Events", "/my/events", "All events")}<div class="lm-list">{rows}</div></section>')
-    classes_card, keep_going = _classes_block(data.get("classes"))
-    parts.append(classes_card)
+    else:
+        parts.append(lc.group_rows(biz, mine, data.get("unread") or {}, pool, used, now))
+    parts.append(lc.serving_card(data.get("serving")))
+    parts.append(lc.classes_list(data.get("classes")))
+    parts.append(lc.prayer_card(data.get("prayers"), str(me.get("id") or ""), bool(mine)))
+    if groups is not None:
+        parts.append(lc.discover(biz, (groups or {}).get("open") or [], pool, used, alone=not mine))
     asks = data.get("asks") or []
-    steps = [keep_going]
+    steps = []
     if "life_event" in asks:
         steps.append(lm.row("/my/ask/life", lm.round_icon("drop", "var(--lm-teal)"), "Get baptized",
                             "Ask the church to plan it with you"))
     if "visit" in asks or "help" in asks:
         steps.append(lm.row("/my/ask", lm.round_icon("chat", "var(--lm-coral)"), "Ask for a visit or help",
                             "It goes straight to the people who care for members"))
-    steps_html = "".join(s for s in steps if s)
+    steps_html = "".join(steps)
     if new_card or steps_html:
         parts.append(f'<section aria-labelledby="lm-next-h">{lm.section("Your next step", hid="lm-next-h")}'
                      f'<div class="lm-newslot">{new_card}</div>'
                      f'{f"<div class=lm-list>{steps_html}</div>" if steps_html else ""}</section>')
-    open_ = (groups or {}).get("open") or []
-    if open_:
-        cards = "".join(
-            f'<a class="lm-gcard" href="/my/groups/{_e(g["id"])}">{_group_art(biz, g, pool, used, big=False)}'
-            f'<h3>{_e(g.get("name"))}</h3><p>{_e(g.get("meets") or g.get("kind") or "")}</p>'
-            f'<span class="lm-btn sm {"going" if g.get("asked") else "ghost"}">{"Asked" if g.get("asked") else "See the group"}</span></a>'
-            for g in open_[:8])
-        parts.append(f'<section aria-labelledby="lm-find-h">{lm.section("Find a group", "/my/groups", "All groups", hid="lm-find-h")}'
-                     f'<div class="lm-rail">{cards}</div></section>')
     ctx = msp.CURRENT.get() or {}
-    rooms = []
-    pastor = data.get("pastor")
-    if pastor and pastor.get("id"):
-        import member_pastor
-        rooms.append(member_pastor.row(biz, pastor))
-    if member_directory.church_on(biz) and (ctx.get("space") or "church") == "church" and not ctx.get("youth"):
-        rooms.append(lm.row("/my/directory", lm.round_icon("person", "var(--lm-teal)"), "Directory",
-                            "Members who chose to be listed", cls="lm-room"))
-    rooms.append(lm.row("/my/news", lm.round_icon("megaphone", "var(--fg2)"), "News", f"What's happening at {church}",
-                        cls="lm-room"))
-    parts.append(f'<div class="lm-rooms">{"".join(rooms)}</div>')
-    return _shell(biz, site, "Connect", "".join(p for p in parts if p), tab="connect", who=me)
+    directory = (member_directory.church_on(biz) and (ctx.get("space") or "church") == "church"
+                 and not ctx.get("youth"))
+    parts.append(lc.more_rows(biz, pastor=data.get("pastor"), week_events=lc.week_count(data.get("occasions"), now.date()),
+                              directory=directory))
+    body = f'<div class="lm-cx">{"".join(p for p in parts if p)}</div>'
+    return _shell(biz, site, "Connect", body, tab="connect", who=me)

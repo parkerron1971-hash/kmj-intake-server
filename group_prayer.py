@@ -105,6 +105,61 @@ def wall(business_id: str, group_id: str, me_id: str, *, answered: bool = False)
     return {"items": items, "answered_n": answered_n, "prayed_month": prayed}
 
 
+# Connect's prayer card in the new look (member_lumen_connect, Look 5.1):
+# this week's requests on the walls of the member's groups. Kept a little
+# while per church and set of groups on each server copy (member_cache), so
+# Connect costs no read of its own on most visits; a new request shows there
+# within RECENT_SECONDS. The wall itself always reads fresh.
+RECENT_DAYS = 7
+RECENT_SHOWN = 20
+RECENT_SECONDS = 120.0
+_RECENT = None
+
+
+def _recent_kept():
+    global _RECENT
+    if _RECENT is None:
+        import member_cache
+        _RECENT = member_cache.Kept("group_prayer_recent", RECENT_SECONDS)
+    return _RECENT
+
+
+def recent(business_id: str, group_ids: List[str]) -> Optional[List[Dict[str, Any]]]:
+    """This week's requests on these groups' walls, newest first, as the wall
+    shows them to the group: {id, group_id, contact_id, first, body,
+    created_at}, the asker by first name. Not answered, not for the pastors
+    only, not taken down. [] for no groups; None on a failed read."""
+    gids = sorted({str(g).lower() for g in group_ids if g})
+    if not gids:
+        return []
+    key = (str(business_id), tuple(gids))
+    kept = _recent_kept()
+    hit, got = kept.get(key)
+    if hit:
+        return got
+    since = (_now() - timedelta(days=RECENT_DAYS)).isoformat()
+    rows = sb_clients.sb_get_as_service(
+        f"/group_prayers?business_id=eq.{_q(business_id)}&group_id=in.({','.join(_q(g) for g in gids)})"
+        f"&removed_at=is.null&answered_at=is.null&to_pastor=is.false&created_at=gte.{_q(since)}"
+        f"&select=id,group_id,contact_id,body,created_at&order=created_at.desc&limit={RECENT_SHOWN}")
+    if not isinstance(rows, list):
+        return None
+    ids = sorted({str(r["contact_id"]) for r in rows if r.get("contact_id")})
+    names: Dict[str, str] = {}
+    if ids:
+        got_names = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{_q(business_id)}&id=in.({','.join(_q(i) for i in ids)})&select=id,name")
+        if not isinstance(got_names, list):
+            return None
+        names = {str(c["id"]): first(c.get("name")) for c in got_names}
+    out = [{"id": str(r["id"]), "group_id": str(r["group_id"]), "contact_id": str(r.get("contact_id") or ""),
+            "first": names.get(str(r.get("contact_id") or ""), "Someone"), "body": r.get("body") or "",
+            "created_at": r.get("created_at")}
+           for r in sorted(rows, key=lambda x: str(x.get("created_at") or ""), reverse=True) if r.get("body")]
+    kept.put(key, out, tag=str(business_id))
+    return out
+
+
 def _prayer(business_id: str, prayer_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/group_prayers?id=eq.{_q(prayer_id)}&business_id=eq.{_q(business_id)}&removed_at=is.null"
