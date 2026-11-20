@@ -68,7 +68,7 @@ def test_an_adult_without_a_birthdate_is_asked_saves_and_posts(world):
     # Above Post, after the check's promise.
     assert html.index("Every post is checked") < html.index('name="birthday"') < html.index(">Post</button>")
     r = _say(world, "So thankful for this group", ADULT)
-    assert r.status_code == 303 and r.headers["location"] == f"/my/groups/{tmm.GRP}?done=posted"
+    assert r.status_code == 303 and r.headers["location"] == f"/my/groups/{tmm.GRP}?done=group_posted"
     assert _given(world) == ADULT and _nora(world)["birthdate"] is None     # never contacts.birthdate
     (p,) = _posts(world)
     assert p["posted_by"] == NOBODY and p["body"] == "So thankful for this group"
@@ -138,9 +138,9 @@ def test_under_13_is_refused_and_nothing_is_kept(world):
 
 def test_once_given_it_cant_be_changed_from_the_app(world):
     _join(world)
-    assert "done=posted" in _say(world, "One", ADULT).headers["location"]
+    assert "done=group_posted" in _say(world, "One", ADULT).headers["location"]
     r = _say(world, "Two", TEEN_AGE)                          # a different date, sent anyway
-    assert "done=posted" in r.headers["location"] and _given(world) == ADULT
+    assert "done=group_posted" in r.headers["location"] and _given(world) == ADULT
     assert mpo.save_birthdate(tmm.BIZ, NOBODY, TEEN_AGE) == "kept" and _given(world) == ADULT
     # Even a teen who'd like to be an adult: hers stays.
     _nora(world)["metadata"] = {mpo.BDAY_KEY: TEEN_AGE}
@@ -156,7 +156,7 @@ def test_the_office_birthdate_wins(world):
     assert "err=post_two_adults" in _say(world, "Hi").headers["location"] and not _posts(world)
     _nora(world)["birthdate"] = "1980-05-05"                   # the office says adult; she'd typed a teen's
     _nora(world)["metadata"] = {mpo.BDAY_KEY: TEEN_AGE}
-    assert "done=posted" in _say(world, "Hi").headers["location"]
+    assert "done=group_posted" in _say(world, "Hi").headers["location"]
     # With the office's on record, nothing is written.
     _nora(world)["metadata"] = {}
     assert mpo.save_birthdate(tmm.BIZ, NOBODY, ADULT) == "kept" and _given(world) is None
@@ -168,7 +168,7 @@ def test_the_office_birthdate_wins(world):
 
 def test_a_typed_birthday_never_unlocks_messaging(world):
     _join(world)
-    assert "done=posted" in _say(world, "Hi", ADULT).headers["location"]
+    assert "done=group_posted" in _say(world, "Hi", ADULT).headers["location"]
     nora = dict(_nora(world), bday=ADULT)                      # as the session's record carries it
     # Messaging reads contacts.birthdate alone: still "no birthdate".
     full = mpm._me_profile(tmm.BIZ, nora)
@@ -199,7 +199,7 @@ def test_another_members_row_is_never_written(world):
     _join(world)
     before = {c["id"]: copy.deepcopy(c) for c in world.t["contacts"] if c["id"] != NOBODY}
     r = _say(world, "Hi", ADULT, contact_id=tmm.ANA, id=tmm.BEN, me=tmm.CARL)
-    assert "done=posted" in r.headers["location"] and _given(world) == ADULT
+    assert "done=group_posted" in r.headers["location"] and _given(world) == ADULT
     assert {c["id"]: c for c in world.t["contacts"] if c["id"] != NOBODY} == before
     # The write names her own record and church, guarded by updated_at.
     seen = []
