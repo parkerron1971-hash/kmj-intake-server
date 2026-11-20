@@ -1011,6 +1011,58 @@
      "caption": "Volunteers",
      "pages": [
       {
+       "key": "operate:volunteer-week",
+       "tab": "operate",
+       "sub": "volunteer-week",
+       "name": "Volunteers’ week",
+       "sees": "every",
+       "what": "See every department’s week: who is on, who is away, the open places and the hours served.",
+       "words": [
+        "volunteers week",
+        "volunteers’ week",
+        "volunteers' week",
+        "volunteer week",
+        "week by department",
+        "who is on",
+        "who is serving",
+        "open places",
+        "department schedule"
+       ],
+       "answers": [
+        {
+         "id": "see-who-is-on-this-week-by-department",
+         "q": "See who is on this week, by department",
+         "a": "Each department has its own card with every place, who is on it and their answer. Look at first, above the cards, says what is short or waiting.",
+         "words": [
+          "volunteers this week",
+          "week by department",
+          "who is on sunday",
+          "department volunteers"
+         ]
+        },
+        {
+         "id": "find-someone-for-an-open-place",
+         "q": "Find someone for an open place",
+         "a": "Press Find someone on the open place. Who serves when opens on that team with the place picked, so you can ask someone there.",
+         "words": [
+          "fill an open place",
+          "short a volunteer",
+          "replace someone who is away"
+         ]
+        },
+        {
+         "id": "look-at-another-week",
+         "q": "Look at another week",
+         "a": "Press the arrows beside the week’s dates to go a week back or ahead. Back to this week returns to now.",
+         "words": [
+          "next week volunteers",
+          "last week volunteers",
+          "week before"
+         ]
+        }
+       ]
+      },
+      {
        "key": "operate:volunteer-teams",
        "tab": "operate",
        "sub": "volunteer-teams",
