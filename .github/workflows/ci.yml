@@ -275,6 +275,7 @@ jobs:
           node __tests__/church_storage_db.mjs
           node __tests__/recording_small_copy_db.mjs
           node __tests__/event_volunteer_dates_db.mjs
+          node __tests__/event_volunteers_db.mjs
           node __tests__/db_health_db.mjs
           node __tests__/ets_close_policies_db.mjs
 
