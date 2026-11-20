@@ -688,6 +688,11 @@ app.include_router(member_pastor_router)
 # BEFORE public_site_router.
 from member_posts import router as member_posts_router
 app.include_router(member_posts_router)
+# Share in the new look (member_lumen_share.py): the sheet's script
+# (GET /my/share.<hash>.js) and a story picture of the church's own content
+# (GET /my/story/<kind>/<id>.png). BEFORE public_site_router.
+from member_lumen_share import router as member_lumen_share_router
+app.include_router(member_lumen_share_router)
 # A member's own highlights, notes and bookmarks in the Bible
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router

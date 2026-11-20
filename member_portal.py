@@ -785,6 +785,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         # for it; Me carries it whatever the look (its control turns the page).
         if mll.here() != "light" or tab == "me":
             moves = mll.dark_tokens(biz, theme) + moves
+        # Share (member_lumen_share): the sheet's script, on a page with a
+        # share control only.
+        import member_lumen_share
+        script = script + member_lumen_share.page_js(body)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -315,6 +315,9 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         # Its start time when the date says one ("2026-11-22T10:30"), for the
         # new Home's date leaf; today's look shows the day only.
         o["time"] = clock_of((entry.get("data") or {}).get(f["date_field"])) if f else ""
+        # Whether it is on the public events page (a member may share it in the
+        # new look, member_lumen_share); today's look doesn't read it.
+        o["public"] = er.is_public(entry.get("data") or {})
     import church_event_signups
     return church_event_signups.annotate(str(business_id), out, contact_id=str(me["id"]))
 
@@ -900,7 +903,8 @@ def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     else:
         import member_app_samples as samples
         hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
-        body = hint + '<div class="lm-evs">' + "".join(_lumen_occasion(o) for o in occasions) + "</div>"
+        body = hint + '<div class="lm-evs">' + "".join(_lumen_occasion(o, share=_lumen_share(biz, site, o))
+                                                       for o in occasions) + "</div>"
         if any(o.get("signup") for o in occasions):
             import church_event_signups
             body = church_event_signups.MEMBER_CSS + body
@@ -908,13 +912,29 @@ def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     return _shell(biz, site, "Coming up", f"{head}{_flash(request)}{body}", tab="events", who=who)
 
 
-def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events") -> str:
+def _lumen_share(biz: Dict[str, Any], site, o: Dict[str, Any]) -> str:
+    """Share for one occasion in the new look (member_lumen_share): only a
+    public one while the church's public events page is on, linking that
+    page; '' otherwise. Its picture is the one the church gave the event,
+    when that is already on its website (mls.event_picture)."""
+    import member_lumen_share as mls
+    if not mls.event_shareable(biz, o):
+        return ""
+    title = o.get("title") or "Event"
+    pic = mls.event_picture(biz, site, title)
+    when = " · ".join(x for x in (o.get("date_label") or "", o.get("location") or "") if x)
+    return mls.link("event", mls.EVENTS_HREF, title, mls.icon("share", 19), sub=when, img=pic,
+                    sid=o.get("entry_id") or "", cls="lm-evshare", label=f"Share {title}")
+
+
+def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events", share: str = "") -> str:
     """One occasion in the new look: its day in the margin (the weekday and
     month small in coral, the date in the serif), what and where, then what
     fits this person's answer, posting the same forms occasion_card posts
     (I'm coming, You're coming, Just attend instead, Can't make it), and
     "Sign up to serve" opening the roles still open. Nothing offered can
-    only fail, as there: a full occasion offers neither."""
+    only fail, as there: a full occasion offers neither. `share` is its
+    Share (_lumen_share), a quiet icon beside the title."""
     import member_app_samples as samples
     import member_app_ui as ui
     import member_lumen_people as lp
@@ -974,8 +994,8 @@ def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events") -> str:
     sample = ui.sample_tag() if samples.is_sample(o) else ""
     said_html = f'<p class="lm-evst">{said}</p>' if said else ""
     row_html = f'<div class="lm-evrow">{"".join(row)}</div>' if row else ""
-    return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt">'
-            f'<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
+    return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt{" has-share" if share else ""}">'
+            f'{share}<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
             f'{row_html}{serve}</div></article>')
 
 

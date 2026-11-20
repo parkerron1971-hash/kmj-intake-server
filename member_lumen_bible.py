@@ -412,7 +412,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     <div class="bb-acts">
       <button type="button" data-act="note">{lm.ic('doc', 16)}<span>Note</span></button>
       <button type="button" data-act="copy">{lm.ic('share', 16)}<span>Copy</span></button>
-      <button type="button" data-act="share">{lm.ic('out', 16)}<span>Share</span></button>
+      <button type="button" class="lm-share" data-share-kind="verse" data-share-from="reader">{lm.ic('out', 16)}<span>Share</span></button>
       <button type="button" data-act="bookmark" aria-pressed="false">{lm.ic('star', 16)}<span>Save</span></button>
       <button type="button" data-act="card" aria-haspopup="dialog">{_glyph('card', 16)}<span>Make a card</span></button>
     </div>
