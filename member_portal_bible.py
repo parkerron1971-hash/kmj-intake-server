@@ -726,6 +726,7 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
         return RedirectResponse(f"/my/bible/{bt.slug(code)}", status_code=303, headers=_SECURE_HEADERS)
     rng = _range(str(request.query_params.get("v") or ""), verses[-1][0])
     marks = None if preview else await asyncio.to_thread(mbm.chapter_marks, biz["id"], str(me["id"]), code, ch)
-    night = request.cookies.get("lm_night") == "1"
+    import member_lumen_look
+    night = member_lumen_look.reader_night()
     return page(render_chapter(biz, site, me, code, ch, tr, rng, marks=marks, preview=preview, night=night),
                 at=(code, ch))

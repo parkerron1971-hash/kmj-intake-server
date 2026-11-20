@@ -13,8 +13,18 @@ THE SHEET. One more shared file beside /my/app.<hash>.css: /my/lumen.<hash>.css
 Every rule sits under body.lm, so the file draws nothing on any other page.
 It reads the colours the app's sheet already defines from the church's
 palette (--acc, --acc-fill, --on-acc, --bg, --s1, the family inks), worked
-out on the white base: Lumen is always white, whatever base the church
-picked for today's look (member_app_ui.base_of).
+out on the white base (member_app_ui.base_of).
+
+DARK. The member's look (member_lumen_look: Light, Dark, Same as my phone)
+turns the page dark with one layer over the white one: the near-black of
+the approved "Look 4: black base" board (#0A0A0B, its surfaces, its warm
+whites), the church's colour lifted to its "lit" shade for words (readable
+on black, then lightened the way the reader does), the family inks their
+dark shades, hairlines and tints remade for a dark page. Written once
+(DARK_TOKENS, and each block's own dark rules) and used twice by dark():
+under body.lm.lm-dark, and under body.lm.lm-auto inside a
+prefers-color-scheme: dark query. The Bible reader keeps its warm night
+and Watch its cinema black, each a narrower rule over this one.
 
 THE PIECES. The top bar of a main tab (logo and name; the message bubble with
 the unread count, the bell, the profile picture), a pushed page's plain back
@@ -72,6 +82,46 @@ def ic(name: str, size: int = 22) -> str:
 
 def _e(s: Any) -> str:
     return escape(str(s if s is not None else ""), quote=True)
+
+
+def dark(css: str) -> str:
+    """Rules for the dark look, written under body.lm.lm-dark, and the same
+    rules for Same as my phone (body.lm.lm-auto) while the phone is dark."""
+    return css + "@media (prefers-color-scheme:dark){" + css.replace(".lm-dark", ".lm-auto") + "}\n"
+
+
+# The dark layer's colours (member_lumen_look). The page's own names, so
+# every part of every page (the new look's and today's pieces inside it)
+# turns with it; the church's colour as words is its lit shade (4.5:1 on
+# black: member_app_ui.palette) lightened a little more; its button colour
+# stays the church's unless that is too deep for near-black (then the page
+# carries a lifted one: member_lumen_look.dark_tokens); the tints are the
+# church's colour over near-black, stronger than on white so they still
+# read as a surface.
+DARK_TOKENS = (
+    "--bg:#0A0A0B;--s1:#161618;--s2:#202023;--s3:#2E2E32;--line:rgba(255,255,255,.1);"
+    "--fg:#F4F2EE;--fg2:#AAA7A1;--fg3:#8F8C86;"
+    "--acc:var(--acc-lit);--accent:var(--acc);--focus:var(--acc);"
+    "--bar:rgba(10,10,11,.82);--hair:rgba(244,242,238,.1);"
+    "--surface:var(--bg);--input-surface:var(--s1);--text-primary:var(--fg);--text-secondary:var(--fg2);"
+    "--text-muted:var(--fg3);--border:var(--line);--mb-surface:var(--s1);--mb-surface-2:var(--s2);"
+    "--mb-line:var(--line);--error:#FF6B5E;"
+    "--gold-ink:var(--gold-lit);--teal-ink:var(--teal-lit);--violet-ink:var(--violet-lit);--coral-ink:var(--coral-lit);"
+    "--gold-deep:var(--gold-night);--teal-deep:var(--teal-night);--violet-deep:var(--violet-night);"
+    "--coral-deep:var(--coral-night);--acc-deep:var(--acc-night);"
+    "--lm-line:rgba(255,255,255,.1);--lm-shadow:rgba(0,0,0,.6);--lm-paper:#F1E8D4;--lm-raise:var(--s3);"
+    "--lm-mint:#12332B;--lm-mint-ink:#8EDBC9;--lm-live:#FF6B6B;"
+    "color-scheme:dark;"
+)
+DARK_MIX = (
+    "--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);"
+    "--acc-soft:color-mix(in srgb,var(--acc-fill) 18%,transparent);--mb-soft:var(--acc-soft);"
+    "--mb-soft-line:color-mix(in srgb,var(--acc-fill) 40%,transparent);"
+    "--lm-tint:color-mix(in srgb,var(--acc-fill) 12%,var(--bg));--lm-tint-6:color-mix(in srgb,var(--acc-fill) 8%,var(--bg));"
+    "--lm-tint-10:color-mix(in srgb,var(--acc-fill) 16%,var(--bg));--lm-tint-12:color-mix(in srgb,var(--acc-fill) 26%,var(--bg));"
+    "--lm-gold-tint:color-mix(in srgb,var(--gold) 14%,var(--bg));--lm-ring:color-mix(in srgb,var(--acc-fill) 50%,transparent);"
+    "--lm-mint:color-mix(in srgb,var(--teal) 22%,var(--bg));"
+)
 
 
 def italic_last(text: Any) -> str:
@@ -226,6 +276,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
     --lm-gold-tint:color-mix(in srgb,var(--gold) 9%,var(--bg));--lm-ring:color-mix(in srgb,var(--acc-fill) 38%,transparent);}
 }
 .lm .lm-ic{display:block;flex:none;}
+body.lm{--lm-raise:var(--bg);--lm-mint:#DCF0EA;--lm-mint-ink:#0b4a40;--lm-live:#c4162a;}
 
 /* the top bar: logo and name; the bubble, the bell, you. White, no glow, a thin rule in the church's colour */
 .lm .mb-top{min-height:62px;max-width:600px;padding-top:calc(6px + env(safe-area-inset-top,0px));padding-bottom:6px;background:var(--bg);}
@@ -327,7 +378,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-wtag{display:inline-flex;margin-top:6px;font:700 10px/1 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--lm-violet);}
 .lm-chev{color:var(--fg3);}
 .lm-aic{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--k,var(--acc));background:var(--lm-tint);}
-.lm-gmini{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;background:#DCF0EA;color:#0b4a40;
+.lm-gmini{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;background:var(--lm-mint);color:var(--lm-mint-ink);
   font:italic 500 15px/1 var(--mb-serif);}
 
 /* the check-in card on Sunday morning */
@@ -369,7 +420,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
   display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.18);}
 
 /* Connect */
-.lm-gart{position:relative;display:block;height:150px;border-radius:14px;overflow:hidden;background:#DCF0EA;color:#0b4a40;}
+.lm-gart{position:relative;display:block;height:150px;border-radius:14px;overflow:hidden;background:var(--lm-mint);color:var(--lm-mint-ink);}
 .lm-gart>span{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-gart b{position:absolute;left:14px;right:14px;bottom:12px;z-index:1;font:italic 400 30px/1 var(--mb-serif);letter-spacing:-.015em;}
 .lm-gart.has-ph b{color:#fff;text-shadow:0 1px 12px rgba(0,0,0,.35);}
@@ -429,7 +480,18 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-icb:focus-visible,.lm-btn:focus-visible,.lm-wrow:focus-visible,.lm-pray:focus-visible,.lm-room:focus-visible,.lm-tile:focus-visible,
 .lm-acad:focus-visible,.lm-page:focus-visible,.lm-gcard:focus-visible,.lm-more:focus-visible,.lm-circle:focus-visible,.lm-brand:focus-visible
 {outline:2px solid var(--acc);outline-offset:2px;}
-""")
+""" + "\n/* the dark look (member_lumen_look): one layer over the white page */\n" + dark(
+    "body.lm.lm-dark{" + DARK_TOKENS + "}"
+    "@supports (background:color-mix(in srgb,red 50%,blue)){body.lm.lm-dark{" + DARK_MIX + "}}"
+    "html:has(>body.lm.lm-dark){background:#0A0A0B;color-scheme:dark;}"
+    # the reader's warm night (member_lumen_bible) at the page's edge too
+    "html:has(>body.lm.lm-dark .lm-read),html:has(>body.lm.lm-dark .lm-dd){background:#100E0B;}"
+    # a gold button keeps dark words on the lighter gold
+    "body.lm.lm-dark .lm-btn.gold{color:#1A1205;}"
+    # a white logo plate and the photo's play dot stay white; the plain page's picture behind a photo goes dark
+    "body.lm.lm-dark .lm-logo.has-img{box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);}"
+    "body.lm.lm-dark .lm-gart.has-ph b{text-shadow:0 1px 12px rgba(0,0,0,.5);}"
+))
 
 
 def templates() -> Tuple[Template, ...]:

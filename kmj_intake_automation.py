@@ -665,6 +665,10 @@ app.include_router(member_portal_checkin_router)
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# A member's Look in the new look (member_lumen_look.py): POST /my/look,
+# Light, Dark or Same as my phone. BEFORE public_site_router.
+from member_lumen_look import router as member_lumen_look_router
+app.include_router(member_lumen_look_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.

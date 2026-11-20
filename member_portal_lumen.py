@@ -287,8 +287,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     brand-new person told the church (told()); `pastor` the church's pastor
     (member_pastor.who, for someone new: Meet the pastor). `cards` are the small cards
     at the foot (installing the app, phone alerts, Ask the church), each ''
-    to leave it out. `dark` draws it on the look's dark switch (nothing
-    sets it yet: the new look is always white)."""
+    to leave it out. `dark` draws it dark whatever the member's look
+    (member_lumen_look decides it for every page; nothing in the app passes
+    it)."""
     import member_app_photos as photos
     import member_app_pictures as mapic
     import member_app_samples as samples

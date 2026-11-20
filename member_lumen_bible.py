@@ -48,6 +48,8 @@ from datetime import date
 from html import escape
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from member_lumen_ui import dark as _dark
+
 
 def _e(s: Any) -> str:
     return escape(str(s if s is not None else ""), quote=True)
@@ -378,13 +380,15 @@ def card_sheet(biz: Dict[str, Any], site, photo: str, logo: str) -> str:
 
 def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
                    marks: Optional[Dict[int, Dict[str, Any]]] = None, preview: bool = False,
-                   night: bool = False) -> str:
+                   night: Optional[bool] = False) -> str:
     """Reading a chapter: the same reader (member_portal_bible.READER_JS:
     tap a verse to highlight it, add a note, copy, share or save it; Aa),
     laid out calm: no tab bar, the chapter's number large, the chapters
     before and after floating at the foot. Lumen Next adds the moon in the
-    bar (night reading, `night` its cookie), the line of how far you've
-    read, the ink sweep and Make a card (READER_MORE_JS)."""
+    bar (night reading: `night` whether the page arrives at night,
+    member_lumen_look.reader_night; None when the phone decides), the line
+    of how far you've read, the ink sweep and Make a card
+    (READER_MORE_JS)."""
     import json
     import bible_text as bt
     import member_app_photos as photos
@@ -426,8 +430,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     pool = photos.photos(biz, site)
     sheet = card_sheet(biz, site, pool[0] if pool else "", theme.get("logo_url") or "") if editable else ""
     day = ui.palette(biz, theme)["bg"]
-    moon = (f'<button type="button" class="lm-aa lm-moon" id="lm-moon" aria-pressed="{"true" if night else "false"}" '
-            f'aria-label="Night reading" data-day="{_e(day)}" data-night="{NIGHT_BG}">{_glyph("moon", 19)}</button>')
+    moon = moon_button(day, NIGHT_BG, night)
     prog = '<span class="lm-rprog" aria-hidden="true"></span>'
     note = ('<p class="mp-muted bb-pv">Highlights and notes are private, so a preview doesn\'t show them.</p>'
             if preview else ('<p class="mp-err" role="alert">Your highlights couldn\'t load just now. Reading still works.</p>'
@@ -470,8 +473,20 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 {sheet}
 <script type="application/json" id="bb-marks">{data}</script>"""
     return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, bar=False,
-                  lumen_bar=(pill, aa + moon + prog), lumen_dark=night,
+                  lumen_bar=(pill, aa + moon + prog), lumen_reader=True,
                   script=(mpb.READER_JS if editable else "") + READER_MORE_JS)
+
+
+def moon_button(day: str, night_bg: str, night: Optional[bool]) -> str:
+    """The moon in the reader's bar: pressed when the page arrives at night
+    (`night`; None: the phone decides, and the script reads it). It carries
+    the member's look when that isn't Light (data-look: the script clears
+    the moon's cookie when the moon lands where the look would anyway)."""
+    import member_lumen_look as mll
+    look = mll.here()
+    said = f' data-look="{look}"' if look != "light" else ""
+    return (f'<button type="button" class="lm-aa lm-moon" id="lm-moon" aria-pressed="{"true" if night else "false"}" '
+            f'aria-label="Night reading" data-day="{_e(day)}" data-night="{night_bg}"{said}>{_glyph("moon", 19)}</button>')
 
 
 # The reader's Lumen Next moments, beside today's reader script (which it
@@ -484,11 +499,17 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 # The moon and the line are their own part (_NIGHT), so a devotional's day
 # (member_lumen_devotional) reads at night by the same switch: NIGHT_JS.
 _NIGHT = r"""
-var B=document.body,moon=document.getElementById('lm-moon'),meta=document.querySelector('meta[name="theme-color"]');
-function night(on){B.classList.toggle('lm-dark',on);
- if(moon){moon.setAttribute('aria-pressed',on?'true':'false');if(meta)meta.setAttribute('content',moon.getAttribute(on?'data-night':'data-day'));}
- try{document.cookie='lm_night='+(on?'1; Max-Age=31536000':'; Max-Age=0')+'; Path=/my; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'');}catch(e){}}
-if(moon)moon.addEventListener('click',function(){night(!B.classList.contains('lm-dark'));});
+var B=document.body,moon=document.getElementById('lm-moon'),nQ=window.matchMedia?matchMedia('(prefers-color-scheme: dark)'):null;
+function nPhone(){return !!(nQ&&nQ.matches);}
+function nLook(){var l=moon?moon.getAttribute('data-look'):'';return l==='dark'||(l==='auto'&&nPhone());}
+function nDark(){return B.classList.contains('lm-dark')||(B.classList.contains('lm-auto')&&nPhone());}
+function night(on){B.classList.remove('lm-auto');B.classList.toggle('lm-dark',on);
+ if(moon){moon.setAttribute('aria-pressed',on?'true':'false');var c=moon.getAttribute(on?'data-night':'data-day');
+  [].forEach.call(document.querySelectorAll('meta[name="theme-color"]'),function(m){m.setAttribute('content',c);});}
+ var v=on===nLook()?'':(on?'1':'0');
+ try{document.cookie='lm_night='+(v?v+'; Max-Age=31536000':'; Max-Age=0')+'; Path=/my; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'');}catch(e){}}
+if(moon){moon.setAttribute('aria-pressed',nDark()?'true':'false');moon.addEventListener('click',function(){night(!nDark());});
+ if(nQ&&nQ.addEventListener)nQ.addEventListener('change',function(){moon.setAttribute('aria-pressed',nDark()?'true':'false');});}
 var line=document.querySelector('.lm-rprog'),queued=false;
 function far(){queued=false;var h=document.documentElement.scrollHeight-window.innerHeight;
  line.style.transform='scaleX('+(h>0?Math.max(0,Math.min(1,window.scrollY/h)):0).toFixed(4)+')';}
@@ -1051,11 +1072,14 @@ body.lm .lm-read .bb-v.hl-pink{--hlc:rgba(236,72,153,.22);}
 body.lm .lm-read .bb-v.hl-teal{--hlc:rgba(23,168,148,.24);}
 body.lm .lm-read .bb-v.hl-violet{--hlc:rgba(109,87,232,.22);}
 body.lm .lm-read .bb-v.hl-coral{--hlc:rgba(240,122,67,.26);}
-body.lm.lm-dark{overscroll-behavior-y:none;--bg:#100E0B;--fg:#E8DFCC;--fg2:#A79E8E;--fg3:#80786B;--s1:#1C1914;--s2:#27231C;--s3:#3A342B;
-  --line:rgba(255,255,255,.1);--lm-line:rgba(255,255,255,.08);--lm-shadow:rgba(0,0,0,.55);--gold:#E9B65A;--gold-ink:#E9B65A;
-  --lm-gold:#E9B65A;--lm-gold-9:rgba(233,182,90,.15);color-scheme:dark;background:var(--bg);color:var(--fg);}
+""" + _dark("""
+body.lm.lm-dark:has(.lm-read),body.lm.lm-dark:has(.lm-dd){overscroll-behavior-y:none;--bg:#100E0B;--fg:#E8DFCC;--fg2:#A79E8E;--fg3:#857D70;
+  --s1:#1C1914;--s2:#27231C;--s3:#3A342B;--line:rgba(255,255,255,.1);--lm-line:rgba(255,255,255,.08);--lm-shadow:rgba(0,0,0,.55);
+  --gold:#E9B65A;--gold-ink:#E9B65A;--lm-gold:#E9B65A;--lm-gold-9:rgba(233,182,90,.15);--bar:rgba(16,14,11,.82);
+  --surface:var(--bg);--input-surface:var(--s1);--mb-surface:var(--s1);--mb-surface-2:var(--s2);color-scheme:dark;
+  background:var(--bg);color:var(--fg);}
 @supports (background:color-mix(in srgb,red 50%,blue)){
-  body.lm.lm-dark{--acc:color-mix(in srgb,var(--acc-fill) 58%,#fff);}
+  body.lm.lm-dark:has(.lm-read),body.lm.lm-dark:has(.lm-dd){--acc:color-mix(in srgb,var(--acc-fill) 58%,#fff);}
 }
 body.lm.lm-dark .lm-read .bb-v.hl-gold{--hlc:rgba(233,182,90,.3);}
 body.lm.lm-dark .lm-read .bb-v.hl-pink{--hlc:rgba(246,112,150,.3);}
@@ -1063,7 +1087,8 @@ body.lm.lm-dark .lm-read .bb-v.hl-teal{--hlc:rgba(46,196,160,.28);}
 body.lm.lm-dark .lm-read .bb-v.hl-violet{--hlc:rgba(150,135,255,.3);}
 body.lm.lm-dark .lm-read .bb-v.hl-coral{--hlc:rgba(255,140,90,.3);}
 body.lm.lm-dark .lm-chstep,body.lm.lm-dark .bb-dock,body.lm.lm-dark .lm-aapanel{box-shadow:0 0 0 1px var(--lm-line),0 14px 36px rgba(0,0,0,.6);}
-body.lm.lm-vc-on{overflow:hidden;}
+body.lm.lm-dark .lm-moon{background:var(--lm-gold-9);color:var(--lm-gold);}
+""") + """body.lm.lm-vc-on{overflow:hidden;}
 body.lm.lm-vc-on .bb-toast{z-index:70;}
 body.lm .lm-vc{position:fixed;inset:0;z-index:60;}
 body.lm .lm-vc[hidden]{display:none;}

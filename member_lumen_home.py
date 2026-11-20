@@ -38,7 +38,7 @@ picture carries the frosted Change button, as today's Home does.
 
 The CSS (CSS) joins the Lumen sheet through member_lumen_ui.templates(),
 every rule under body.lm, and draws on the look's dark switch too
-(body.lm-dark: checked on black; the new look itself is still always white).
+(body.lm-dark, a member's Dark: member_lumen_look; checked on black).
 Every move waits for the phone's yes to motion. Pure functions, no I/O.
 """
 from __future__ import annotations
@@ -47,6 +47,8 @@ from datetime import date, datetime, time
 from html import escape
 from string import Template
 from typing import Any, Dict, List, Optional, Tuple
+
+from member_lumen_ui import dark as _dark
 
 # The glyphs before the date: the mock's thin-line moon and sun.
 MOON = ('<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
@@ -448,12 +450,7 @@ body.lm .lm-brief .lm-hi4{margin-top:12px;font-size:36px;line-height:1.05;}
   .lm-t4:active,.lm-lv4:active{transform:scale(.98);}
 }
 .lm-t4:focus-visible,.lm-lv4:focus-visible,.lm-q4:focus-visible{outline:2px solid var(--acc);outline-offset:3px;border-radius:12px;}
-/* on the look's dark switch (a black base): a neutral black, the card's tint and the badges' ring with it */
-body.lm.lm-dark:has(.lm-brief){--bg:#0A0A0B;--s1:#161618;--s2:#202023;--s3:#2E2E32;--line:rgba(255,255,255,.1);--lm-line:rgba(255,255,255,.1);
-  --fg:#F4F2EE;--fg2:#AAA7A1;--fg3:#8F8C86;--lm-shadow:rgba(0,0,0,.6);}
-@supports (background:color-mix(in srgb,red 50%,blue)){
-  body.lm.lm-dark:has(.lm-brief){--acc:color-mix(in srgb,var(--acc-fill) 58%,#fff);--lm-tint-12:color-mix(in srgb,var(--acc-fill) 26%,#0A0A0B);}
-}
-html:has(>body.lm.lm-dark .lm-brief){background:#0A0A0B;}
-.lm.lm-dark .lm-bdg{box-shadow:0 0 0 2px rgba(10,10,11,.85);}
-""")
+/* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the badges' ring in the page's black */
+""" + _dark("""
+body.lm.lm-dark .lm-bdg{box-shadow:0 0 0 2px rgba(10,10,11,.85);}
+"""))

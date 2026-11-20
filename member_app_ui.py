@@ -63,6 +63,14 @@ BASE_LABELS = {"black": "Black", "charcoal": "Dark gray", "gray": "Light gray", 
 KIDS_BASE: Dict[str, Any] = {"bg": "#fff8ec", "s1": "#ffffff", "s2": "#fbefd9", "s3": "#f0dfbd", "line": "#f1e3c7",
                              "fg": "#2b1d0e", "fg2": "#65533f", "fg3": "#7a6650", "dark": False}
 KIDS_ACCENT = "#f28c28"
+# The new look's own dark (member_lumen_look: a member's Dark, or Same as
+# my phone at night): the near-black of the approved "Look 4: black base"
+# board. Not a base a church picks; its pages' colours are worked out on it
+# only for what the CSS can't do itself (the church's button colour on a
+# dark page: member_lumen_look.dark_tokens).
+LUMEN_DARK_BASE: Dict[str, Any] = {"bg": "#0a0a0b", "s1": "#161618", "s2": "#202023", "s3": "#2e2e32",
+                                   "line": "#262628", "fg": "#f4f2ee", "fg2": "#aaa7a1", "fg3": "#8f8c86",
+                                   "dark": True}
 DEFAULT_BASE = "black"
 
 # The colour family (Kevin, 2026-10-19: "it only have two colors. this
@@ -338,8 +346,11 @@ def _rgba(hex_: str, a: float) -> str:
 
 def base_of(biz: Dict[str, Any]) -> str:
     """The church's base (settings.member_portal.base), black by default.
-    The new look (member_lumen) is always white: the church's base keeps
-    applying to today's look only."""
+    A new-look page (member_lumen) is drawn on white: its dark (a member's
+    Dark, Same as my phone at night, the reader at night, Watch) is a layer
+    over it in the new look's own sheet (member_lumen_look), so one page can
+    turn either way with no new colours. Which way a member's pages turn
+    until they choose follows this base (member_lumen_look.church_look)."""
     import member_lumen
     if member_lumen.page():
         return "white"
@@ -375,18 +386,23 @@ def _readable_on(c: str, bg: str, dark: bool, need: float = 4.5) -> str:
     return out
 
 
-def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> Dict[str, Any]:
+def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *,
+            lumen_dark: bool = False) -> Dict[str, Any]:
     """The page's colours: the church's base, and its colour as the accent.
     `accent` is for words and icons (4.5:1 on the base); `fill` is the
     button colour, with `on_fill` the words on it (white when they read,
     else near-black, as on gold). Youth (member_spaces) sits on black with
-    its own colour, volt green unless the church picked one."""
+    its own colour, volt green unless the church picked one. `lumen_dark`
+    works the church's colours out on the new look's dark instead
+    (LUMEN_DARK_BASE)."""
     if space == "youth":
         import member_spaces
         name, brand = "black", member_spaces.youth_colour(biz)
         b = BASES[name]
     elif space == "kids":
         name, brand, b = "kids", KIDS_ACCENT, KIDS_BASE
+    elif lumen_dark:
+        name, brand, b = "lumen-dark", None, LUMEN_DARK_BASE
     else:
         name, brand = base_of(biz), None
         b = BASES[name]

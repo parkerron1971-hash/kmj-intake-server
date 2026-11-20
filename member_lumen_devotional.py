@@ -51,6 +51,8 @@ from datetime import date, timedelta
 from html import escape
 from typing import Any, Dict, List, Optional, Tuple
 
+from member_lumen_ui import dark as _dark
+
 # The devotional's own colours (the mock's): the deep green it wears, the
 # mint on it, and the leaf green of its labels on the page (lighter at night).
 GREEN = "#10261C"
@@ -314,7 +316,7 @@ def _step(dev: Dict[str, Any], st: Dict[str, Any], k: int, which: str, today: da
 
 
 def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any], mine: Optional[Dict[str, Any]], *,
-               tr: str = "kjv", listen: bool = False, night: bool = False, today: Optional[date] = None) -> str:
+               tr: str = "kjv", listen: bool = False, night: Optional[bool] = False, today: Optional[date] = None) -> str:
     """A devotional's day in the new look. `mine` is the member's own day
     (done, ticks, journal); None = it couldn't load, so nothing on the page
     can save. `night`: the reader's night cookie (dark, the same switch)."""
@@ -429,8 +431,7 @@ def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any], m
              '<div class="bb-aa-row"><span>Font</span><span class="bb-aa-btns">'
              '<button type="button" data-font="serif" aria-pressed="true">Book</button>'
              '<button type="button" data-font="sans" aria-pressed="false">Clean</button></span></div></div>')
-    moon = (f'<button type="button" class="lm-aa lm-moon" id="lm-moon" aria-pressed="{"true" if night else "false"}" '
-            f'aria-label="Night reading" data-day="{GREEN}" data-night="{GREEN}">{mlb._glyph("moon", 19)}</button>')
+    moon = mlb.moon_button(GREEN, GREEN, night)
     mid = f'<span class="lm-dd-bt">{_e(dtitle)} · Day {n}</span>'
     page = f"""<a class="mb-back" href="{_href(dev)}">{ui.icon('back', 16)}{_e(dtitle[:28])}</a>
 {panel}
@@ -449,7 +450,7 @@ def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any], m
 <p class="lm-dd-toast" id="lm-dd-toast" role="status" hidden></p>"""
     return _shell(biz, site, name, page, tab="bible", who=me, bar=False,
                   lumen_bar=(mid, aa + moon + '<span class="lm-rprog" aria-hidden="true"></span>'),
-                  lumen_dark=night, lumen_bar_colour=GREEN, script=DAY_JS + mlb.NIGHT_JS)
+                  lumen_reader=True, lumen_bar_colour=GREEN, script=DAY_JS + mlb.NIGHT_JS)
 
 
 # Today's DAY_JS (member_portal_devotionals) on this markup: the checklist
@@ -529,11 +530,15 @@ body.lm{--dd-leaf:#2F7A4E;--dd-tint:var(--s1);}
 @supports (background:color-mix(in srgb,red 50%,blue)){
   body.lm{--dd-tint:color-mix(in srgb,#2F7A4E 10%,var(--bg));}
 }
+""" + _dark("""
 body.lm.lm-dark{--dd-leaf:#8ED3A2;}
 @supports (background:color-mix(in srgb,red 50%,blue)){
   body.lm.lm-dark{--dd-tint:color-mix(in srgb,#2F7A4E 16%,var(--bg));}
 }
-/* the Bible tab: today's devotional on top */
+body.lm.lm-dark .lm-dd-scrip{background:#1C1914;color:#E8DFCC;}
+body.lm.lm-dark .lm-dd-lbl,body.lm.lm-dark .lm-dd-read{color:#BFA97C;}
+body.lm.lm-dark .lm-devo{box-shadow:inset 0 0 0 1px rgba(189,227,194,.14);}
+""") + """/* the Bible tab: today's devotional on top */
 body.lm .lm-devo{position:relative;margin-top:22px;padding:20px 20px 22px;border-radius:26px;background:#10261C;color:#E3F1E5;overflow:hidden;}
 body.lm .lm-devo::before{content:"";position:absolute;inset:8px;border:1px solid rgba(189,227,194,.25);border-radius:20px;pointer-events:none;}
 body.lm .lm-devo-k{position:relative;margin:0;font:700 10.5px/1.3 var(--mb-ui);letter-spacing:.16em;text-transform:uppercase;color:#BDE3C2;}
@@ -596,8 +601,6 @@ body.lm .lm-dd-lbl{margin:0;font:700 10.5px/1.3 var(--mb-ui);letter-spacing:.16e
 body.lm .lm-dd-q{margin:12px 0 0;font-family:var(--lm-read);font-style:italic;font-size:19px;line-height:1.5;}
 body.lm .lm-dd-q i{font-style:normal;}
 body.lm .lm-dd-read{display:inline-flex;align-items:center;gap:4px;margin-top:14px;font:650 13px/1 var(--mb-ui);color:var(--lm-ink2);text-decoration:none;}
-body.lm.lm-dark .lm-dd-scrip{background:#1C1914;color:#E8DFCC;}
-body.lm.lm-dark .lm-dd-lbl,body.lm.lm-dark .lm-dd-read{color:#BFA97C;}
 /* the words, read like a book */
 body.lm .lm-dd-body p{margin:20px 0 0;font-family:var(--lm-read);font-size:19px;line-height:1.74;hyphens:auto;color:var(--fg);}
 body.lm .lm-dd-body p:first-child::first-letter{float:left;margin:6px 9px 0 0;font-family:var(--mb-serif);font-weight:var(--lm-dw);

@@ -45,8 +45,14 @@ def _occ(title, d, n=0, mine=None, eid="00000000-0000-4000-8000-000000000301"):
 
 @pytest.fixture
 def church(fake, monkeypatch):  # noqa: F811
-    """Ana at a made-up church whose base is black, with an accent colour."""
+    """Ana at a made-up church whose base is black, with an accent colour.
+    She picked Light for the new look (member_lumen_look), so these pages are
+    its white page; test_member_lumen_dark covers Dark, Same as my phone and
+    a member who hasn't chosen (the church's base)."""
     fake.person(tct.ANA, "Ana Rivera")
+    for row in fake.t["contacts"]:
+        if row["id"] == tct.ANA:
+            row["metadata"] = {"member_look": "light"}
     biz = fake.biz[tct.BIZ]
     biz["name"] = "Grace Fellowship"
     biz["settings"]["member_portal"]["base"] = "black"
@@ -97,7 +103,7 @@ def test_on_links_the_sheet_and_is_white(church, fake, monkeypatch):  # noqa: F8
     assert _body_class(html).split()[:2] == ["lm", "lm-tab"]
     app_at, lumen_at = html.index(ui.sheet_url("app")), html.index(ui.sheet_url("lumen"))
     assert app_at < lumen_at                                              # laid over the app's sheet
-    assert '<meta name="theme-color" content="#ffffff">' in html          # white whatever the base
+    assert '<meta name="theme-color" content="#ffffff">' in html          # white: she chose Light
     assert "--mbt-bg:#ffffff" in html
     head = html[:html.index("</head>")]
     import member_lumen_motion
