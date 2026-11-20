@@ -2103,6 +2103,16 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # A Welcome Path guest's reply waiting on a person (guest_replies.py,
+    # 2026-11-20): one the quiet hours held is told, a day later the caller
+    # is reminded once, three days later the office's alert once. A hold
+    # never ends by itself. GUEST_PATH=off: reads nothing.
+    try:
+        import guest_replies as _guest_replies
+        scheduler.add_job(g("guest_replies_sweep", _guest_replies.sweep), "interval", minutes=10,
+                          id="guest_replies_sweep", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] guest replies sweep not scheduled: {e}")
     # The Welcome Path after week one (2026-11-20): the two roads' texts
     # (came back, not yet, the church's next step, the door is open), the
     # held texts once a reply is answered, and Saturday's heads-up to the

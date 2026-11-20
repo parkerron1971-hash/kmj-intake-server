@@ -521,7 +521,17 @@ def _note(biz: str, fid: str, author_kind: str, kind: str, body: str = "", *, pa
         "author_contact_id": author_contact_id, "author_user_id": author_user_id,
         "author_name": (author_name or "")[:120],
     })
-    return rows[0] if isinstance(rows, list) and rows else None
+    note = rows[0] if isinstance(rows, list) and rows else None
+    if note and kind in REACHED and author_kind != "chief":
+        # A guest's reply waiting on a person (the Welcome Path,
+        # guest_replies) is answered once their caller reached them: the
+        # automatic texts go on. In a thread of its own; never in the way.
+        try:
+            import guest_replies
+            guest_replies.later(guest_replies.on_outcome, biz, fid, author_name or "")
+        except Exception:  # noqa: BLE001
+            logger.info("church follow-up: guest answer hand-off skipped", exc_info=True)
+    return note
 
 
 def _guest_path_on(biz: str, card_key: str, kind: str) -> bool:

@@ -93,6 +93,8 @@ TICKS = {
     # and each church is read again and asks skip() before anything is sent.
     "guest_path_weeks_sweep": "guest_path_weeks:sweep_tick",
     "care_handoff_sweep": "care_handoff:sweep_tick",
+    # A Welcome Path guest's waiting reply: its churches go through drop_samples.
+    "guest_replies_sweep": "guest_replies:sweep",
     "church_checkin_sweep": "church_checkin:sweep",
     "church_shepherd_sweep": "church_shepherd_signals:sweep",
     "church_leader_tasks_sweep": "church_leader_tasks:sweep_tick",
