@@ -479,9 +479,11 @@ def test_news_in_the_new_look(calendar, monkeypatch):
     import church_news as cn
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
-    monkeypatch.setattr(cn, "feed", lambda b, me_id, filt="", today=None: [
+    # The new look's News is the all-posts page (member_lumen_feed.all_posts, one page of feed_page).
+    monkeypatch.setattr(cn, "feed_page", lambda b, me_id, filt="", today=None, page=1: {"posts": [
         {"id": "00000000-0000-4000-8000-000000000811", "kind": "announcement", "title": "Food Drive", "body": "Saturday",
-         "pinned": False, "created_at": now, "published_at": now, "reactions": {}, "mine": [], "comment_count": 0}])
+         "pinned": False, "created_at": now, "published_at": now, "rx": {}, "my_rx": [], "comment_n": 0}],
+        "today": [], "more": False, "total": 1, "page": 1})
     monkeypatch.setattr(cn, "can_post", lambda b, me_id: {})
     monkeypatch.setattr(cn, "mark_seen", lambda *a, **k: None)
     monkeypatch.setattr(cn, "comments_open", lambda b: False)

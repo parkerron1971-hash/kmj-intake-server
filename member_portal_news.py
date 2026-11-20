@@ -11,7 +11,10 @@ boards 1–3, built to look as drawn:
   /my/news  "What's happening.": filters (All, Announcements, Celebrations,
             Photos, Events), each post as a card in the church colour when
             pinned, with what it carries (an event, a sermon, photos), its
-            reactions and its comment count.
+            reactions and its comment count. In the new look (member_lumen)
+            it is the all-posts page Home's See all posts opens: the posts
+            as Home's feed draws them, ten at a time (?page=2, …), with Show
+            more (member_lumen_feed.all_posts, church_news.feed_page).
   /my/news/<id>  one post, every reaction, and the comments with replies.
             A comment shows "Checking it first…" while it's checked
             (msg_screen, church_news.comment); the box at the foot says so.
@@ -614,7 +617,7 @@ def _row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
 def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: Optional[List[Dict[str, Any]]],
                open_: bool, rights: Optional[Dict[str, Any]] = None, *, title: str = "From the church",
                more: str = "All news", me: Optional[Dict[str, Any]] = None, site=None,
-               new_n: Optional[int] = None) -> str:
+               new_n: Optional[int] = None, total: Optional[int] = None) -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
     never says "nothing yet"), except to someone who posts (`rights`,
@@ -623,12 +626,13 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
     In the new look (member_lumen) it is the feed instead, "What's happening
     at <church>": every post as a card with its comments under it
     (member_lumen_feed; `me` for the write pill's face, `site` for the
-    church's pictures, `new_n` how many are new)."""
+    church's pictures, `new_n` how many are new, `total` how many posts See
+    all posts opens)."""
     import member_app_ui as ui
     import member_lumen
     if member_lumen.page():
         import member_lumen_feed
-        return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n)
+        return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n, total=total)
     if not posts:
         return home_first(biz, rights, heading=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
@@ -679,13 +683,6 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     head = ('<a class="mb-back" href="/my">Home</a>'
             f'<div class="nw-head"><div class="nw-headrow"><p class="nw-eb">From your church</p>{write}</div>'
             f'<h1 class="nw-lt">What\'s <em>happening.</em></h1></div>')
-    import member_lumen
-    lumen = member_lumen.page()
-    if lumen:
-        # The new look (member_lumen_people): the heading in the serif, the
-        # posts as plain stories between thin lines, the filters as chips.
-        head = (f'<header class="lm-mast lm-nwhead"><div class="lm-nwrow"><p class="lm-eyebrow">From your church</p>{write}</div>'
-                f'<h1 class="lm-disp">What&#x27;s <em>happening</em></h1></header>')
     if posts is None:
         body = f'{head}<p class="mp-err" role="alert">The news couldn\'t load just now. Please try again in a moment.</p>'
         return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me), 503
@@ -709,8 +706,6 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     import member_portal_share as mps
     body = (f'{head}<nav class="nw-filter" aria-label="Show">{chips}</nav>{_flash(request)}'
             f'<div class="nw-list">{cards}</div>{mps.share_card()}{foot}')
-    if lumen:
-        body = f'<div class="lm-nwpage">{body}</div>'
     return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me, script=RX_JS), 200
 
 
@@ -877,6 +872,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if not rest:
         filt = str(request.query_params.get("f") or "")
         filt = filt if filt in dict(cn.FILTERS) else ""
+        import member_lumen
+        if member_lumen.page():
+            return await _all_posts(request, biz, site, me, filt, today)
         posts, occ, open_, rights = await asyncio.gather(asyncio.to_thread(cn.feed, business_id, me_id, filt, today),
                                                          asyncio.to_thread(mpc.upcoming_for, business_id, me),
                                                          asyncio.to_thread(cn.comments_open, biz),
@@ -896,6 +894,30 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     return render_post(biz, site, request, me, p, occ, open_, others)
 
 
+async def _all_posts(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], filt: str, today: str):
+    """GET /my/news in the new look: one page of ten (?page=n) with the
+    reads Home's feed makes (church_news.feed_page: one read of the posts,
+    then this page's decorations; whose authors are pastors read together),
+    the member's upcoming events, whether comments are open and whether
+    they post. The posts shown are marked as opened, as News does."""
+    import member_lumen_feed
+    import member_portal_church as mpc
+    business_id, me_id = str(biz["id"]), str(me["id"])
+    try:
+        page = cn.page_count(int(str(request.query_params.get("page") or "1")[:4]))
+    except ValueError:
+        page = 1
+    got, occ, open_, rights = await asyncio.gather(asyncio.to_thread(cn.feed_page, business_id, me_id, filt, today, page),
+                                                   asyncio.to_thread(mpc.upcoming_for, business_id, me),
+                                                   asyncio.to_thread(cn.comments_open, biz),
+                                                   asyncio.to_thread(cn.can_post, business_id, me_id))
+    shown = [str(p["id"]) for p in (got or {}).get("posts", []) + (got or {}).get("today", [])]
+    if shown:
+        await asyncio.to_thread(cn.mark_seen, business_id, me_id, shown)
+    poster = bool(rights and (rights.get("church") or rights.get("groups")))
+    return member_lumen_feed.all_posts(biz, site, request, me, got, filt, occ, open_, poster)
+
+
 # ─── routes ──────────────────────────────────────────────────────────
 
 
@@ -904,7 +926,7 @@ def _go(target: str, anchor: str = "", **q: str) -> RedirectResponse:
     path, _, query = (target or "").partition("?")
     if not _BACK_RE.match(path):
         path, query = "/my/news", ""
-    keep = [kv for kv in query.split("&") if kv.startswith("f=")] if query else []
+    keep = [kv for kv in query.split("&") if kv.startswith("f=") or re.fullmatch(r"page=\d{1,3}", kv)] if query else []
     qs = "&".join(keep + [f"{k}={v}" for k, v in q.items() if v])
     url = f"{path}?{qs}" if qs else path
     return RedirectResponse(url + (f"#{anchor}" if anchor else ""), status_code=303, headers=_SECURE_HEADERS)
