@@ -157,7 +157,7 @@ def test_a_spelled_business_id_withdraws_the_asks_of_a_login_that_left(db, how):
 @pytest.mark.parametrize("biz, user, seat", [
     ("nope", MANAGER, None), (BIZ, "nope", None), (f"{BIZ}#", MANAGER, None), (BIZ, f"{MANAGER}&user_id=neq.x", None),
     (None, MANAGER, None), (BIZ, None, None), ("", "", None), (BIZ, MANAGER, "not-a-seat"), (BIZ, MANAGER, ""),
-    (BIZ, MANAGER, "*"), (BIZ, MANAGER, f"{uuid.uuid4()}&seat_id=neq.x"), ("urn:uuid:" + BIZ, MANAGER, None),
+    (BIZ, MANAGER, "*"), (BIZ, MANAGER, "5e000000-0000-4000-8000-0000000000e5&seat_id=neq.x"), ("urn:uuid:" + BIZ, MANAGER, None),
 ])
 def test_an_id_that_is_not_a_uuid_is_refused_and_nothing_is_written(db, monkeypatch, biz, user, seat):
     _give(db, MANAGER, "lead", who=True, bank=True)
