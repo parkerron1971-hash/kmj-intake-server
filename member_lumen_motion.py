@@ -23,15 +23,15 @@ THE MOVES (all CSS, in /my/lumen.<hash>.css; reduced motion gets none):
   get a plain ease, and a browser without cross-document view transitions
   (before Chrome 126 or Safari 18.2) changes pages as it always has.
 
-THE CINEMA. Every page under the Watch tab (Watch, a series, a message,
-the live room and Live between services: body.pg-watch) goes dark,
-whatever base the church picked or look the member chose, through the new
-look's one dark switch (body.lm-dark, set by member_portal._shell), in the
-cinema's neutral black instead of the reader's warm night: the church's
-colour is its "lit" shade
+THE CINEMA. Live (the live room and Live between services: tab "live",
+body.pg-watch) goes dark, whatever base the church picked or look the
+member chose, through the new look's one dark switch (body.lm-dark, set by
+member_portal._shell), in the cinema's neutral black instead of the
+reader's warm night: the church's colour is its "lit" shade
 (member_app_ui.palette, readable on black), the family inks their dark
-shades. Watch's latest message runs edge to edge under a serif title, the
-series are posters on a rail, the messages rows with wide thumbnails.
+shades. Watch, a series and a message (Look 5.1, member_lumen_watch,
+2026-11-20) wear the member's own look like every other tab: white in
+Light, and the cinema's black when the member chose Dark.
 
 LIVE. The hearts rise over the video instead of beside the box, and so
 does an "Amen" (or "Hallelujah") or praying hands when someone sends that
@@ -54,13 +54,13 @@ CINE_BG = "#050506"
 
 
 def cine(tab: Optional[str]) -> bool:
-    """Whether a page sits under the Watch tab, the cinema's pages. They
-    take the new look's one dark switch whatever the member's look
+    """Whether a page is the cinema: Live (the room and between services).
+    It takes the new look's one dark switch whatever the member's look
     (member_lumen_look.page_look), and this sheet makes that dark the
     cinema's neutral black rather than the look's near-black or the
-    reader's warm night."""
-    import member_app_ui as ui
-    return ui.TAB_OF.get(tab or "", "") == "watch"
+    reader's warm night. Watch's own pages (Look 5.1) follow the member's
+    look."""
+    return (tab or "") == "live"
 
 
 # Which way a page change goes, and what travels. A click on one of our
@@ -90,9 +90,9 @@ JS = ("<script>(function(){if(window.__lmvt)return;window.__lmvt=1;"
       "catch(e){return '';}}"
       "function from(a){var r=a.closest('.lm-irow');"
       "if(r)return [[r.querySelector('.lm-av,.lm-cl'),'lm-face'],[r.querySelector('.lm-itop b'),'lm-ttl']];"
-      "if(/^\\/my\\/sermons\\/[^\\/?#]+$/.test(path(a))){var x=a.closest('.lm-feat');"
-      "if(x)return [[x.querySelector('.lm-poster'),'lm-sermon']];"
-      "x=a.closest('.lm-lrow');if(x)return [[x.querySelector('.lm-th'),'lm-sermon']];"
+      "if(/^\\/my\\/sermons\\/[^\\/?#]+$/.test(path(a))){var x=a.closest('.lw-hero');"
+      "if(x)return [[x.querySelector('.lw-img'),'lm-sermon']];"
+      "x=a.closest('.lw-mrow,.lw-cw,.lw-prow');if(x)return [[x.querySelector('.lw-th'),'lm-sermon']];"
       "x=a.closest('.lm-tile');if(x)return [[x.querySelector('.img'),'lm-sermon']];}return [];}"
       "var t=0;d.addEventListener('click',function(e){"
       "if(e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;"
@@ -173,7 +173,7 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
   html[data-vt=tab]::view-transition-old(root){animation-name:lmVtFade;animation-duration:.16s;}
   html[data-vt=tab]::view-transition-new(root){animation-name:lmVtUp;animation-duration:.38s;}
   /* what travels: a message's picture into the player, a face and a name into the bar */
-  html:active-view-transition body.lm .mb-player{view-transition-name:lm-sermon;}
+  html:active-view-transition body.lm .mb-player,html:active-view-transition body.lm .lw-pv{view-transition-name:lm-sermon;}
   html:active-view-transition body.lm .lm-thead>.lm-av,html:active-view-transition body.lm .lm-thead>.lm-cl{view-transition-name:lm-face;}
   html:active-view-transition body.lm .lm-thead b{view-transition-name:lm-ttl;}
   ::view-transition-group(lm-sermon),::view-transition-group(lm-face),::view-transition-group(lm-ttl){animation-duration:.55s;}
@@ -209,10 +209,10 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
   body.lm .lm-disp em{display:inline-block;animation:lmSettleEm 1.1s var(--lm-out) .22s backwards;}
   /* a finger presses in; letting go springs back */
   body.lm .lm-btn,body.lm .lm-icb,body.lm .lm-wrow,body.lm .lm-pray,body.lm .lm-room,body.lm .lm-tile,body.lm .lm-acad,
-  body.lm .lm-page,body.lm .lm-gcard,body.lm .lm-spost,body.lm .lm-lrow,body.lm .lm-nrow,body.lm .lm-rxb{
+  body.lm .lm-page,body.lm .lm-gcard,body.lm .lm-lrow,body.lm .lm-rxb{
     transition:transform .45s var(--lm-spring),background-color .25s,color .25s,box-shadow .25s;}
   body.lm .lm-btn:active,body.lm .lm-icb:active{transform:scale(.94);}
-  body.lm .lm-spost:active,body.lm .lm-rxb:active{transform:scale(.95);}
+  body.lm .lm-rxb:active{transform:scale(.95);}
 }
 @keyframes lmArrive{from{opacity:0;transform:translateY(16px)}}
 @keyframes lmSettle{from{opacity:0;transform:translateY(14px);filter:blur(5px)}}
@@ -224,7 +224,7 @@ body.lm{--lm-spring:cubic-bezier(.3,1.35,.5,1);--lm-soft:cubic-bezier(.2,.9,.25,
   .lm .lm-nav .mb-tab[aria-current] svg{animation:lmTabPop .6s var(--lm-spring) backwards;}
 }
 
-/* the cinema: every page under Watch takes the dark switch (lm-dark), in a neutral black */
+/* the cinema: Live takes the dark switch (lm-dark), in a neutral black; so does Watch for a member who chose Dark */
 body.lm.lm-dark.pg-watch{--bg:#050506;--s1:#151517;--s2:#1F1F22;--s3:#2C2C30;--line:rgba(255,255,255,.1);--fg:#F5F3EF;--fg2:#AAA7A2;--fg3:#8C8984;
   --acc:var(--acc-lit);--accent:var(--acc-lit);--focus:var(--acc-lit);--bar:rgba(5,5,6,.82);--hair:rgba(245,243,239,.1);
   --surface:#050506;--input-surface:#151517;--text-primary:#F5F3EF;--text-secondary:#AAA7A2;--text-muted:#8C8984;
@@ -233,45 +233,7 @@ body.lm.lm-dark.pg-watch{--bg:#050506;--s1:#151517;--s2:#1F1F22;--s3:#2C2C30;--l
   --gold-deep:var(--gold-night);--teal-deep:var(--teal-night);--violet-deep:var(--violet-night);--coral-deep:var(--coral-night);
   --acc-deep:var(--acc-night);--lm-line:rgba(255,255,255,.1);--lm-shadow:rgba(0,0,0,.7);color-scheme:dark;}
 @supports (color:color-mix(in oklab,red 50%,blue)){body.lm.lm-dark.pg-watch{--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);}}
-.lm.lm-tab.pg-watch .mb-top::after{display:none;}
 html:has(>body.lm.lm-dark.pg-watch){background:#050506;color-scheme:dark;}
-
-/* Watch: the next live as a card, the latest edge to edge under a serif title, posters on a rail */
-.lm.pg-watch .lm-nrow{margin:6px 0 18px;padding:12px 14px;border:0;border-radius:16px;background:var(--s1);}
-.lm.pg-watch .lm-nrow .lm-halo{width:40px;height:40px;border-radius:12px;background:var(--s2);}
-.lm.pg-watch .lm-nrow.is-live{background:#E11D48;color:#fff;}
-.lm.pg-watch .lm-nrow.is-live .lm-kicker,.lm.pg-watch .lm-nrow.is-live .lm-wt>span,.lm.pg-watch .lm-nrow.is-live .lm-chev{color:#fff;}
-.lm.pg-watch .lm-nrow.is-live .lm-halo{background:rgba(255,255,255,.18);color:#fff;}
-.lm.pg-watch .lm-nrow.is-live .lm-dotlive{background:#fff;}
-.lm.pg-watch .lm-feat{margin-top:0;}
-.lm.pg-watch .lm-feat .lm-poster{aspect-ratio:auto;height:310px;}
-.lm .lm-featk{margin:22px 0 0;color:var(--violet-ink);}
-.lm .lm-featk .lm-dot{background:var(--violet-ink);}
-.lm .lm-feat .lm-disp{margin-top:10px;}
-.lm .lm-feat .lm-disp a{color:inherit;text-decoration:none;}
-.lm .lm-feat .lm-acts{margin-top:20px;}
-.lm .lm-btn.lm-light{background:#fff;color:#0b0b0c;}
-.lm .lm-feat .lm-btn.ghost{background:var(--s1);color:var(--fg);}
-.lm .lm-sposts{gap:12px;scroll-padding-inline:20px;}
-.lm .lm-spost{position:relative;width:148px;height:214px;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;
-  background:var(--s1);color:var(--fg);text-decoration:none;}
-.lm .lm-spost .img{position:relative;flex:1;overflow:hidden;background:var(--s2);}
-.lm .lm-spost .img>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
-.lm .lm-spost .img .mb-art-title,.lm .lm-spost .img .mb-titled b,.lm .lm-spost .img .mb-art-kick,.lm .lm-spost .img .mb-art-play{display:none;}
-.lm .lm-sptx{display:block;padding:10px 12px 13px;}
-.lm .lm-sptx .lm-kicker{font-size:9px;letter-spacing:.16em;margin-bottom:7px;}
-.lm .lm-sptx .tt{display:block;font:400 19px/1.02 var(--mb-serif);font-weight:var(--lm-dw,400);letter-spacing:-.02em;
-  font-variation-settings:var(--lm-dvar,normal);font-stretch:var(--lm-dst,100%);}
-.lm .lm-sptx .tt em{font-style:italic;font-weight:var(--lm-iw,400);color:var(--acc);}
-.lm.pg-watch .lm-lrow .lm-th{width:96px;height:60px;border-radius:12px;}
-.lm.pg-watch .lm-lrow .lm-wt b{font-size:15px;}
-
-/* a message: the player edge to edge, the title in serif */
-.lm.pg-watch.lm-push .mb-player{margin:0 -20px;border-radius:0;overflow:hidden;background:#000;}
-.lm.pg-watch.lm-push .mb-player .mb-video,.lm.pg-watch.lm-push .mb-player>.mb-art,.lm.pg-watch.lm-push .mb-player>.mb-ph,
-.lm.pg-watch.lm-push .mb-player>.mb-titled{border-radius:0;}
-.lm.pg-watch.lm-push .mp-shell>h1{font:400 34px/1.05 var(--mb-serif);font-weight:var(--lm-dw,400);letter-spacing:var(--lm-dtr,-.025em);
-  font-variation-settings:var(--lm-dvar,normal);font-stretch:var(--lm-dst,100%);}
 
 /* Live: reactions rising over the video, who's here, Amen · heart · Praying */
 .lm .lm-rxl{position:absolute;z-index:2;right:10px;bottom:10px;top:52px;width:96px;overflow:hidden;pointer-events:none;}
@@ -298,6 +260,6 @@ html:has(>body.lm.lm-dark.pg-watch){background:#050506;color-scheme:dark;}
 .lm .lm-rxb svg{width:20px;height:20px;}
 .lm .lm-rxb.h{color:#FF5C7A;}
 .lm .lm-rxb.p svg{color:#FFD27A;}
-.lm .lm-rxb:focus-visible,.lm .lm-spost:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.lm .lm-rxb:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 @media (max-width:999px) and (orientation:landscape) and (max-height:520px){.lm .lm-watching,.lm .lm-rxbar{display:none;}}
 """)

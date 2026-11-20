@@ -34,6 +34,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import member_app_ui as ui
+import member_cache
 import member_lumen_look as mll
 import member_portal as mp
 import test_church_threads as tct
@@ -146,13 +147,17 @@ def test_same_as_my_phone_is_css_with_two_bars(church, fake, monkeypatch):  # no
     assert at > sheet.index("body.lm.lm-dark{--bg:#0A0A0B;")          # the same layer, twice
 
 
-def test_watch_stays_the_cinema_in_every_look(church, fake, monkeypatch):  # noqa: F811
+def test_live_stays_the_cinema_in_every_look_and_watch_follows_hers(church, fake, monkeypatch):  # noqa: F811
     c = _client(fake, monkeypatch)
     for look in ("light", "dark", "auto"):
         _look(fake, look, "black")
-        html = c.get("/my/sermons").text
+        member_cache.forget_all()
+        html = c.get("/my/live").text
         assert "lm-dark" in _body_class(html).split() and "pg-watch" in _body_class(html).split()
         assert _metas(html) == ['<meta name="theme-color" content="#050506">']
+        # Watch (Look 5.1, member_lumen_watch) wears her own look.
+        watch = _body_class(c.get("/my/sermons").text).split()
+        assert ("lm-dark" in watch) == (look == "dark") and ("lm-auto" in watch) == (look == "auto")
 
 
 def test_youth_keeps_its_own_look(church, fake, monkeypatch):  # noqa: F811

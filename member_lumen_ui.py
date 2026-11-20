@@ -498,17 +498,16 @@ body.lm{--lm-raise:var(--bg);--lm-mint:#DCF0EA;--lm-mint-ink:#0b4a40;--lm-live:#
 def templates() -> Tuple[Template, ...]:
     """The sheet's parts, in order: the foundation's rules, then each page's
     own block (member_lumen_bible.CSS: the Bible, its reader and plans;
-    member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give, Watch and
-    Live; member_lumen_people.CSS_PEOPLE: Messages and the people pages;
-    member_lumen_motion.CSS: how it all moves, and Watch and Live as a
-    cinema; member_lumen_moments.CSS: the moments in Prayer, Give and
-    Messages; member_lumen_feed.CSS: Home's feed and the comments under
-    each post; member_lumen_home.CSS: the top of Home, Look 5.1;
+    member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give and Live;
+    member_lumen_people.CSS_PEOPLE: Messages and the people pages;
+    member_lumen_motion.CSS: how it all moves, and Live as a cinema;
+    member_lumen_moments.CSS: the moments in Prayer, Give and Messages; member_lumen_feed.CSS: Home's feed and
+    the comments under each post; member_lumen_home.CSS: the top of Home, Look 5.1;
     member_lumen_devotional.CSS: the devotional on the Bible tab and its
     day; member_pastor.CSS: Meet the pastor; member_lumen_connect.CSS: Connect and a group's page, Look 5.1;
     member_lumen_stories.CSS: Home's moments and their viewer; member_lumen_share.CSS: the share sheet;
-    member_mini.CSS: the mini player), and last the
-    type (member_lumen_fonts: the faces and the church's pairing, which set every block's fonts).
+    member_lumen_watch.CSS: Watch, a series and a message, Look 5.1; member_mini.CSS: the mini player), and
+    last the type (member_lumen_fonts: the faces and the church's pairing, which set every block's fonts).
     member_app_ui.sheet("lumen") serves them as one file."""
     import member_lumen_bible
     import member_lumen_classes
@@ -523,12 +522,13 @@ def templates() -> Tuple[Template, ...]:
     import member_lumen_people
     import member_lumen_share
     import member_lumen_stories
+    import member_lumen_watch
     import member_mini
     import member_pastor
     return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
             member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS, member_lumen_feed.CSS,
             member_lumen_home.CSS, Template(member_lumen_devotional.CSS), member_pastor.CSS, member_lumen_connect.CSS,
-            member_lumen_stories.CSS, member_lumen_share.CSS, member_mini.CSS, member_lumen_fonts.template())
+            member_lumen_stories.CSS, member_lumen_share.CSS, member_lumen_watch.CSS, member_mini.CSS, member_lumen_fonts.template())
 
 
 def css() -> str:

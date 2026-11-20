@@ -1,16 +1,14 @@
 # __tests__/test_member_lumen_give.py
 #
-# Give, Watch and Live in the member app's new look ("Lumen",
-# member_lumen_give), behind MEMBER_LUMEN (member_lumen.py). Pins:
+# Give and Live in the member app's new look ("Lumen", member_lumen_give),
+# behind MEMBER_LUMEN (member_lumen.py); Watch is test_member_lumen_watch.py
+# (Look 5.1). Pins:
 #   - off: none of it shows (no Lumen class, sheet or block on any of them);
 #   - Give: the same page, payment and script (giving_router's, unchanged),
 #     in the Lumen frame; the form keeps every id, class and value the give
 #     script reads; the funds are chips that set the same <select>; the
 #     thank-you is the mock's sheet holding the same #gv-thanks; Your giving
 #     and Recurring gifts; one fund has no chips; the preview never charges;
-#   - Watch: Watch & listen, the next live (or Live now), the latest with
-#     Watch, Listen and Share, the series, every message; a series keeps
-#     today's page;
 #   - Live: the room keeps every id its script reads (instant send, hearts,
 #     the poll, the pin, the sheets), Back and Live · N here on the video,
 #     Give in the box (with I'm here when the chat is closed); between
@@ -201,48 +199,6 @@ def test_give_before_online_giving(church, fake, monkeypatch):  # noqa: F811
     assert 'href="/my/me#mp-giving"' in html and "In person" in html
 
 
-# ─── Watch ───────────────────────────────────────────────────────────
-
-
-def test_watch(church, fake, monkeypatch):  # noqa: F811
-    html = _get(fake, monkeypatch, "/my/sermons")
-    assert _body_class(html).split()[:3] == ["lm", "lm-tab", "pg-watch"]             # the cinema
-    assert '<meta name="theme-color" content="#050506">' in html
-    assert '<h1 class="mp-sr">Watch &amp; listen</h1>' in html                       # the bar says whose it is
-    row = html[html.index('class="lm-nrow'):]
-    assert row.startswith('class="lm-nrow" href="/my/live"') and "Next live" in row[:600] and "Sunday Worship" in row[:600]
-    feat = html[html.index('class="lm-feat"'):]
-    assert '<h2 class="lm-disp m" id="lm-feat-h">' in feat[:3000] and "Hope Has a <em>Name</em>" in feat[:3000]
-    assert "Latest message · " in feat[:3000] and "Pastor James · Isaiah 9:6" in feat[:3000]
-    assert 'class="lm-btn lm-light"' in feat[:3000]
-    assert "Listen</a>" in feat[:3000]
-    # Share is the new look's share sheet (member_lumen_share): the public message, its story picture.
-    assert 'class="lm-share lm-btn ghost lm-sq" href="/sermons/' in feat[:3000] and 'data-share-kind="message"' in feat[:3000]
-    posters = html[html.index('class="lm-rail lm-sposts"'):]
-    assert f'class="lm-spost" href="/my/sermons?series={SER}"' in posters and "2 messages" in posters
-    assert "Light Has <em>Come</em>" in posters
-    assert html.count('class="lm-lrow"') == 2
-    nav = html[html.index('<nav class="mb-nav lm-nav'):]
-    assert 'href="/my/sermons" aria-current="page"' in nav[:nav.index("</nav>")]
-
-
-def test_watch_while_live_and_with_nothing_posted(church, fake, monkeypatch):  # noqa: F811
-    church["live"] = dict(LIVE)
-    html = _get(fake, monkeypatch, "/my/sermons")
-    assert 'class="lm-nrow is-live" href="/my/live"' in html and "Live now" in html
-    church["live"], church["lib"] = {}, {"sermons": [], "series": []}
-    html = _get(fake, monkeypatch, "/my/sermons")
-    assert "Messages are on the <em>way</em>" in html and 'class="lm-feat"' not in html
-
-
-def test_a_series_keeps_todays_page(church, fake, monkeypatch):  # noqa: F811
-    html = _get(fake, monkeypatch, f"/my/sermons?series={SER}")
-    assert 'class="lm-feat"' not in html and 'class="mb-mtile-art"' in html
-    assert "pg-watch" in _body_class(html)                                             # dark like Watch
-    top = html[html.index('<header class="mb-top">'):html.index("</header>")]
-    assert 'class="mb-back" href="/my/sermons"' in top
-
-
 # ─── Live ────────────────────────────────────────────────────────────
 
 
@@ -320,5 +276,5 @@ def test_the_tab_bar_and_the_top_bar_are_solid():
 def test_the_sheet_carries_the_give_watch_live_block():
     assert mlg.CSS.template in lm.css()
     text = ui.sheet("lumen")[0]
-    assert ".lm .lm-amt{" in text and ".lm .lm-nrow{" in text and ".lm .lm-lvchip{" in text
+    assert ".lm .lm-amt{" in text and ".lm .lm-lvchip{" in text and ".lm .lm-nrow{" not in text
     assert "$" not in mlg.CSS.template                                                     # no tokens to fill
