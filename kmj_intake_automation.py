@@ -771,8 +771,11 @@ from church_map_router import router as church_map_router
 app.include_router(church_map_router)
 # The roll: a church's People page in one read (people, their last 8
 # Sundays, families, groups, serving, This week). Read-only; CHURCH_ROLL.
+# Changing it (edit in place, add people, Tidy up, merge): church_roll_edit, CHURCH_ROLL_EDIT.
 from church_roll import router as church_roll_router
 app.include_router(church_roll_router)
+from church_roll_edit import router as church_roll_edit_router
+app.include_router(church_roll_edit_router)
 # Live: the team runs a live service and moderates its chat (live_router);
 # members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
 from live_router import router as live_router
