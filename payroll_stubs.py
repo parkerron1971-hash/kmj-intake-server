@@ -160,6 +160,15 @@ def _housing(ctx: Dict[str, Any], emp: Dict[str, Any]) -> Optional[Dict[str, Any
 
 # ─── One statement ────────────────────────────────────────────────────
 
+def _exempt(item: Dict[str, Any]) -> bool:
+    """A line taxed as a minister's: pay, and no Medicare either half (a
+    check so small its Medicare rounds to nothing isn't one). The same test
+    as payroll_forms._exempt."""
+    gross = _r(item.get("gross"))
+    return (gross > 0 and _r(gross * payroll_calc.MEDICARE_RATE) > 0
+            and not _r(item.get("medicare_employee")) and not _r(item.get("employer_medicare")))
+
+
 def _payload(item: Dict[str, Any]) -> Dict[str, Any]:
     p = item.get("calc_payload")
     return p if isinstance(p, dict) else {}
@@ -245,23 +254,25 @@ def build(ctx: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
 
     fit, sit = _r(item.get("federal_withholding")), _r(item.get("state_withholding"))
     ss, med = _r(item.get("social_security_employee")), _r(item.get("medicare_employee"))
+    # Each line's own Social Security and Medicare, as it was taxed: someone
+    # paid as staff in spring and as a minister since keeps the spring's in
+    # this year's figures, so pay before taxes = taxes + deductions + take-home.
+    exempt = _exempt(item)
     taxes = [
         {"key": "federal", "label": "Federal income tax", "this": fit, "ytd": total("federal_withholding"),
-         "note": "asked for on their W-4" if minister and fit else None},
+         "note": "asked for on their W-4" if exempt and fit else None},
         {"key": "state", "label": "State income tax", "this": sit, "ytd": total("state_withholding"), "note": None},
     ]
-    if minister:
-        taxes += [{"key": "social_security", "label": "Social Security", "this": None, "ytd": None,
-                   "note": "none, minister"},
-                  {"key": "medicare", "label": "Medicare", "this": None, "ytd": None, "note": "none, minister"}]
-    else:
-        taxes += [{"key": "social_security", "label": "Social Security", "this": ss,
-                   "ytd": total("social_security_employee"), "note": None},
-                  {"key": "medicare", "label": "Medicare", "this": med, "ytd": total("medicare_employee"),
-                   "note": None}]
-    tax_this = _r(fit + sit + (0 if minister else ss + med))
-    tax_ytd = _r(total("federal_withholding") + total("state_withholding")
-                 + (0 if minister else total("social_security_employee") + total("medicare_employee")))
+    for key, label, col, now in (("social_security", "Social Security", "social_security_employee", ss),
+                                 ("medicare", "Medicare", "medicare_employee", med)):
+        ytd = total(col)
+        if exempt:
+            taxes.append({"key": key, "label": label, "this": None, "ytd": ytd or None, "note": "none, minister"})
+        else:
+            taxes.append({"key": key, "label": label, "this": now, "ytd": ytd, "note": None})
+    tax_this = _r(fit + sit + ss + med)
+    tax_ytd = _r(total("federal_withholding") + total("state_withholding") + total("social_security_employee")
+                 + total("medicare_employee"))
     other_this, other_ytd = _r(item.get("other_deductions")), total("other_deductions")
     deductions = ([{"key": "other", "label": "Other deductions", "this": other_this, "ytd": other_ytd}]
                   if other_this or other_ytd else [])
@@ -403,15 +414,35 @@ def pdf(stub: Dict[str, Any], biz_row: Dict[str, Any]) -> bytes:
         c.drawPath(p, fill=1, stroke=1)
     c.setFillAlpha(1)
 
-    text(M + 42, top - 13, payer.get("name") or "", "Helvetica-Bold", 15)
+    # The church's name and line wrap beside the title (two lines at most
+    # each, the last cut short with an ellipsis), and push the rest down.
+    head_w = W - M - 210 - (M + 42)
+
+    def lines_of(s: str, font: str, size: float, most: int) -> List[str]:
+        got = simpleSplit(str(s or ""), font, size, head_w) or [""]
+        if len(got) > most:
+            got = got[:most]
+            last = got[-1]
+            while last and c.stringWidth(last + "…", font, size) > head_w:
+                last = last[:-1]
+            got[-1] = last.rstrip() + "…"
+        return got
+
+    yy = top - 13
+    for ln in lines_of(payer.get("name") or "", "Helvetica-Bold", 15, 2):
+        text(M + 42, yy, ln, "Helvetica-Bold", 15)
+        yy -= 17
     sub = " · ".join(x for x in (payer.get("address"),
                                  f"EIN ending {payer['ein_last4']}" if payer.get("ein_last4") else None) if x)
     if sub:
-        text(M + 42, top - 27, sub, size=8.5, color=muted)
+        yy += 3
+        for ln in lines_of(sub, "Helvetica", 8.5, 2):
+            text(M + 42, yy, ln, size=8.5, color=muted)
+            yy -= 11
     text(W - M, top - 14, "Pay statement", "Helvetica-Bold", 19, align="right")
     pd = _day(stub["period"]["pay_date"])
     text(W - M, top - 28, f"Pay date {long_day(pd)}" if pd else "", size=8.5, color=muted, align="right")
-    y = top - 46
+    y = min(top - 46, yy - 6)
     c.setFillColor(acc)
     c.roundRect(M, y, W - 2 * M, 2.5, 1.2, fill=1, stroke=0)
 
@@ -472,7 +503,10 @@ def pdf(stub: Dict[str, Any], biz_row: Dict[str, Any]) -> bytes:
                 text(tx, y0, label, size=10)
             if r.get("this") is None:
                 text(c1, y0, r.get("note") or "—", size=8.5, color=faint, align="right")
-                text(c2, y0, "none" if r.get("note") else "—", size=8.5, color=faint, align="right")
+                if r.get("ytd"):
+                    text(c2, y0, money(r["ytd"]), size=10, align="right")
+                else:
+                    text(c2, y0, "none" if r.get("note") else "—", size=8.5, color=faint, align="right")
             else:
                 text(c1, y0, money(r["this"]), size=10, align="right")
                 text(c2, y0, money(r["ytd"]), size=10, align="right")
@@ -581,8 +615,11 @@ def pdf(stub: Dict[str, Any], biz_row: Dict[str, Any]) -> bytes:
     c.setStrokeColor(line)
     c.setLineWidth(0.8)
     c.line(M, M + 14, W - M, M + 14)
-    text(M, M, f"For your records. {payer.get('name') or 'The church'} pays from its own bank.", size=8,
-         color=faint)
+    foot = f"For your records. {payer.get('name') or 'The church'} pays from its own bank."
+    room = W - 2 * M - c.stringWidth("Prepared with Solutionist", "Helvetica", 8) - 24
+    if c.stringWidth(foot, "Helvetica", 8) > room:
+        foot = f"For your records. {'The church' if _church(biz_row) else 'The employer'} pays from its own bank."
+    text(M, M, foot, size=8, color=faint)
     text(W - M, M, "Prepared with Solutionist", size=8, color=faint, align="right")
     c.showPage()
     c.save()

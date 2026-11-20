@@ -3,7 +3,10 @@
 Three days before an approve-by day, a tax deposit or a form's due date that
 is still open, one alert goes to the people who work payroll at that church
 or business: the owner, its Admins, and (with the giving tick switched on,
-CHURCH_MONEY_TICKS) the logins the owner gave giving at Work. The day before,
+CHURCH_MONEY_TICKS) the logins the owner gave giving at Work, except that an
+approve-by day goes only to those who can approve (the owner and Admins). An
+IRS deposit's alert says EFTPS needs it by 8 p.m. Eastern the day before it's
+due (Publication 15). The day before,
 if it's still open, one more to the owner alone. Through the existing alert
 path (a phone alert and an email to each person, as church_help._tell and
 church_money_levels._tell send them).
@@ -117,6 +120,18 @@ def due_items(biz_row: Dict[str, Any], today: date) -> List[Dict[str, Any]]:
 def team(biz_row: Dict[str, Any]) -> Set[str]:
     """The owner, the active Admin seats and, with the giving tick on for
     this church, the logins that hold it at Work."""
+    return people(biz_row)[1]
+
+
+def approvers(biz_row: Dict[str, Any]) -> Set[str]:
+    """Who can approve a run (payroll_router.approve_run asks for an Admin):
+    the owner and the active Admin seats. A Work tick marks deposits but
+    doesn't approve, so it never hears about an approve-by day."""
+    return people(biz_row)[0]
+
+
+def people(biz_row: Dict[str, Any]):
+    """(the approvers, the whole payroll team) at one business."""
     biz = str(biz_row["id"])
     out = {str(biz_row["owner_id"])} if biz_row.get("owner_id") else set()
     seats = sb_clients.sb_get_as_service(
@@ -124,6 +139,7 @@ def team(biz_row: Dict[str, Any]) -> Set[str]:
     for s in seats if isinstance(seats, list) else []:
         if s.get("role") == "admin" and s.get("user_id"):
             out.add(str(s["user_id"]))
+    can_approve = set(out)
     try:
         import church_money_ticks as cmt
         if cmt.mode() != "off" and cmt.open_for(biz):
@@ -135,7 +151,7 @@ def team(biz_row: Dict[str, Any]) -> Set[str]:
                         out.add(uid)
     except Exception:  # noqa: BLE001 — the owner and Admins still hear
         logger.warning("[payroll] reminders: the giving holders couldn't be read biz=%s", biz[:8])
-    return out
+    return can_approve, out
 
 
 def _emails(biz_row: Dict[str, Any], to: Set[str]) -> Dict[str, str]:
@@ -163,36 +179,49 @@ def _sentence(s: str) -> str:
     return f"{s[:1].upper()}{s[1:]}." if s else ""
 
 
-def words(e: Dict[str, Any], church: bool) -> Dict[str, str]:
-    """A title and a line for one to-do."""
+def words(e: Dict[str, Any], church: bool, audience: str = TEAM) -> Dict[str, str]:
+    """A title, a line, and a short form for a list, for one to-do. An IRS
+    deposit says when EFTPS needs it: by 8 p.m. Eastern the day BEFORE the
+    due date (IRS Publication 15, "How To Deposit"), so the owner's
+    day-before alert says "today"."""
     when = pcal.day_words(e["date"])
     bank = "the church’s bank" if church else "your bank"
+    tomorrow = audience == OWNER
     if e["kind"] == "approve":
-        return {"title": f"{e['title']} by {when}",
+        title = f"{e['title']} by {when}"
+        return {"title": ("Tomorrow: " if tomorrow else "") + title, "line": f"{title}.",
                 "body": "Approving two bank days before payday gives the bank time for direct deposit. Nothing "
                         f"moves until you pay from {bank}."}
     if e["kind"] == "deposit_federal":
-        amt = f": {pcal.money(e['amount'])}" if e.get("amount") else ""
-        return {"title": f"IRS deposit due {when}{amt}",
-                "body": f"{_sentence(e['sub'])} Pay it on EFTPS.gov from {bank}, then mark it sent on Pay staff."}
+        amt = pcal.money(e["amount"]) if e.get("amount") else ""
+        about = _sentence(e.get("_for") or e["sub"])
+        if tomorrow:
+            title = f"Tomorrow: IRS deposit {amt}".strip()
+            eftps = "Submit it on EFTPS today by 8 p.m. Eastern."
+        else:
+            title = f"IRS deposit due {when}" + (f": {amt}" if amt else "")
+            eftps = pcal.eftps_words(e["date"])[:-1] + ", the day before it’s due."
+        return {"title": title, "line": f"IRS deposit due {when}" + (f" ({amt})" if amt else "") + f". {eftps}",
+                "body": f"{about} {eftps} Pay from {bank}, then mark it sent on Pay staff."}
     if e["kind"] == "deposit_state":
         amt = f": {pcal.money(e['amount'])}" if e.get("amount") else ""
-        return {"title": f"{e['title']} due {when}{amt}",
+        title = f"{e['title']} due {when}{amt}"
+        return {"title": ("Tomorrow: " if tomorrow else "") + title, "line": f"{title}.",
                 "body": f"{_sentence(e['sub'])} Pay it on your state’s site, then mark it sent on Pay staff."}
-    return {"title": f"{e['title']} due {when}",
+    title = f"{e['title']} due {when}"
+    return {"title": ("Tomorrow: " if tomorrow else "") + title, "line": f"{title}.",
             "body": f"{_sentence(e['sub'])} Solutionist’s worksheet has the numbers; you or your accountant "
                     "file it."}
 
 
 def message(items: List[Dict[str, Any]], audience: str, church: bool) -> Dict[str, str]:
-    lines = [words(e, church) for e in items]
+    lines = [words(e, church, audience) for e in items]
     if len(lines) == 1:
         title, body = lines[0]["title"], lines[0]["body"]
     else:
-        title = f"{len(lines)} payroll dates in the next {TEAM_DAYS} days"
-        body = " ".join(f"{w['title']}." for w in lines)
-    if audience == OWNER:
-        title = "Tomorrow: " + (title[:1].lower() + title[1:] if len(lines) > 1 else title)
+        title = (f"Tomorrow: {len(lines)} payroll dates" if audience == OWNER
+                 else f"{len(lines)} payroll dates in the next {TEAM_DAYS} days")
+        body = " ".join(w["line"] for w in lines)
     return {"title": title[:150], "body": body}
 
 
@@ -294,13 +323,26 @@ def _one(biz: str, now: datetime, stats: Dict[str, Any]) -> int:
                 mine.append(e)
         if not mine:
             continue
-        to = team(biz_row) if audience == TEAM else ({str(biz_row["owner_id"])} if biz_row.get("owner_id") else set())
-        msg = message(mine, audience, church)
-        import hashlib
-        which = hashlib.sha1("|".join(sorted(e["key"] for e in mine)).encode()).hexdigest()[:10]
-        _tell(biz_row, to, msg["title"], msg["body"], tag=f"payroll-{audience}-{today.isoformat()}-{which}")
         stats["items"] += len(mine)
-        sent += 1
+        # Who hears what: an approve-by day only those who can approve (the
+        # owner, Admins); deposits and forms the whole payroll team. People
+        # who'd hear the same things share one alert.
+        if audience == TEAM:
+            can_approve, everyone = people(biz_row)
+            groups: Dict[tuple, Set[str]] = {}
+            for uid in sorted(everyone):
+                keys = tuple(e["key"] for e in mine if e["kind"] != "approve" or uid in can_approve)
+                if keys:
+                    groups.setdefault(keys, set()).add(uid)
+        else:
+            owner = str(biz_row.get("owner_id") or "")
+            groups = {tuple(e["key"] for e in mine): {owner}} if owner else {}
+        import hashlib
+        for keys, to in groups.items():
+            msg = message([e for e in mine if e["key"] in keys], audience, church)
+            which = hashlib.sha1("|".join(sorted(keys)).encode()).hexdigest()[:10]
+            _tell(biz_row, to, msg["title"], msg["body"], tag=f"payroll-{audience}-{today.isoformat()}-{which}")
+            sent += 1
     return sent
 
 

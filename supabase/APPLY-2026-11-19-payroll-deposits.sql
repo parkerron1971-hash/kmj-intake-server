@@ -34,8 +34,10 @@
 -- records, and the reminders' memory is the server's own. The app reads both
 -- through the payroll routes, which ask the church money wall first.
 --
--- Two new tables: one transaction, safe to run twice, nothing dropped, no
--- existing table touched. Apply any time. Until then the code reads "no
+-- Two new tables (one transaction), then 'payroll' added to the settings
+-- guard's server keys if that guard is in (a second transaction, section 2).
+-- Safe to run twice, nothing dropped, no existing table touched. Apply any
+-- time. Until then the code reads "no
 -- deposits marked" (GET /payroll/calendar answers deposits_ready: false),
 -- marking a deposit answers 503 "Deposit tracking is being switched on. Try
 -- again shortly.", and the hourly reminders skip.
@@ -80,6 +82,48 @@ grant all on public.payroll_reminders_sent to service_role;
 
 commit;
 
+-- 2. settings.payroll (the deposit schedule and the state's day, written by
+-- PUT /payroll/settings) is the server's: business_settings.SERVER_KEYS has
+-- 'payroll' since 2026-11-19. The settings guard keeps the app's own logins
+-- from writing a server key straight to the row; its list is the function
+-- below. Pre-check: when the guard (APPLY-2026-11-17-settings-server-keys.sql)
+-- is already in, its list gains 'payroll' here (the same 44 keys, the same
+-- function signature, so its grants and the trigger stay as they are); when
+-- it isn't, nothing happens here, and that file brings 'payroll' itself (it
+-- was added there before that file was applied). Either order ends with 44.
+begin;
+
+set local lock_timeout = '5s';
+
+do $guard$
+begin
+  if to_regprocedure('public.business_settings_server_keys()') is null then
+    raise notice 'the settings guard is not applied yet: APPLY-2026-11-17-settings-server-keys.sql brings payroll itself';
+    return;
+  end if;
+  execute $fn$
+create or replace function public.business_settings_server_keys() returns text[]
+language sql immutable parallel safe set search_path = public as $body$
+  select array[
+    'founding_church', 'no_card_trial', 'sample_church', 'church_move', 'extra_logins',
+    'extra_storage', 'church_texts_bill', 'stripe', 'churchsavvy_only', 'platform_books',
+    'computer', 'email_domain', 'autonomy', 'content_autonomy', 'automations_paused',
+    'church_owner_contact_id',
+    'lifecycle_emails', 'chief_insights', 'chief_playbook', 'maturity',
+    'church_leaders_note', 'church_team_rollup', 'interview_events',
+    'availability', 'booking_page', 'business_picture', 'church_serving', 'churchsavvy',
+    'client_sources', 'concierge', 'doc_defaults', 'giving', 'journeys', 'member_portal',
+    'messaging', 'new_here', 'news', 'reading_plan', 'site_prefs', 'sms_replies', 'studio',
+    'superbill', 'texting_hours',
+    'payroll'
+  ]::text[]
+$body$
+$fn$;
+end
+$guard$;
+
+commit;
+
 notify pgrst, 'reload schema';
 
 -- Check:
@@ -100,6 +144,9 @@ notify pgrst, 'reload schema';
 --   -- primary key, the foreign key and the checks on key and audience
 --   select count(*) from public.payroll_deposits;        -- 0
 --   select count(*) from public.payroll_reminders_sent;  -- 0
+--   -- Only when the settings guard is in (to_regprocedure('public.business_settings_server_keys()') is not null):
+--   select cardinality(public.business_settings_server_keys()),
+--          'payroll' = any(public.business_settings_server_keys());                   -- 44, true
 --
 -- Rollback (loses which deposits were marked sent, and the reminders may repeat once; no money record,
 -- run or person changes):

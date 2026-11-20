@@ -69,12 +69,24 @@ def test_a_deposit_three_days_out_and_nothing_once_it_is_marked_sent(db):
     prm.sweep(at(8))
     assert prm.sweep(at(12))["alerts"] == 1                         # Saturday the 12th: due Tuesday the 15th
     t = db.told[-1]
-    assert t["title"] == "IRS deposit due Tue, Dec 15: $956.00" and "EFTPS.gov" in t["body"]
+    assert t["title"] == "IRS deposit due Tue, Dec 15: $956.00"
+    # EFTPS needs it by 8 p.m. Eastern the day BEFORE the due date (Publication 15).
+    assert t["body"] == ("For November. Submit it on EFTPS by 8 p.m. Eastern on Mon, Dec 14, the day before it’s "
+                         "due. Pay from the church’s bank, then mark it sent on Pay staff.")
     db.rows("payroll_deposits").append({"business_id": CHURCH, "key": "federal:2026-11", "kind": "federal",
                                         "period": "2026-11", "amount": 956.0, "sent_on": "2026-12-12"})
     before = len(db.told)
     prm.sweep(at(14))
     assert len(db.told) == before                                   # marked sent: no owner alert
+
+
+def test_the_owners_day_before_deposit_alert_says_submit_today(db):
+    db.draft["status"] = "approved"                                 # only the deposit is open
+    prm.sweep(at(14))                                               # Monday the 14th: due tomorrow
+    assert len(db.told) == 1
+    t = db.told[0]
+    assert t["to"] == {OWNER} and t["title"] == "Tomorrow: IRS deposit $956.00"
+    assert t["body"].startswith("For November. Submit it on EFTPS today by 8 p.m. Eastern.")
 
 
 def test_an_approved_run_needs_no_reminder(db):
@@ -126,8 +138,29 @@ def test_a_business_with_no_runs_is_never_read(db):
 
 def test_with_the_giving_tick_on_a_work_holder_hears_and_a_see_holder_does_not(db, monkeypatch):
     ticks(monkeypatch, {MANAGER: tick("work"), MEMBER: tick("see", "member")})
+    assert prm.team(next(b for b in db.rows("businesses") if b["id"] == CHURCH)) == {OWNER, ADMIN, MANAGER}
+    db.draft["status"] = "approved"
+    prm.sweep(at(12))                                               # the IRS deposit, three days out
+    assert [t["to"] for t in db.told] == [{OWNER, ADMIN, MANAGER}]
+
+
+def test_an_approve_by_day_goes_only_to_those_who_can_approve(db, monkeypatch):
+    # A Work tick marks deposits but can't approve a run (approve asks for an Admin).
+    ticks(monkeypatch, {MANAGER: tick("work")})
     prm.sweep(at(8))
-    assert db.told[0]["to"] == {OWNER, ADMIN, MANAGER}
+    assert [(t["title"], t["to"]) for t in db.told] == [("Approve the Dec 15 run by Fri, Dec 11", {OWNER, ADMIN})]
+
+
+def test_an_approve_and_a_deposit_together_reach_each_person_once(db, monkeypatch):
+    ticks(monkeypatch, {MANAGER: tick("work")})
+    next(b for b in db.rows("businesses") if b["id"] == CHURCH)["settings"]["payroll"] = {
+        "deposit_schedule": "semiweekly"}
+    run(db, "2026-12-05", "paid", lines=standard_lines())      # Saturday: due Friday Dec 11
+    prm.sweep(at(8))                                            # Dec 11 is three days out for both
+    got = {frozenset(t["to"]): t for t in db.told}
+    assert set(got) == {frozenset({OWNER, ADMIN}), frozenset({MANAGER})}
+    assert got[frozenset({OWNER, ADMIN})]["title"] == "2 payroll dates in the next 3 days"
+    assert got[frozenset({MANAGER})]["title"].startswith("IRS deposit due Fri, Dec 11")
 
 
 def test_the_alert_goes_by_phone_and_email_through_the_church_path(db, monkeypatch, caplog):

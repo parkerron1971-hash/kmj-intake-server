@@ -99,14 +99,39 @@ def test_a_monthly_depositor_deposits_by_the_15th_of_the_next_month():
     (D(2026, 12, 22), D(2026, 12, 28)),
     # Friday Jan 16: Monday the 19th is Martin Luther King Jr. Day, so a business day more: Thursday.
     (D(2026, 1, 16), D(2026, 1, 22)),
+    # Tuesday before Thanksgiving: Wed 25, (Thu 26), Fri 27, Mon 30.
+    (D(2026, 11, 24), D(2026, 11, 30)),
+    # Saturday Dec 26: the period closes Tue 29; Wed 30, Thu 31, (New Year's Fri), Mon Jan 4.
+    (D(2026, 12, 26), D(2027, 1, 4)),
 ])
 def test_the_semiweekly_rule(pay, due):
     assert pcal.semiweekly_due(pay) == due
 
 
-def test_the_state_day_rolls_the_same_way():
+def test_more_monthly_rolls_from_the_review():
+    assert pcal.monthly_due(2027, 12) == D(2028, 1, 18)            # Jan 15 Sat, Jan 17 MLK Day
+    assert pcal.monthly_due(2027, 3) == D(2027, 4, 15)             # a Thursday; Emancipation Day is the 16th
+    assert pcal.monthly_due(2028, 3) == D(2028, 4, 18)             # Sat 15; Mon 17 is Emancipation Day observed
+    assert pcal.year_end_due(2027) == D(2028, 1, 31)               # a Monday
+    assert pcal.approve_by(D(2026, 1, 20)) == D(2026, 1, 15)       # MLK Day Monday skipped
+    assert pcal.approve_by(D(2026, 7, 6)) == D(2026, 7, 2)         # Fri Jul 3 is a bank day: Thu Jul 2, Fri Jul 3
+
+
+def test_the_state_day_rolls_on_bank_days_not_dc_holidays():
     assert pcal.state_due(2026, 11, 20) == D(2026, 12, 21)        # Dec 20, 2026 is a Sunday
     assert pcal.state_due(2026, 11, 15) == D(2026, 12, 15)
+    # A state's deadline doesn't follow DC: Emancipation Day (Thu Apr 16, 2026) moves nothing ...
+    assert pcal.state_due(2026, 3, 16) == D(2026, 4, 16)
+    # ... nor does Friday July 3, 2026, a federal "observed" day the banks stay open on.
+    assert pcal.state_due(2026, 6, 3) == D(2026, 7, 3)
+    assert pcal.state_due(2026, 11, 25) == D(2026, 12, 28)         # Christmas on a Friday, then the weekend
+    assert pcal.due_for(pcal.parse_key("state:2026-03"), {"state_day": 16}) == D(2026, 4, 16)
+
+
+def test_eftps_needs_the_deposit_by_8_pm_eastern_the_day_before():
+    assert pcal.eftps_by(D(2026, 12, 15)) == D(2026, 12, 14)
+    assert pcal.eftps_words(D(2026, 12, 15)) == "Submit it on EFTPS by 8 p.m. Eastern on Mon, Dec 14."
+    assert pcal.eftps_words(D(2027, 2, 1)) == "Submit it on EFTPS by 8 p.m. Eastern on Sun, Jan 31."
 
 
 @pytest.mark.parametrize("payday, by", [
@@ -194,7 +219,8 @@ def test_december_2026_with_christmas_on_a_friday(db):
     fed = days["2026-12-15"][1]
     # November's run: $650 withheld + $124 × 2 Social Security + $29 × 2 Medicare (the pastor owes none).
     assert fed["amount"] == 956.0 and fed["deposit_key"] == "federal:2026-11" and fed["status"] == "open"
-    assert fed["sub"] == "for November"
+    assert fed["sub"] == "for November. Submit it on EFTPS by 8 p.m. Eastern on Mon, Dec 14."
+    assert "_for" not in fed                                    # the reminders' own words stay inside
     state = days["2026-12-15"][2]
     assert state["title"] == "Ohio" and state["amount"] == 140.0 and state["deposit_key"] == "state:2026-11"
     assert days["2026-12-15"][0]["amount"] == dec15["totals"]["net"]
@@ -232,7 +258,7 @@ def test_semiweekly_deposits_are_keyed_by_pay_date(db):
     fed = next(e for d in view["days"] for e in d["events"] if e["kind"] == "deposit_federal")
     day = next(d["date"] for d in view["days"] if fed in d["events"])
     assert day == "2026-12-28" and fed["deposit_key"] == "federal:2026-12-22"
-    assert fed["sub"] == "for the Dec 22 payday"
+    assert fed["sub"] == "for the Dec 22 payday. Submit it on EFTPS by 8 p.m. Eastern on Sun, Dec 27."
 
 
 def test_projected_paydays_are_marked_and_never_more_than_three_months_out(db):

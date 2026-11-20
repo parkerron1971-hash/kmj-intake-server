@@ -246,12 +246,35 @@ def semiweekly_due(pay_date: date) -> date:
     return d
 
 
+def roll_bank(d: date) -> date:
+    """The next bank business day on or after `d` (weekends and Federal
+    Reserve holidays skipped)."""
+    while not is_bank_day(d):
+        d += timedelta(days=1)
+    return d
+
+
 def state_due(year: int, month: int, day: int) -> date:
     """The state's withholding deposit: the day of the following month the
-    church set (its state publishes it), moved past a weekend or holiday the
-    same way."""
+    church set (its state publishes it), moved past a weekend or a BANK
+    holiday (the Federal Reserve's). A state's deadlines don't follow the
+    District of Columbia's holidays, so DC Emancipation Day or a Friday
+    "observed" holiday the banks stay open on doesn't move them."""
     y, m = _next_month(year, month)
-    return roll(date(y, m, day))
+    return roll_bank(date(y, m, day))
+
+
+def eftps_by(due: date) -> date:
+    """The day an EFTPS payment must be submitted for a deposit due on
+    `due`: by 8 p.m. Eastern the calendar day before (IRS Publication 15,
+    "How To Deposit": "you must submit the deposit by 8 p.m. Eastern time
+    the day before the date the deposit is due")."""
+    return due - timedelta(days=1)
+
+
+def eftps_words(due: date) -> str:
+    """"Submit it on EFTPS by 8 p.m. Eastern on Mon, Dec 14.\""""
+    return f"Submit it on EFTPS by 8 p.m. Eastern on {day_words(eftps_by(due))}."
 
 
 def quarter_of(d: date) -> int:
@@ -530,8 +553,11 @@ def build_events(*, runs: List[Dict[str, Any]], settings: Dict[str, Any], marked
         amount = _r(sum(_deposits_of(r)["federal"] for r in final)) if final else None
         for_words = (f"for the {short_day(pd)} payday" if schedule == SEMIWEEKLY else f"for {MONTHS[pd.month - 1]}")
         status = "sent" if key in marked else ("open" if g["runs"] else None)
-        sub = for_words + ("" if g["runs"] else ", projected")
-        out.append(_ev("deposit_federal", due, "IRS deposit", sub, amount=amount, key=key, status=status))
+        about = for_words + ("" if g["runs"] else ", projected")
+        ev = _ev("deposit_federal", due, "IRS deposit", f"{about}. {eftps_words(due)}", amount=amount, key=key,
+                 status=status)
+        ev["_for"] = about                         # the reminders' own words; never in the answer
+        out.append(ev)
 
     # State withholding: only once the church has set its state's day.
     if state_day:

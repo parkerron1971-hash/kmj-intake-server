@@ -47,6 +47,7 @@ def _deposit(db, key, amount):
 
 def test_the_fourth_quarter_by_hand(db):
     _q4(db)
+    designate(db)                         # $24,000 designated Dec 14, 2025: every housing part is left out
     _deposit(db, "federal:2026-10", 956.0)
     _deposit(db, "state:2026-10", 140.0)
     q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
@@ -121,7 +122,8 @@ def test_paid_runs_alone_once_nothing_is_left_to_pay(db):
     run(db, "2025-12-31", "paid", lines=standard_lines())
     y = pf.year(_biz(db), 2025, today=TODAY)
     assert y["projected"] is False and y["note"] is None and y["due"] == "2026-02-02"   # Jan 31, 2026: Saturday
-    assert y["w3"]["1"] == 12000.0
+    # Nothing was designated for 2025, so the pastor's $4,000 of housing is wages too.
+    assert y["w3"]["1"] == 16000.0
     ready = {r["key"]: r for r in y["readiness"]}
     assert ready["housing_designation"]["ok"] is False
     assert "No 2025 housing allowance designation is on file for Marcus Ellwood" == ready["housing_designation"]["line"]
@@ -151,9 +153,56 @@ def test_the_housing_records_switched_off_says_so(db, monkeypatch):
     import housing_allowance
     monkeypatch.setattr(housing_allowance, "switched_on", lambda biz: False)
     _q4(db)
-    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    y = pf.year(_biz(db), 2026, today=TODAY)
+    ready = {r["key"]: r for r in y["readiness"]}
     assert ready["housing_designation"]["ok"] is False and ready["housing_designation"]["fix"] is None
     assert "aren’t switched on" in ready["housing_designation"]["line"]
+    # Nothing can be checked: left out as before, and the W-2 row says so.
+    pastor = next(p for p in y["w2"] if p["employee"]["id"] == PASTOR)
+    assert pastor["boxes"]["1"] == 12000.0 and pastor["boxes"]["14"] == [{"label": "Housing", "amount": 6000.0}]
+    assert any("as if the board designated it in advance" in n for n in pastor["notes"])
+
+
+def _year_of_housing(db):
+    """Twelve paid months: the pastor $6,000 a month, $2,000 of it housing."""
+    for m in range(1, 13):
+        run(db, f"2026-{m:02d}-28", "paid", lines=standard_lines(ytd_staff=2000.0 * (m - 1)))
+
+
+def test_housing_past_what_the_board_designated_is_wages(db):
+    # The reviewer's case: $12,000 designated, $24,000 paid as housing.
+    designate(db, amount=12000.0, on="2025-12-14")
+    _year_of_housing(db)
+    y = pf.year(_biz(db), 2026, today=date(2027, 1, 10))
+    pastor = next(p for p in y["w2"] if p["employee"]["id"] == PASTOR)
+    assert pastor["boxes"]["1"] == 60000.0                       # $72,000 pay, $12,000 left out
+    assert pastor["boxes"]["14"] == [{"label": "Housing", "amount": 12000.0}]
+    assert any(n.startswith("$12,000.00 of housing is more than the board designated for 2026 ($12,000.00)")
+               and "Treas. Reg. 1.107-1(b)" in n for n in pastor["notes"])
+    # The designation runs out in June: the second half's housing is wages on line 2.
+    q2 = pf.quarter(_biz(db), 2026, 2, today=date(2027, 1, 10))
+    assert q2["lines"]["2"] == 18000.0                           # (4,000 + 2,000) × 3
+    q4 = pf.quarter(_biz(db), 2026, 4, today=date(2027, 1, 10))
+    assert q4["lines"]["2"] == 24000.0                           # (6,000 + 2,000) × 3
+    assert any(n.startswith("$6,000.00 of housing paid this quarter is counted as wages on line 2: it was more "
+                            "than the board designated for the year") for n in q4["notes"])
+
+
+def test_no_designation_in_advance_makes_all_the_housing_wages(db):
+    _year_of_housing(db)
+    y = pf.year(_biz(db), 2026, today=date(2027, 1, 10))
+    pastor = next(p for p in y["w2"] if p["employee"]["id"] == PASTOR)
+    assert pastor["boxes"]["1"] == 72000.0 and pastor["boxes"]["14"] == []
+    assert "the board’s 2026 housing designation" in pastor["missing"]
+    assert any("No housing allowance was designated in advance for 2026" in n for n in pastor["notes"])
+    q1 = pf.quarter(_biz(db), 2026, 1, today=date(2027, 1, 10))
+    assert q1["lines"]["2"] == 24000.0 and any("not designated in advance" in n for n in q1["notes"])
+
+
+def test_a_tiny_check_is_not_taken_for_a_ministers(db):
+    assert pf._exempt({"gross": 0.30, "medicare_employee": 0.0, "employer_medicare": 0.0}) is False
+    assert pf._exempt({"gross": 6000.0, "medicare_employee": 0.0, "employer_medicare": 0.0}) is True
+    assert pf._exempt({"gross": 6000.0, "medicare_employee": 87.0, "employer_medicare": 87.0}) is False
 
 
 def _contractors(db):
@@ -162,9 +211,13 @@ def _contractors(db):
         {"id": jordan, "business_id": CHURCH, "name": "Jordan Pike", "tin_last4": "1111", "stripe_account_id": None,
          "tin_encrypted": "gAAAA-TIN-CIPHER"},
         {"id": simone, "business_id": CHURCH, "name": "Simone Carr", "tin_last4": None, "stripe_account_id": None}])
+    stripe_paid = uid()
+    db.rows("contractors").append({"id": stripe_paid, "business_id": CHURCH, "name": "Remy Stripe",
+                                   "tin_last4": None, "stripe_account_id": "acct_made_up"})
     for cid, name, amt, when in ((jordan, "Jordan Pike", 1200.0, "2026-03-01"), (jordan, "Jordan Pike", 1200.0,
                                                                                  "2026-09-01"),
                                  (simone, "Simone Carr", 1500.0, "2026-05-01"),
+                                 (stripe_paid, "Remy Stripe", 5000.0, "2026-07-01"),
                                  (None, "=HYPERLINK(\"x\")", 2100.0, "2026-06-01")):
         db.rows("bills").append({"id": uid(), "business_id": CHURCH, "status": "paid", "is_1099_eligible": True,
                                  "paid_at": f"{when}T12:00:00Z", "paid_amount": amt, "amount": amt,
@@ -176,8 +229,10 @@ def test_contractors_at_the_2000_line_with_their_w9s(db):
     _contractors(db)
     y = pf.year(_biz(db), 2026, today=TODAY)
     assert y["nec_threshold"] == 2000.0
+    # Simone's $1,500 is under the line; Remy's $5,000 went through Stripe, which files that 1099 itself
+    # (excluded exactly as the 1099 drafts exclude it).
     assert sorted((c["name"], c["amount"], c["w9"]) for c in y["contractors"]) == [
-        ("=HYPERLINK(\"x\")", 2100.0, False), ("Jordan Pike", 2400.0, True)]      # Simone's $1,500 is under
+        ("=HYPERLINK(\"x\")", 2100.0, False), ("Jordan Pike", 2400.0, True)]
     ready = {r["key"]: r for r in y["readiness"]}
     assert ready["w9s"]["ok"] is False and ready["w9s"]["line"] == "=HYPERLINK(\"x\") has no W-9 on file"
     assert pf.nec_threshold(2025) == 600.0 and pf.nec_threshold(2026) == 2000.0 and pf.nec_threshold(2030) == 2000.0
@@ -185,6 +240,7 @@ def test_contractors_at_the_2000_line_with_their_w9s(db):
 
 def test_the_csv_is_a_worksheet_that_never_runs_a_formula(db):
     _q4(db)
+    designate(db)
     _contractors(db)
     data = pf.year(_biz(db), 2026, today=TODAY)
     text = pf.year_csv(_biz(db), data)

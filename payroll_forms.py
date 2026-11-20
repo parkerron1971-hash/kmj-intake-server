@@ -25,8 +25,10 @@ THE RULES ENCODED HERE (each cited where it is used):
   * W-2 Box 1 leaves out the housing allowance, which shows in Box 14
     (Publication 517, "Members of the Clergy"); a minister's Boxes 3 to 6
     are blank (General Instructions for Forms W-2 and W-3, "Clergy and
-    religious workers"); housing paid before the board designated it isn't
-    a housing allowance and stays in Box 1 (housing_allowance.figures)
+    religious workers"); only housing the board designated IN ADVANCE is
+    left out (Treas. Reg. 1.107-1(b)): housing paid before the vote, past the
+    year's designated amount, or with no designation at all is wages in Box
+    1 and on 941 line 2, and Box 14 shows only what is left out
   * a church owes no FUTA (IRC 3306(c)(8)), so there is no Form 940 here
   * 1099-NEC: each contractor paid $2,000 or more for payments made in 2026
     and later, $600 before (Instructions for Forms 1099-MISC and 1099-NEC,
@@ -69,8 +71,13 @@ class Unavailable(Exception):
 
 def nec_threshold(year: int) -> float:
     """The 1099-NEC line: $2,000 for payments made in 2026 and later, $600
-    before (Instructions for Forms 1099-MISC and 1099-NEC, 2026)."""
-    return 2000.0 if year >= 2026 else 600.0
+    before (Instructions for Forms 1099-MISC and 1099-NEC, 2026). One shared
+    helper, form_1099.nec_threshold, so every 1099 surface says the same."""
+    import form_1099
+    return form_1099.nec_threshold(year)
+
+
+HOUSING_RULE = "Treas. Reg. 1.107-1(b)"
 
 
 def _r(x: Any) -> float:
@@ -170,31 +177,53 @@ def _exempt(item: Dict[str, Any]) -> bool:
     Medicare has no wage base, so any other line with pay carries some
     (payroll_calc.statutory); this reads how the line WAS taxed, so a
     person who became a minister mid-year is counted right on both sides."""
-    return (_r(item.get("gross")) > 0 and not _r(item.get("medicare_employee"))
-            and not _r(item.get("employer_medicare")))
+    gross = _r(item.get("gross"))
+    # A check so small its Medicare rounds to nothing isn't a minister's.
+    return (gross > 0 and _r(gross * payroll_calc.MEDICARE_RATE) > 0
+            and not _r(item.get("medicare_employee")) and not _r(item.get("employer_medicare")))
 
 
 def person_lines(ctx: Dict[str, Any], emp: Dict[str, Any], items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Each of a person's lines (in pay-date order) with the figures the
     forms need: Box 1 wages, Social Security and Medicare wages (the wage
     base and the $200,000 line measured across the year), the housing part
-    left out, and the line's tax liability for the 941's months."""
+    left out, and the line's tax liability for the 941's months.
+
+    The housing part is left out of Box 1 only as far as the board
+    designated it IN ADVANCE (Treas. Reg. 1.107-1(b); IRS Publication 517):
+    housing paid before the vote, housing past the year's designated amount
+    (counted in pay-date order), and all of it when no designation is on
+    file are wages. With the housing allowance records not switched on for
+    the church nothing can be checked, so the housing is left out as before
+    and the worksheet says so."""
     base = payroll_calc.ss_wage_base(ctx["year"])
     minister = payroll_calc.is_minister(emp, ctx["church"])
-    rec = None
+    rec, on = None, True
     if minister or any(_r(i.get("housing_allowance")) for i in items):
-        rec, _on = _housing_record(ctx, emp)
+        rec, on = _housing_record(ctx, emp)
     voted = _day(rec.get("designated_on")) if rec else None
+    cap = None if not rec or rec.get("designated_amount") in (None, "") else _r(rec.get("designated_amount"))
     fica_before = 0.0
     out = []
     for i in items:
         pd = _day(i.get("_pay_date"))
         gross, housing = _r(i.get("gross")), min(_r(i.get("housing_allowance")), _r(i.get("gross")))
         exempt = _exempt(i)
-        # Housing paid before the board's vote isn't housing allowance:
-        # it stays in Box 1 (housing_allowance.figures).
-        early = bool(voted and pd and pd < voted)
-        excluded = housing if (exempt or minister) and housing and not early else 0.0
+        early = over = undesignated = 0.0
+        excluded = 0.0
+        if housing and (exempt or minister):
+            if not on:
+                excluded = housing                    # can't be checked here: left out, and said so
+            elif rec is None:
+                undesignated = housing                # nothing designated in advance: wages
+            elif voted and pd and pd < voted:
+                early = housing                       # paid before the board's vote: wages
+            elif cap is None:
+                excluded = housing
+            else:
+                excluded = _r(min(housing, cap))      # up to what the board designated for the year
+                cap = _r(cap - excluded)
+                over = _r(housing - excluded)         # past it: wages
         if exempt:
             ss_w = med_w = add_w = 0.0
         else:
@@ -206,7 +235,8 @@ def person_lines(ctx: Dict[str, Any], emp: Dict[str, Any], items: List[Dict[str,
                        + _r(i.get("employer_social_security")) + _r(i.get("medicare_employee"))
                        + _r(i.get("employer_medicare")))
         out.append({"pay_date": pd, "item": i, "box1": _r(gross - excluded), "housing_excluded": excluded,
-                    "housing_early": housing if early else 0.0, "fit": _r(i.get("federal_withholding")),
+                    "housing_early": early, "housing_over": over, "housing_undesignated": undesignated,
+                    "housing_unchecked": excluded if not on else 0.0, "fit": _r(i.get("federal_withholding")),
                     "sit": _r(i.get("state_withholding")), "exempt": exempt, "ss_wages": ss_w, "med_wages": med_w,
                     "add_wages": add_w, "ss_tax": _r(i.get("social_security_employee")),
                     "med_tax": _r(i.get("medicare_employee")), "liability": liability, "gross": gross})
@@ -279,6 +309,14 @@ def quarter(biz_row: Dict[str, Any], year: int, q: int, today: Optional[date] = 
                      "Ask your accountant before filing.")
     if any(ln["exempt"] for ln in lines):
         notes.append("Ministers aren’t in lines 5a and 5c: their pay isn’t Social Security or Medicare wages.")
+    moved = _r(sum(ln["housing_early"] + ln["housing_over"] + ln["housing_undesignated"] for ln in lines))
+    if moved:
+        why = [w for w, k in (("paid before the board’s vote", "housing_early"),
+                              ("more than the board designated for the year", "housing_over"),
+                              ("not designated in advance", "housing_undesignated"))
+               if any(ln[k] for ln in lines)]
+        notes.append(f"{pcal.money(moved)} of housing paid this quarter is counted as wages on line 2: it was "
+                     f"{' or '.join(why)} ({HOUSING_RULE}).")
     due = pcal.form_941_due(year, q)
     return {
         "ok": True, "year": year, "q": q, "due": due.isoformat(),
@@ -304,25 +342,26 @@ def _address_ok(p: Dict[str, Any]) -> bool:
 
 
 def _contractors(biz: str, year: int) -> List[Dict[str, Any]]:
-    """Each contractor paid at least the year's 1099-NEC line, from the
-    existing 1099 summary (paid 1099-eligible bills), with whether a W-9 is
-    on file (its last four, or Stripe collecting it)."""
+    """Each contractor the church files a 1099-NEC for, chosen exactly as
+    the 1099 drafts choose them (reports_router.drafts_1099): from the 1099
+    summary (paid 1099-eligible bills), at or above the year's line, and not
+    Stripe-managed (Stripe Tax Reporting files those). With whether a W-9 is
+    on file (its last four)."""
     import reports_router
     try:
         summary = reports_router._summary_1099(biz, year)
     except sb_clients.PartialRead:
         raise Unavailable("bills")
-    line = nec_threshold(year)
-    rows = [r for r in summary.get("rows") or [] if _r(r.get("total_paid")) >= line]
+    rows = [r for r in summary.get("rows") or [] if not r.get("stripe_managed") and r.get("reaches_threshold")]
     ids = sorted({str(r["contractor_id"]) for r in rows if r.get("contractor_id")})
     w9: Dict[str, bool] = {}
     if ids:
         got = sb_clients.sb_get_as_service(
             f"/contractors?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in ids)})"
-            f"&select=id,tin_last4,stripe_account_id&limit=500")
+            f"&select=id,tin_last4&limit=500")
         if not isinstance(got, list):
             raise Unavailable("contractors")
-        w9 = {str(c["id"]): bool(c.get("tin_last4") or c.get("stripe_account_id")) for c in got}
+        w9 = {str(c["id"]): bool(c.get("tin_last4")) for c in got}
     return [{"name": r.get("name") or "—", "amount": _r(r.get("total_paid")),
              "w9": bool(r.get("contractor_id") and w9.get(str(r["contractor_id"])))} for r in rows]
 
@@ -359,6 +398,9 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
         b1, b2 = _r(sum(ln["box1"] for ln in lns)), _r(sum(ln["fit"] for ln in lns))
         housing = _r(sum(ln["housing_excluded"] for ln in lns))
         early = _r(sum(ln["housing_early"] for ln in lns))
+        over = _r(sum(ln["housing_over"] for ln in lns))
+        undesignated = _r(sum(ln["housing_undesignated"] for ln in lns))
+        unchecked = _r(sum(ln["housing_unchecked"] for ln in lns))
         sit = _r(sum(ln["sit"] for ln in lns))
         boxes: Dict[str, Any] = {
             "1": b1, "2": b2,
@@ -381,20 +423,28 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
         if not prof.get("ssn_last4"):
             missing.append("a Social Security number")
             need["ssns"].append(who)
-        if minister or housing or early:
+        if minister or housing or early or over or undesignated:
             ministers += 1
             rec, on = _housing_record(ctx, emp)
             housing_on = housing_on and on
             if not rec:
                 missing.append(f"the board’s {yr} housing designation")
                 need["housing"].append(who)
-            elif rec.get("designated_amount") is not None and housing > _r(rec.get("designated_amount")):
-                notes.append(f"The housing paid ({pcal.money(housing)}) is more than the board designated "
-                             f"({pcal.money(_r(rec.get('designated_amount')))}); the extra is taxable. Ask your "
-                             f"accountant before filing.")
+            if over:
+                notes.append(f"{pcal.money(over)} of housing is more than the board designated for {yr} "
+                             f"({pcal.money(_r(rec.get('designated_amount')))}), so it is wages in Box 1, not "
+                             f"housing allowance ({HOUSING_RULE}).")
         if early:
             notes.append(f"{pcal.money(early)} of housing was paid before the board’s vote, so it is wages in "
-                         f"Box 1, not housing allowance.")
+                         f"Box 1, not housing allowance ({HOUSING_RULE}).")
+        if undesignated:
+            notes.append(f"No housing allowance was designated in advance for {yr}, so the {pcal.money(undesignated)} "
+                         f"of housing paid is wages in Box 1 ({HOUSING_RULE}). If the board did designate it, record "
+                         f"the designation and this changes.")
+        if unchecked:
+            notes.append(f"Housing allowance records aren’t switched on here, so the {pcal.money(unchecked)} of "
+                         f"housing is left out of Box 1 as if the board designated it in advance. If it didn’t, "
+                         f"it is wages.")
         for k in ("1", "2"):
             w3[k] = _r(w3[k] + boxes[k])
         for k in ("3", "4", "5", "6"):

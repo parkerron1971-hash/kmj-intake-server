@@ -9,6 +9,11 @@ rate and frequency. The line then says where they came from
 date), and the app shows "carried over from Nov 13" beside them. Typing a new
 figure on the line drops the note (payroll_router.update_item).
 
+An HOURLY line carries only when this check's pay equals the copied line's
+(check()): otherwise the line needs typing and calc_payload.carry_note says
+why. Changing a carried hourly line's hours later clears what was carried, the
+same way. And approve refuses any line whose take-home would be below zero.
+
 How they were paid on a line is kept on the line from now on
 (calc_payload.pay = {type, rate, frequency}). A line written before this has
 no such record; for those, "unchanged" means the line's own hours, paid on
@@ -22,7 +27,7 @@ from urllib.parse import quote
 import payroll_calc
 import sb_clients
 
-CARRY_KEYS = ("carried_from", "carried_from_pay_date", "carried_item")
+CARRY_KEYS = ("carried_from", "carried_from_pay_date", "carried_item", "carried_gross", "carry_note")
 
 
 def terms(employee: Dict[str, Any]) -> Dict[str, Any]:
@@ -81,21 +86,54 @@ def sources(business_id: str, employees: List[Dict[str, Any]],
             continue
         run = by_run[str(last["pay_run_id"])]
         out[str(emp["id"])] = {"run_id": str(run["id"]), "pay_date": str(run.get("pay_date") or "")[:10],
-                               "item_id": str(last.get("id")),
+                               "item_id": str(last.get("id")), "gross": round(float(last.get("gross") or 0), 2),
                                "federal": last.get("federal_withholding"), "state": last.get("state_withholding")}
     return out
 
 
+def _when(src: Dict[str, Any]) -> str:
+    try:
+        from datetime import date
+        from payroll_calendar import short_day
+        return short_day(date.fromisoformat(str(src.get("pay_date") or "")[:10]))
+    except ValueError:
+        return "last"
+
+
+def check(src: Optional[Dict[str, Any]], employee: Dict[str, Any],
+          new_gross: float) -> "tuple[Optional[Dict[str, Any]], Optional[str]]":
+    """(what to carry, or None; and why nothing was, for the line's note).
+    Withholding follows the size of the check: a salary is the same every
+    period, but an hourly check with different hours is a different check,
+    and last time's figures could take more than it pays (a 4-hour check
+    carrying an 80-hour check's $390 would leave take-home below zero). So an
+    hourly line carries only when its pay equals the line it would copy."""
+    if not src:
+        return None, None
+    if terms(employee)["type"] == "hourly" and abs(float(src.get("gross") or 0) - float(new_gross or 0)) >= 0.005:
+        return None, (f"Nothing was carried over from the {_when(src)} run: this check’s pay "
+                      f"(${float(new_gross or 0):,.2f}) isn’t that one’s (${float(src.get('gross') or 0):,.2f}), so "
+                      f"its federal and state withholding need typing.")
+    return src, None
+
+
+HOURS_CHANGED = ("The hours changed after the withholding was carried over from the {when} run, so it was "
+                 "cleared: type this check’s federal and state withholding.")
+
+
 def payload(employee: Dict[str, Any], carried: Optional[Dict[str, Any]] = None,
-            before: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            before: Optional[Dict[str, Any]] = None, note: Optional[str] = None) -> Dict[str, Any]:
     """A line's calc_payload: what it had, how the person is paid now, and
-    (when given) where its withholding was carried from."""
+    (when given) where its withholding was carried from, or why it wasn't."""
     out = dict(before) if isinstance(before, dict) else {}
     out["pay"] = terms(employee)
     if carried:
         out["carried_from"] = carried["run_id"]
         out["carried_from_pay_date"] = carried["pay_date"]
         out["carried_item"] = carried["item_id"]
+        out["carried_gross"] = carried.get("gross")
+    if note:
+        out["carry_note"] = note
     return out
 
 

@@ -156,23 +156,126 @@ def test_sending_statements_is_the_owners_or_an_admins_and_goes_only_to_their_ow
     assert status(pr.send_run_stubs, shop_run["id"], None, user=user(SHOP_VIEWER))[0] == 403
 
 
-def test_marking_a_run_paid_emails_the_statements_and_never_fails_for_it(db, monkeypatch):
+def test_marking_a_run_paid_queues_the_statements_and_never_fails_for_them(db, monkeypatch):
     def approved():
         r = run(db, "2026-11-30", "approved", lines=standard_lines())
         return r["id"]
+    queued = []
+    monkeypatch.setattr(pr, "_background", lambda fn: queued.append(fn))
     out = pr.mark_paid(approved(), user=user(OWNER))
-    assert out["run"]["status"] == "paid" and out["stubs"] == {"sent": 2, "skipped": [], "auto": True}
+    # The answer comes back before any mail: the send is queued, off the request.
+    assert out["run"]["status"] == "paid"
+    assert out["stubs"] == {"queued": True, "auto": True, "sent": None, "skipped": []}
+    assert db.mail == [] and len(queued) == 1
+    queued.pop()()                                              # the background work, run here
+    assert sorted(m["to_email"] for m in db.mail) == ["dana@graceharbor.example", "marcus@graceharbor.example"]
     db.mail.clear()
     monkeypatch.setenv("PAYROLL_STUB_EMAIL", "off")
     out = pr.mark_paid(approved(), user=user(OWNER))
-    assert out["stubs"] == {"sent": 0, "skipped": [], "auto": False} and db.mail == []
+    assert out["stubs"] == {"queued": False, "auto": False, "sent": None, "skipped": []} and queued == []
     monkeypatch.setenv("PAYROLL_STUB_EMAIL", "owner")
-    assert pr.mark_paid(approved(), user=user(OWNER))["stubs"]["auto"] is False and db.mail == []
+    assert pr.mark_paid(approved(), user=user(OWNER))["stubs"]["queued"] is False and queued == []
     monkeypatch.setenv("PAYROLL_STUB_EMAIL", "on")
     import payroll_stubs
     monkeypatch.setattr(payroll_stubs, "load", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
     out = pr.mark_paid(approved(), user=user(OWNER))
-    assert out["ok"] and out["run"]["status"] == "paid" and out["stubs"]["failed"] is True
+    assert out["ok"] and out["stubs"]["queued"] is True
+    queued.pop()()                                              # a failure in the background raises nothing
+    assert db.mail == []
+    # A thread that can't even start still leaves the run paid.
+    monkeypatch.setattr(pr, "_background", lambda fn: (_ for _ in ()).throw(RuntimeError("no threads")))
+    out = pr.mark_paid(approved(), user=user(OWNER))
+    assert out["run"]["status"] == "paid" and out["stubs"]["failed"] is True and out["stubs"]["queued"] is False
+
+
+def test_the_background_is_a_daemon_thread(monkeypatch):
+    started = []
+
+    class T:
+        def __init__(self, target, daemon=None):
+            started.append(daemon)
+            self.target = target
+
+        def start(self):
+            self.target()
+    import threading
+    monkeypatch.setattr(threading, "Thread", T)
+    ran = []
+    pr._background(lambda: ran.append(1))
+    assert started == [True] and ran == [1]
+
+
+# ─── A run that would pay someone less than nothing ───────────────────
+
+def _hourly(db):
+    from payroll_free_fake import HOURLY
+    db.rows("employees").append({"id": HOURLY, "business_id": CHURCH, "first_name": "Hal", "last_name": "Oakes",
+                                 "status": "active", "pay_type": "hourly", "pay_rate": 25.0,
+                                 "pay_frequency": "biweekly", "email": "hal@graceharbor.example"})
+    return HOURLY
+
+
+def test_a_short_hourly_check_carries_nothing_and_a_negative_net_never_approves(db):
+    # The reviewer's case: last paid run 80 hours with $300 federal and $90 state; a 4-hour run.
+    hal = _hourly(db)
+    run(db, "2026-11-13", "paid", lines=[{"employee_id": hal, "hours": 80, "fit": 300.0, "sit": 90.0}])
+    out = pr.create_run(pr.RunBody(business_id=CHURCH, period_start="2026-11-14", period_end="2026-11-27",
+                                   pay_date="2026-11-30", items=[pr.RunItemInput(employee_id=hal, hours=4)]),
+                        user=user(OWNER))
+    line = out["items"][0]
+    assert line["gross"] == 100.0
+    assert line["federal_withholding"] is None and line["state_withholding"] is None
+    assert line["calc_status"] == "needs_calculation" and line["net"] is None
+    assert "carried_from" not in line["calc_payload"]
+    assert line["calc_payload"]["carry_note"] == (
+        "Nothing was carried over from the Nov 13 run: this check’s pay ($100.00) isn’t that one’s ($2,000.00), "
+        "so its federal and state withholding need typing.")
+    # Typed by hand as the same $390: take-home below zero, and approve says so, naming him.
+    pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(federal_withholding=300.0, state_withholding=90.0),
+                   user=user(OWNER))
+    with pytest.raises(HTTPException) as e:
+        pr.approve_run(out["run"]["id"], user=user(OWNER))
+    assert e.value.status_code == 409 and e.value.detail["error"] == "negative_net"
+    assert e.value.detail["people"] == ["Hal Oakes"]
+    assert e.value.detail["message"] == ("Take-home pay would be below zero for Hal Oakes (−$297.65): the taxes and "
+                                         "deductions are more than the pay. Fix that line before approving.")
+    assert next(r for r in db.rows("pay_runs") if r["id"] == out["run"]["id"])["status"] == "draft"
+
+
+def test_the_same_hours_carry_and_changing_them_afterwards_clears_what_was_carried(db):
+    hal = _hourly(db)
+    prev = run(db, "2026-11-13", "paid", lines=[{"employee_id": hal, "hours": 80, "fit": 300.0, "sit": 90.0}])
+    out = pr.create_run(pr.RunBody(business_id=CHURCH, period_start="2026-11-14", period_end="2026-11-27",
+                                   pay_date="2026-11-30", items=[pr.RunItemInput(employee_id=hal, hours=80)]),
+                        user=user(OWNER))
+    line = out["items"][0]
+    assert line["federal_withholding"] == 300.0 and line["calc_payload"]["carried_from"] == prev["id"]
+    assert line["calc_payload"]["carried_gross"] == 2000.0
+    changed = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(hours=4), user=user(OWNER))["item"]
+    assert changed["gross"] == 100.0 and changed["federal_withholding"] is None
+    assert changed["calc_status"] == "needs_calculation" and "carried_from" not in changed["calc_payload"]
+    assert changed["calc_payload"]["carry_note"].startswith("The hours changed after the withholding was carried over "
+                                                            "from the Nov 13 run")
+    with pytest.raises(HTTPException) as e:
+        pr.approve_run(out["run"]["id"], user=user(OWNER))
+    assert e.value.detail["error"] == "needs_calculation"
+
+
+def test_money_is_never_nan_or_infinite(db):
+    run(db, "2026-11-30", "paid", lines=standard_lines())
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        assert status(_mark, OWNER, amount=bad)[0] == 400, bad
+        with pytest.raises(HTTPException) as e:
+            pr._money(bad, "hours")
+        assert e.value.status_code == 400
+    assert db.rows("payroll_deposits") == []
+
+
+def test_the_pay_records_refusal_names_only_who_can_open_payroll():
+    # The accountant holds no seat, and payroll's own ladder refuses a login with none.
+    assert "accountant" not in gate.PAY_RECORDS_403
+    assert gate.PAY_RECORDS_403 == ("Pay and tax records are kept for the owner, an admin, or a login the owner gave "
+                                    "giving at Work.")
 
 
 # ─── Deposits marked sent ─────────────────────────────────────────────
@@ -242,9 +345,10 @@ def test_settings_are_the_owners_or_an_admins_and_touch_only_their_own_keys(db):
 def test_the_worksheet_doors(db):
     run(db, "2026-10-30", "paid", lines=standard_lines())
     q = pr.forms_quarter(CHURCH, q=4, year=2026, user=user(OWNER))
-    assert q["lines"]["2"] == 6000.0 and q["runs_in"] == 1
+    # No designation on file for 2026: the pastor's $2,000 of housing is wages too.
+    assert q["lines"]["2"] == 8000.0 and q["runs_in"] == 1
     y = pr.forms_year(CHURCH, year=2026, user=user(ADMIN))
-    assert y["w3"]["1"] == 6000.0
+    assert y["w3"]["1"] == 8000.0
     for fn, kw, media in ((pr.forms_quarter_pdf, {"q": 4}, "application/pdf"),
                           (pr.forms_year_pdf, {}, "application/pdf"),
                           (pr.forms_year_csv, {}, "text/csv; charset=utf-8")):

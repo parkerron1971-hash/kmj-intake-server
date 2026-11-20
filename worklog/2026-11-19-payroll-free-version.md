@@ -4,17 +4,15 @@ date: 2026-11-19
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-19: "build the free version now and will think about the other option later." The church pays its people from its own bank and sends its own tax deposits; Solutionist prepares the numbers, the stubs, the calendar, the reminders and the year-end worksheets. Contract: payroll_free_contract.md (the app is built against it in parallel).'
 status: in progress
-prs: []
-migrations: [supabase/APPLY-2026-11-19-payroll-deposits.sql (NOT applied)]
+prs: [kmj-intake-server#1973]
+migrations: [supabase/APPLY-2026-11-19-payroll-deposits.sql (NOT applied; reviewed safe to apply)]
 left_undone:
-  - "Not pushed: local commits on branch payroll-free-version (worktree _be-payroll), for the parent session to review and open as a PR."
   - "Migration NOT applied. Until Kevin applies it the calendar reads 'no deposits marked' (deposits_ready: false), Mark sent and Undo answer 503 'Deposit tracking is being switched on. Try again shortly.', and the reminders skip."
-  - "settings.payroll is not on business_settings.SERVER_KEYS: the key is written only by the server (business_settings.merge, under=['payroll']), but the app's own login could still PATCH it straight to the businesses row through RLS (it sets reminder dates, no money). Adding it needs the SQL list in the settings guard to change too (test_settings_server_keys pins them equal), so it is a follow-up migration."
-  - "reports_router._summary_1099 still says $600 is the 1099-NEC line. The year worksheet uses $2,000 for payments made in 2026 and later (Instructions for Forms 1099-MISC and 1099-NEC, 2026); the 1099 summary card and the 1099 drafts were left as they are (other surfaces, other tests)."
+  - "Housing with the housing allowance records switched off (HOUSING_ALLOWANCE=owner, so every church but the platform owner's): nothing can be checked, so the W-2 still leaves the housing out of Box 1 as if the board designated it in advance, and the row's note says so. With the records on, only what was designated in advance is left out."
   - "No route sets a person's paid_by. The statement reads employees.paid_by when that column exists, else 'direct_deposit' when direct-deposit consent is stamped, else null. No bank account number is stored or shown (the mock's 'Checking ending 2290' line is not drawn)."
   - "employees has no title column: Stub.employee.title and the W-2 list's title read employees.title when it exists, else null."
   - "The $100,000 next-day deposit rule and the 941 lookback that decides monthly vs semiweekly are not worked out: the church picks its schedule in the payroll settings."
-  - "State holidays: a state's own deposit date rolls past weekends and the federal (DC) legal holidays, not that state's own holidays."
+  - "State holidays: a state's own deposit date rolls past weekends and Federal Reserve (bank) holidays, not that state's own holidays."
   - "No live send was made: the statement emails and the reminder alerts were checked with send_via_resend and push stood in."
 decisions:
   - "Payroll and contractor READS need the giving tick at Work, not See (Kevin, 2026-11-19): church_money_gate.require_pay_records, asked first in payroll_router._access, contractors_router._access, and the 1099 summary, drafts and summary export in reports_router. With CHURCH_MONEY_TICKS off no tick is ever a standing, so nothing about who may see payroll changes (a test compares every login's answer with the switch off against no switch at all). Three existing tests that pinned the old call string were updated to the new one."
@@ -55,3 +53,29 @@ Tests: the seven new files (`test_payroll_calendar.py`,
 `__tests__/payroll_free_fake.py`), the existing payroll, contractor, gate,
 export and housing suites, and the whole suite in CI's four parts with the
 Supabase keys unset.
+
+**After the independent review (PR #1973).** Must-fix: carried withholding
+could leave an hourly check's take-home below zero and the run still
+approved (80 hours carried onto a 4-hour check: net −$297.65). Now an hourly
+line carries only when its pay equals the copied line's
+(`payroll_carry.check`, with `calc_payload.carry_note` saying why not),
+changing a carried hourly line's hours clears what was carried, and approve
+refuses any line with take-home below zero, naming the person (409
+`negative_net`). Also fixed: housing past the board's designated amount, or
+with no designation in advance, is wages in W-2 Box 1 and on 941 line 2, Box
+14 shows only what is left out, and the W-2 row and the 941 say how much
+moved and why (Treas. Reg. 1.107-1(b)); IRS deposit lines and alerts say
+EFTPS needs the payment by 8 p.m. Eastern the day before it's due
+(Publication 15); the 1099-NEC line is the tax year's everywhere (one helper,
+`form_1099.nec_threshold`: the 1099 summary, drafts, export column, summary
+PDF, the accountant's cover email and the year worksheet); state due dates
+roll on bank days, not DC holidays; `settings.payroll` is a server key (added
+to the unapplied 11-17 settings guard file, and this migration rewrites the
+guard's list when that file is already in); NaN and infinity are refused as
+money; a statement's year-to-date taxes use each line's own Social Security
+and Medicare; the year worksheet's contractors leave out Stripe-managed ones
+as the drafts do; a long church name wraps on the PDF; statements after
+mark-paid go in the background (`stubs: {queued, auto, sent: null,
+skipped: []}`); the pay-records refusal no longer names the accountant
+(payroll's ladder refuses a login with no seat); approve-by reminders go only
+to the owner and Admins.

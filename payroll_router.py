@@ -74,7 +74,9 @@ path; a statement of another church's run is a 404.
 from __future__ import annotations
 
 import logging
+import math
 import re
+import threading
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -205,6 +207,8 @@ def _money(v: Optional[float], field: str, allow_none: bool = True) -> Optional[
     try:
         f = float(v)
     except (TypeError, ValueError):
+        raise HTTPException(400, f"{field} must be a number")
+    if not math.isfinite(f):                     # NaN and infinity are not money
         raise HTTPException(400, f"{field} must be a number")
     if f < 0:
         raise HTTPException(400, f"{field} cannot be negative")
@@ -725,17 +729,21 @@ def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[
     for it in wanted:
         emp = by_id[it.employee_id]
         ytd = _ytd_gross_before(biz, emp["id"], year, run.get("id"))
-        src = carry.get(str(emp["id"]))
+        hours = _money(it.hours, "hours") or 0.0
+        overtime = _money(it.overtime_hours, "overtime_hours") or 0.0
+        # An hourly check carries last time's withholding only when its pay is
+        # the same (payroll_carry.check); otherwise the note says why not.
+        src, note = payroll_carry.check(carry.get(str(emp["id"])), emp,
+                                        payroll_calc.gross_for(emp, hours, overtime))
         calc = payroll_calc.compute_item(
-            employee=emp, hours=_money(it.hours, "hours") or 0.0,
-            overtime_hours=_money(it.overtime_hours, "overtime_hours") or 0.0,
+            employee=emp, hours=hours, overtime_hours=overtime,
             ytd_gross_before=ytd, year=year,
             federal_withholding=src.get("federal") if src else None,
             state_withholding=src.get("state") if src else None,
             housing_allowance=emp.get("housing_allowance_per_period"), church=church)
         r = sb_clients.sb_post_as_service("/pay_run_items", {
             "pay_run_id": run["id"], "business_id": biz, "employee_id": emp["id"], **calc,
-            "calc_payload": payroll_carry.payload(emp, src),
+            "calc_payload": payroll_carry.payload(emp, src, note=note),
         })
         items.append((r or [{}])[0])
 
@@ -917,16 +925,30 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
         if str(biz_row.get("owner_id")) != str(user.id):
             raise HTTPException(403, "Only the owner sets the housing allowance part of a check.")
         overrides["housing_allowance"] = _money(housing, "housing_allowance")
+    import payroll_carry
+    before = item.get("calc_payload") if isinstance(item.get("calc_payload"), dict) else {}
+    typed = "federal_withholding" in overrides or "state_withholding" in overrides
+    note = None
+    if not typed and before.get("carried_from") and payroll_carry.terms(emp_rows[0])["type"] == "hourly":
+        # A carried hourly line whose hours changed is a different check: what
+        # was carried no longer fits it, so it's cleared and needs typing.
+        merged = {**item, **overrides}
+        gross_now = payroll_calc.gross_for(emp_rows[0], float(merged.get("hours") or 0),
+                                           float(merged.get("overtime_hours") or 0))
+        if abs(gross_now - float(before.get("carried_gross") or item.get("gross") or 0)) >= 0.005:
+            overrides["federal_withholding"] = None
+            overrides["state_withholding"] = None
+            note = payroll_carry.HOURS_CHANGED.format(when=payroll_carry._when(
+                {"pay_date": before.get("carried_from_pay_date")}))
+            before = payroll_carry.dropped(before)
     calc = _recompute_item(run["business_id"], run, item, emp_rows[0], **overrides)
     if housing is not None and overrides["housing_allowance"] > calc["gross"]:
         raise HTTPException(400, f"The housing part can't be more than the check (${calc['gross']:,.2f}).")
     # How they're paid now rides the line; a withholding figure typed here
     # is no longer the one carried over (payroll_carry).
-    import payroll_carry
-    before = item.get("calc_payload") if isinstance(item.get("calc_payload"), dict) else {}
-    if "federal_withholding" in overrides or "state_withholding" in overrides:
+    if typed:
         before = payroll_carry.dropped(before)
-    calc["calc_payload"] = payroll_carry.payload(emp_rows[0], None, before)
+    calc["calc_payload"] = payroll_carry.payload(emp_rows[0], None, before, note=note)
     calc["updated_at"] = _now_iso()
     sb_clients.sb_patch_as_service(f"/pay_run_items?id=eq.{item_id}", calc)
     items = _items_of(run_id)
@@ -953,6 +975,22 @@ def approve_run(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[s
             "count": len(missing),
             "message": (f"{len(missing)} line(s) still need federal and state withholding. "
                         "Enter them from your tax engine before approving."),
+        })
+    # Nobody is paid less than nothing: a line whose taxes and deductions are
+    # more than its pay stops the run, naming the person.
+    below = [i for i in items if i.get("net") is not None and float(i.get("net") or 0) < 0]
+    if below:
+        people = {e["id"]: e for e in sb_clients.sb_get_as_service(
+            f"/employees?business_id=eq.{run['business_id']}&select=id,first_name,last_name&limit=1000") or []}
+        names = [(_name(people.get(i["employee_id"]) or {}) or "Someone", float(i["net"])) for i in below]
+        which = " and ".join(f"{n} (−${abs(v):,.2f})" for n, v in names)
+        one = len(names) == 1
+        raise HTTPException(409, {
+            "error": "negative_net",
+            "count": len(names),
+            "people": [n for n, _ in names],
+            "message": (f"Take-home pay would be below zero for {which}: the taxes and deductions are more than "
+                        f"the pay. Fix {'that line' if one else 'those lines'} before approving."),
         })
     totals = payroll_calc.run_totals(items)
     when = _now_iso()
@@ -1007,23 +1045,37 @@ def mark_paid(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str
             "housing": housing, "stubs": _auto_stubs({**run, "status": "paid", "paid_at": when})}
 
 
+def _background(fn) -> None:
+    """Work after the answer, off the request (the repo's way:
+    church_job_defs._later): a slow mail server never holds up mark-paid."""
+    threading.Thread(target=fn, daemon=True).start()
+
+
 def _auto_stubs(run: Dict[str, Any]) -> Dict[str, Any]:
     """A run marked paid emails each person their statement, behind
-    PAYROLL_STUB_EMAIL (off | owner | on, default on). A send that fails
-    never fails the mark-paid: the answer says what went."""
+    PAYROLL_STUB_EMAIL (off | owner | on, default on), in the background:
+    the answer says whether it was queued, never what went (Send stubs, and
+    the run's statements, show that). A send that fails never fails the
+    mark-paid."""
     import payroll_stubs
     biz = str(run["business_id"])
+    if not payroll_stubs.auto_on(biz):
+        return {"queued": False, "auto": False, "sent": None, "skipped": []}
+
+    def go() -> None:
+        try:
+            rows = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings,type&limit=1")
+            if isinstance(rows, list) and rows:
+                payroll_stubs.send(payroll_stubs.load(run, rows[0]), auto=True)
+        except Exception as e:  # noqa: BLE001 — the run is paid either way; Send stubs can try again
+            logger.warning(f"[payroll] statements not sent run={str(run.get('id'))[:8]}: {type(e).__name__}")
     try:
-        if not payroll_stubs.auto_on(biz):
-            return {"sent": 0, "skipped": [], "auto": False}
-        rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings,type&limit=1")
-        if not isinstance(rows, list) or not rows:
-            return {"sent": 0, "skipped": [], "auto": True, "failed": True}
-        return {**payroll_stubs.send(payroll_stubs.load(run, rows[0]), auto=True), "auto": True}
-    except Exception as e:  # noqa: BLE001 — the run is paid either way; Send stubs can try again
-        logger.warning(f"[payroll] statements not sent run={str(run.get('id'))[:8]}: {type(e).__name__}")
-        return {"sent": 0, "skipped": [], "auto": True, "failed": True}
+        _background(go)
+    except Exception as e:  # noqa: BLE001 — couldn't start: Send stubs still works
+        logger.warning(f"[payroll] statements not queued run={str(run.get('id'))[:8]}: {type(e).__name__}")
+        return {"queued": False, "auto": True, "sent": None, "skipped": [], "failed": True}
+    return {"queued": True, "auto": True, "sent": None, "skipped": []}
 
 
 @router.post("/runs/{run_id}/log-housing")

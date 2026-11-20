@@ -162,6 +162,42 @@ def test_the_pdf_of_an_hourly_line_splits_overtime(db):
     assert "Regular pay, 40 hours" in _text(ps.pdf(s, ctx["biz"]))
 
 
+def test_someone_who_became_a_minister_mid_year_keeps_the_springs_taxes(db):
+    # The reviewer's case: Dana paid as staff January to June, then a minister.
+    for m in range(1, 7):
+        run(db, f"2026-{m:02d}-28", "paid", lines=[{"employee_id": STAFF, "fit": 150.0, "sit": 40.0,
+                                                     "ytd": 2000.0 * (m - 1)}])
+    dana = next(e for e in db.rows("employees") if e["id"] == STAFF)
+    dana["minister"], dana["minister_credential"] = True, "licensed"
+    july = run(db, "2026-07-28", "paid", lines=[{"employee_id": STAFF, "fit": 150.0, "sit": 40.0}])
+    _ctx, s = _stub(db, july, STAFF)
+    taxes = {t["key"]: t for t in s["taxes"]}
+    # This check: none, as a minister's. This year: the six staff checks' $124 and $29 each.
+    assert taxes["social_security"] == {"key": "social_security", "label": "Social Security", "this": None,
+                                        "ytd": 744.0, "note": "none, minister"}
+    assert taxes["medicare"]["this"] is None and taxes["medicare"]["ytd"] == 174.0
+    assert s["total_taxes"] == {"this": 190.0, "ytd": 2248.0}          # 190 × 7 + 744 + 174
+    assert s["gross"]["ytd"] == 14000.0
+    assert s["gross"]["ytd"] == round(s["total_taxes"]["ytd"] + s["net"]["ytd"], 2)
+    text = _text(ps.pdf(s, _ctx["biz"]))
+    assert "none, minister" in text and "$744.00" in text
+
+
+def test_a_long_church_name_wraps_and_stays_on_one_page(db):
+    designate(db)
+    biz = _biz(db)
+    biz["name"] = "The Greater Grace Harbor Community Church of the Living Water and Fellowship Hall " * 3
+    this = run(db, "2026-11-30", "paid", lines=standard_lines())
+    ctx, s = _stub(db, this, PASTOR)
+    import pypdf
+    data = ps.pdf(s, ctx["biz"])
+    assert len(pypdf.PdfReader(io.BytesIO(data)).pages) == 1
+    text = _text(data)
+    assert "The Greater Grace Harbor" in text and "…" in text and "Pay statement" in text
+    assert "EIN ending 6789" in text
+    assert "For your records. The church pays from its own bank." in text      # the foot fits too
+
+
 # ─── Sending ──────────────────────────────────────────────────────────
 
 @pytest.fixture
