@@ -3143,7 +3143,7 @@ in, and one private link that puts it all on their phone's calendar).
 (`__tests__/church_meetings_db.mjs`), the export decision for the four new tables, and this
 section. 10.9 is the PR split for the rest.
 
-**S3-2 is built** (groups and answers, server only): `church_meetings.py` (the switch, `ready`,
+**S3-2 is built** (#2020; groups and answers, server only): `church_meetings.py` (the switch, `ready`,
 keeping the list in step, Set a meeting for a one-off, the answers and the note's readers), every
 board reader of 10.2 taught `kind`, the first four of "What the old code must learn", the rename's
 words, the lint (`test_board_readers_name_kind.py`), the checklist
@@ -3668,7 +3668,7 @@ its first part changes who counts as a board and should be reviewed alone.
 | PR | Contains | Migration first? |
 |---|---|---|
 | **S3-1 Migration** (#2001, merged) | `APPLY-2026-11-21-church-meetings.sql`; its `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_meetings_db.mjs` and its `ci.yml` line; this section; the work log. No Python | this is it |
-| **S3-2 Groups and answers** (server; **built**, 10.12) | `church_meetings.py`: the switch, `ready`, keeping the list in step, `kind=eq.board` in the four readers of 10.2 **and the lint that pins them**, Set a meeting for a one-off (a group for the list found or made, by insert and a 409), the answers and the note's readers, the meeting page's who comes and answers, `cant` read as excused at the end, the rename's words; every reader in 10.2's table and the first four of "What the old code must learn", with the checklist test; `church_schedule_fake` taught the tables | yes |
+| **S3-2 Groups and answers** (server; **built**, #2020, 10.12) | `church_meetings.py`: the switch, `ready`, keeping the list in step, `kind=eq.board` in the four readers of 10.2 **and the lint that pins them**, Set a meeting for a one-off (a group for the list found or made, by insert and a 409), the answers and the note's readers, the meeting page's who comes and answers, `cant` read as excused at the end, the rename's words; every reader in 10.2's table and the first four of "What the old code must learn", with the checklist test; `church_schedule_fake` taught the tables | yes |
 | **S3-3 Series, rooms and the date check** (server) | series made ahead (`on_conflict=series_id,series_day`), edit one, edit all from a day (on or before the first day: in place; a shared day re-pointed), skip, end, closing a group; the room booked, moved and let go, and Rooms & spaces refusing to move a meeting's booking; the rest of "What the old code must learn"; the date check (shared with Chief's `check_dates`); the church calendar's route; the sweep's making ahead and keeping in step; `TICKS` | yes |
 | **S3-4 The office** (frontend) | Meetings & minutes: the groups side by side, Set a meeting with the date check, the meeting page's answers and Remind, Meeting and Away on the church calendar | after S3-2 and S3-3 |
 | **S3-5 The phone** (member app, this repo) | Coming up on Dates, I'll be there / I can't with the note; whether the Board tab shows meetings | after S3-2 |
@@ -3762,7 +3762,7 @@ From the review of #2001:
 4. **The calendar link: only meetings, or their own away dates and Sundays they serve too?**
    Built as meetings only for now; the same link can carry more later without a new one.
 
-### 10.12 Decided while building S3-2
+### 10.12 Decided while building S3-2 (#2020)
 
 All decided in the build; none is the pastor's call, and any can be reopened with him.
 

@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'S3-2 of step 3 ("Meetings and one calendar") of the church leaders schedule: groups and answers, server only, exactly as docs/CHURCH_SCHEDULE.md section 10 assigns it. The pastor approved the mock and its five calls on 2026-11-20.'
 status: in progress
-prs: [kmj-intake-server (S3-2, this PR)]
+prs: [kmj-intake-server#2020]
 migrations: [supabase/APPLY-2026-11-21-church-meetings.sql (from #2001; NOT applied, nothing new here)]
 left_undone:
   - "The migration is still not applied: until it is, every /church/meetings/* route answers 404 and the page stays Board & minutes; once it is, every board reader reads kind=eq.board whatever CHURCH_MEETINGS says."
