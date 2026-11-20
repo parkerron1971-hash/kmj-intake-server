@@ -536,6 +536,9 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
                         if str(m["group_id"]) == gid and m.get("role") == "leader" and str(m["contact_id"]) in names],
             "full": bool(g.get("capacity")) and count.get(gid, 0) >= int(g["capacity"]),
             "mode": join_mode(g), "asked": gid in asked,
+            # How many are in it, for the new look's Find your people
+            # (member_lumen_connect): counted from the members read above.
+            "count": count.get(gid, 0),
         }
         if gid in my_role:
             # The regular time and who's in it, for the new Home's "Up next"

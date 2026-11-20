@@ -246,8 +246,9 @@ def test_connect_is_the_people_hub(church, fake, monkeypatch):  # noqa: F811
     fake.add("group_members", group_id=tct.GROUP, business_id=tct.BIZ, contact_id=tct.ANA, role="member")
     html = _client(fake, monkeypatch).get("/my/connect").text
     assert _body_class(html).split()[:2] == ["lm", "lm-tab"]
-    assert "Your <em>people</em>" in html
-    for s in ("Your group", "Young Adults", "Prayer", "Events", "Prayer Night", "News"):
+    # Look 5.1 (member_lumen_connect): the title and who it's about, your groups, prayer, More's Events row.
+    assert '<h1 class="lm-ctt">Connect</h1>' in html and "Your people at " in html
+    for s in ("Your groups", "Young Adults", "Prayer", "Ask for prayer", "Events"):
         assert s in html, s
     nav = html[html.index('<nav class="mb-nav lm-nav'):]
     assert 'href="/my/connect" aria-current="page"' in nav
