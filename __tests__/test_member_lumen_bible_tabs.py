@@ -399,6 +399,8 @@ def test_the_tabs_css_is_the_bibles_block_before_the_type():
                 "lm-mcovs", "lm-aplan", "lm-ringp", "lm-pstart", "lm-pc", "lm-hls", "lm-hlr", "lm-saved0"):
         assert f".{cls}" in css, cls
     assert "body.lm.lm-tab .bb-dock{bottom:calc(76px" in css                            # the verse bar over the tab bar
+    assert "body.lm.lm-tab.lm-mini-pad .bb-dock{bottom:calc(158px" in css               # and over the mini player
+    assert "querySelector('.lm-mini')" in mlb.READ_JS
     assert "body.lm.lm-dark{--lm-wk:#BDE3C2;" in css and "body.lm.lm-auto{--lm-wk:#BDE3C2;" in css
     motion = css[css.index("@media (prefers-reduced-motion:no-preference)"):]
     assert "body.lm .lm-bsg{transition:" in motion

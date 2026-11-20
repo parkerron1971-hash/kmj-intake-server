@@ -948,7 +948,8 @@ window.addEventListener('load',function(){window.addEventListener('click',functi
 
 # The reader's Look 5.1 moments, beside today's reader script and Lumen
 # Next's (which it leaves alone): the verse bar sits just over the tab bar
-# (whatever its height; its CSS place is the fallback); its Share carries
+# and the mini player when one is showing (member_mini; measured as the bar
+# opens; its CSS place is the fallback); its Share carries
 # the verse it was opened on (data-share-*, for the share sheet; without
 # one, SHARE_JS); the translation pill closes on a
 # tap outside it; Listen reads the chapter aloud with the phone's own voice,
@@ -959,10 +960,12 @@ READ_JS = r"""<script>(function(){
 var read=document.querySelector('.bb-read');if(!read)return;
 var dock=document.getElementById('bb-dock'),sh=dock?dock.querySelector('.bb-dock-h .lm-share'):null;
 var nav=document.querySelector('.mb-nav'),toast=document.getElementById('bb-toast');
-function lift(){if(!dock)return;var r=nav?nav.getBoundingClientRect():null,up=0;
+function lift(){if(!dock)return;var r=nav?nav.getBoundingClientRect():null,up=0,m=document.querySelector('.lm-mini');
  if(r&&r.height&&r.top<window.innerHeight&&r.width>window.innerWidth*.6)up=Math.round(window.innerHeight-r.top);
+ if(m&&!m.hidden){var q=m.getBoundingClientRect();if(q.height&&q.top<window.innerHeight)up=Math.max(up,Math.round(window.innerHeight-q.top));}
  dock.style.bottom=up?(up+8)+'px':'';if(toast)toast.style.bottom=up?(up+184)+'px':'';}
 lift();window.addEventListener('resize',lift);
+if(dock&&window.MutationObserver)new MutationObserver(function(){if(!dock.hidden)lift();}).observe(dock,{attributes:true,attributeFilter:['hidden']});
 var label=read.getAttribute('data-label')||'',tr=(read.getAttribute('data-tr')||'').toUpperCase(),bk=read.getAttribute('data-book')||'',
  ch=read.getAttribute('data-ch')||'';
 function words(s){var c=s.cloneNode(true);c.querySelectorAll('sup,.bb-nm,.bb-bm').forEach(function(x){x.remove();});return c.textContent.replace(/\s+/g,' ').trim();}
@@ -1346,6 +1349,7 @@ body.lm .lm-rstep span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap
 body.lm .bb-dock{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));max-width:576px;padding:12px 12px 14px 16px;
   border-radius:18px;background:var(--bg);box-shadow:0 0 0 1px var(--lm-line),0 12px 32px var(--lm-shadow);}
 body.lm.lm-tab .bb-dock{bottom:calc(76px + env(safe-area-inset-bottom,0px));}
+body.lm.lm-tab.lm-mini-pad .bb-dock{bottom:calc(158px + env(safe-area-inset-bottom,0px));}
 body.lm .bb-dock-h{gap:8px;}
 body.lm .bb-dock-ref{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 14px/1.2 var(--mb-ui);}
 body.lm .bb-dock-h .lm-share{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;border-radius:18px;
