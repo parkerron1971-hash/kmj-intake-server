@@ -1,13 +1,13 @@
 # __tests__/test_member_lumen_feed.py
 #
-# Home's feed in the member app's new look ("Look 4.1", member_lumen_feed):
-# "What's happening at <church>", each post with its comments under it.
+# Home's feed in the member app's new look ("Look 4.1", restyled to Look 5.1
+# by member_lumen_feed): each post edge to edge with its comments under it.
 # Kevin: "make sure the people can comment under news feed. i know who ever
 # make the post can allow whether people can comment or not." Pins:
 #   - the newest one or two comments, one reply in (church_news.preview_of);
-#   - each card: the summary, Love · Amen · Praying · Comment (News' react
-#     forms), the comment bubbles, View all N comments, the write pill on
-#     the same /my/news/comment route, the shield line;
+#   - each card: Love · Praying · Comment (News' react forms) and Save,
+#     "Loved by", View all N comments and the newest comment, the write pill
+#     on the same /my/news/comment route, the shield line;
 #   - the poster's choice holds: Prayers only (I'm praying, no box), Off (a
 #     lock line), and no box before the church has its two safety officers;
 #   - the post's own photos; an event's date leaf over its picture spot;
@@ -136,7 +136,7 @@ def _feed(html):
 
 
 def _card(html, key):
-    i = html.index(f'<article class="lm-fc" id="p-{P[key]}"')
+    i = html.index(f'<article class="lf-post" id="p-{P[key]}"')
     return html[i:html.index("</article>", i)]
 
 
@@ -164,30 +164,30 @@ def test_the_preview_is_the_newest_thread_one_reply_in():
 def test_home_is_the_feed_with_comments_under_each_post(church, monkeypatch):
     html = _client(church, monkeypatch).get("/my").text
     feed = _feed(html)
-    assert "What&#x27;s happening at <em>Grace Fellowship</em>" in feed
-    assert "From the church" in feed and "From the church</h2>" not in html
-    order = re.findall(r'<article class="lm-fc" id="p-([^"]+)"', feed)
+    assert '<h2 class="mp-sr" id="lm-feed-h">What&#x27;s happening at Grace Fellowship</h2>' in feed
+    assert '<a class="lf-comp-in" href="/my/news/share">Share a praise or a prayer…</a>' in feed   # contract 2
+    order = re.findall(r'<article class="lf-post" id="p-([^"]+)"', feed)
     assert order == [P["worship"], P["noah"], P["food"], P["denise"]]           # pinned first, then newest
     noah = _card(html, "noah")
-    # The summary: badges, how many people, how many comments (shown ones only).
-    assert '<span class="lm-cwho">3 people</span>' in noah
-    assert f'<a class="lm-ccount" href="/my/news/{P["noah"]}#comments">4 comments</a>' in noah
-    # Love · Amen · Praying: News' react forms, answered in place (RX_JS), back to Home.
+    # Loved by: the newest Love that isn't Ana's, by first name, and how many more.
+    assert '<p class="lf-likes">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah
+    # Love · Praying: News' react forms, answered in place (RX_JS), back to Home; Save at the right.
     forms = re.findall(r'<form method="post" action="/my/news/react" class="nw-rxf">.*?name="kind" value="(\w+)">'
                        r'<input type="hidden" name="back" value="/my">', noah)
-    assert forms == ["love", "amen", "pray"]
-    assert re.search(r'class="lm-ca lv" type="submit" aria-pressed="true"', noah)    # Ana loves it
-    assert f'<label class="lm-ca" for="cwt-{P["noah"]}">' in noah                    # Comment opens the box
-    # The newest thread: Maya's comment and Elena's reply, one in; the held one never.
-    bubbles = re.findall(r'<div class="(lm-cm[^"]*)" id="fc-[^"]+">.*?<b>([^<]+)</b><span>([^<]+)</span>', noah)
-    assert bubbles == [("lm-cm", "Cal Moss", "He is beautiful."), ("lm-cm rep", "Elena Ruiz", "Those cheeks!")]
+    assert forms == ["love", "pray"]
+    assert re.search(r'class="lf-act lv" type="submit" aria-pressed="true" aria-label="Love"', noah)   # Ana loves it
+    assert f'<label class="lf-act" for="cwt-{P["noah"]}">' in noah                    # Comment opens the box
+    assert 'action="/my/news/save" class="lf-savef"' in noah and 'aria-label="Save"' in noah
+    # The newest comment (Elena's reply to Maya); the held one never.
+    lines = re.findall(r'<div class="(lf-cm[^"]*)" id="fc-[^"]+"><p><b>([^<]+)</b> <span>([^<]+)</span></p>', noah)
+    assert lines == [("lf-cm rep", "Elena Ruiz", "Those cheeks!")]
     assert "something unkind" not in html
-    assert f'?reply={tct.cid(1802)}#nw-comp" data-reply="{tct.cid(1802)}" data-who="Cal">Reply</a>' in noah
-    assert f'<a class="lm-cmore" href="/my/news/{P["noah"]}#comments">View all 4 comments</a>' in noah
+    assert f'<a class="lf-vall" href="/my/news/{P["noah"]}#comments">View all 4 comments</a>' in noah
+    assert noah.index("lf-vall") < noah.index("lf-cms")                             # View all, then the newest
     # The write pill: the same route, the post's id, the member's initials, the shield line.
-    assert (f'<form class="lm-cw" method="post" action="/my/news/comment"><input type="hidden" name="id" '
-            f'value="{P["noah"]}"><span class="lm-cw-me" aria-hidden="true">AR</span>') in noah
-    assert 'placeholder="Write a comment…"' in noah and 'maxlength="1000" required' in noah
+    assert (f'<form class="lf-cw" method="post" action="/my/news/comment"><input type="hidden" name="id" '
+            f'value="{P["noah"]}"><span class="lf-cw-me" aria-hidden="true">AR</span>') in noah
+    assert 'placeholder="Add a comment…"' in noah and 'maxlength="1000" required' in noah
     assert "Every comment is checked before the church sees it" in noah
     assert mlf.JS in html and mpn.RX_JS in html
 
@@ -196,12 +196,13 @@ def test_the_posters_choice_holds(church, monkeypatch):
     html = _client(church, monkeypatch).get("/my").text
     food, denise = _card(html, "food"), _card(html, "denise")
     assert "Comments are off for this post." in food
-    assert 'class="lm-cw"' not in food and 'class="lm-ca" for=' not in food and "lm-ccount" not in food
-    # Prayers only: I'm praying is the pray reaction; no box, no Praying in the row.
-    assert 'name="kind" value="pray"><input type="hidden" name="back" value="/my"><button class="lm-cpray"' in denise
+    assert 'class="lf-cw"' not in food and 'class="lf-act" for=' not in food and "lf-vall" not in food
+    # Prayers only: the post on the soft panel, I'm praying is the pray reaction; no box, no Praying in the row.
+    assert 'name="kind" value="pray"><input type="hidden" name="back" value="/my"><button class="lf-pbtn"' in denise
+    assert '<div class="lf-pray lf-cpr"><p class="lf-kick">Please pray</p><b class=lf-pt>Keep Sister Denise in prayer</b>' in denise
     assert "I&#x27;m praying" in denise or "I'm praying" in denise
     assert "Comments are off for this one. Tap Praying to let them know." in denise
-    assert 'class="lm-cw"' not in denise and "<span>Praying</span>" not in denise
+    assert 'class="lf-cw"' not in denise and 'aria-label="Praying"' not in denise
     assert '<span class="n0">1 praying</span><span class="n1">2 praying</span>' in denise
     assert "James Carter" in denise and "Pastor" in denise
 
@@ -211,33 +212,33 @@ def test_no_box_before_the_church_has_its_safety_officers(church, monkeypatch):
     html = _client(church, monkeypatch).get("/my").text
     noah = _card(html, "noah")
     assert "Comments aren't open at Grace Fellowship yet. You can still react." in noah
-    assert 'class="lm-cw"' not in noah and "lm-cm " not in noah and "<span>Love</span>" in noah
+    assert 'class="lf-cw"' not in noah and "lf-cm " not in noah and 'aria-label="Love"' in noah
     assert "Comments are off for this one" in _card(html, "denise")               # prayers needs no officers
 
 
 def test_pictures_are_the_posts_own_and_an_events_leaf(church, monkeypatch):
     html = _client(church, monkeypatch).get("/my").text
-    assert (f'<a class="lm-fpic" href="/my/news/{P["worship"]}"><img src="https://example.org/hero.jpg"'
-            in _card(html, "worship"))
+    assert '<div class="lf-pic lf-dbl"><img src="https://example.org/hero.jpg"' in _card(html, "worship")
     food = _card(html, "food")
-    # No picture on that spot: the date leaf alone, in the church's colour.
-    assert '<span class="lm-fev-p bare"><span class="lm-leaf" aria-hidden="true"><small>SAT</small><b>21</b></span>' in food
-    assert "Community Food Drive" in food and "12 coming" in food
+    # No picture on that spot: the date leaf alone.
+    assert '<span class="lf-evbare" aria-hidden="true"><span class="lf-leaf" aria-hidden="true"><small>SAT</small><b>21</b></span>' in food
+    assert "Community Food Drive" in food and "Fellowship Hall · 12 going" in food
     assert 'action="/my/news/signup"' in food and 'name="back" value="/my"' in food
     # The church put a picture on the event's spot: it shows under the leaf.
     church.biz[tct.BIZ]["settings"]["member_portal"]["pictures"] = {
         "event:community-food-drive": {"url": "https://example.org/pantry.jpg", "look": "colour"}}
     food = _card(_client(church, monkeypatch).get("/my").text, "food")
-    assert '<span class="lm-fev-p"><img src="https://example.org/pantry.jpg"' in food and "<small>SAT</small>" in food
+    assert (f'<a class="lf-evimg" href="/my/events#mp-occ-{FOOD}" tabindex="-1" aria-hidden="true">'
+            f'<img src="https://example.org/pantry.jpg"') in food and "<small>SAT</small>" in food
 
 
 def test_an_album_shows_three_and_how_many_more():
     p = {"id": P["noah"], "attach": {"photos": [f"https://example.org/{i}.jpg" for i in range(5)]}}
     html = mlf._picture(p)
-    assert html.startswith('<div class="lm-falb">') and html.count("<img") == 3 and '<span class="lm-fmore">+2</span>' in html
-    assert '<div class="lm-falb two">' in mlf._picture({"id": "x", "attach": {"photos": ["https://a/1.jpg", "https://a/2.jpg"]}})
+    assert html.startswith('<div class="lf-alb lf-dbl">') and html.count("<img") == 3 and '<span class="lf-plus">+2</span>' in html
+    assert '<div class="lf-alb lf-dbl two">' in mlf._picture({"id": "x", "attach": {"photos": ["https://a/1.jpg", "https://a/2.jpg"]}})
     tall = mlf._picture({"id": "x", "attach": {"pics": [{"path": "p", "w": 600, "h": 900}]}})
-    assert 'class="lm-fpic tall"' in tall and 'src="/my/news/x/photo/0"' in tall
+    assert 'class="lf-pic lf-dbl tall"' in tall and 'src="/my/news/x/photo/0"' in tall
 
 
 def test_caught_up_sits_between_new_and_opened(church, monkeypatch):
@@ -245,16 +246,15 @@ def test_caught_up_sits_between_new_and_opened(church, monkeypatch):
                                      {"post_id": P["denise"], "contact_id": tct.ANA, "business_id": tct.BIZ}]
     feed = _feed(_client(church, monkeypatch).get("/my").text)
     assert "You&#x27;re all caught up" in feed or "You're all caught up" in feed
-    at = feed.index("lm-caught")
-    assert feed.index(f'id="p-{P["noah"]}"') < at < feed.index('<p class="lm-older">Earlier</p>') < feed.index(f'id="p-{P["food"]}"')
-    assert "2 new" in feed                                                          # the pinned post and Noah
+    at = feed.index("lf-done")
+    assert feed.index(f'id="p-{P["noah"]}"') < at < feed.index('<p class="lf-older">Earlier</p>') < feed.index(f'id="p-{P["food"]}"')
     # Nothing opened yet: no line.
     church.t["church_post_seen"].clear()
-    assert "lm-caught" not in _feed(_client(church, monkeypatch).get("/my").text)
+    assert "lf-done" not in _feed(_client(church, monkeypatch).get("/my").text)
     # The seen read failed: no line either.
     church.t["church_post_seen"] += [{"post_id": P["food"], "contact_id": tct.ANA, "business_id": tct.BIZ}]
     church.down.add("church_post_seen")
-    assert "lm-caught" not in _feed(_client(church, monkeypatch).get("/my").text)
+    assert "lf-done" not in _feed(_client(church, monkeypatch).get("/my").text)
 
 
 # ─── reads ───────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ def test_a_comment_from_home_posts_in_place(church, monkeypatch):
     x = r.json()
     assert r.status_code == 200 and x["ok"] and x["code"] == "commented" and x["pid"] == P["noah"]
     assert x["notice"] == "" and "So happy for you all." in x["html"] and "<b>You</b>" in x["html"]
-    assert '<div class="lm-cm mine" id="fc-' in x["html"] and "Just now" in x["html"] and ">Reply</a>" in x["html"]
+    assert '<div class="lf-cm mine" id="fc-' in x["html"] and "Just now" in x["html"]
     saved = [c for c in church.t["church_post_comments"] if c["body"] == "So happy for you all."]
     assert len(saved) == 1 and saved[0]["status"] == "shown" and saved[0]["contact_id"] == tct.ANA
 
@@ -336,7 +336,7 @@ def test_a_reply_from_home_goes_under_its_comment(church, monkeypatch):
     _screen(monkeypatch, "ok")
     x = _say(_client(church, monkeypatch), "noah", "Amen.", reply_to=tct.cid(1803)).json()   # a reply to a reply
     saved = next(c for c in church.t["church_post_comments"] if c["body"] == "Amen.")
-    assert saved["reply_to"] == tct.cid(1802) and 'class="lm-cm rep mine"' in x["html"]
+    assert saved["reply_to"] == tct.cid(1802) and 'class="lf-cm rep mine"' in x["html"]
 
 
 def test_held_and_crisis_words_answer_with_the_pages_own_words(church, monkeypatch):
@@ -344,7 +344,7 @@ def test_held_and_crisis_words_answer_with_the_pages_own_words(church, monkeypat
     _screen(monkeypatch, "harm")
     x = _say(c, "noah", "something unkind").json()
     assert x["ok"] and x["code"] == "comment_held" and x["notice"] == mpn.DONE["comment_held"]
-    assert "Only you see this until a safety officer looks at it." in x["html"] and "lm-cm mine held" in x["html"]
+    assert "Only you see this until a safety officer looks at it." in x["html"] and "lf-cm mine held" in x["html"]
     _screen(monkeypatch, "self_harm")
     x = _say(c, "noah", "I can't go on").json()
     assert x["ok"] and x["code"] == "care" and "988" in x["notice"] and x["notice"] == mpn.DONE["care"]
@@ -397,5 +397,9 @@ def test_the_feeds_css_is_in_the_lumen_file_before_the_type():
     assert "$" not in css
     # It moves only when the phone allows it.
     still = re.sub(r"@media \(prefers-reduced-motion:no-preference\)\{.*?\n\}", "", css, flags=re.S)
+    # With reduced motion the double-tap heart only fades (no scale): that rule alone.
+    reduce = re.findall(r"@media \(prefers-reduced-motion:reduce\)\{(.*?)\}\}", still, flags=re.S)
+    assert reduce == [".lm .lf-heart.calm{animation:lffade .7s ease both;"]
+    still = re.sub(r"@media \(prefers-reduced-motion:reduce\)\{.*?\}\}", "", still, flags=re.S)
     assert "animation:" not in still and "transition:" not in still
     assert ".lm .wr-seg input:checked+span" in css                                  # posting from a phone

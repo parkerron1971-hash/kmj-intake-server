@@ -2316,14 +2316,40 @@ async def prayer_route(request: Request):
     return _go(_base(gid, "prayer"), **({"done": code} if ok else {"err": code}))
 
 
-async def _prayer_action(request: Request, act):
-    """The shared shape of mark / answer / remove: back to the wall."""
+async def _prayer_action(request: Request, act, *, feed: bool = False):
+    """The shared shape of mark / answer / remove: back to the wall. `feed`
+    (mark): from Home's feed too (member_lumen_feed's "I prayed"): JSON for
+    its script (Accept: application/json), or back to Home at the request
+    (back=/my), and this member's kept feed items are forgotten
+    (member_feed_more)."""
     import asyncio
-    church, me, form, stop = await _who(request, "/my/groups")
-    if stop:
-        return stop
+    wants = feed and "application/json" in (request.headers.get("accept") or "")
+    if wants:
+        from fastapi.responses import JSONResponse
+        import member_portal_church as mpc
+        church, me, unavailable = await mpc._signed_in(request)
+        if unavailable or not me or not mpc._allowed(church, me):
+            code = "preview" if unavailable == "preview" else "error" if unavailable else "signed_out" if not me else "slow"
+            return JSONResponse({"ok": False, "code": code}, status_code={"preview": 403, "signed_out": 401,
+                                                                          "slow": 429}.get(code, 503))
+        form = await request.form()
+    else:
+        church, me, form, stop = await _who(request, "/my/groups")
+        if stop:
+            return stop
     biz_id = str(church["business"]["id"])
     ok, code, gid = await asyncio.to_thread(act, church["business"], biz_id, me, form)
+    if feed and ok:
+        import member_feed_more
+        member_feed_more.forget(biz_id, me["id"])
+    if wants:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": ok, "code": code}, status_code=200 if ok else 400, headers={"Cache-Control": "no-store"})
+    if feed and str(form.get("back") or "") == "/my":
+        from member_portal import _SECURE_HEADERS
+        pid = str(form.get("id") or "")
+        anchor = f"#gp-{pid}" if UUID.match(pid) else ""
+        return RedirectResponse(f"/my?{'done' if ok else 'err'}={code}{anchor}", status_code=303, headers=_SECURE_HEADERS)
     back = _base(gid, "prayer") if UUID.match(gid or "") else "/my/groups"
     if ok and str(form.get("view") or "") == "answered" and UUID.match(gid or ""):
         back = _base(gid, "prayer")
@@ -2335,7 +2361,7 @@ async def prayer_mark_route(request: Request):
     import group_prayer
     return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.mark(
         biz, me, str(form.get("id") or ""), str(form.get("kind") or ""),
-        lambda gid: _is_member(biz_id, gid, me["id"])))
+        lambda gid: _is_member(biz_id, gid, me["id"])), feed=True)
 
 
 @router.post("/my/groups/prayer/answer", include_in_schema=False)

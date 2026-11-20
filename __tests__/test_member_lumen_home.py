@@ -461,6 +461,8 @@ def test_the_reads(church, fake, monkeypatch):  # noqa: F811
     warm_on = base(fake.gets)
     for kept in (gg._ANSWERS, mim._TOLD, mim._NOT_YET):
         kept.clear()
+    import member_cache
+    member_cache.feed.clear()                   # Look 5.1's group items (member_feed_more), kept 30 s
     fake.gets.clear()
     c.get("/my")
     cold_on = base(fake.gets)
@@ -470,7 +472,10 @@ def test_the_reads(church, fake, monkeypatch):  # noqa: F811
     c.get("/my")
     off = base(fake.gets)
     assert warm_on == off, warm_on - off                                    # warm: today's Home's reads
-    assert cold_on - off == Counter({"/group_rsvps": 1, "/contacts": 1})   # cold: the two kept reads
+    # cold: the two kept reads, and the feed's group items (the member's
+    # groups, their Board posts, their prayer walls: member_feed_more)
+    assert cold_on - off == Counter({"/group_rsvps": 1, "/contacts": 1, "/group_members": 1, "/group_posts": 1,
+                                     "/group_prayers": 1})
 
 
 def test_the_sheet():

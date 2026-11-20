@@ -61,11 +61,11 @@ def _pastor_role(f, *who):
 
 
 def _ids(html):
-    return re.findall(r'<article class="lm-fc" id="p-([^"]+)"', html)
+    return re.findall(r'<article class="lf-post" id="p-([^"]+)"', html)
 
 
 def _see(html):
-    m = re.search(r'<a class="lm-fsee"[^>]*>.*?</a>', html, re.S)
+    m = re.search(r'<a class="lf-see"[^>]*>.*?</a>', html, re.S)
     return m.group(0) if m else ""
 
 
@@ -78,17 +78,17 @@ def test_home_keeps_four_posts_then_see_all_posts_with_the_count(church, monkeyp
     feed = html[html.index('<section class="lm-feed"'):html.index("</section>", html.index('<section class="lm-feed"'))]
     assert _ids(feed) == [P["worship"], P["noah"], P["food"], P["denise"]]
     see = _see(feed)
-    assert see.startswith('<a class="lm-fsee" href="/my/news" aria-label="See all 21 posts"><span>See all posts</span>')
+    assert see.startswith('<a class="lf-see" href="/my/news" aria-label="See all 21 posts"><span>See all posts</span>')
     assert '<small aria-hidden="true">21</small>' in see
     # Under the fourth post, at the foot of the feed; the old All news is gone.
-    assert feed.rindex("</article>") < feed.index('class="lm-fsee"') and "All news" not in html
+    assert feed.rindex("</article>") < feed.index('class="lf-see"') and "All news" not in html
     # The scripts ride once (two copies of RX_JS cancel each other out).
     assert html.count(mpn.RX_JS) == 1 and html.count(mlf.JS) == 1
 
 
 def test_see_all_posts_has_no_number_when_home_already_shows_them_all(church, monkeypatch):
     see = _see(_client(church, monkeypatch).get("/my").text)
-    assert see.startswith('<a class="lm-fsee" href="/my/news" aria-label="See all posts">') and "<small" not in see
+    assert see.startswith('<a class="lf-see" href="/my/news" aria-label="See all posts">') and "<small" not in see
 
 
 def test_the_count_is_none_when_homes_read_came_back_full(church):
@@ -144,20 +144,20 @@ def test_the_all_posts_page_is_home_s_cards_ten_at_a_time(church, monkeypatch):
     ids = _ids(html)
     assert ids == [P["worship"], P["noah"], P["food"], P["denise"]] + OLD[:6]          # pinned first, then newest
     assert '<div class="lm-nwpage">' in html and "What&#x27;s <em>happening</em>" in html
-    # Home's cards: the summary, the react row back to this page, the comments, the write pill.
+    # Home's cards: Loved by, the react row (and Save) back to this page, the comments, the write pill.
     noah = html[html.index(f'id="p-{P["noah"]}"'):]
     noah = noah[:noah.index("</article>")]
-    assert '<span class="lm-cwho">3 people</span>' in noah and "View all 4 comments" in noah
-    assert noah.count('name="back" value="/my/news"') == 3                                    # Love · Amen · Praying
-    assert '<form class="lm-cw" method="post" action="/my/news/comment">' in noah
+    assert '<p class="lf-likes">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah and "View all 4 comments" in noah
+    assert noah.count('name="back" value="/my/news"') == 3                                    # Love · Praying · Save
+    assert '<form class="lf-cw" method="post" action="/my/news/comment">' in noah
     # The poster's choice: prayers only, comments off; the event's date leaf and Sign me up.
     assert "I'm praying" in html and "Comments are off for this post." in html
     food = html[html.index(f'id="p-{P["food"]}"'):]
     food = food[:food.index("</article>")]
-    assert '<span class="lm-leaf" aria-hidden="true"><small>SAT</small><b>21</b></span>' in food
+    assert '<span class="lf-leaf" aria-hidden="true"><small>SAT</small><b>21</b></span>' in food
     assert 'action="/my/news/signup"' in food and 'name="back" value="/my/news"' in food
     # Show more: a plain link to the next ten; no Earlier line on the first page.
-    assert ('<a class="lm-fsee lm-fnext" href="/my/news?page=2"><span>Show more</span>' in html
+    assert ('<a class="lf-see lf-next" href="/my/news?page=2"><span>Show more</span>' in html
             and "Earlier posts" not in html)
     # Back goes Home (the page's own link, in the bar).
     assert re.search(r'<a class="mb-back" href="/my">.*?Home</a>', html, re.S)
@@ -170,13 +170,13 @@ def test_page_two_and_the_end(church, monkeypatch):
     c = _client(church, monkeypatch)
     two = c.get("/my/news?page=2").text
     assert _ids(two) == OLD[6:16]
-    assert '<p class="lm-fpage"><span>Earlier posts</span><a href="/my/news">Back to the newest</a></p>' in two
+    assert '<p class="lf-page"><span>Earlier posts</span><a href="/my/news">Back to the newest</a></p>' in two
     assert 'href="/my/news?page=3"' in two and 'name="back" value="/my/news?page=2"' in two
     assert "<title>News, page 2" in two
     three = c.get("/my/news?page=3").text
-    assert _ids(three) == OLD[16:] and "lm-fnext" not in three
+    assert _ids(three) == OLD[16:] and "lf-next" not in three
     past = c.get("/my/news?page=9").text
-    assert _ids(past) == [] and "That&#x27;s every post." in past and "lm-fnext" not in past
+    assert _ids(past) == [] and "That&#x27;s every post." in past and "lf-next" not in past
     # Nonsense is the first page.
     assert _ids(c.get("/my/news?page=abc").text) == _ids(c.get("/my/news").text)
     assert _ids(c.get("/my/news?page=-4").text) == _ids(c.get("/my/news").text)
@@ -202,12 +202,12 @@ def test_todays_birthday_is_on_the_first_page_only(church, monkeypatch):
           created_at=_ago(hours=2))
     c = _client(church, monkeypatch)
     one = c.get("/my/news").text
-    assert '<article class="lm-fc lm-ftoday" aria-label="Today we celebrate">' in one
-    assert f'<a class="lm-fprow" href="/my/news/{P["old1"]}">' in one and "Wish them well" in one
+    assert '<article class="lf-post lf-today" aria-label="Today we celebrate">' in one
+    assert f'<a class="lf-prow-p" href="/my/news/{P["old1"]}">' in one and "Wish them well" in one
     # After what's pinned, and it isn't one of the ten.
-    assert one.index(f'id="p-{P["worship"]}"') < one.index("lm-ftoday") < one.index(f'id="p-{P["noah"]}"')
+    assert one.index(f'id="p-{P["worship"]}"') < one.index("lf-today") < one.index(f'id="p-{P["noah"]}"')
     assert P["old1"] not in _ids(one) and len(_ids(one)) == 10
-    assert "lm-ftoday" not in c.get("/my/news?page=2").text
+    assert "lf-today" not in c.get("/my/news?page=2").text
 
 
 def test_the_page_marks_what_it_showed_as_opened(church, monkeypatch):
@@ -221,7 +221,7 @@ def test_no_news_yet_and_a_failed_read(church, monkeypatch):
     church.t["church_posts"].clear()
     c = _client(church, monkeypatch)
     html = c.get("/my/news").text
-    assert "Nothing from your church yet. When your pastors post, it shows here." in html and "lm-fnext" not in html
+    assert "Nothing from your church yet. When your pastors post, it shows here." in html and "lf-next" not in html
     church.down.add("church_posts")
     r = c.get("/my/news")
     assert r.status_code == 503 and "The news couldn't load just now" in r.text
@@ -296,11 +296,11 @@ def test_switch_off_news_and_home_are_todays(church, monkeypatch):
     monkeypatch.setenv("MEMBER_LUMEN", "off")
     c = _client(church, monkeypatch)
     news = c.get("/my/news").text
-    assert 'class="nw-post' in news and "lm-fc" not in news and "lm-fnext" not in news
+    assert 'class="nw-post' in news and "lf-post" not in news and "lf-next" not in news
     assert len(re.findall(r'<article class="nw-post', news)) == 21                 # every post, as today
     assert c.get("/my/news?page=2").text == news
     home = c.get("/my").text
-    assert "All news" in home and "lm-fsee" not in home
+    assert "All news" in home and "lf-see" not in home
 
 
 # ─── the look ────────────────────────────────────────────────────────
@@ -312,7 +312,9 @@ def test_the_rows_css_is_in_the_lumen_file_with_tokens_only():
     assert mlf.CSS in parts and parts.index(mlf.CSS) < len(parts) - 1
     css = mlf.CSS.template
     block = css[css.index("/* See all posts"):css.index("@media (prefers-reduced-motion")]
-    assert ".lm .lm-fsee{" in block and ".lm .lm-fnext{" in block and ".lm .lm-ftoday" in block
+    assert ".lm .lf-see{" in block and ".lm .lf-next{" in block and ".lm .lf-today" in block
     assert not re.search(r"#[0-9a-fA-F]{3,6}\b|rgba?\(", block)                    # tokens only, for dark mode
     still = re.sub(r"@media \(prefers-reduced-motion:no-preference\)\{.*?\n\}", "", css, flags=re.S)
+    # (the double-tap heart's still fade is for reduced motion only)
+    still = re.sub(r"@media \(prefers-reduced-motion:reduce\)\{.*?\}\}", "", still, flags=re.S)
     assert "transition:" not in still and "animation:" not in still
