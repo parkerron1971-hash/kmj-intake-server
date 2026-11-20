@@ -2,7 +2,7 @@
 title: Church texters file as guests, and renamed people sort by their new name
 date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
-asked: "first lets do it with members the ability to edited names and enter new people is off" (2026-11-20), then "build and push to churches as well" after the Members mock (artifact 8UafD2wJsRm9cq5HhoB9h7)
+asked: 'Kevin, 2026-11-20: "first lets do it with members the ability to edited names and enter new people is off", then "build and push to churches as well" after the Members mock (artifact 8UafD2wJsRm9cq5HhoB9h7)'
 status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
