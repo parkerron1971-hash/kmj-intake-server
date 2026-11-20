@@ -167,6 +167,30 @@ def is_pastoral(business_id: str, contact_id: str) -> Optional[bool]:
     return any((by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS for r in roles)
 
 
+def pastors_among(business_id: str, contact_ids) -> Optional[set]:
+    """Which of these people hold an active senior or pastoral role
+    (is_pastoral's answer), in two reads however many there are: their roles
+    together, and the church's roles. None when a read failed."""
+    import church_roles as cr
+    import messaging_router as mr
+    ids = sorted({str(c) for c in contact_ids if c})
+    if not ids:
+        return set()
+    roles = sb_clients.sb_get_as_service(
+        f"/church_leader_roles?business_id=eq.{_q(business_id)}&contact_id=in.({_ids(ids)})"
+        f"&status=eq.active&select=contact_id,role&limit=500")
+    if roles is None:
+        return None
+    if not roles:
+        return set()
+    defs = cr.defs(str(business_id))
+    if defs is None:
+        return None
+    by = cr.by_key(defs)
+    return {str(r["contact_id"]) for r in roles
+            if (by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS}
+
+
 def picked(business_id: str, contact_id: str) -> Optional[bool]:
     rows = sb_clients.sb_get_as_service(
         f"/church_news_posters?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(contact_id)}&select=contact_id&limit=1")
@@ -267,12 +291,14 @@ def preview_of(shown: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
-              previews: bool = False) -> Optional[List[Dict[str, Any]]]:
+              previews: bool = False, batch: bool = False) -> Optional[List[Dict[str, Any]]]:
     """Authors, ministry names, reaction counts and mine, comment counts,
     and what each post carries (an event, a sermon). `previews` (Home's feed
     in the new look): the count read also brings the comments' words, so
     each post carries its newest one or two (preview_of) with their writers
-    (in the same people read), and how many people reacted (rx_people)."""
+    (in the same people read), and how many people reacted (rx_people).
+    `batch` (the all-posts page, feed_page): whose authors are pastors in two
+    reads together (pastors_among), not two for each new author."""
     if not rows:
         return []
     ids = _ids(r["id"] for r in rows)
@@ -300,6 +326,9 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
         return None
     gname = {str(g["id"]): g.get("name") or "" for g in groups}
     pastoral: Dict[str, bool] = {}
+    if batch:
+        got = pastors_among(business_id, [r.get("posted_by") for r in rows]) or set()
+        pastoral = {str(r.get("posted_by")): str(r.get("posted_by")) in got for r in rows if r.get("posted_by")}
     for r in rows:
         pid = str(r["id"])
         mine = [x for x in rx if str(x["post_id"]) == pid]
@@ -369,7 +398,60 @@ def feed(business_id: str, me_id: str, filt: str = "", today: str = "") -> Optio
     return _decorate(business_id, rows[:40], me_id)
 
 
-def home_view(business_id: str, me_id: str, previews: bool = False) -> Tuple[Optional[List[Dict[str, Any]]], int]:
+PAGE = 10
+PAGE_READ_MAX = 400
+
+
+def page_window(page: int) -> int:
+    """How many of the newest posts one page of the all-posts page reads: 80
+    (News' own read) for the first two pages, then four posts for each one
+    shown, up to 400."""
+    return min(max(FEED_READ, page * PAGE * 4), PAGE_READ_MAX)
+
+
+def page_count(page: int) -> int:
+    """The deepest page there is (the last one the read can reach)."""
+    return max(1, min(int(page or 1), PAGE_READ_MAX // PAGE))
+
+
+def feed_page(business_id: str, me_id: str, filt: str = "", today: str = "",
+              page: int = 1) -> Optional[Dict[str, Any]]:
+    """One page of the all-posts page (the News page in the member app's new
+    look, opened from Home's See all posts): ten posts, pinned first, then
+    newest, each as Home's feed draws it (previews: its newest comments; how
+    many people reacted), with whose authors are pastors read together.
+    Today's birthdays and anniversaries come on the first page only, apart
+    (`today`), as News shows them. One read of the posts (page_window), the
+    member's groups, and the decorations for this page's posts only.
+    {posts, today, more: another page follows, total: posts counted in the
+    read, page}; None when a read failed."""
+    page = page_count(page)
+    rows = sb_clients.sb_get_as_service(
+        f"/church_posts?business_id=eq.{_q(business_id)}&status=eq.posted&removed_at=is.null"
+        f"&select={POST_SELECT}&order=created_at.desc&limit={page_window(page)}")
+    groups = my_groups(business_id, me_id)
+    if rows is None or groups is None:
+        return None
+    now = _now()
+    mine = set(groups)
+    rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
+            and (not is_person_celebration(r) or (today and str(r.get("celebrate_on")) == today))]
+    rows.sort(key=when_of, reverse=True)
+    rows.sort(key=lambda r: not pinned_now(r, now))
+    rows = [r for r in rows if matches(r, filt)]
+    people = [r for r in rows if is_person_celebration(r)] if page == 1 else []
+    rest = [r for r in rows if not is_person_celebration(r)]
+    start = (page - 1) * PAGE
+    shown = rest[start:start + PAGE]
+    done = _decorate(business_id, shown + people, me_id, previews=True, batch=True)
+    if done is None:
+        return None
+    return {"posts": done[:len(shown)], "today": done[len(shown):], "more": len(rest) > start + PAGE,
+            "total": len(rest), "page": page}
+
+
+def home_view(business_id: str, me_id: str, previews: bool = False,
+              count: Optional[Dict[str, Any]] = None) -> Tuple[Optional[List[Dict[str, Any]]], int]:
     """Home's "From the church" (the first four posts, decorated) and the
     bell's count of posts from the last two weeks this member hasn't opened.
     Read in one go, beside Home's other reads. (None, 0) when a read failed:
@@ -377,7 +459,10 @@ def home_view(business_id: str, me_id: str, previews: bool = False) -> Tuple[Opt
     `previews` (Home's feed in the new look, member_lumen_feed): each post
     also carries its newest comments (_decorate) and `seen`, whether this
     member has opened it (from the bell's own read; older than two weeks
-    counts as seen; None when that read failed)."""
+    counts as seen; None when that read failed).
+    `count` (Home's See all posts): filled with n, how many posts the
+    all-posts page lists (feed_page's total, birthdays aside), from this
+    same read; None when the read came back full, so more may be there."""
     rows = sb_clients.sb_get_as_service(
         f"/church_posts?business_id=eq.{_q(business_id)}&status=eq.posted&removed_at=is.null"
         f"&select={POST_SELECT}&order=created_at.desc&limit=40")
@@ -386,6 +471,9 @@ def home_view(business_id: str, me_id: str, previews: bool = False) -> Tuple[Opt
         return None, 0
     now = _now()
     mine = set(groups)
+    if count is not None:
+        count["n"] = None if len(rows) >= 40 else sum(
+            1 for r in rows if is_live(r, now) and reaches(r, mine, me_id) and not is_person_celebration(r))
     # A birthday, anniversary or milestone is Home's "Celebrating today", not
     # "From the church" (News keeps them all).
     rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)

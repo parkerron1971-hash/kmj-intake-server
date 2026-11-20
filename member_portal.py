@@ -1983,6 +1983,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_portal_lumen as mlp
     devo_info: Optional[Dict[str, Any]] = {} if lumen_home else None
     fresh = str(request.query_params.get("done") or request.query_params.get("err") or "").startswith("rsvp")
+    feed_kw = _feed_previews()
     (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
      told_us) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
@@ -1997,7 +1998,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
         asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
         # "From the church" and the bell (member_portal_news).
-        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **_feed_previews()) if church_home else _nothing(),
+        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **feed_kw) if church_home else _nothing(),
         asyncio.to_thread(cn.comments_open, biz) if church_home else _nothing(),
         # "Celebrating today" and the church's once-only question (member_portal_celebrations).
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
@@ -2035,7 +2036,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
-                                   "new_n": news_n} if lumen_home else {}))
+                                   "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n")}
+                                  if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
     import member_portal_serving as mpsv
@@ -2078,9 +2080,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
 def _feed_previews() -> Dict[str, Any]:
     """Home's feed in the new look carries each post's newest comments and
     whether it was opened (church_news.home_view previews, in the reads Home
-    already makes); today's look asks nothing more."""
+    already makes), and counts the posts for See all posts (`count`, filled
+    from the same read); today's look asks nothing more."""
     import member_lumen
-    return {"previews": True} if member_lumen.page() else {}
+    return {"previews": True, "count": {}} if member_lumen.page() else {}
 
 
 def _inbox_space() -> bool:

@@ -37,6 +37,13 @@ Data: church_news.home_view(previews=True) brings each post's newest
 comments and their writers in the reads Home already made (the comment
 count read and the people read), so the feed costs no read of its own.
 
+Home shows four posts. Under the fourth, See all posts (Kevin, 2026-11-20:
+"show 4 post and a show more tab where people can see other post from
+another page"), with how many there are, counted from Home's own read,
+opens the all-posts page: /my/news in the new look (all_posts), the same
+cards ten at a time (church_news.feed_page), the filters, and Show more, a
+plain link to the next ten (?page=2), so it works without JavaScript.
+
 CSS joins /my/lumen.<hash>.css (member_lumen_ui.templates); every rule sits
 under body.lm. The script rides in the block itself (Home only).
 """
@@ -157,7 +164,7 @@ def _picture(p: Dict[str, Any]) -> str:
 
 
 def _event(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]], pool: List[str],
-           used: set) -> str:
+           used: set, back: str = "/my") -> str:
     """The event a post carries: its picture spot (when the church has a
     picture there) with the date on a leaf in the church's colour, what and
     where, and Sign me up when the post offers it."""
@@ -190,7 +197,7 @@ def _event(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]
                     f'<a href="/my/events#mp-occ-{_e(o["entry_id"])}">Change</a></p>')
         else:
             out += (f'<form class="lm-fact" method="post" action="/my/news/signup"><input type="hidden" name="id" value="{_e(p["id"])}">'
-                    f'<input type="hidden" name="back" value="/my"><button class="lm-btn sm" type="submit">Sign me up</button></form>')
+                    f'<input type="hidden" name="back" value="{_e(back)}"><button class="lm-btn sm" type="submit">Sign me up</button></form>')
     return out
 
 
@@ -227,12 +234,12 @@ def _words(p: Dict[str, Any]) -> str:
     return f'<div class="lm-fbody">{kick}{h}{para}</div>' if (h or para) else ""
 
 
-def _react(p: Dict[str, Any], kind: str, label: str) -> str:
+def _react(p: Dict[str, Any], kind: str, label: str, back: str = "/my") -> str:
     """One of Love · Amen · Praying: News' react form (RX_JS answers it in place)."""
     on = kind in (p.get("my_rx") or [])
     icon = {"love": _ic("heart", 15), "pray": _ic("pray", 15)}.get(kind, "")
     return (f'<form method="post" action="/my/news/react" class="nw-rxf"><input type="hidden" name="id" value="{_e(p["id"])}">'
-            f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="/my">'
+            f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="{_e(back)}">'
             f'<button class="lm-ca{" lv" if kind == "love" else ""}" type="submit" aria-pressed="{"true" if on else "false"}">'
             f'{icon}<span>{label}</span></button></form>')
 
@@ -269,7 +276,7 @@ def _composer(p: Dict[str, Any], me: Dict[str, Any]) -> str:
             f'<p class="lm-cw-say" role="status" hidden></p>')
 
 
-def _prayers(p: Dict[str, Any]) -> str:
+def _prayers(p: Dict[str, Any], back: str = "/my") -> str:
     """Prayers only: a soft "I'm praying" (the pray reaction, with the
     flame) and how many are."""
     import member_lumen_ui as lm
@@ -278,20 +285,22 @@ def _prayers(p: Dict[str, Any]) -> str:
     base = n - (1 if on else 0)
     return (f'<div class="lm-cpr"><form method="post" action="/my/news/react" class="nw-rxf">'
             f'<input type="hidden" name="id" value="{_e(p["id"])}"><input type="hidden" name="kind" value="pray">'
-            f'<input type="hidden" name="back" value="/my"><button class="lm-cpray" type="submit" aria-pressed="{"true" if on else "false"}">'
+            f'<input type="hidden" name="back" value="{_e(back)}"><button class="lm-cpray" type="submit" aria-pressed="{"true" if on else "false"}">'
             f'{lm.ic("flame", 20)}<span class="off">I\'m praying</span><span class="on">You\'re praying</span></button></form>'
             f'<p class="lm-cpn"><span class="n0">{f"{base} praying" if base else ""}</span><span class="n1">{base + 1} praying</span></p>'
             f'<p class="lm-cnote">Comments are off for this one. Tap Praying to let them know.</p></div>')
 
 
 def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]], *, open_: bool,
-         me: Dict[str, Any], pool: List[str], used: set, tz: Any) -> str:
-    """One post. `tz` is (the church's clock,), looked up once for the feed."""
+         me: Dict[str, Any], pool: List[str], used: set, tz: Any, back: str = "/my") -> str:
+    """One post. `tz` is (the church's clock,), looked up once for the feed.
+    `back`: where its forms come back to without JavaScript (Home, or the
+    all-posts page it sits on)."""
     pid = _e(p["id"])
     mode = p.get("comments") or "on"
     can_say = open_ and mode == "on"
     row = [(k, label) for k, label in ROW if not (mode == "prayers" and k == "pray")]
-    acts = "".join(_react(p, k, label) for k, label in row)
+    acts = "".join(_react(p, k, label, back) for k, label in row)
     if can_say:
         acts += (f'<label class="lm-ca" for="cwt-{pid}">{_ic("comment", 15)}<span>Comment</span></label>')
     under = ""
@@ -305,11 +314,11 @@ def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]],
         church = (biz.get("name") or "").strip() or "your church"
         under = f'<p class="lm-cnote">{_ic("lock", 14)}<span>Comments aren\'t open at {_e(church)} yet. You can still react.</span></p>'
     elif mode == "prayers":
-        under = _prayers(p)
+        under = _prayers(p, back)
     else:
         under = f'<p class="lm-cnote">{_ic("lock", 14)}<span>Comments are off for this post.</span></p>'
     return (f'<article class="lm-fc" id="p-{pid}" aria-label="{_e(p.get("title") or "A post")}">'
-            f'{_source(biz, p, tz)}{_picture(p)}{_words(p)}{_event(biz, p, occ, pool, used)}{_carries(p)}'
+            f'{_source(biz, p, tz)}{_picture(p)}{_words(p)}{_event(biz, p, occ, pool, used, back)}{_carries(p)}'
             f'<div class="lm-cmx">{_summary(p, mode)}<div class="lm-cact" role="group" aria-label="React">{acts}</div>'
             f'{under}</div></article>')
 
@@ -346,11 +355,23 @@ def _head(biz: Dict[str, Any], posts: List[Dict[str, Any]], new_n: Optional[int]
             f'<p class="lm-fsub">{_e(sub)}</p></header>')
 
 
+def see_all(total: Optional[int]) -> str:
+    """Under Home's four posts: a quiet row to the all-posts page (News),
+    with how many posts it lists when that is known (church_news.home_view's
+    count, from Home's own read) and more than Home shows."""
+    n = int(total) if isinstance(total, int) and total > 4 else 0
+    said = f"See all {n} posts" if n else "See all posts"
+    count = f'<small aria-hidden="true">{n}</small>' if n else ""
+    return (f'<a class="lm-fsee" href="/my/news" aria-label="{said}"><span>See all posts</span>{count}'
+            f'{_ic("chevron", 16)}</a>')
+
+
 def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], occ, open_: bool,
               rights: Optional[Dict[str, Any]] = None, *, me: Optional[Dict[str, Any]] = None,
-              new_n: Optional[int] = None) -> str:
+              new_n: Optional[int] = None, total: Optional[int] = None) -> str:
     """Home's feed in the new look. Nothing when the news couldn't be read;
-    with no news yet, a poster sees where it will go (as today's Home)."""
+    with no news yet, a poster sees where it will go (as today's Home).
+    Under the four posts, See all posts (`total`: how many there are)."""
     import member_app_photos as photos
     import member_lumen_ui as lm
     import member_portal_news as mpn
@@ -378,7 +399,104 @@ def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], 
         cards.append(_caught() if p == "caught" else
                      card(biz, p, by, open_=open_, me=me or {}, pool=pool, used=used, tz=tz))
     return (f'<section class="lm-feed" aria-labelledby="lm-feed-h">{_head(biz, posts, new_n)}{"".join(cards)}'
-            f'<a class="lm-fall" href="/my/news">All news</a></section>{JS}')
+            f'{see_all(total)}</section>{JS}')
+
+
+# ─── the all-posts page ──────────────────────────────────────────────
+
+
+def page_href(filt: str = "", page: int = 1) -> str:
+    """The all-posts page's address: /my/news, with its filter and page."""
+    q = [f"f={filt}"] if filt else []
+    if page > 1:
+        q.append(f"page={page}")
+    return "/my/news" + ("?" + "&".join(q) if q else "")
+
+
+def _today(people: List[Dict[str, Any]]) -> str:
+    """Today's birthdays and anniversaries, together on one card (News'
+    "Today we celebrate"), each opening its own page of wishes."""
+    import member_portal_celebrations as mcl
+    import member_portal_news as mpn
+    if not people:
+        return ""
+    rows = []
+    for p in people:
+        n = int(p.get("comment_n") or 0)
+        if p.get("sub") == "anniversary":
+            years = (p.get("attach") or {}).get("years")
+            small, act = (f"{years} years married today" if years else "Their anniversary is today"), "Congratulate"
+            face = (f'<span class="lm-fpair">{mpn._face(p.get("person") or {}, "lm-fface")}'
+                    f'{mpn._face(p.get("partner") or {}, "lm-fface")}</span>')
+        else:
+            small = "Happy birthday" + (f" · {n} wish{'' if n == 1 else 'es'} so far" if n else "")
+            act, face = "Wish them well", mpn._face(p.get("person") or {}, "lm-fface")
+        rows.append(f'<a class="lm-fprow" href="/my/news/{_e(p["id"])}">{face}<span class="lm-fprow-t">'
+                    f'<b>{_e(mcl.full_name(p))}</b><small>{_e(small)}</small></span><span class="lm-fprow-go">{act}</span></a>')
+    return (f'<article class="lm-fc lm-ftoday" aria-label="Today we celebrate"><div class="lm-fbody">'
+            f'<span class="lm-fk">Today we celebrate</span></div>{"".join(rows)}'
+            f'<p class="lm-cnote lm-ftoday-n">Shown because they said yes</p></article>')
+
+
+def all_posts(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], got: Optional[Dict[str, Any]],
+              filt: str, occ, open_: bool, poster: bool = False):
+    """The News page in the new look, opened from Home's See all posts: the
+    heading and filters as before, then the posts as Home draws them (the
+    reactions, the newest comments, the write pill, the poster's choice,
+    an event's date leaf), ten at a time (church_news.feed_page), with Show
+    more, a plain link to the next ten. Back goes Home. (html, status)."""
+    import church_news as cn
+    import group_gatherings as gg
+    import member_app_photos as photos
+    import member_portal_news as mpn
+    import member_portal_share as mps
+    from member_portal import _shell
+    write = f'<a class="nw-write" href="/my/news/write">{_ic("pencil", 15)}Post</a>' if poster else ""
+    head = ('<a class="mb-back" href="/my">Home</a>'
+            f'<header class="lm-mast lm-nwhead"><div class="lm-nwrow"><p class="lm-eyebrow">From your church</p>{write}</div>'
+            f'<h1 class="lm-disp">What&#x27;s <em>happening</em></h1></header>')
+    if got is None:
+        body = f'{head}<p class="mp-err" role="alert">The news couldn\'t load just now. Please try again in a moment.</p>'
+        return _shell(biz, site, "News", f'<style>{mpn.NEWS_CSS}</style><div class="lm-nwpage">{body}</div>',
+                      tab="news", who=me), 503
+    page = int(got.get("page") or 1)
+    chips = "".join(
+        f'<a class="nw-fp" href="{page_href(key)}"{" aria-current=page" if key == filt else ""}>{label}</a>'
+        for key, label in cn.FILTERS)
+    back = page_href(filt, page)
+    posts, people = got.get("posts") or [], got.get("today") or []
+    by = mpn._occasions(occ)
+    pool = photos.photos(biz, site) if posts else []
+    used: set = set()
+    # The church's clock, once for every label on the page (it is a read).
+    tz = (gg.zone(biz),) if posts else (None,)
+    cards = "".join(card(biz, p, by, open_=open_, me=me, pool=pool, used=used, tz=tz, back=back)
+                    for p in posts if p.get("pinned"))
+    cards += _today(people)
+    cards += "".join(card(biz, p, by, open_=open_, me=me, pool=pool, used=used, tz=tz, back=back)
+                     for p in posts if not p.get("pinned"))
+    earlier = ""
+    if page > 1:
+        earlier = f'<p class="lm-fpage"><span>Earlier posts</span><a href="{page_href(filt)}">Back to the newest</a></p>'
+    if not cards:
+        if page > 1:
+            empty = f'That&#x27;s every post. <a href="{page_href(filt)}">Back to the newest</a>'
+        else:
+            empty = _e("Nothing from your church yet. When your pastors post, it shows here." if not filt
+                       else "Nothing here yet. Try All.")
+        cards = f'<p class="nw-empty">{empty}</p>'
+    more = ""
+    if got.get("more"):
+        more = (f'<a class="lm-fsee lm-fnext" href="{_e(page_href(filt, page + 1))}"><span>Show more</span>'
+                f'{_ic("down", 16)}</a>')
+    foot = (f'<p class="nw-foot">{_ic("lock", 16)}<span>Only your pastors and the leaders they name can post here. '
+            f'{"Everyone can react and comment, and every comment is checked before anyone sees it." if open_ else "Everyone can react."}'
+            f'</span></p>')
+    body = (f'{head}<nav class="nw-filter" aria-label="Show">{chips}</nav>{mpn._flash(request)}{earlier}'
+            f'<div class="lm-flist" id="lm-flist">{cards}</div>{more}{mps.share_card()}{foot}')
+    title = "News" if page == 1 else f"News, page {page}"
+    return _shell(biz, site, title, f'<style>{mpn.NEWS_CSS}</style><div class="lm-nwpage">{body}</div>',
+                  tab="news", who=me, script=mpn.RX_JS + (JS if posts else "")), 200
 
 
 # ─── the script: a comment from Home ─────────────────────────────────
@@ -565,8 +683,31 @@ CSS = Template("""
 .lm .lm-older{display:flex;align-items:center;gap:12px;margin:22px 0 0;font:650 11px/1 var(--mb-ui);letter-spacing:.14em;
   text-transform:uppercase;color:var(--fg3);}
 .lm .lm-older::before,.lm .lm-older::after{content:"";flex:1;height:1px;background:var(--lm-line);}
-.lm .lm-fall{display:flex;align-items:center;justify-content:center;height:46px;margin-top:16px;border-radius:23px;background:var(--s1);
-  color:var(--fg);font:650 14.5px/1 var(--mb-ui);text-decoration:none;}
+/* See all posts under Home's four; Show more on the all-posts page: a quiet row, a hairline like the cards */
+.lm .lm-fsee{display:flex;align-items:center;gap:10px;min-height:52px;margin-top:14px;padding:0 14px 0 18px;border-radius:18px;
+  background:var(--bg);box-shadow:0 0 0 1px var(--lm-line);color:var(--fg);text-decoration:none;}
+.lm .lm-fsee span{flex:1;min-width:0;font:650 14.5px/1.2 var(--mb-ui);}
+.lm .lm-fsee small{flex:none;font:500 13.5px/1 var(--mb-ui);color:var(--fg3);font-variant-numeric:tabular-nums;}
+.lm .lm-fsee .mb-ic{width:16px;height:16px;flex:none;color:var(--fg3);}
+.lm .lm-fsee:active{background:var(--s1);}
+.lm .lm-fnext{justify-content:center;gap:8px;margin-top:20px;}
+.lm .lm-fnext span{flex:none;}
+/* the all-posts page (member_lumen_feed.all_posts): the cards as on Home */
+.lm .lm-flist{margin-top:6px;}
+.lm .lm-flist>.nw-empty{margin-top:14px;}
+.lm .lm-flist>.nw-empty a{color:var(--acc);font-weight:650;text-decoration:none;}
+.lm .lm-fpage{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:20px 0 0;
+  font:650 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
+.lm .lm-fpage a{font:650 13px/1.2 var(--mb-ui);letter-spacing:0;text-transform:none;color:var(--acc);text-decoration:none;}
+.lm .lm-ftoday .lm-fbody{padding-bottom:4px;}
+.lm .lm-fprow{display:flex;align-items:center;gap:12px;padding:10px 16px;color:var(--fg);text-decoration:none;}
+.lm .lm-fprow-t{flex:1;min-width:0;}
+.lm .lm-fprow-t b{display:block;font:650 15px/1.25 var(--mb-ui);}
+.lm .lm-fprow-t small{display:block;margin-top:2px;font:500 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+.lm .lm-fprow-go{flex:none;font:650 13px/1 var(--mb-ui);color:var(--acc);}
+.lm .lm-fpair{display:flex;flex:none;}
+.lm .lm-fpair .lm-fface+.lm-fface{margin-left:-10px;box-shadow:0 0 0 2px var(--bg);}
+.lm .lm-ftoday>.lm-ftoday-n{margin:4px 16px 14px;}
 @media (prefers-reduced-motion:no-preference){
   .lm .lm-ca,.lm .lm-cpray,.lm .lm-cw-go{transition:transform .35s cubic-bezier(.3,1.4,.5,1),color .2s,background-color .25s;}
   .lm .lm-ca:active,.lm .lm-cw-go:active{transform:scale(.9);}
@@ -574,11 +715,13 @@ CSS = Template("""
   .lm .lm-cm.checking .lm-cmbub{background:linear-gradient(90deg,var(--s1),var(--lm-tint-12),var(--s1));background-size:200% 100%;
     animation:lmfshim 1.1s linear infinite;}
   .lm .lm-cm.rise{animation:lmfrise .45s cubic-bezier(.2,.8,.2,1) both;}
+  .lm .lm-fsee{transition:background-color .2s;}
 }
 @keyframes lmfshim{to{background-position:-200% 0}}
 @keyframes lmfrise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.lm .lm-ca:focus-visible,.lm .lm-cw-go:focus-visible,.lm .lm-cpray:focus-visible,.lm .lm-fall:focus-visible,.lm .lm-cmore:focus-visible,
-.lm .lm-ccount:focus-visible,.lm .lm-fev:focus-visible,.lm .lm-fatt:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.lm .lm-ca:focus-visible,.lm .lm-cw-go:focus-visible,.lm .lm-cpray:focus-visible,.lm .lm-fsee:focus-visible,.lm .lm-cmore:focus-visible,
+.lm .lm-ccount:focus-visible,.lm .lm-fev:focus-visible,.lm .lm-fatt:focus-visible,.lm .lm-fprow:focus-visible,
+.lm .lm-fpage a:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 .lm .lm-cw:focus-within{box-shadow:0 0 0 1px var(--acc-fill);}
 
 /* posting from a phone (member_portal_write): its Comments and When choices in the new look */
