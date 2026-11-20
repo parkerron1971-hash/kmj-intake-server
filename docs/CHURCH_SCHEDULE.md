@@ -2804,7 +2804,7 @@ the hours equal the Serving page's with a gathering, an away day, two places one
 office's hours, and read only this year's yeses; "Everything is filled" is said only of days with
 places.
 
-### 8.8 The department leader's week, in the member app (My department)
+### 8.8 The department leader's week, in the member app (My department, #2011)
 
 The pastor approved the mock and four calls on 2026-11-20: the same week Laquesha sees in the
 office's Volunteers → The week, for one department, on the member app's Lead tab, for that
