@@ -46,11 +46,14 @@ item 11; 7.12 for what the build decided):
   the scheduler ..... church_schedule.holds adds one row a day it falls on
                       (held_days): who and which days, never the label
 
-THE LABEL IS AS PRIVATE AS AN ASK'S REASON. It is read by the person, the
-one an ask of theirs would go to, the owner and whoever oversees the office
-(sees_label: church_schedule.sees_reason's own rule, on the row an ask of
-theirs would be), and by nobody else. Everyone else on the calendar reads a
-name and a day, and the key isn't there. held_days, the sweep and every
+THE LABEL IS THE PERSON'S, THE OWNER'S AND THE OFFICE OVERSEER'S (an
+office login's, never a member-app session's), and nobody else's
+(sees_label). A reason on an ask is read by whoever answers it; a thing that
+repeats needs no yes, so nobody over them has a decision to make with what
+it is, and working out who an ask would go to, for every person on every
+calendar and every Dates page, cost about four reads a person (the #1990
+review). Everyone else on the calendar reads a name and a day, and the key
+isn't there. held_days, the sweep and every
 notice never select it.
 
 Every read is by business_id, bounded and paged; a failed read is a 503 (a
@@ -109,7 +112,9 @@ def _int(v: Any) -> Optional[int]:
     if isinstance(v, int):
         return v
     s = str(v if v is not None else "").strip()
-    return int(s) if s.isdigit() else None
+    # ASCII only and short: "²" and "①" are digits to isdigit() and not to int(), and Python
+    # won't read a string of 4,300 digits. Either would be a 500, not "pick a day" (#1990 review).
+    return int(s) if s.isascii() and s.isdigit() and len(s) <= 4 else None
 
 
 def _nth_day(year: int, month: int, weekday: int, nth: int) -> date:
@@ -230,27 +235,14 @@ def said(row: Dict[str, Any], today: date, *, long: bool = False) -> str:
 
 # ─── Who reads the label ──────────────────────────────────────────────
 
-def _to_row(ch: co.Church, cid: str) -> Dict[str, Any]:
-    """The row an ask of theirs would be, for the rules that read one: who
-    they are, and who it would go to (church_schedule.goes_to)."""
-    to = cs.goes_to(ch, cid)
-    return {"contact_id": cid, "to_user_id": to["id"] if to and to["kind"] == co.LOGIN else None,
-            "to_contact_id": to["id"] if to and to["kind"] == co.PERSON else None}
-
-
 def sees_label(ch: co.Church, me: Dict[str, Any], cid: Any) -> bool:
-    """Who reads what a commitment is: exactly who reads an ask's reason
-    (church_schedule.sees_reason), on the row an ask of theirs would be. The
-    person, the one it would go to, and (an office login) the owner and
-    whoever oversees the office. Nobody else: not another leader, not an
-    Admin, not the one who keeps Who serves when."""
+    """Who reads what a commitment is: the person, and (an office login) the
+    owner and whoever oversees the office. Nobody else: not whoever is over
+    them, not another leader, not an Admin, not the one who keeps Who serves
+    when, and never a member-app session for anyone but itself. No read: the
+    calendar and the Dates page cost the same however many have one."""
     cid = str(cid or "")
-    if cs._is_asker(ch, me, {"contact_id": cid}) or cs.over_all(ch, me):
-        return True                                 # never worth working out who it would go to
-    memo = ch._memo.setdefault("repeat_to", {})
-    if cid not in memo:
-        memo[cid] = _to_row(ch, cid)
-    return cs.sees_reason(ch, me, memo[cid])
+    return cs._is_asker(ch, me, {"contact_id": cid}) or cs.over_all(ch, me)
 
 
 def shape(ch: co.Church, me: Dict[str, Any], row: Dict[str, Any], names: Dict[str, str],

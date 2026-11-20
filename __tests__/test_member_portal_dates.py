@@ -446,7 +446,7 @@ def test_a_short_notice_ask_is_said_gently_before_and_after_and_never_blocked(ap
 def test_cant_make_it_is_on_the_calendar_at_once_and_the_page_says_it_needs_no_yes(app, db, shell):
     words = text(page(db, "elena")[0])
     assert ("For the next two weeks: sick, or something came up. It goes straight on the calendar and needs no yes. "
-            "Amara Stone is let know.") in words
+            "We’ll let Amara Stone know.") in words
     as_(app, "elena")
     r = post(app, "/my/lead/dates/cant", start=day(1), end=day(2), reason=SECRET)
     assert went(r) == "/my/lead/dates?done=dt_cant"
@@ -1417,8 +1417,10 @@ def test_things_that_repeat_come_after_my_dates_in_plain_words_with_what_they_ty
     assert "Bible study at the jail Every Wednesday until Mar 31, 2027 Remove" in words
     for r in theirs(db):
         assert f'action="/my/lead/dates/commitments/{r["id"]}/remove"' in html, "ids ride in form addresses"
-    assert ("Everyone on the leaders schedule sees the days. What it is stays between you, Amara Stone and those who "
-            "look after the whole church.") in words and "Amara Stone is let know." in words
+    assert ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look after "
+            "the whole church.") in words
+    rep = words[words.index("Things that repeat"):words.index("Who else is away")]
+    assert "We’ll let Amara Stone know." in rep, "the form's own line, not the I can't make it one"
     lists = fields(html).lists
     assert lists["weekday"] == ["", "1", "2", "3", "4", "5", "6", "7"]
     assert lists["often"] == ["weekly", "every_other", "month_1", "month_2", "month_3", "month_4", "month_last"]
@@ -1458,7 +1460,8 @@ def test_their_own_is_theirs_to_take_off_and_nobody_elses_here(app, db, shell):
 
 def test_what_cant_be_saved_comes_back_in_plain_words(app, db, shell):
     for form, code in (({"label": ""}, "dt_repeat_label"), ({"label": "x" * 81}, "dt_repeat_label"),
-                       ({"weekday": ""}, "dt_said"), ({"often": "fortnightly"}, "dt_said"),
+                       ({"weekday": ""}, "dt_said"), ({"weekday": "²"}, "dt_said"),
+                       ({"weekday": "7" * 5000}, "dt_said"), ({"often": "fortnightly"}, "dt_said"),
                        ({"start": "2028-06-01"}, "dt_repeat_days"), ({"until": day(-1)}, "dt_repeat_days"),
                        ({"start": day(18), "until": day(18)}, "dt_repeat_none")):
         assert repeat(app, **form).endswith(f"err={code}"), form
@@ -1495,4 +1498,4 @@ def test_the_owners_own_person_adds_one_that_tells_nobody(app, db, shell):
     assert theirs(db, "nathan")[0]["told_at"] and db.later == [], "nobody is over them"
     words = text(page(db, "nathan")[0])
     assert ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look after "
-            "the whole church.") in words and "is let know" not in words[words.index("Things that repeat"):]
+            "the whole church.") in words and "We’ll let" not in words[words.index("Things that repeat"):]

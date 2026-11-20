@@ -2401,12 +2401,17 @@ migration: `church_away_commitments` was in step 1's file, and no column was mis
   open it (the Lead tab gives them no Dates entry for that alone: `section` answers from what is
   kept and reads nothing new); the office sees theirs in `all` and can take them off.
 
-**The label is as private as a reason**
+**The label is the person's, the owner's and the office overseer's**
 
-- **Read exactly by those who read an ask's reason**: `sees_label` is `church_schedule.sees_reason`
-  on the row an ask of theirs would be, with who it would go to worked out when it is read
-  (`goes_to`, the first at the nearest step, decision 1). When who is over them changes, who reads
-  it changes with it; nothing is kept.
+- **Read by the person, and (an office login) the owner and whoever oversees the office**, and by
+  nobody else (`sees_label`). Changed in the review of #1990: as first built it was read like an
+  ask's reason, by whoever an ask of theirs would go to, worked out on every read. That cost about
+  four reads a person with one on every calendar and every leader's Dates page (20 people: 22 reads
+  became 99), each a new way for the page to fail, and it let who reads it move when the order at
+  the nearest step changed (a co-leader added who sorts first), which an ask's reason never does
+  (decision 1). A reason is read by whoever answers the ask; a thing that repeats needs no yes, so
+  nobody over them has a decision to make with what it is. Whoever it would go to is still told
+  that it's there, and on which days, never what it is.
 - **For anyone else the key is absent**, on the calendar and on a list; never an empty string.
 - **The day and the pattern are not private**: everyone on the schedule reads the name and the
   days on the calendar, as they read an approved away date's.
@@ -2450,15 +2455,21 @@ migration: `church_away_commitments` was in step 1's file, and no column was mis
   list** that starts at "Pick a day". The form is only for someone on the schedule, and past ten it
   is one line instead ("That's ten, as many as you can have. Take one off to add another.").
 - **In plain words**: "from" only while it hasn't started, "until" only when it ends, the year only
-  when it isn't this one. The privacy line under "What it is" names who it goes to, as the reason's
-  does; the owner's own person reads "between you and those who look after the whole church".
+  when it isn't this one. The privacy line under "What it is" reads "between you and those who look
+  after the whole church" for everyone, and "We'll let Amara know." follows for whoever has someone
+  over them (and, from the same review, "I can't make it" says "We'll let Amara know." too, where it
+  said "Amara is let know.").
 
 **Open for the lead session or the owner**
 
 - Whether the person should hear when the office adds one for them.
 - Whether whoever it would go to should hear when one is taken off.
 - Whether someone taken off the schedule should keep a Dates entry for theirs, or theirs should
-  stop holding them from the scheduler.
+  stop holding them from the scheduler. For now they hold them (it's still true that they work that
+  Saturday), and the office's Leaders' dates screen will list everyone's, theirs too, with Take it
+  off for the owner and the office overseer (the frontend follow-up), so none is out of sight.
+- From the review of #1990, also: `weekday` and `nth` are read as ASCII digits only, four at most
+  ("²" or a 5,000-digit string was a 500, now the plain refusal).
 - Two presses in the same instant can make two copies (no unique index).
 - The office app has no screen for them: the API only, until the office frontend exists
   (decision 21).

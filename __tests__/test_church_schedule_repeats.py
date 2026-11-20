@@ -270,7 +270,9 @@ def test_the_same_one_twice_is_one(app, db):
 @pytest.mark.parametrize("body,said", [
     ({"label": ""}, crep.LABEL), ({"label": "   "}, crep.LABEL), ({"label": "x" * 81}, crep.LABEL),
     ({"weekday": 0}, crep.BAD_WEEKDAY), ({"weekday": 8}, crep.BAD_WEEKDAY), ({"weekday": True}, crep.BAD_WEEKDAY),
-    ({"weekday": "Saturday"}, crep.BAD_WEEKDAY), ({"pattern": "fortnightly"}, crep.BAD_PATTERN),
+    ({"weekday": "Saturday"}, crep.BAD_WEEKDAY), ({"weekday": "²"}, crep.BAD_WEEKDAY),
+    ({"weekday": "①"}, crep.BAD_WEEKDAY), ({"weekday": "6" * 5000}, crep.BAD_WEEKDAY),
+    ({"pattern": "month_nth", "nth": "³"}, crep.BAD_NTH), ({"pattern": "fortnightly"}, crep.BAD_PATTERN),
     ({"pattern": "month_nth"}, crep.BAD_NTH), ({"pattern": "month_nth", "nth": 6}, crep.BAD_NTH),
     ({"starts_on": "2028-01-01"}, crep.BAD_START), ({"starts_on": "2025-11-01"}, crep.BAD_START),
     ({"starts_on": "soon"}, crep.BAD_START), ({"until_on": day(-1), "starts_on": day(-20)}, crep.BAD_UNTIL),
@@ -365,11 +367,12 @@ def test_a_removal_that_fails_is_a_503_and_it_stays(app, db, monkeypatch):
 READERS = ("elena", "amara", "owner", "owen", "yusuf", "esther", "tessa", "sunny", "olive", "kira")
 
 
-def test_the_label_is_read_exactly_by_who_reads_an_asks_reason(app, db):
+def test_the_label_is_read_by_the_person_the_owner_and_the_office_overseer_only(app, db):
     """Elena asks with a private reason and Amara says yes, so the away date
-    is on everyone's calendar; she also has a thing that repeats. For every
-    reader the label is there exactly when the reason is: Elena, Amara (the
-    one an ask of hers goes to), the owner and whoever oversees the office."""
+    is on everyone's calendar; she also has a thing that repeats. The reason
+    is read by Amara, who answered it; the label is not (nothing about it
+    waits on anyone's yes): only Elena, the owner and whoever oversees the
+    office read it (the #1990 review)."""
     w = db.who[HOPE]
     as_(app, HOPE, "elena")
     asked = app.post("/church/schedule/asks", json={"business_id": HOPE, "starts_on": day(30), "ends_on": day(31),
@@ -384,34 +387,57 @@ def test_the_label_is_read_exactly_by_who_reads_an_asks_reason(app, db):
         away = next(a for a in g["away"] if a["contact_id"] == w["elena"])
         standing = [s for s in g["standing"] if s["contact_id"] == w["elena"]]
         assert [s["day"] for s in standing] == ["2026-12-05", "2026-12-19", "2027-01-02", "2027-01-16"], who
-        reads_reason = away["reason"] == SECRET
-        assert all(("label" in s) == reads_reason for s in standing), who
+        reads = "label" in standing[0]
+        assert all(("label" in s) == reads for s in standing), who
         for s in standing:
-            assert set(s) == ({"contact_id", "name", "day", "label"} if reads_reason else {"contact_id", "name", "day"})
+            assert set(s) == ({"contact_id", "name", "day", "label"} if reads else {"contact_id", "name", "day"})
             assert s.get("label", SHIFT) == SHIFT and s["name"] == "Elena Ruiz"
-        seen[who] = reads_reason
-    assert {w for w, yes in seen.items() if yes} == {"elena", "amara", "owner", "owen"}
+        seen[who] = (reads, away.get("reason") == SECRET)
+    assert {w for w, (yes, _r) in seen.items() if yes} == {"elena", "owner", "owen"}
+    assert seen["amara"] == (False, True), "Amara reads the reason she answered, never the label"
     # And nowhere else on the calendar for those who don't read it.
     for who in ("yusuf", "tessa", "sunny"):
         as_(app, HOPE, who)
         assert SHIFT not in app.get(f"/church/schedule/leaders?business_id={HOPE}").text, who
 
 
-def test_whoever_it_would_go_to_moves_and_the_label_follows(app, db):
-    """Who reads it is worked out from who an ask would go to now, never
-    kept: Elena's go to Amara; once Elena answers to Abel on the map, Abel
-    reads it and Amara no longer does."""
+def test_nobody_over_them_reads_it_whoever_they_answer_to(app, db):
+    """Elena's asks go to Amara; once she answers to Abel on the map, they go
+    to Abel. Neither reads what her thing that repeats is, before or after."""
     w = db.who[HOPE]
     fake.seat(db, HOPE, "abel")
     add(app, "elena")
-    assert "label" in cal(app, "amara")["leaders"]["standing"][0]
-    assert "label" not in cal(app, "abel")["leaders"]["standing"][0]
+    assert "label" not in cal(app, "amara")["leaders"]["standing"][0]
     for r in db.t["church_leader_roles"]:
         if r["business_id"] == HOPE and r["contact_id"] == w["elena"]:
             r["answers_to_contact_id"] = w["abel"]
     assert cs.goes_to(church(db), w["elena"])["id"] == w["abel"], "she answers to Abel now"
-    assert "label" in cal(app, "abel")["leaders"]["standing"][0]
-    assert "label" not in cal(app, "amara")["leaders"]["standing"][0]
+    for who in ("abel", "amara"):
+        assert "label" not in cal(app, who)["leaders"]["standing"][0], who
+    assert cal(app, "owner")["leaders"]["standing"][0]["label"] == SHIFT
+
+
+@pytest.mark.parametrize("who", ["yusuf", "amara", "owner"])
+def test_the_calendar_costs_the_same_however_many_have_one(app, db, who):
+    """Who reads a label is worked out with no read, so the calendar makes
+    the same reads with one person's thing that repeats as with twenty (it
+    once worked out who an ask would go to for each: about four reads a
+    person, the #1990 review)."""
+    people = sorted(cs.roster(church(db)).people())[:20]
+    assert len(people) == 20
+
+    def reads_with(n):
+        db.t["church_away_commitments"][:] = [
+            {"id": f"7a000000-0000-4000-8000-{i:012d}", "business_id": HOPE, "contact_id": cid, "label": SHIFT,
+             "weekday": SAT, "pattern": "weekly", "nth": None, "starts_on": day(0), "until_on": None,
+             "told_at": day(0), "created_at": day(0)} for i, cid in enumerate(people[:n])]
+        as_(app, HOPE, who)
+        db.reads.clear()
+        got = cal(app, who, 0, 30)
+        assert sum(len(g["standing"]) for g in got.values() if isinstance(g, dict) and "standing" in g) >= n * 4
+        return len(db.reads)
+    reads_with(1)                       # what is kept a minute is read on the first call only
+    assert reads_with(1) == reads_with(20), who
 
 
 def test_the_calendar_lists_each_day_in_its_window_under_their_group(app, db):

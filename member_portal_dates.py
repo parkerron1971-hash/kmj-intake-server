@@ -767,14 +767,9 @@ def _repeat_form(v: Dict[str, Any]) -> str:
     today, to = v["today"].isoformat(), v.get("to") or ""
     if len(v.get("repeats") or []) >= crep.MAX_EACH:
         return f'<p class="ld-quiet">That’s {WORDS[crep.MAX_EACH]}, as many as you can have. Take one off to add another.</p>'
-    if v["top"]:
-        reads = ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look "
-                 "after the whole church.")
-        told = ""
-    else:
-        reads = (f"Everyone on the leaders schedule sees the days. What it is stays between you, "
-                 f"{to or 'whoever is over you'} and those who look after the whole church.")
-        told = f" {to} is let know." if to else ""
+    reads = ("Everyone on the leaders schedule sees the days. What it is stays between you and those who look "
+             "after the whole church.")
+    told = f" We’ll let {to} know." if to and not v["top"] else ""
     days = "".join(f'<option value="{n}">{_e(name)}</option>' for n, name in enumerate(crep.WEEKDAYS, 1))
     often = "".join(f'<option value="{_e(k)}">{_e(words)}</option>' for k, words, _p, _n in OFTEN)
     return (f'<section class="ld-pr dt-card" aria-label="Add something that repeats">'
@@ -866,7 +861,7 @@ def _ask_again(v: Dict[str, Any], d: Dict[str, Any]) -> str:
 def _cant_form(v: Dict[str, Any]) -> str:
     today, near = v["today"], int(v["near"])
     last = (today + timedelta(days=near - 1)).isoformat()
-    told = f" {v['to']} is let know." if v.get("to") else ""
+    told = f" We’ll let {v['to']} know." if v.get("to") else ""
     return (f'<section class="ld-pr dt-card" aria-label="I can’t make it">'
             f'<p class="dt-lede">For the next {_e(_span(near))}: sick, or something came up. It goes straight on the '
             f'calendar and needs no yes.{_e(told)}</p>'

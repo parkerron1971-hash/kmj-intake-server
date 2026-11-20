@@ -1771,7 +1771,7 @@ def calendar(ch: co.Church, me: Dict[str, Any], lo: date, hi: date) -> Dict[str,
     office overseer every one): a waiting ask is nobody else's to see.
     `standing` (S1-7, things that repeat): one entry a day each of the
     group's people's commitments falls on, {contact_id, name, day}, with
-    `label` only for those who would read an ask's reason
+    `label` only for the person, the owner and the office overseer
     (church_schedule_repeats.sees_label); for anyone else the key is
     absent."""
     if hi < lo or (hi - lo).days > WINDOW_DAYS:
