@@ -283,12 +283,16 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
         try:
             import billing_limits
             if not billing_limits.chief_can_send(str(_cap_biz)):
+                # Inside the Android app, never "upgrade" (android_app;
+                # Google Play's payments policy). A 429, which the app's
+                # 402 replacement doesn't cover.
+                import android_app
+                used_up = "This month's included Chief messages are used up on your plan."
                 raise HTTPException(
                     status_code=429,
                     detail={"error": "chief_message_cap",
-                            "message": "This month's included Chief messages are "
-                                       "used up on your plan. Upgrade for "
-                                       "unlimited Chief."})
+                            "message": android_app.wording(
+                                used_up + " Upgrade for unlimited Chief.", used_up)})
         except HTTPException:
             raise
         except Exception as _cap_err:

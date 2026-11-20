@@ -181,6 +181,12 @@ def _fallback_system(system: Any) -> str:
     state = dynamic.strip()[:FALLBACK_STATE_CHARS].strip()
     if state:
         parts.append("=== LIVE BUSINESS STATE ===\n" + state)
+    # The Android app's rules (android_app) end the turn's prompt, past where
+    # the state is cut: carry them over whole, once.
+    import android_app
+    app_rules = android_app.block_in(raw)
+    if app_rules and app_rules not in state:
+        parts.append(app_rules)
     return "\n\n".join(parts)
 
 

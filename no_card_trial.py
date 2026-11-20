@@ -405,6 +405,17 @@ _WHAT = {
     "trial_over": "Your free trial has ended.",
 }
 
+# Inside the Android app (android_app): what isn't on, never "add a card"
+# (Google Play's payments policy). Chief passes these on as they are.
+_APP_WHAT = {
+    "texts": "Texting isn't on for this account yet.",
+    "number": "A texting number isn't on for this account yet.",
+    "bulk_email": "Sending to a group of contacts at once isn't on for this account yet.",
+    "rebuild": "Your free trial includes one site build, and you've used it.",
+    "builds_full": "Today's free site builds are all taken. Try again tomorrow.",
+    "trial_over": "Your free trial has ended.",
+}
+
 
 def card_message(what: str, row: Optional[Dict[str, Any]] = None) -> str:
     """The refusal, in the practitioner's words. While the trial is still
@@ -412,10 +423,14 @@ def card_message(what: str, row: Optional[Dict[str, Any]] = None) -> str:
     charged before the end date, and the tank grows.
 
     A sample church's row (blocks() marks it) is never told to add a card:
-    it hears the sample's own words (sample_church.MESSAGE)."""
+    it hears the sample's own words (sample_church.MESSAGE). Nor is anyone
+    inside the Android app: they hear what isn't on (_APP_WHAT)."""
     if row is not None and row.get("is_sample") is True:
         import sample_church
         return sample_church.MESSAGE
+    import android_app
+    if android_app.in_android_app():
+        return _APP_WHAT.get(what, "That isn't on for this account yet.")
     lead = _WHAT.get(what, "That turns on once there's a card on file.")
     action = {"rebuild": "To build again, add a card",
               "builds_full": "To build now, add a card",

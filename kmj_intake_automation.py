@@ -169,6 +169,13 @@ _cors_origins = [
 # it. Pure ASGI; it never wraps a response it lets through.
 from sample_church_guard import SampleChurchGuard
 app.add_middleware(SampleChurchGuard)
+# Is this request from the Android app (android_app.py)? Its WebView's user
+# agent carries SolutionistAndroid/; Chief then never sells our plans or
+# add-ons in its replies (Google Play's payments policy). Pure ASGI: it only
+# sets a ContextVar for the request and clears it after, so where it sits
+# in the stack doesn't matter; every route and the tasks they start see it.
+from android_app import AndroidAppMarker
+app.add_middleware(AndroidAppMarker)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

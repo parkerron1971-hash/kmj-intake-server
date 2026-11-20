@@ -129,6 +129,10 @@ async def say(message: str, streamer: Any, evidence: Dict[str, Dict[str, Any]], 
     before = streamer.text
     t0 = time.perf_counter()
     system = SYSTEM + ("\nThis is spoken aloud: short, plain words." if voice else "")
+    # Inside the Android app, plans and buying wait for the full answer,
+    # which carries the app's rules (android_app; '' everywhere else).
+    import android_app
+    system += android_app.defer_rule("NEED_MORE")
     messages = list(history or [])[-2:] + [{"role": "user", "content":
                                             f"RECORDS:\n{records}\n\nQUESTION: {message[:1500]}"}]
     while messages and messages[0]["role"] != "user":

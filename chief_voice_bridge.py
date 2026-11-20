@@ -106,6 +106,11 @@ class VoiceBridge:
         messages = list(history or [])[-6:] + [{"role": "user", "content": message[:4000]}]
         while messages[0]["role"] != "user":
             messages.pop(0)
+        # Inside the Android app, plans and buying wait for the full answer,
+        # which carries the app's rules (android_app; '' everywhere else).
+        # Read here, in the turn's context, before the preview task starts.
+        import android_app
+        system = SYSTEM + android_app.defer_rule("NEED_MORE") + "\n\nBUSINESS RECORDS:\n" + records
 
         async def run():
             pending = ""
@@ -113,7 +118,7 @@ class VoiceBridge:
             try:
                 async with asyncio.timeout(timeout):
                     async for piece in cft.stream_text(
-                        SYSTEM + "\n\nBUSINESS RECORDS:\n" + records,
+                        system,
                         messages,
                         model=chief_models.model_for("fast"), max_tokens=240,
                         rec=headline._TallyOnly(), endpoint="/chief/voice-bridge",
