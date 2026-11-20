@@ -205,6 +205,57 @@ def test_a_tiny_check_is_not_taken_for_a_ministers(db):
     assert pf._exempt({"gross": 6000.0, "medicare_employee": 87.0, "employer_medicare": 87.0}) is False
 
 
+def test_a_failed_housing_read_never_reads_as_not_designated(db, monkeypatch):
+    # The second review's case: a failed read used to move all the housing into Box 1 ($72,000)
+    # with a confident "not designated" note.
+    designate(db)
+    _year_of_housing(db)
+    import housing_allowance as ha
+
+    def down(*a, **k):
+        raise ha.Unavailable("minister_housing_allowances")
+    monkeypatch.setattr(ha, "list_allowances", down)
+    with pytest.raises(pf.HousingUnreadable):
+        pf.year(_biz(db), 2026, today=date(2027, 1, 10))
+    with pytest.raises(pf.HousingUnreadable):
+        pf.quarter(_biz(db), 2026, 4, today=date(2027, 1, 10))
+    assert issubclass(pf.HousingUnreadable, pf.Unavailable)
+
+
+def test_two_records_that_could_be_his_leave_the_housing_unchecked_and_say_so(db):
+    designate(db)
+    second = designate(db, amount=6000.0)
+    second["employee_id"] = None
+    db.rows("minister_housing_allowances")[0]["employee_id"] = None        # neither linked: both match by name
+    _year_of_housing(db)
+    y = pf.year(_biz(db), 2026, today=date(2027, 1, 10))
+    pastor = next(p for p in y["w2"] if p["employee"]["id"] == PASTOR)
+    # Left out of Box 1 as the records-off path does, never "not designated".
+    assert pastor["boxes"]["1"] == 48000.0 and pastor["boxes"]["14"] == [{"label": "Housing", "amount": 24000.0}]
+    assert not any("No housing allowance was designated" in n for n in pastor["notes"])
+    assert any(n.startswith("More than one 2026 housing allowance record could be Marcus Ellwood’s")
+               and "couldn’t tell which record is theirs" in n for n in pastor["notes"])
+    assert any("more than one record could be theirs" in m for m in pastor["missing"])
+    ready = {r["key"]: r for r in y["readiness"]}
+    assert ready["housing_designation"]["ok"] is False
+    assert ready["housing_designation"]["line"] == "More than one 2026 housing allowance record could be Marcus Ellwood’s"
+    assert ready["housing_designation"]["fix"] == "Link the right record to each minister on Bookkeeping, Housing."
+    q4 = pf.quarter(_biz(db), 2026, 4, today=date(2027, 1, 10))
+    assert q4["lines"]["2"] == 18000.0                                       # (4,000 + 2,000) × 3
+    assert any(n.startswith("$6,000.00 of housing paid this quarter is left out of line 2 without being checked: "
+                            "more than one housing allowance record could be the minister’s") for n in q4["notes"])
+
+
+def test_the_941_page_says_when_records_are_off(db, monkeypatch):
+    import housing_allowance
+    monkeypatch.setattr(housing_allowance, "switched_on", lambda biz: False)
+    _q4(db)
+    q4 = pf.quarter(_biz(db), 2026, 4, today=TODAY)
+    assert q4["lines"]["2"] == 12000.0
+    assert any(n.startswith("$4,000.00 of housing paid this quarter is left out of line 2 without being checked: "
+                            "the housing allowance records aren’t switched on here") for n in q4["notes"])
+
+
 def _contractors(db):
     jordan, simone = uid(), uid()
     db.rows("contractors").extend([

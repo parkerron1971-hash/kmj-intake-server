@@ -261,6 +261,60 @@ def test_the_same_hours_carry_and_changing_them_afterwards_clears_what_was_carri
     assert e.value.detail["error"] == "needs_calculation"
 
 
+def test_new_hours_and_only_federal_typed_clears_the_carried_state_figure(db):
+    # The second review's case: carried $300 / $90; a PATCH changes the hours and types only federal.
+    hal = _hourly(db)
+    run(db, "2026-11-13", "paid", lines=[{"employee_id": hal, "hours": 80, "fit": 300.0, "sit": 90.0}])
+    out = pr.create_run(pr.RunBody(business_id=CHURCH, period_start="2026-11-14", period_end="2026-11-27",
+                                   pay_date="2026-11-30", items=[pr.RunItemInput(employee_id=hal, hours=80)]),
+                        user=user(OWNER))
+    line = out["items"][0]
+    assert line["state_withholding"] == 90.0 and line["calc_payload"]["carried_fields"] == ["federal", "state"]
+    after = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(hours=40, federal_withholding=150.0),
+                           user=user(OWNER))["item"]
+    assert after["gross"] == 1000.0 and after["federal_withholding"] == 150.0
+    assert after["state_withholding"] is None                       # never the 80-hour check's $90
+    assert after["calc_status"] == "needs_calculation" and after["net"] is None
+    assert "carried_from" not in after["calc_payload"]
+    assert after["calc_payload"]["carry_note"] == (
+        "The hours changed after the withholding was carried over from the Nov 13 run, so the carried state "
+        "withholding was cleared: type it for this check.")
+    with pytest.raises(HTTPException) as e:
+        pr.approve_run(out["run"]["id"], user=user(OWNER))
+    assert e.value.detail["error"] == "needs_calculation"
+    # Typing the state figure finishes the line and answers the note.
+    done = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(state_withholding=45.0), user=user(OWNER))["item"]
+    assert done["calc_status"] == "manual" and "carry_note" not in done["calc_payload"]
+
+
+def test_new_hours_with_both_figures_typed_clears_nothing(db):
+    hal = _hourly(db)
+    run(db, "2026-11-13", "paid", lines=[{"employee_id": hal, "hours": 80, "fit": 300.0, "sit": 90.0}])
+    out = pr.create_run(pr.RunBody(business_id=CHURCH, period_start="2026-11-14", period_end="2026-11-27",
+                                   pay_date="2026-11-30", items=[pr.RunItemInput(employee_id=hal, hours=80)]),
+                        user=user(OWNER))
+    line = out["items"][0]
+    after = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(hours=40, federal_withholding=150.0,
+                                                                      state_withholding=45.0), user=user(OWNER))["item"]
+    assert after["federal_withholding"] == 150.0 and after["state_withholding"] == 45.0
+    assert after["calc_status"] == "manual" and "carry_note" not in after["calc_payload"]
+    assert "carried_from" not in after["calc_payload"]
+
+
+def test_a_failed_housing_read_is_a_503_never_a_confident_number(db, monkeypatch):
+    run(db, "2026-10-30", "paid", lines=standard_lines())
+    import housing_allowance as ha
+
+    def down(*a, **k):
+        raise ha.Unavailable("minister_housing_allowances")
+    monkeypatch.setattr(ha, "list_allowances", down)
+    import payroll_forms
+    for fn, kw in ((pr.forms_year, {}), (pr.forms_quarter, {"q": 4}), (pr.forms_year_csv, {}),
+                   (pr.forms_year_pdf, {}), (pr.forms_quarter_pdf, {"q": 4})):
+        assert status(fn, CHURCH, year=2026, user=user(OWNER), **kw) == (503, payroll_forms.HOUSING_503), fn
+    assert payroll_forms.HOUSING_503 == "The housing allowance records couldn't be read. Try again shortly."
+
+
 def test_money_is_never_nan_or_infinite(db):
     run(db, "2026-11-30", "paid", lines=standard_lines())
     for bad in (float("nan"), float("inf"), float("-inf")):

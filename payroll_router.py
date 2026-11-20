@@ -787,20 +787,29 @@ def _housing_record(biz: str, year: int, employee: Dict[str, Any]):
     to this employee, else the one unlinked record whose name holds theirs
     word for word ("Pastor Ana Cruz" for Ana Cruz; never "Susana Cruz-Lee").
     (record, "") or (None, why)."""
+    rec, _kind, why = _housing_match(biz, year, employee)
+    return rec, why
+
+
+def _housing_match(biz: str, year: int, employee: Dict[str, Any]):
+    """_housing_record's answer with what kind it is: (record, "found", ""),
+    (None, "ambiguous", why) when more than one record could be theirs, or
+    (None, "none", why). A failed read raises housing_allowance.Unavailable:
+    it is never "none"."""
     import housing_allowance as ha
     rows = ha.list_allowances(biz, year)
     linked = [a for a in rows if str(a.get("employee_id") or "") == str(employee.get("id"))]
     if len(linked) == 1:
-        return linked[0], ""
+        return linked[0], "found", ""
     first, last = _words(employee.get("first_name")), _words(employee.get("last_name"))
     named = [a for a in rows if not a.get("employee_id") and first and last
              and set(first + last) <= set(_words(a["minister_name"]))]
     if len(named) == 1:
-        return named[0], ""
+        return named[0], "found", ""
     who = _name(employee) or "this minister"
     if len(linked) + len(named) > 1:
-        return None, f"more than one {year} housing allowance could be {who}'s"
-    return None, f"no {year} housing allowance is recorded for {who}"
+        return None, "ambiguous", f"more than one {year} housing allowance could be {who}'s"
+    return None, "none", f"no {year} housing allowance is recorded for {who}"
 
 
 def _housing_notes(run: Dict[str, Any], items: List[Dict[str, Any]],
@@ -927,27 +936,16 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
         overrides["housing_allowance"] = _money(housing, "housing_allowance")
     import payroll_carry
     before = item.get("calc_payload") if isinstance(item.get("calc_payload"), dict) else {}
-    typed = "federal_withholding" in overrides or "state_withholding" in overrides
-    note = None
-    if not typed and before.get("carried_from") and payroll_carry.terms(emp_rows[0])["type"] == "hourly":
-        # A carried hourly line whose hours changed is a different check: what
-        # was carried no longer fits it, so it's cleared and needs typing.
-        merged = {**item, **overrides}
-        gross_now = payroll_calc.gross_for(emp_rows[0], float(merged.get("hours") or 0),
-                                           float(merged.get("overtime_hours") or 0))
-        if abs(gross_now - float(before.get("carried_gross") or item.get("gross") or 0)) >= 0.005:
-            overrides["federal_withholding"] = None
-            overrides["state_withholding"] = None
-            note = payroll_carry.HOURS_CHANGED.format(when=payroll_carry._when(
-                {"pay_date": before.get("carried_from_pay_date")}))
-            before = payroll_carry.dropped(before)
+    # A figure typed here is no longer carried; a carried hourly line whose
+    # hours changed is a different check, so every carried figure this PATCH
+    # doesn't type is cleared and the note says which (payroll_carry.after_patch).
+    before, note, clear = payroll_carry.after_patch(before, item, emp_rows[0], overrides)
+    for col in clear:
+        overrides[col] = None
     calc = _recompute_item(run["business_id"], run, item, emp_rows[0], **overrides)
     if housing is not None and overrides["housing_allowance"] > calc["gross"]:
         raise HTTPException(400, f"The housing part can't be more than the check (${calc['gross']:,.2f}).")
-    # How they're paid now rides the line; a withholding figure typed here
-    # is no longer the one carried over (payroll_carry).
-    if typed:
-        before = payroll_carry.dropped(before)
+    # How they're paid now rides the line (payroll_carry).
     calc["calc_payload"] = payroll_carry.payload(emp_rows[0], None, before, note=note)
     calc["updated_at"] = _now_iso()
     sb_clients.sb_patch_as_service(f"/pay_run_items?id=eq.{item_id}", calc)
@@ -1338,6 +1336,8 @@ def _quarter(biz: str, year: Optional[int], q: int, user: AuthedUser):
         raise HTTPException(400, "q must be 1, 2, 3 or 4")
     try:
         return row, payroll_forms.quarter(row, _year(year), q)
+    except payroll_forms.HousingUnreadable:
+        raise HTTPException(503, payroll_forms.HOUSING_503)
     except payroll_forms.Unavailable:
         raise _unavailable()
 
@@ -1347,6 +1347,8 @@ def _year_data(biz: str, year: Optional[int], user: AuthedUser):
     row = _owner(_biz(biz), user)
     try:
         return row, payroll_forms.year(row, _year(year))
+    except payroll_forms.HousingUnreadable:
+        raise HTTPException(503, payroll_forms.HOUSING_503)
     except payroll_forms.Unavailable:
         raise _unavailable()
 

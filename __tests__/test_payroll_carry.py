@@ -13,7 +13,7 @@ import pytest
 import payroll_carry
 import payroll_router as pr
 from payroll_free_fake import (CHURCH, OWNER, PASTOR, STAFF, PayrollFake, install, people, run, seed,
-                               standard_lines, user)
+                               standard_lines, uid, user)
 
 
 @pytest.fixture
@@ -81,11 +81,33 @@ def test_typing_a_figure_drops_the_carried_note(db):
     run(db, "2026-11-30", "paid", lines=standard_lines())
     out = _new_run()
     dana = _line(out, STAFF)
+    assert dana["calc_payload"]["carried_fields"] == ["federal", "state"]
     kept = pr.update_item(out["run"]["id"], dana["id"], pr.ItemPatch(other_deductions=10.0), user=user(OWNER))
     assert kept["item"]["calc_payload"]["carried_from"]                  # an unrelated edit keeps it
+    # Typing federal: federal is no longer carried; the state figure still is, and still says so.
     typed = pr.update_item(out["run"]["id"], dana["id"], pr.ItemPatch(federal_withholding=160.0), user=user(OWNER))
-    assert "carried_from" not in typed["item"]["calc_payload"] and typed["item"]["federal_withholding"] == 160.0
-    assert typed["item"]["calc_payload"]["pay"]["rate"] == 52000.0
+    p = typed["item"]["calc_payload"]
+    assert typed["item"]["federal_withholding"] == 160.0 and typed["item"]["state_withholding"] == 40.0
+    assert p["carried_from"] and p["carried_fields"] == ["state"]
+    assert p["pay"]["rate"] == 52000.0
+    both = pr.update_item(out["run"]["id"], dana["id"], pr.ItemPatch(state_withholding=41.0), user=user(OWNER))
+    assert "carried_from" not in both["item"]["calc_payload"] and "carried_fields" not in both["item"]["calc_payload"]
+
+
+def test_typing_answers_a_nothing_carried_note(db):
+    hal = uid()
+    db.rows("employees").append({"id": hal, "business_id": CHURCH, "first_name": "Hal", "last_name": "Oakes",
+                                 "status": "active", "pay_type": "hourly", "pay_rate": 25.0,
+                                 "pay_frequency": "biweekly"})
+    run(db, "2026-11-13", "paid", lines=[{"employee_id": hal, "hours": 80, "fit": 300.0, "sit": 90.0}])
+    out = pr.create_run(pr.RunBody(business_id=CHURCH, period_start="2026-11-14", period_end="2026-11-27",
+                                   pay_date="2026-11-30", items=[pr.RunItemInput(employee_id=hal, hours=4)]),
+                        user=user(OWNER))
+    line = out["items"][0]
+    assert line["calc_payload"]["carry_note"].startswith("Nothing was carried over")
+    done = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(federal_withholding=5.0, state_withholding=1.0),
+                          user=user(OWNER))["item"]
+    assert "carry_note" not in done["calc_payload"] and done["calc_status"] == "manual"
 
 
 def test_a_read_that_fails_carries_nothing_and_the_run_still_drafts(db, monkeypatch):

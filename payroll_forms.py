@@ -69,6 +69,15 @@ class Unavailable(Exception):
     """A read the worksheet needs failed: never shown as a worksheet of zeros."""
 
 
+HOUSING_503 = "The housing allowance records couldn't be read. Try again shortly."
+
+
+class HousingUnreadable(Unavailable):
+    """The housing allowance records couldn't be read: never shown as "not
+    designated" (that would move the housing into Box 1 with a confident,
+    wrong number). The doors answer 503 with HOUSING_503."""
+
+
 def nec_threshold(year: int) -> float:
     """The 1099-NEC line: $2,000 for payments made in 2026 and later, $600
     before (Instructions for Forms 1099-MISC and 1099-NEC, 2026). One shared
@@ -150,22 +159,28 @@ def load(biz_row: Dict[str, Any], year: int, statuses: Tuple[str, ...]) -> Dict[
             "settings": pcal.settings_of(biz_row), "housing": {}}
 
 
-def _housing_record(ctx: Dict[str, Any], emp: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], bool]:
-    """(the minister's housing allowance record for the year, whether the
-    records are on here at all)."""
+def _housing_record(ctx: Dict[str, Any], emp: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """(the minister's housing allowance record for the year, or None; and
+    which it is): "found"; "none" (no record: nothing designated in
+    advance); "ambiguous" (more than one record could be theirs: can't
+    tell); "off" (the records aren't switched on for this church: can't
+    tell). A read that FAILS raises HousingUnreadable: it is never "none"."""
     eid = str(emp.get("id"))
     if eid in ctx["housing"]:
         return ctx["housing"][eid]
-    out: Tuple[Optional[Dict[str, Any]], bool] = (None, False)
+    import housing_allowance as ha
+    import payroll_router
+    biz = str(ctx["biz"]["id"])
     try:
-        import housing_allowance as ha
-        import payroll_router
-        biz = str(ctx["biz"]["id"])
-        if ha.switched_on(biz):
-            rec, _why = payroll_router._housing_record(biz, ctx["year"], emp)
-            out = (rec, True)
-    except Exception:  # noqa: BLE001 — read as "no record", and the readiness line says so
-        out = (None, True)
+        on = ha.switched_on(biz)
+        if not on:
+            out: Tuple[Optional[Dict[str, Any]], str] = (None, "off")
+        else:
+            rec, kind, _why = payroll_router._housing_match(biz, ctx["year"], emp)
+            out = (rec, kind)
+    except Exception as e:  # noqa: BLE001 — never a confident wrong number: the door says try again
+        logger.warning("[payroll] housing records unread biz=%s: %s", biz[:8], type(e).__name__)
+        raise HousingUnreadable("minister_housing_allowances")
     ctx["housing"][eid] = out
     return out
 
@@ -194,13 +209,15 @@ def person_lines(ctx: Dict[str, Any], emp: Dict[str, Any], items: List[Dict[str,
     housing paid before the vote, housing past the year's designated amount
     (counted in pay-date order), and all of it when no designation is on
     file are wages. With the housing allowance records not switched on for
-    the church nothing can be checked, so the housing is left out as before
-    and the worksheet says so."""
+    the church, or more than one record that could be theirs, nothing can be
+    checked, so the housing is left out as before and the worksheet says so.
+    A read that fails raises HousingUnreadable (the door's 503)."""
     base = payroll_calc.ss_wage_base(ctx["year"])
     minister = payroll_calc.is_minister(emp, ctx["church"])
-    rec, on = None, True
+    rec, state = None, "none"
     if minister or any(_r(i.get("housing_allowance")) for i in items):
-        rec, on = _housing_record(ctx, emp)
+        rec, state = _housing_record(ctx, emp)
+    unchecked_why = state if state in ("off", "ambiguous") else None
     voted = _day(rec.get("designated_on")) if rec else None
     cap = None if not rec or rec.get("designated_amount") in (None, "") else _r(rec.get("designated_amount"))
     fica_before = 0.0
@@ -212,7 +229,7 @@ def person_lines(ctx: Dict[str, Any], emp: Dict[str, Any], items: List[Dict[str,
         early = over = undesignated = 0.0
         excluded = 0.0
         if housing and (exempt or minister):
-            if not on:
+            if unchecked_why:
                 excluded = housing                    # can't be checked here: left out, and said so
             elif rec is None:
                 undesignated = housing                # nothing designated in advance: wages
@@ -236,7 +253,8 @@ def person_lines(ctx: Dict[str, Any], emp: Dict[str, Any], items: List[Dict[str,
                        + _r(i.get("employer_medicare")))
         out.append({"pay_date": pd, "item": i, "box1": _r(gross - excluded), "housing_excluded": excluded,
                     "housing_early": early, "housing_over": over, "housing_undesignated": undesignated,
-                    "housing_unchecked": excluded if not on else 0.0, "fit": _r(i.get("federal_withholding")),
+                    "housing_unchecked": excluded if unchecked_why else 0.0, "housing_unchecked_why": unchecked_why,
+                    "fit": _r(i.get("federal_withholding")),
                     "sit": _r(i.get("state_withholding")), "exempt": exempt, "ss_wages": ss_w, "med_wages": med_w,
                     "add_wages": add_w, "ss_tax": _r(i.get("social_security_employee")),
                     "med_tax": _r(i.get("medicare_employee")), "liability": liability, "gross": gross})
@@ -317,6 +335,15 @@ def quarter(biz_row: Dict[str, Any], year: int, q: int, today: Optional[date] = 
                if any(ln[k] for ln in lines)]
         notes.append(f"{pcal.money(moved)} of housing paid this quarter is counted as wages on line 2: it was "
                      f"{' or '.join(why)} ({HOUSING_RULE}).")
+    unchecked = _r(sum(ln["housing_unchecked"] for ln in lines))
+    if unchecked:
+        whys = {ln["housing_unchecked_why"] for ln in lines if ln["housing_unchecked"]}
+        reasons = [w for w, k in (("the housing allowance records aren’t switched on here", "off"),
+                                  ("more than one housing allowance record could be the minister’s", "ambiguous"))
+                   if k in whys]
+        notes.append(f"{pcal.money(unchecked)} of housing paid this quarter is left out of line 2 without being "
+                     f"checked: {' and '.join(reasons)}. If the board didn’t designate it in advance, it is wages "
+                     f"({HOUSING_RULE}).")
     due = pcal.form_941_due(year, q)
     return {
         "ok": True, "year": year, "q": q, "due": due.isoformat(),
@@ -386,7 +413,7 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
     per = _by_person(ctx)
     w2 = []
     w3 = {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0}
-    need = {"w4s": [], "addresses": [], "ssns": [], "housing": []}
+    need: Dict[str, List[str]] = {"w4s": [], "addresses": [], "ssns": [], "housing": [], "housing_ambiguous": []}
     housing_on = True
     ministers = 0
     for eid, lns in sorted(per.items(), key=lambda kv: _name(ctx["emps"].get(kv[0]) or {}).lower()):
@@ -423,13 +450,16 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
         if not prof.get("ssn_last4"):
             missing.append("a Social Security number")
             need["ssns"].append(who)
-        if minister or housing or early or over or undesignated:
+        if minister or housing or early or over or undesignated or unchecked:
             ministers += 1
-            rec, on = _housing_record(ctx, emp)
-            housing_on = housing_on and on
-            if not rec:
+            rec, state = _housing_record(ctx, emp)
+            housing_on = housing_on and state != "off"
+            if state == "none":
                 missing.append(f"the board’s {yr} housing designation")
                 need["housing"].append(who)
+            elif state == "ambiguous":
+                missing.append(f"one clear {yr} housing designation (more than one record could be theirs)")
+                need["housing_ambiguous"].append(who)
             if over:
                 notes.append(f"{pcal.money(over)} of housing is more than the board designated for {yr} "
                              f"({pcal.money(_r(rec.get('designated_amount')))}), so it is wages in Box 1, not "
@@ -442,9 +472,16 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
                          f"of housing paid is wages in Box 1 ({HOUSING_RULE}). If the board did designate it, record "
                          f"the designation and this changes.")
         if unchecked:
-            notes.append(f"Housing allowance records aren’t switched on here, so the {pcal.money(unchecked)} of "
-                         f"housing is left out of Box 1 as if the board designated it in advance. If it didn’t, "
-                         f"it is wages.")
+            whys = {ln["housing_unchecked_why"] for ln in lns if ln["housing_unchecked"]}
+            if "ambiguous" in whys:
+                notes.append(f"More than one {yr} housing allowance record could be {who}’s, so the "
+                             f"{pcal.money(unchecked)} of housing is left out of Box 1 as if the board designated it "
+                             f"in advance: it couldn’t tell which record is theirs. Link the right record to them on "
+                             f"Bookkeeping, Housing, and it is checked.")
+            else:
+                notes.append(f"Housing allowance records aren’t switched on here, so the {pcal.money(unchecked)} of "
+                             f"housing is left out of Box 1 as if the board designated it in advance. If it didn’t, "
+                             f"it is wages.")
         for k in ("1", "2"):
             w3[k] = _r(w3[k] + boxes[k])
         for k in ("3", "4", "5", "6"):
@@ -496,10 +533,17 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
                           "line": f"Housing allowance records aren’t switched on for this church: keep the board’s "
                                   f"written {yr} designation with the payroll records", "fix": None})
     else:
-        readiness.append(ready_line("housing_designation", not need["housing"],
-                                    f"The board’s housing allowance for {yr} is on file",
-                                    f"No {yr} housing allowance designation is on file for {_names(need['housing'])}",
-                                    "Record the board’s designation on Bookkeeping, Housing."))
+        gaps, fixes = [], []
+        if need["housing"]:
+            gaps.append(f"No {yr} housing allowance designation is on file for {_names(need['housing'])}")
+            fixes.append("Record the board’s designation on Bookkeeping, Housing.")
+        if need["housing_ambiguous"]:
+            gaps.append(f"More than one {yr} housing allowance record could be "
+                        f"{_names(need['housing_ambiguous'])}’s")
+            fixes.append("Link the right record to each minister on Bookkeeping, Housing.")
+        readiness.append(ready_line("housing_designation", not gaps,
+                                    f"The board’s housing allowance for {yr} is on file", "; ".join(gaps),
+                                    " ".join(fixes)))
     due = pcal.year_end_due(yr)
     return {
         "ok": True, "year": yr, "due": due.isoformat(), "projected": projected,

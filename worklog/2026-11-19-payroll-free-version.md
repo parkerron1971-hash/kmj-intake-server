@@ -79,3 +79,17 @@ mark-paid go in the background (`stubs: {queued, auto, sent: null,
 skipped: []}`); the pay-records refusal no longer names the accountant
 (payroll's ladder refuses a login with no seat); approve-by reminders go only
 to the owner and Admins.
+
+**After the second review.** A housing allowance record read that FAILS now
+answers 503 "The housing allowance records couldn't be read. Try again
+shortly." on every worksheet door (`payroll_forms.HousingUnreadable`), never
+"not designated" with all the housing in Box 1. When more than one record
+could be the minister's (`payroll_router._housing_match`: found, none or
+ambiguous), the housing is left out of Box 1 as with the records off, the W-2
+row says it couldn't tell which record is theirs, readiness asks to link the
+right one, and the 941 page now says when it left housing unchecked (records
+off or ambiguous). A carried line now records which figures were carried
+(`calc_payload.carried_fields`); typing one leaves the other still marked,
+and when the hours change on a carried hourly line every carried figure the
+same PATCH doesn't type is cleared, with a note saying which still needs
+typing (never the old check's state figure standing on the new one).

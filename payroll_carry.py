@@ -27,7 +27,8 @@ from urllib.parse import quote
 import payroll_calc
 import sb_clients
 
-CARRY_KEYS = ("carried_from", "carried_from_pay_date", "carried_item", "carried_gross", "carry_note")
+CARRY_KEYS = ("carried_from", "carried_from_pay_date", "carried_item", "carried_gross", "carried_fields",
+              "carry_note")
 
 
 def terms(employee: Dict[str, Any]) -> Dict[str, Any]:
@@ -117,14 +118,53 @@ def check(src: Optional[Dict[str, Any]], employee: Dict[str, Any],
     return src, None
 
 
-HOURS_CHANGED = ("The hours changed after the withholding was carried over from the {when} run, so it was "
-                 "cleared: type this check’s federal and state withholding.")
+HOURS_CHANGED = ("The hours changed after the withholding was carried over from the {when} run, so the carried "
+                 "{what} was cleared: type {it} for this check.")
+# The figures a line can carry, by name in calc_payload.carried_fields.
+FIELDS = {"federal": "federal_withholding", "state": "state_withholding"}
+_WHAT = {("federal",): ("federal withholding", "it"), ("state",): ("state withholding", "it"),
+         ("federal", "state"): ("federal and state withholding", "them")}
+
+
+def after_patch(before: Dict[str, Any], item: Dict[str, Any], employee: Dict[str, Any],
+                overrides: Dict[str, Any]):
+    """What a PATCH of a line does to what was carried over onto it:
+    (the payload to keep, a note or None, the withholding columns to clear).
+
+    A figure the PATCH types is no longer carried. When the hours change on
+    a carried HOURLY line it is a different check, so every carried figure
+    the same PATCH doesn't type is cleared (never left standing with its
+    "carried over" mark gone) and the note says which still needs typing.
+    A carried figure that stays is still marked (carried_fields)."""
+    typed = {f for f, col in FIELDS.items() if col in overrides}
+    if not before.get("carried_from"):
+        # Nothing carried; a figure typed now answers an old "needs typing" note.
+        return (dropped(before) if typed else before), None, []
+    carried = [f for f in (before.get("carried_fields") or list(FIELDS)) if f in FIELDS]
+    remaining = [f for f in carried if f not in typed]
+    note: Optional[str] = None
+    clear: List[str] = []
+    if remaining and terms(employee)["type"] == "hourly":
+        merged = {**item, **overrides}
+        gross_now = payroll_calc.gross_for(employee, float(merged.get("hours") or 0),
+                                           float(merged.get("overtime_hours") or 0))
+        if abs(gross_now - float(before.get("carried_gross") or item.get("gross") or 0)) >= 0.005:
+            clear = [FIELDS[f] for f in remaining]
+            what, it = _WHAT[tuple(f for f in FIELDS if f in remaining)]
+            note = HOURS_CHANGED.format(when=_when({"pay_date": before.get("carried_from_pay_date")}), what=what, it=it)
+            remaining = []
+    if remaining:
+        kept = dict(before)
+        kept["carried_fields"] = remaining
+        return kept, None, []
+    return dropped(before), note, clear
 
 
 def payload(employee: Dict[str, Any], carried: Optional[Dict[str, Any]] = None,
             before: Optional[Dict[str, Any]] = None, note: Optional[str] = None) -> Dict[str, Any]:
     """A line's calc_payload: what it had, how the person is paid now, and
-    (when given) where its withholding was carried from, or why it wasn't."""
+    (when given) where its withholding was carried from (and which figures:
+    carried_fields), or why it wasn't."""
     out = dict(before) if isinstance(before, dict) else {}
     out["pay"] = terms(employee)
     if carried:
@@ -132,6 +172,7 @@ def payload(employee: Dict[str, Any], carried: Optional[Dict[str, Any]] = None,
         out["carried_from_pay_date"] = carried["pay_date"]
         out["carried_item"] = carried["item_id"]
         out["carried_gross"] = carried.get("gross")
+        out["carried_fields"] = [f for f in FIELDS if carried.get(f) is not None]
     if note:
         out["carry_note"] = note
     return out
