@@ -229,6 +229,13 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
     player = player_html(s).replace('class="sm-video"', 'class="mb-video"').replace(
         'class="sm-go"', 'class="mp-go" style="margin:12px 20px 0;width:calc(100% - 40px)"').replace(
         '<audio class="sm-audio"', '<audio id="listen" class="sm-audio"')
+    import member_mini
+    if member_mini.here():
+        # The mini player (member_mini): the player marked, so the message
+        # plays on while the member moves around the app.
+        player = member_mini.mark(player, title=s.get("title") or "", sub=s.get("speaker") or series,
+                                  thumb=member_mini.thumb(biz, site, series, s.get("title") or ""),
+                                  href=f"/my/sermons/{s['id']}")
     if not (s.get("video_url") or "").strip():
         # Audio only, or nothing posted yet: the series art holds the space.
         player = _art(lib, s, pal, site, photos.photos(biz, site)) + player

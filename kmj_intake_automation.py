@@ -207,6 +207,13 @@ app.add_middleware(NoGzipForStreams)
 # outermost.
 from member_stopwatch import MemberStopwatch
 app.add_middleware(MemberStopwatch)
+# The member app's mini player (member_mini.py): a member page asked for by a
+# frame on the same site (the frame the app opens over a playing message)
+# allows this site's frame (X-Frame-Options SAMEORIGIN, frame-ancestors
+# 'self') instead of refusing every frame. Pure ASGI, headers only; every
+# other request passes through untouched; MEMBER_MINI_PLAYER=off turns it off.
+from member_mini import FrameForStage
+app.add_middleware(FrameForStage)
 # A custom domain's pages are never stored by Cloudflare: the SaaS Worker
 # fetches the Railway URL, so every custom domain shared one cache entry per
 # path (churchsavvy.app's home showed on lovecityc.com, 2026-10-25). See
