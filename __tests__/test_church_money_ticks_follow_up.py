@@ -517,3 +517,47 @@ def test_the_sql_picks_exactly_the_codes_gifts_and_waits_for_kevin():
     assert row.rstrip().endswith("| **NOT APPLIED** (Kevin applies it by hand, before the switch goes on). |")
     ci = pathlib.Path(ROOT, ".github", "workflows", "ci.yml").read_text(encoding="utf-8")
     assert "node __tests__/gift_thankyou_events_db.mjs" in ci
+
+
+# ─── The sheet's guarded rows say who may hold giving ─────────────────
+
+class _GuardCh:
+    b = "11111111-1111-4111-8111-111111111111"
+
+    def role(self, target):
+        return "member"
+
+    def login_name(self, target):
+        return "Dana Hill"
+
+
+def _guard_rows(monkeypatch, on, held):
+    import church_keys
+    monkeypatch.setattr(church_keys, "mode", lambda: "off")
+    monkeypatch.setattr(cmt, "open_for", lambda biz: on)
+    monkeypatch.setattr(cmt, "holder", lambda biz, uid: held)
+    return {r["key"]: r for r in cs._guarded(_GuardCh(), "22222222-2222-4222-8222-222222222222", None)}
+
+
+def test_the_guarded_rows_name_the_giving_tick_while_it_is_on(monkeypatch):
+    rows = _guard_rows(monkeypatch, True, {"level": "see", "who_gave": True, "bank": False})
+    assert rows["who_gave"]["holds"] is True and rows["bank"]["holds"] is False
+    for key in ("who_gave", "bank"):
+        assert "whoever the owner gives it to under Giving on their sheet" in rows[key]["how"]
+
+
+def test_the_guarded_rows_are_unchanged_while_the_tick_is_off(monkeypatch):
+    rows = _guard_rows(monkeypatch, False, {"level": "lead", "who_gave": True, "bank": True})
+    assert rows["who_gave"]["holds"] is False and rows["bank"]["holds"] is False
+    assert rows["who_gave"]["how"].endswith("the owner, an Admin login and the church's accountant.")
+
+
+def test_a_failed_tick_read_leaves_the_guarded_rows_as_the_seat_gives(monkeypatch):
+    def boom(biz, uid):
+        raise RuntimeError("read failed")
+    rows = _guard_rows(monkeypatch, True, None)
+    assert rows["who_gave"]["holds"] is False
+    import church_keys  # noqa: F401
+    monkeypatch.setattr(cmt, "holder", boom)
+    rows = {r["key"]: r for r in cs._guarded(_GuardCh(), "22222222-2222-4222-8222-222222222222", None)}
+    assert rows["bank"]["holds"] is False
