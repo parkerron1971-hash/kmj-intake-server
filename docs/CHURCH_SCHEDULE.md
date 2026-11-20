@@ -2778,7 +2778,7 @@ places.
 
 ---
 
-## 10. Step 3: Meetings and one calendar (S3-1)
+## 10. Step 3: Meetings and one calendar (S3-1, #2001)
 
 The pastor approved the mock and its five calls on 2026-11-20, each as recommended. Four screens:
 the office's church calendar gains two kinds, **Meeting** and **Away** (who is away, by name and

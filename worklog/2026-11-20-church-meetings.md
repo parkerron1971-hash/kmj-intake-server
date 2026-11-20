@@ -4,7 +4,7 @@ date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'The pastor approved the mock and its five calls on 2026-11-20, each as recommended: one home for every meeting (Board & minutes becomes Meetings & minutes); a meeting for every leader follows the leaders list, and so does one for the office; "I can''t" needs no yes, with a short note only whoever set the meeting, the owner and the office overseer read; a reminder the day before, in the app, never in quiet hours, email only without the app, no texts; a private link for a phone''s calendar that can be made again, the old one stopping. Also: setting a meeting books the room when it is free. S3-1 is the spec and the database change only.'
 status: in progress
-prs: [kmj-intake-server#PR_NUMBER]
+prs: [kmj-intake-server#2001]
 migrations: [supabase/APPLY-2026-11-21-church-meetings.sql (not applied)]
 left_undone:
   - "The migration is NOT APPLIED. The owner applies it by hand in the SQL editor; its Check block says what to read back (four tables with RLS on, 0 policies and no browser or anon read; 11 new columns; 11 constraints validated; 3 functions no browser runs; 0 meeting groups, 0 list seats, 0 meetings with any of the new columns). It needs only Board & minutes' and Rooms & spaces' files, both applied in October."
