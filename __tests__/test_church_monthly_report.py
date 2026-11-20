@@ -380,6 +380,18 @@ def test_the_month_is_checked(app):
     assert _get(app, "2026-11")["current"] is True
 
 
+def test_the_menus_status_check_is_a_plain_yes_after_the_same_checks(app):
+    """The app asks month=status once to know whether to show the page. It
+    was a 400 the app read as yes (a failed request on every load)."""
+    r = app.get(f"/church/monthly-report?business_id={BIZ}&month=status")
+    assert r.status_code == 200 and r.json() == {"enabled": True, "sections": []}
+    app.who["id"] = NAIYA                     # a Manager without the duty: still 403
+    assert app.get(f"/church/monthly-report?business_id={BIZ}&month=status").status_code == 403
+    app.who["id"] = MEMBER                    # no report for a Member: still 404
+    assert app.get(f"/church/monthly-report?business_id={BIZ}&month=status").status_code == 404
+    assert app.get("/church/monthly-report?business_id=not-a-church&month=status").status_code == 400
+
+
 # ─── Who ──────────────────────────────────────────────────────────────
 
 def test_the_owner_and_an_admin_can_too(app):

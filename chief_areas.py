@@ -102,6 +102,11 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "people_under", "assignments_of", "one_on_one", "give_assignment", "start_first_assignment",
         "mark_assignment", "mark_stuck", "send_up_assignment", "take_back_assignment", "set_my_day",
         "send_handover",
+        # The leaders schedule (chief_church_schedule): who is away, asking and answering, things that repeat, and
+        # the volunteers' week. Who may read a reason, say yes or read the week is the engine's (church_schedule,
+        # church_week), never an area's.
+        "who_is_away", "time_off_asks", "check_dates", "serving_week", "ask_time_off", "answer_time_off",
+        "take_back_time_off", "add_repeat", "take_off_repeat",
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
         "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
