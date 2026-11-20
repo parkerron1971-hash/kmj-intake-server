@@ -293,7 +293,8 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     """Everyone at this church with exactly this address (a household can
     share one), each with their photo record, their Look in the new look
     (member_lumen_look), where they are in the church's messages
-    (member_lumen_watch) and their saved posts (member_feed_more): read here
+    (member_lumen_watch), their saved posts (member_feed_more) and the
+    birthday they gave for posting (member_posts, `bday`): read here
     so a page needs no read for them. An exact, case-insensitive match — wildcards escaped.
     None when the read FAILED: that is "try again", never "not on the
     list". Reads one past MAX_HOUSEHOLD so an over-shared address shows."""
@@ -305,7 +306,7 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
         f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
-        f"saved:metadata->member_saved"
+        f"saved:metadata->member_saved,bday:metadata->member_birthdate"
         f"&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
@@ -324,7 +325,7 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
         f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
-        f"saved:metadata->member_saved"
+        f"saved:metadata->member_saved,bday:metadata->member_birthdate"
         f"&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
