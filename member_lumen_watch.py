@@ -79,8 +79,10 @@ time and time zone the office set for check-in, every week, with the live
 page's link. Kept ten minutes per server copy and an hour by the phone.
 No end time: we don't know how long the service runs.
 
-THE PLAYER for the mini-player (another piece): the media element carries
-data-lm-media data-title data-sub data-thumb data-href. The page keeps the
+THE PLAYER for the mini player (member_mini, behind its own switch,
+MEMBER_MINI_PLAYER): the media element carries data-title data-sub
+data-thumb data-href, and data-lm-media where the mini player shows (so
+with its switch off the page is what it would be without it). The page keeps the
 phone's place in localStorage "lw:<who>" and says each save as a
 "lm:progress" event on window ({id, pos, dur, m}).
 
@@ -775,8 +777,17 @@ def _video(s: Dict[str, Any], at: int, info: Dict[str, str]) -> str:
     kind = "yt" if "youtube" in src else ("vimeo" if "player.vimeo.com" in src else "")
     return (f'<div class="lw-vid"><iframe src="{_e(_with_start(src, at))}" title="{_e(s.get("title"))}" '
             f'allowfullscreen referrerpolicy="strict-origin-when-cross-origin" '
-            f'allow="autoplay; fullscreen; picture-in-picture; encrypted-media" data-lm-media data-lw-kind="{kind}" '
+            f'allow="autoplay; fullscreen; picture-in-picture; encrypted-media" data-lw-media{_mini()} data-lw-kind="{kind}" '
             f'{_media_attrs(info)}></iframe></div>')
+
+
+def _mini() -> str:
+    """The mini player's mark (the shared contract), where it shows."""
+    try:
+        import member_mini
+        return " data-lm-media" if member_mini.here() else ""
+    except Exception:
+        return ""
 
 
 def _media_attrs(info: Dict[str, str]) -> str:
@@ -795,7 +806,7 @@ def _audio(s: Dict[str, Any], art: str, at: int, info: Dict[str, str]) -> str:
             f'<button class="lw-big" type="button" data-lw-play aria-label="Play">{icon("play", 26, "pl")}{icon("pause", 26, "pa")}</button>'
             f'<button class="lw-sk" type="button" data-lw-skip="15" aria-label="Forward 15 seconds">{icon("fwd15", 26)}<i>15</i></button>'
             f'</div></div>'
-            f'<audio class="lw-native" controls preload="metadata" src="{_e(src)}" data-lm-media data-lw-at="{at}" '
+            f'<audio class="lw-native" controls preload="metadata" src="{_e(src)}" data-lw-media{_mini()} data-lw-at="{at}" '
             f'{_media_attrs(info)}><a href="{_e(src)}">Listen</a></audio>'
             f'<div class="lw-scrub" hidden><input type="range" min="0" max="0" step="1" value="{at}" aria-label="Where you are" '
             f'data-lw-seek><span class="lw-tm"><span data-lw-cur>{clock(at)}</span><span data-lw-len>--:--</span></span></div></div>')
@@ -1309,7 +1320,7 @@ addEventListener('pagehide',function(){if(pos)remember(true);});
 d.addEventListener('visibilitychange',function(){if(d.visibilityState==='hidden'&&pos)remember(true);});
 function local(){var a=merged().p[sid];return a&&a[3]===mode?a:null;}
 function resumeAt(){var a=local();return a&&a[0]>=STARTED&&!isDone(a[0],a[1])?Math.max(0,a[0]-3):0;}
-var au=root.querySelector('audio[data-lm-media]');
+var au=root.querySelector('audio[data-lw-media]');
 if(au){var ctl=root.querySelector('.lw-actl'),sc=root.querySelector('.lw-scrub'),seek=root.querySelector('[data-lw-seek]'),
 cur=root.querySelector('[data-lw-cur]'),len=root.querySelector('[data-lw-len]'),pb=root.querySelector('[data-lw-play]'),dragging=false,begun=false;
 au.removeAttribute('controls');au.hidden=true;ctl.hidden=false;sc.hidden=false;
@@ -1339,7 +1350,7 @@ navigator.mediaSession.setActionHandler('seekbackward',function(){au.currentTime
 navigator.mediaSession.setActionHandler('seekforward',function(){au.currentTime=Math.min(dur||1e9,au.currentTime+15);});
 navigator.mediaSession.setActionHandler('seekto',function(x){au.currentTime=x.seekTime;});}catch(e){}}
 return;}
-var fr=root.querySelector('iframe[data-lm-media]');if(!fr)return;var kind=fr.getAttribute('data-lw-kind');if(!kind)return;
+var fr=root.querySelector('iframe[data-lw-media]');if(!fr)return;var kind=fr.getAttribute('data-lw-kind');if(!kind)return;
 var r0=resumeAt(),src=fr.getAttribute('src');
 // The phone's newer place than the server drew: open there instead.
 if(r0){var srv=kind==='yt'?(/[?&]start=(\d+)/.exec(src)||[])[1]:(/#t=(\d+)s/.exec(src)||[])[1];if(Math.abs((+srv||0)-r0)>5){

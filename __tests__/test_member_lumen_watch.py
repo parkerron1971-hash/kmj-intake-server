@@ -237,6 +237,7 @@ def test_series_two_across(watch, fake, monkeypatch):  # noqa: F811
 
 
 def test_a_message(watch, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("MEMBER_MINI_PLAYER", "on")                         # the mini player's mark (member_mini)
     _places(fake, p={M[0]: [700, 2292, 30, "v"], M[2]: [2465, 2465, 900, "v"]})
     html = _get(fake, monkeypatch, f"/my/sermons/{M[0]}")
     assert _body_class(html).split()[:2] == ["lm", "lm-push"]
@@ -269,7 +270,24 @@ def test_a_message(watch, fake, monkeypatch):  # noqa: F811
     assert 'aria-label="Watched"' in ser                                   # part 1 is watched
 
 
+def test_the_mini_players_mark_follows_its_switch(watch, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("MEMBER_MINI_PLAYER", "off")
+    html = _get(fake, monkeypatch, f"/my/sermons/{M[0]}")
+    frame = re.search(r"<iframe[^>]*>", html).group(0)
+    assert "data-lw-media" in frame and "data-lm-media" not in html and "__lmMini" not in html
+    monkeypatch.setenv("MEMBER_MINI_PLAYER", "on")
+    html = _get(fake, monkeypatch, f"/my/sermons/{M[0]}?listen=1")
+    assert len(re.findall(r"<audio[^>]*data-lw-media data-lm-media", html)) == 1 and "__lmMini" in html
+    for path in ("/my/sermons", f"/my/sermons?series={S1}"):                 # no player there: nothing changes
+        on = _get(fake, monkeypatch, path)
+        monkeypatch.setenv("MEMBER_MINI_PLAYER", "off")
+        off = _get(fake, monkeypatch, path)
+        monkeypatch.setenv("MEMBER_MINI_PLAYER", "on")
+        assert re.sub(r'"now":\d+', "", on) == re.sub(r'"now":\d+', "", off), path
+
+
 def test_a_message_listen_audio_only_give_and_one_tab(watch, fake, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("MEMBER_MINI_PLAYER", "on")
     _places(fake, p={M[0]: [700, 2292, 30, "v"], M[3]: [600, 2658, 30, "a"]})
     html = _get(fake, monkeypatch, f"/my/sermons/{M[0]}?listen=1")
     pv = _cut(html, '<div class="lw-pv', '<div class="lw-pinfo">')
