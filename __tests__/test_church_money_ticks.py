@@ -856,12 +856,22 @@ def test_a_login_that_only_sees_changes_no_money(db):
     with pytest.raises(HTTPException) as e:
         giving_records.require_ministry_finance(BIZ, _u(MANAGER), row, need="work")
     assert e.value.status_code == 403 and e.value.detail == gate.SEES_ONLY_403
-    for mod in ("gl_router", "payroll_router", "contractors_router", "accounting_periods_router"):
-        import importlib
+    import importlib
+    for mod in ("gl_router", "accounting_periods_router"):
         r = importlib.import_module(mod)
         assert r._access(BIZ, _u(MANAGER), "viewer")["id"] == BIZ, mod
         assert _status(r._access, BIZ, _u(MANAGER), "manager") == 403, mod
+    # Payroll and contractors show pay and the last four of SSNs and TINs: a
+    # See tick doesn't even read them (Kevin, 2026-11-19).
+    for mod in ("payroll_router", "contractors_router"):
+        r = importlib.import_module(mod)
+        with pytest.raises(HTTPException) as e:
+            r._access(BIZ, _u(MANAGER), "viewer")
+        assert e.value.status_code == 403 and e.value.detail == gate.PAY_RECORDS_403, mod
+        assert _status(r._access, BIZ, _u(MANAGER), "manager") == 403, mod
     _give(db, MANAGER, "work")
+    for mod in ("payroll_router", "contractors_router"):
+        assert importlib.import_module(mod)._access(BIZ, _u(MANAGER), "viewer")["id"] == BIZ, mod
     for mod in ("gl_router", "payroll_router", "contractors_router", "accounting_periods_router"):
         assert importlib.import_module(mod)._access(BIZ, _u(MANAGER), "manager")["id"] == BIZ, mod
     giving_records.require_ministry_finance(BIZ, _u(MANAGER), row, need="work")
@@ -880,7 +890,11 @@ def test_no_money_door_that_changes_something_asks_only_to_see():
         src = pathlib.Path(ROOT, f"{mod}.py").read_text(encoding="utf-8")
         body = src[src.index("def _access("):]
         body = body[:body.index("\ndef ", 10)]
-        assert 'require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")' in body, mod
+        if mod in ("payroll_router", "contractors_router"):
+            # Work to read as well as to change (church_money_gate.require_pay_records).
+            assert "church_money_gate.require_pay_records(biz, user, row)" in body, mod
+        else:
+            assert 'require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")' in body, mod
         assert "require_ministry_finance(biz, user, row)\n" not in src, mod
     reports = pathlib.Path(ROOT, "reports_router.py").read_text(encoding="utf-8")
     put = reports[reports.index('@router.put("/budgets")'):]

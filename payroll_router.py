@@ -47,15 +47,42 @@ was logged and what couldn't be.
   POST  /payroll/runs/{id}/log-housing          (owner; a paid run's housing parts, again)
   POST  /payroll/runs/{id}/cancel               (draft only)
   GET   /payroll/interest?biz=   POST /payroll/interest?biz=   (unchanged)
+
+Payroll, the free version (2026-11-19, Kevin: "build the free version now").
+The church pays from its own bank and sends its own deposits; Solutionist
+prepares the numbers, the statements, the calendar, the reminders and the
+year-end worksheets. The logic lives in its own modules; these are the doors:
+
+  GET   /payroll/calendar?biz=&month=YYYY-MM    (payroll_calendar)
+  POST  /payroll/deposits/mark-sent             (owner, Admin, or a Work tick; payroll_deposits)
+  POST  /payroll/deposits/undo
+  PUT   /payroll/settings                       (owner or Admin; businesses.settings.payroll)
+  GET   /payroll/runs/{id}/stubs                (payroll_stubs; approved or paid runs)
+  GET   /payroll/runs/{id}/items/{item}/stub    and .../stub.pdf
+  POST  /payroll/runs/{id}/stubs/send           (owner or Admin; and on mark-paid, PAYROLL_STUB_EMAIL)
+  GET   /payroll/forms/quarter?biz=&year=&q=    and /forms/quarter.pdf (payroll_forms; worksheets only)
+  GET   /payroll/forms/year?biz=&year=          and /forms/year.pdf, /forms/year.csv
+  A new run carries each person's typed withholding over (payroll_carry);
+  the hourly reminders are payroll_reminders (PAYROLL_REMINDERS).
+
+Every door asks the church wall first (church_money_gate.require_pay_records:
+in a church the owner, an Admin or the accountant; with the giving tick on,
+a login the owner gave giving at Work, to read as well as to change), then
+today's seat ladder. Ids are shape-checked before they reach a PostgREST
+path; a statement of another church's run is a 404.
 """
 from __future__ import annotations
 
 import logging
+import math
 import re
+import threading
+import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import payroll_calc
@@ -77,7 +104,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
+def _access(biz: str, user: AuthedUser, min_role: str = "viewer", tick_work: bool = False) -> Dict[str, Any]:
+    """The business row when this person may open payroll at `min_role`.
+    `tick_work`: a login the church wall let in by its giving tick (at Work,
+    which require_pay_records already holds it to) stands in for min_role:
+    the doors the contract opens to "owner, Admin, or a Work tick"."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings,type&limit=1") or []
     if not rows:
@@ -85,18 +116,44 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     row = rows[0]
     # A church's or nonprofit's payroll, contractors and period closes are its
     # books: the money wall is asked first, as the ledger asks it (gl_router).
-    # Any other business isn't asked here.
-    from giving_records import require_ministry_finance
-    # A door asked for more than reading (min_role above "viewer") is about
-    # to change something: a login let in only by a giving tick must hold Work.
-    require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")
+    # Any other business isn't asked here. Payroll shows pay and Social
+    # Security numbers' last four, so a login let in only by its giving tick
+    # must hold Work to READ as well as to change (Kevin, 2026-11-19).
+    import church_money_gate
+    passed = church_money_gate.require_pay_records(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
     if min_role == "owner":
         raise HTTPException(403, "owner only")
+    if tick_work and passed.by in church_money_gate.TICKS:
+        return row
     from business_users_router import require_role
     require_role(biz, str(user.id), min_role)
     return row
+
+
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _uuid(v: Any, what: str) -> str:
+    """An id that goes into a PostgREST path: exactly a UUID (fullmatch, so
+    no trailing newline, brace or fragment rides along), or a 400."""
+    if not isinstance(v, str) or not _UUID_RE.fullmatch(v):
+        raise HTTPException(400, f"That {what} id isn't valid.")
+    return str(uuid.UUID(v))
+
+
+def _scoped_run(run_id: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
+    """A run for a statement door: a run this person may not open (another
+    church's, or one they can't see) is a 404, never a 403 that says it
+    exists."""
+    rid = _uuid(run_id, "pay run")
+    try:
+        return _run(rid, user, min_role)
+    except HTTPException as e:
+        if e.status_code == 403:
+            raise HTTPException(404, "pay run not found")
+        raise
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -150,6 +207,8 @@ def _money(v: Optional[float], field: str, allow_none: bool = True) -> Optional[
     try:
         f = float(v)
     except (TypeError, ValueError):
+        raise HTTPException(400, f"{field} must be a number")
+    if not math.isfinite(f):                     # NaN and infinity are not money
         raise HTTPException(400, f"{field} must be a number")
     if f < 0:
         raise HTTPException(400, f"{field} cannot be negative")
@@ -658,17 +717,33 @@ def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[
     })
     run = (res or [{}])[0]
     year = int(pd[:4])
+    # Last time's typed withholding, where how they're paid hasn't changed
+    # (payroll_carry). A read that fails carries nothing.
+    import payroll_carry
+    try:
+        carry = payroll_carry.sources(biz, [by_id[it.employee_id] for it in wanted], exclude_run_id=run.get("id"))
+    except Exception as e:  # noqa: BLE001 — the lines then need typing, as before
+        logger.warning(f"[payroll] carry-over skipped biz={biz[:8]}: {type(e).__name__}")
+        carry = {}
     items: List[Dict[str, Any]] = []
     for it in wanted:
         emp = by_id[it.employee_id]
         ytd = _ytd_gross_before(biz, emp["id"], year, run.get("id"))
+        hours = _money(it.hours, "hours") or 0.0
+        overtime = _money(it.overtime_hours, "overtime_hours") or 0.0
+        # An hourly check carries last time's withholding only when its pay is
+        # the same (payroll_carry.check); otherwise the note says why not.
+        src, note = payroll_carry.check(carry.get(str(emp["id"])), emp,
+                                        payroll_calc.gross_for(emp, hours, overtime))
         calc = payroll_calc.compute_item(
-            employee=emp, hours=_money(it.hours, "hours") or 0.0,
-            overtime_hours=_money(it.overtime_hours, "overtime_hours") or 0.0,
+            employee=emp, hours=hours, overtime_hours=overtime,
             ytd_gross_before=ytd, year=year,
+            federal_withholding=src.get("federal") if src else None,
+            state_withholding=src.get("state") if src else None,
             housing_allowance=emp.get("housing_allowance_per_period"), church=church)
         r = sb_clients.sb_post_as_service("/pay_run_items", {
             "pay_run_id": run["id"], "business_id": biz, "employee_id": emp["id"], **calc,
+            "calc_payload": payroll_carry.payload(emp, src, note=note),
         })
         items.append((r or [{}])[0])
 
@@ -712,20 +787,29 @@ def _housing_record(biz: str, year: int, employee: Dict[str, Any]):
     to this employee, else the one unlinked record whose name holds theirs
     word for word ("Pastor Ana Cruz" for Ana Cruz; never "Susana Cruz-Lee").
     (record, "") or (None, why)."""
+    rec, _kind, why = _housing_match(biz, year, employee)
+    return rec, why
+
+
+def _housing_match(biz: str, year: int, employee: Dict[str, Any]):
+    """_housing_record's answer with what kind it is: (record, "found", ""),
+    (None, "ambiguous", why) when more than one record could be theirs, or
+    (None, "none", why). A failed read raises housing_allowance.Unavailable:
+    it is never "none"."""
     import housing_allowance as ha
     rows = ha.list_allowances(biz, year)
     linked = [a for a in rows if str(a.get("employee_id") or "") == str(employee.get("id"))]
     if len(linked) == 1:
-        return linked[0], ""
+        return linked[0], "found", ""
     first, last = _words(employee.get("first_name")), _words(employee.get("last_name"))
     named = [a for a in rows if not a.get("employee_id") and first and last
              and set(first + last) <= set(_words(a["minister_name"]))]
     if len(named) == 1:
-        return named[0], ""
+        return named[0], "found", ""
     who = _name(employee) or "this minister"
     if len(linked) + len(named) > 1:
-        return None, f"more than one {year} housing allowance could be {who}'s"
-    return None, f"no {year} housing allowance is recorded for {who}"
+        return None, "ambiguous", f"more than one {year} housing allowance could be {who}'s"
+    return None, "none", f"no {year} housing allowance is recorded for {who}"
 
 
 def _housing_notes(run: Dict[str, Any], items: List[Dict[str, Any]],
@@ -850,9 +934,19 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
         if str(biz_row.get("owner_id")) != str(user.id):
             raise HTTPException(403, "Only the owner sets the housing allowance part of a check.")
         overrides["housing_allowance"] = _money(housing, "housing_allowance")
+    import payroll_carry
+    before = item.get("calc_payload") if isinstance(item.get("calc_payload"), dict) else {}
+    # A figure typed here is no longer carried; a carried hourly line whose
+    # hours changed is a different check, so every carried figure this PATCH
+    # doesn't type is cleared and the note says which (payroll_carry.after_patch).
+    before, note, clear = payroll_carry.after_patch(before, item, emp_rows[0], overrides)
+    for col in clear:
+        overrides[col] = None
     calc = _recompute_item(run["business_id"], run, item, emp_rows[0], **overrides)
     if housing is not None and overrides["housing_allowance"] > calc["gross"]:
         raise HTTPException(400, f"The housing part can't be more than the check (${calc['gross']:,.2f}).")
+    # How they're paid now rides the line (payroll_carry).
+    calc["calc_payload"] = payroll_carry.payload(emp_rows[0], None, before, note=note)
     calc["updated_at"] = _now_iso()
     sb_clients.sb_patch_as_service(f"/pay_run_items?id=eq.{item_id}", calc)
     items = _items_of(run_id)
@@ -879,6 +973,22 @@ def approve_run(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[s
             "count": len(missing),
             "message": (f"{len(missing)} line(s) still need federal and state withholding. "
                         "Enter them from your tax engine before approving."),
+        })
+    # Nobody is paid less than nothing: a line whose taxes and deductions are
+    # more than its pay stops the run, naming the person.
+    below = [i for i in items if i.get("net") is not None and float(i.get("net") or 0) < 0]
+    if below:
+        people = {e["id"]: e for e in sb_clients.sb_get_as_service(
+            f"/employees?business_id=eq.{run['business_id']}&select=id,first_name,last_name&limit=1000") or []}
+        names = [(_name(people.get(i["employee_id"]) or {}) or "Someone", float(i["net"])) for i in below]
+        which = " and ".join(f"{n} (−${abs(v):,.2f})" for n, v in names)
+        one = len(names) == 1
+        raise HTTPException(409, {
+            "error": "negative_net",
+            "count": len(names),
+            "people": [n for n, _ in names],
+            "message": (f"Take-home pay would be below zero for {which}: the taxes and deductions are more than "
+                        f"the pay. Fix {'that line' if one else 'those lines'} before approving."),
         })
     totals = payroll_calc.run_totals(items)
     when = _now_iso()
@@ -930,7 +1040,40 @@ def mark_paid(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str
         housing = {"logged": [], "not_logged": [], "failed": True,
                    "reason": "the housing allowance couldn't be logged just now; the owner can try again"}
     return {"ok": True, "run": {**run, "status": "paid", "paid_at": when, "payout_rail": rail},
-            "housing": housing}
+            "housing": housing, "stubs": _auto_stubs({**run, "status": "paid", "paid_at": when})}
+
+
+def _background(fn) -> None:
+    """Work after the answer, off the request (the repo's way:
+    church_job_defs._later): a slow mail server never holds up mark-paid."""
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def _auto_stubs(run: Dict[str, Any]) -> Dict[str, Any]:
+    """A run marked paid emails each person their statement, behind
+    PAYROLL_STUB_EMAIL (off | owner | on, default on), in the background:
+    the answer says whether it was queued, never what went (Send stubs, and
+    the run's statements, show that). A send that fails never fails the
+    mark-paid."""
+    import payroll_stubs
+    biz = str(run["business_id"])
+    if not payroll_stubs.auto_on(biz):
+        return {"queued": False, "auto": False, "sent": None, "skipped": []}
+
+    def go() -> None:
+        try:
+            rows = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings,type&limit=1")
+            if isinstance(rows, list) and rows:
+                payroll_stubs.send(payroll_stubs.load(run, rows[0]), auto=True)
+        except Exception as e:  # noqa: BLE001 — the run is paid either way; Send stubs can try again
+            logger.warning(f"[payroll] statements not sent run={str(run.get('id'))[:8]}: {type(e).__name__}")
+    try:
+        _background(go)
+    except Exception as e:  # noqa: BLE001 — couldn't start: Send stubs still works
+        logger.warning(f"[payroll] statements not queued run={str(run.get('id'))[:8]}: {type(e).__name__}")
+        return {"queued": False, "auto": True, "sent": None, "skipped": [], "failed": True}
+    return {"queued": True, "auto": True, "sent": None, "skipped": []}
 
 
 @router.post("/runs/{run_id}/log-housing")
@@ -956,6 +1099,293 @@ def cancel_run(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[st
     sb_clients.sb_patch_as_service(f"/pay_runs?id=eq.{run_id}",
                                    {"status": "cancelled", "updated_at": when})
     return {"ok": True, "run": {**run, "status": "cancelled"}}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Payroll, the free version (2026-11-19): the calendar, deposits,
+# settings, statements and worksheets. Thin doors; the logic is in
+# payroll_calendar, payroll_deposits, payroll_stubs and payroll_forms.
+# ═══════════════════════════════════════════════════════════════════
+
+def _biz(biz: Any) -> str:
+    return _uuid(biz, "business")
+
+
+def _year(v: Optional[int]) -> int:
+    y = date.today().year if v is None else v
+    if not isinstance(y, int) or not 2000 <= y <= 2100:
+        raise HTTPException(400, "year must be between 2000 and 2100")
+    return y
+
+
+def _unavailable() -> HTTPException:
+    return HTTPException(503, "Payroll couldn't be read just now, so nothing is shown. Try again.")
+
+
+def _file(data: bytes, media: str, name: str) -> Response:
+    return Response(content=data, media_type=media, headers={
+        "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+# ─── The calendar ───────────────────────────────────────────────────
+
+@router.get("/calendar")
+def payroll_calendar_month(biz: str, month: Optional[str] = None,
+                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Every payday, approve-by day, tax deposit, form date and bank holiday
+    in one month, with what's next and what comes after."""
+    import payroll_calendar
+    row = _owner(_biz(biz), user)
+    try:
+        return payroll_calendar.month_view(row, month)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except payroll_calendar.Unreadable:
+        raise _unavailable()
+
+
+# ─── Deposits marked sent ───────────────────────────────────────────
+
+class MarkSentBody(BaseModel):
+    business_id: str
+    key: str
+    amount: float
+    sent_on: Optional[str] = None
+    reference: Optional[str] = None
+
+
+class DepositKeyBody(BaseModel):
+    business_id: str
+    key: str
+
+
+def _deposit_key(key: str) -> Dict[str, Any]:
+    import payroll_calendar
+    parsed = payroll_calendar.parse_key((key or "").strip())
+    if not parsed:
+        raise HTTPException(400, "That isn't a deposit or form this calendar knows.")
+    return parsed
+
+
+@router.post("/deposits/mark-sent")
+def mark_deposit_sent(body: MarkSentBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The church sent this deposit (or filed this form) itself: the
+    calendar says so and the reminders stop. A second call updates it."""
+    import payroll_calendar
+    import payroll_deposits
+    biz = _biz(body.business_id)
+    row = _access(biz, user, "admin", tick_work=True)
+    key = body.key.strip()
+    parsed = _deposit_key(key)
+    amount = _money(body.amount, "amount", allow_none=False)
+    if amount > 10_000_000:
+        raise HTTPException(400, "amount is too large")
+    sent_on = date.fromisoformat(_date(body.sent_on, "sent_on") or date.today().isoformat())
+    if abs((sent_on - date.today()).days) > 400:
+        raise HTTPException(400, "sent_on must be within a year of today")
+    ref = re.sub(r"[\x00-\x1f\x7f<>]", " ", body.reference or "").strip()[:120] or None
+    due = payroll_calendar.due_for(parsed, payroll_calendar.settings_of(row))
+    try:
+        saved = payroll_deposits.mark_sent(biz, key, parsed, amount=amount, sent_on=sent_on, reference=ref,
+                                           due_on=due, by=str(user.id))
+    except payroll_deposits.NotReady:
+        raise HTTPException(503, payroll_deposits.NOT_READY)
+    except payroll_deposits.SaveFailed:
+        raise HTTPException(503, payroll_deposits.SAVE_503)
+    _audit(biz, user, "payroll_deposit_marked", f"Marked {parsed['kind']} {parsed['period']} sent",
+           target_type="payroll_deposit", target_id=key)
+    return {"ok": True, "deposit": payroll_deposits.public(saved)}
+
+
+@router.post("/deposits/undo")
+def undo_deposit_sent(body: DepositKeyBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import payroll_deposits
+    biz = _biz(body.business_id)
+    _access(biz, user, "admin", tick_work=True)
+    key = body.key.strip()
+    _deposit_key(key)
+    try:
+        payroll_deposits.undo(biz, key)
+    except payroll_deposits.NotReady:
+        raise HTTPException(503, payroll_deposits.NOT_READY)
+    except payroll_deposits.SaveFailed:
+        raise HTTPException(503, payroll_deposits.SAVE_503)
+    _audit(biz, user, "payroll_deposit_unmarked", "Took back a deposit marked sent",
+           target_type="payroll_deposit", target_id=key)
+    return {"ok": True}
+
+
+# ─── Settings ───────────────────────────────────────────────────────
+
+class PayrollSettingsBody(BaseModel):
+    business_id: str
+    deposit_schedule: Optional[str] = None
+    state_day: Optional[int] = None
+    state_label: Optional[str] = None
+
+
+@router.put("/settings")
+def put_payroll_settings(body: PayrollSettingsBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """How often the church deposits, and its state's day. Written by the
+    server into businesses.settings.payroll, these keys only."""
+    import payroll_calendar
+    biz = _biz(body.business_id)
+    row = _access(biz, user, "admin")
+    given = {k: getattr(body, k) for k in ("deposit_schedule", "state_day", "state_label")
+             if k in body.model_fields_set}
+    try:
+        patch = payroll_calendar.settings_patch(given)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not patch:
+        return {"ok": True, "settings": payroll_calendar.settings_of(row)}
+    after = payroll_calendar.save_settings(biz, patch)
+    if after is None:
+        raise HTTPException(503, "The payroll settings didn't save. Try again.")
+    _audit(biz, user, "payroll_settings_saved", "Changed the payroll deposit settings",
+           payload={"keys": sorted(patch)})
+    return {"ok": True, "settings": after}
+
+
+# ─── Pay statements ─────────────────────────────────────────────────
+
+def _stub_run(run_id: str, user: AuthedUser) -> Dict[str, Any]:
+    import payroll_stubs
+    run = _scoped_run(run_id, user)
+    if run.get("status") == "draft":
+        raise HTTPException(409, payroll_stubs.DRAFT_409)
+    if run.get("status") not in payroll_stubs.STATUSES_WITH_STUBS:
+        raise HTTPException(409, payroll_stubs.CANCELLED_409)
+    return run
+
+
+def _stub_ctx(run: Dict[str, Any], user: AuthedUser) -> Dict[str, Any]:
+    import payroll_stubs
+    row = _access(str(run["business_id"]), user)
+    try:
+        return payroll_stubs.load(run, row)
+    except payroll_stubs.Unavailable:
+        raise _unavailable()
+
+
+def _one_item(ctx: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+    iid = _uuid(item_id, "line")
+    item = next((i for i in ctx["items"] if str(i.get("id")) == iid), None)
+    if not item:
+        raise HTTPException(404, "That line isn't on this run.")
+    return item
+
+
+@router.get("/runs/{run_id}/stubs")
+def run_stubs(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import payroll_stubs
+    ctx = _stub_ctx(_stub_run(run_id, user), user)
+    return {"ok": True, "stubs": payroll_stubs.all_stubs(ctx)}
+
+
+@router.get("/runs/{run_id}/items/{item_id}/stub")
+def item_stub(run_id: str, item_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import payroll_stubs
+    ctx = _stub_ctx(_stub_run(run_id, user), user)
+    return {"ok": True, "stub": payroll_stubs.build(ctx, _one_item(ctx, item_id))}
+
+
+@router.get("/runs/{run_id}/items/{item_id}/stub.pdf")
+def item_stub_pdf(run_id: str, item_id: str, user: AuthedUser = Depends(require_user)) -> Response:
+    import payroll_stubs
+    ctx = _stub_ctx(_stub_run(run_id, user), user)
+    stub = payroll_stubs.build(ctx, _one_item(ctx, item_id))
+    return _file(payroll_stubs.pdf(stub, ctx["biz"]), "application/pdf", payroll_stubs.filename(stub))
+
+
+class SendStubsBody(BaseModel):
+    item_ids: Optional[List[str]] = None
+
+
+@router.post("/runs/{run_id}/stubs/send")
+def send_run_stubs(run_id: str, body: Optional[SendStubsBody] = None,
+                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Email each person (or the lines named) their statement, at the
+    address on their own record, from the church."""
+    import payroll_stubs
+    run = _stub_run(run_id, user)
+    _access(str(run["business_id"]), user, "admin")
+    only = None
+    if body is not None and body.item_ids is not None:
+        if len(body.item_ids) > 500:
+            raise HTTPException(400, "Too many lines at once.")
+        only = [_uuid(i, "line") for i in body.item_ids]
+    ctx = _stub_ctx(run, user)
+    if only is not None:
+        have = {str(i.get("id")) for i in ctx["items"]}
+        if any(i not in have for i in only):
+            raise HTTPException(404, "That line isn't on this run.")
+    out = payroll_stubs.send(ctx, only=only)
+    _audit(str(run["business_id"]), user, "pay_statements_sent",
+           f"Emailed {out['sent']} pay statement(s) for the {run.get('pay_date')} run",
+           target_type="pay_run", target_id=str(run["id"]))
+    return {"ok": True, **out}
+
+
+# ─── The worksheets ─────────────────────────────────────────────────
+
+def _quarter(biz: str, year: Optional[int], q: int, user: AuthedUser):
+    import payroll_forms
+    row = _owner(_biz(biz), user)
+    if not isinstance(q, int) or not 1 <= q <= 4:
+        raise HTTPException(400, "q must be 1, 2, 3 or 4")
+    try:
+        return row, payroll_forms.quarter(row, _year(year), q)
+    except payroll_forms.HousingUnreadable:
+        raise HTTPException(503, payroll_forms.HOUSING_503)
+    except payroll_forms.Unavailable:
+        raise _unavailable()
+
+
+def _year_data(biz: str, year: Optional[int], user: AuthedUser):
+    import payroll_forms
+    row = _owner(_biz(biz), user)
+    try:
+        return row, payroll_forms.year(row, _year(year))
+    except payroll_forms.HousingUnreadable:
+        raise HTTPException(503, payroll_forms.HOUSING_503)
+    except payroll_forms.Unavailable:
+        raise _unavailable()
+
+
+@router.get("/forms/quarter")
+def forms_quarter(biz: str, q: int = Query(...), year: Optional[int] = None,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    return _quarter(biz, year, q, user)[1]
+
+
+@router.get("/forms/quarter.pdf")
+def forms_quarter_pdf(biz: str, q: int = Query(...), year: Optional[int] = None,
+                      user: AuthedUser = Depends(require_user)) -> Response:
+    import payroll_forms
+    row, data = _quarter(biz, year, q, user)
+    return _file(payroll_forms.quarter_pdf(row, data), "application/pdf",
+                 f"941-worksheet-{data['year']}-Q{data['q']}.pdf")
+
+
+@router.get("/forms/year")
+def forms_year(biz: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    return _year_data(biz, year, user)[1]
+
+
+@router.get("/forms/year.pdf")
+def forms_year_pdf(biz: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)) -> Response:
+    import payroll_forms
+    row, data = _year_data(biz, year, user)
+    return _file(payroll_forms.year_pdf(row, data), "application/pdf", f"year-end-worksheet-{data['year']}.pdf")
+
+
+@router.get("/forms/year.csv")
+def forms_year_csv(biz: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)) -> Response:
+    import payroll_forms
+    row, data = _year_data(biz, year, user)
+    return _file(payroll_forms.year_csv(row, data).encode("utf-8"), "text/csv; charset=utf-8",
+                 f"year-end-worksheet-{data['year']}.csv")
 
 
 # ═══════════════════════════════════════════════════════════════════

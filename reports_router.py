@@ -91,6 +91,15 @@ def _bank_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
     require_ministry_finance(biz, user, biz_row, part="bank")
 
 
+def _pay_records_wall(biz: str, user: AuthedUser, biz_row: Dict[str, Any]) -> None:
+    """A contractor read (the 1099 summary, the drafts with a taxpayer
+    number's last four): with the giving tick switched on, a login let in
+    only by its tick must hold Work, as on Contractors itself (Kevin,
+    2026-11-19). Switched off this asks nothing new."""
+    import church_money_gate
+    church_money_gate.require_pay_records(biz, user, biz_row)
+
+
 def _givers_hidden(biz: str, user: AuthedUser, data: Dict[str, Any]) -> Dict[str, Any]:
     """Revenue and profitability keep their totals behind the Giving lock;
     only the per-giver rows (by_customer) are left out."""
@@ -325,7 +334,12 @@ def general_ledger(biz: str, account: Optional[str] = None,
 def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
     """Calendar-year contractor payment totals from PAID 1099-eligible bills
     (the single source of truth — Stripe-transfer payments auto-create these;
-    manual 1099 bills count too). $600 = the IRS 1099-NEC threshold."""
+    manual 1099 bills count too). The 1099-NEC line is the tax year's:
+    $2,000 for payments made in 2026 and later, $600 before
+    (form_1099.nec_threshold)."""
+    import form_1099
+    line = form_1099.nec_threshold(year)
+    words = form_1099.nec_threshold_words(year)
     start, end = f"{year}-01-01", f"{year}-12-31"
     bills = sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}&status=eq.paid&is_1099_eligible=eq.true"
@@ -351,22 +365,23 @@ def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
         e["payments"] += 1
     rows = sorted(
         [{**e, "total_paid": round(e["total_paid"], 2),
-          "reaches_threshold": e["total_paid"] >= 600.0} for e in agg.values()],
+          "reaches_threshold": e["total_paid"] >= line} for e in agg.values()],
         key=lambda x: -x["total_paid"])
     return {
         "ok": True, "report": "summary_1099", "year": year, "rows": rows,
         "total_paid": round(sum(r["total_paid"] for r in rows), 2),
+        "threshold": line,
         "threshold_count": sum(1 for r in rows if r["reaches_threshold"]),
         "note": ("Stripe-managed contractors (Express) get their W-9 + 1099-NEC handled by "
                  "Stripe Tax Reporting. Rows without Stripe management need a manual 1099 "
-                 "if they reach the $600 threshold — confirm with your accountant."),
+                 f"if they reach the {year} line of {words} — confirm with your accountant."),
     }
 
 
 @router.get("/1099-summary")
 def summary_1099(biz: str, year: Optional[int] = None,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_or_reader(biz, user)
+    _pay_records_wall(biz, user, _owner_or_reader(biz, user))
     billing_limits.require_feature(biz, "contractor_payments")
     from datetime import datetime as _dt, timezone as _tz
     y = year or _dt.now(_tz.utc).year
@@ -391,6 +406,7 @@ def drafts_1099(biz: str, year: Optional[int] = None,
     W-9 profile, who's missing one, and whether the payer block is
     filled in. Stripe-managed rows are excluded — Stripe files those."""
     b = _owner_or_reader(biz, user)
+    _pay_records_wall(biz, user, b)
     billing_limits.require_feature(biz, "contractor_payments")
     from datetime import datetime as _dt, timezone as _tz
     y = year or _dt.now(_tz.utc).year
@@ -427,8 +443,9 @@ def drafts_1099(biz: str, year: Optional[int] = None,
         "ok": True, "year": y, "rows": out,
         "payer": {k: payer[k] for k in ("name", "ein", "line1", "line2",
                                         "city_state_zip", "phone", "complete")},
-        "note": ("Drafts for manually-paid contractors at/above the $600 IRS "
-                 "threshold. Stripe-managed contractors are excluded — Stripe "
+        "threshold": summary["threshold"],
+        "note": (f"Drafts for manually-paid contractors at/above the IRS 1099-NEC line for {y} "
+                 f"(${summary['threshold']:,.0f}). Stripe-managed contractors are excluded — Stripe "
                  "Tax Reporting files those. Prepared by bookkeeping software, "
                  "not a CPA: review with your tax professional before filing."),
     }
@@ -1075,6 +1092,8 @@ def export(biz: str, report: str, format: str = "csv",
         _bank_wall(biz, user, biz_row)
     if report in ("general_ledger", "audit_trail"):
         _names_wall(biz, user)   # as their screens: the lines can name a giver
+    if report == "summary_1099":
+        _pay_records_wall(biz, user, biz_row)   # as its screen
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     # Exports gate exactly like their screens; Starter reports (P&L,
@@ -1375,7 +1394,10 @@ def _csv_rows(report: str, data: Dict[str, Any], voice: Optional[str] = None) ->
         t = data.get("totals") or {}
         rows.append(["", "TOTALS", "", t.get("debits", 0), t.get("credits", 0), t.get("difference", 0)])
     elif report == "summary_1099":
-        rows.append(["Contractor / Vendor", "Payments", "Total Paid", "Reaches $600", "Stripe-managed 1099"])
+        import form_1099
+        line = data.get("threshold") or form_1099.nec_threshold(data.get("year"))
+        rows.append(["Contractor / Vendor", "Payments", "Total Paid", f"Reaches ${line:,.0f}",
+                     "Stripe-managed 1099"])
         for r in data.get("rows", []):
             rows.append([r.get("name"), r.get("payments"), r.get("total_paid"),
                          "yes" if r.get("reaches_threshold") else "no",

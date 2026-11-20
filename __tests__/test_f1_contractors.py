@@ -127,11 +127,16 @@ def test_1099_summary_aggregates_and_thresholds(fake, stripe_ok):
     by_name = {r["name"]: r for r in out["rows"]}
     jane = by_name["Jane Dev"]
     assert jane["total_paid"] == 700.0 and jane["payments"] == 2
-    assert jane["reaches_threshold"] is True and jane["stripe_managed"] is True
+    # 2026's 1099-NEC line is $2,000 (form_1099.nec_threshold): $700 is under it.
+    assert out["threshold"] == 2000.0
+    assert jane["reaches_threshold"] is False and jane["stripe_managed"] is True
     bob = by_name["Freelance Bob"]
     assert bob["total_paid"] == 200.0 and bob["reaches_threshold"] is False
     assert bob["stripe_managed"] is False
-    assert out["total_paid"] == 900.0 and out["threshold_count"] == 1
+    assert out["total_paid"] == 900.0 and out["threshold_count"] == 0
+    asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=1400.0), request=_request(), user=_U()))
+    jane = {r["name"]: r for r in _summary_1099("biz1", 2026)["rows"]}["Jane Dev"]
+    assert jane["total_paid"] == 2100.0 and jane["reaches_threshold"] is True
 
 
 # ─── Locked to the platform owner's businesses (2026-10-31) ──────────

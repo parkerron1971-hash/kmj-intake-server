@@ -103,6 +103,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
     "church_money_holders": "who the owner let into giving, and how far (church_money_holders.py): a sign-in user id tied to one seat row, neither of which can mean anything in another business; a restored church's owner ticks giving again, and until then only the owner, Admins and the accountant open it; cascade on business and seat deletion",
     "church_money_asks": "requests for giving access and the owner's answers (church_money_holders.py): who asked, for whom and who answered are sign-in user ids that can't mean anything in another business, and an open ask a restore must not offer the owner again; nothing to restore; cascade on business deletion",
+    "payroll_reminders_sent": "the payroll reminders' memory (payroll_reminders.py): which deposit, form or approve-by reminder already went to whom, so nobody hears it twice; the server's own ledger, nothing a church keeps or restores; cascade on business deletion",
     "church_duty_holders": "who a church moved each office duty to (church_duties.py): sign-in user ids that can't mean anything in another business; a restored church follows its lanes' defaults until it moves its duties again; cascade on business and login deletion",
     "church_duty_changes": "the log of those moves, from and to as sign-in user ids (church_duties.py): meaningless in another business, and nothing to restore once the moves are gone; cascade on business deletion",
     "church_duty_days": "the day each office login picked for one of its duties (church_assignments.py): keyed by sign-in user ids that can't mean anything in another business; a restored church's logins pick their days again, and until they do each duty falls on its catalog day; cascade on business and login deletion",
@@ -566,6 +567,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Funds for the year (funds.py): placements before their fund.
     "business_fund_items",
     "business_funds",
+    # Payroll, the free version (payroll_deposits.py): the tax deposits and
+    # forms the church marked sent. It cites nothing by a foreign key but
+    # the business.
+    "payroll_deposits",
     "pay_run_items",
     "pay_runs",
     "employees",
@@ -864,6 +869,11 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # The tax deposits and forms a church marked sent (payroll_deposits.py):
+    # who marked each is a sign-in id, and a restore must not tell a church a
+    # deposit went out on an archive's word; the export keeps them, and the
+    # restored church marks them again from its EFTPS history.
+    "payroll_deposits",
     # The monthly report's notes name their writer and its last send its
     # sender by sign-in id, and a restore must not claim a report went to the
     # pastor; the export keeps them, and the restored church writes its notes

@@ -610,9 +610,11 @@ def _summary_1099_body(d, s, money_cell, accent, stripe, rule, danger, colors, T
     head = [Paragraph(h, s["th"]) for h in ("Contractor / Vendor", "Payments", "1099 handling")] + \
            [Paragraph("Total Paid", s["thr"])]
     rows = [head]
+    import form_1099
+    line = d.get("threshold") or form_1099.nec_threshold(d.get("year"))
     for r in rows_data:
         handling = "Stripe Tax Reporting" if r.get("stripe_managed") else \
-            ("Manual 1099 needed" if r.get("reaches_threshold") else "Below $600 threshold")
+            ("Manual 1099 needed" if r.get("reaches_threshold") else f"Below ${line:,.0f} threshold")
         style = s["drl"] if (r.get("reaches_threshold") and not r.get("stripe_managed")) else s["row"]
         rows.append([
             Paragraph(str(r.get("name")), s["row"]),

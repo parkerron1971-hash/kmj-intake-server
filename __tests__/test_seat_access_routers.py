@@ -176,9 +176,16 @@ def test_a_business_that_is_not_a_church_keeps_its_ladder(fake, module):
 def test_the_three_ask_the_wall_before_anything_else():
     """The wall sits before the owner shortcut and the seat ladder, so no
     later branch can answer for a church first."""
-    for name in ("payroll_router", "contractors_router", "accounting_periods_router"):
+    # Payroll and contractors ask the pay-records wall (2026-11-19: a login let
+    # in by its giving tick holds Work to read them too); the periods ask the
+    # church wall as before.
+    walls = {"payroll_router": "church_money_gate.require_pay_records(biz, user, row)",
+             "contractors_router": "church_money_gate.require_pay_records(biz, user, row)",
+             "accounting_periods_router":
+                 'require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")'}
+    for name, call in walls.items():
         src = (_here.parent / f"{name}.py").read_text(encoding="utf-8")
         body = src[src.index("def _access("):]
         body = body[:body.index("\ndef ", 10)]
-        wall = body.index('require_ministry_finance(biz, user, row, need="see" if min_role == "viewer" else "work")')
+        wall = body.index(call)
         assert wall < body.index('str(row.get("owner_id"))') and wall < body.index("require_role("), name
