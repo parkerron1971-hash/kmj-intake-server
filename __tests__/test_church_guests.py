@@ -591,12 +591,17 @@ def test_the_routes(db, monkeypatch, areas):
     assert s.status_code == 200 and s.json()["label"] == "This month"
     assert t.get(f"/church/guests/{BIZ}/scorecard").json()["period"] == "season"
     assert t.get(f"/church/guests/{BIZ}/scorecard", params={"period": "week"}).status_code == 400
+    db.paths.clear()
+    st = t.get(f"/church/guests/{BIZ}/status")
+    assert st.status_code == 200 and st.json() == {"open": True}
+    assert not any(p.startswith(("/contacts", "/church_follow_ups")) for p in db.paths)   # no guest read
 
 
 def test_the_switch(db, monkeypatch, areas):
     t = _client(monkeypatch)
     monkeypatch.setenv("GUEST_PATH", "off")
     assert t.get(f"/church/guests/{BIZ}").status_code == 404
+    assert t.get(f"/church/guests/{BIZ}/status").status_code == 404
     assert t.get(f"/church/guests/{BIZ}/scorecard").status_code == 404
     monkeypatch.setenv("GUEST_PATH", "owner")
     monkeypatch.setattr(guest_path, "switched_on", lambda b: str(b) == BIZ)
@@ -614,6 +619,7 @@ def test_a_seat_below_manager_and_the_areas(db, monkeypatch, areas):
     areas["view"] = {"areas": ["worship_media"]}
     r = t.get(f"/church/guests/{BIZ}")
     assert r.status_code == 403 and "People & care" in r.json()["detail"]
+    assert t.get(f"/church/guests/{BIZ}/status").status_code == 403
     areas["view"] = {"areas": None}                                           # the whole church
     assert t.get(f"/church/guests/{BIZ}").status_code == 200
     areas["view"] = None                                                      # unread

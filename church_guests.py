@@ -23,6 +23,9 @@ New here (new_here.py), the follow-ups (church_follow_up.py), check-in
       follow-ups, in their own words).
   GET /church/guests/{business_id}/scorecard?period=month|season|year
       From first visit to connected, by door and by caller.
+  GET /church/guests/{business_id}/status
+      {open: true} when this login has the room (the menu asks once); the
+      same gate, without a guest read.
 
 Who: the GUEST_PATH switch (guest_path.switched_on); off is a 404, so the
 app hides the room. A church login at Manager or above (the Follow-up
@@ -1028,6 +1031,16 @@ def scorecard(biz: Dict[str, Any], period: str, *, now: Optional[datetime] = Non
 
 def _unread() -> HTTPException:
     return HTTPException(503, "The guests couldn't be read just now. Try again in a minute.")
+
+
+@router.get("/church/guests/{business_id}/status")
+def get_status(business_id: str, biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
+               session: UserSession = Depends(sb_clients.authed_request)):
+    """Whether this login has the Guests room: the menu asks this once (the
+    same gate as the room, without reading a single guest). A no is the
+    room's own 404 or 403."""
+    _gate(biz, session)
+    return {"open": True}
 
 
 @router.get("/church/guests/{business_id}")

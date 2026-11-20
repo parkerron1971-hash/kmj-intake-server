@@ -30,7 +30,9 @@ lane, the print cards), the member app's I'm new here, first check-ins and
 the follow-up board. Nothing had put every door's guests in one room.
 
 `church_guests.py` (new): `GET /church/guests/{business_id}` (This week) and
-`GET /church/guests/{business_id}/scorecard?period=month|season|year`, mounted
+`GET /church/guests/{business_id}/scorecard?period=month|season|year`, plus
+`GET /church/guests/{business_id}/status` (the menu asks it once: the same
+gate, no guest read), mounted
 after the guest card in `kmj_intake_automation.py`. It builds on `guest_path.py`
 (PR #2002, the Welcome Path's shared core) and reads what New here, the
 follow-ups, check-in and Groups wrote.
