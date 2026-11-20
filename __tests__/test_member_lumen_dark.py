@@ -443,14 +443,23 @@ def test_cookie_value_names_whose_it_is():
     assert abs(float(mll.cookie_value("dark", {"id": "x"}).split(".")[1]) - time.time()) < 5
 
 
-def test_a_record_with_no_updated_at_still_saves(fake):  # noqa: F811
+def test_a_record_with_no_updated_at_still_saves(fake, monkeypatch):  # noqa: F811
+    import sb_clients
     fake.person(tct.ANA, "Ana Rivera")
     for row in fake.t["contacts"]:
         if row["id"] == tct.ANA:
             row.pop("updated_at", None)
+    paths = []
+
+    def patch(path, body, **kw):
+        paths.append(path)
+        return fake.patch(path, body, **kw)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
     assert mll.save(tct.BIZ, tct.ANA, "auto") is True
     assert next(r for r in fake.t["contacts"] if r["id"] == tct.ANA)["metadata"]["member_look"] == "auto"
-    assert any("updated_at=is.null" in "".join(str(x) for x in w) or w[0] == "patch" for w in fake.written("contacts"))
+    # guarded by "still no updated_at", her own row only
+    assert len(paths) == 1 and paths[0].endswith("&updated_at=is.null")
+    assert f"id=eq.{tct.ANA}" in paths[0] and f"business_id=eq.{tct.BIZ}" in paths[0]
 
 
 def test_a_busy_member_saves_nothing(church, fake, monkeypatch):  # noqa: F811
