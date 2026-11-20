@@ -83,6 +83,7 @@ SERVER_KEYS: Tuple[str, ...] = (
     "messaging", "new_here", "news", "reading_plan", "site_prefs", "sms_replies", "studio",
     "superbill", "texting_hours",
     "payroll",              # PUT /payroll/settings (payroll_calendar): deposit schedule, the state's day
+    "guest_calls",          # PUT /church/guest-calls (guest_calls): who calls the church's guests
 )
 
 # Keys the app's login may set when it makes a business and never change
