@@ -100,6 +100,9 @@ OFFICE_NAV = "operate:sms"   # the office phone alert opens Text, where the App 
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 GROUP_URL_RE = re.compile(
     r"^/my/groups/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#]|$)")
+# A request on a group's prayer wall (member_push.tell_group_prayer's link).
+PRAYER_URL_RE = re.compile(
+    r"^/my/groups/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/prayer(?:[?#]|$)")
 NOTE_FIELDS = "id,contact_id,thread,direction,kind,title,body,url,author_name,created_at,read_at,held"
 
 
@@ -353,7 +356,11 @@ def is_new(row: Dict[str, Any], read_at: str) -> bool:
 
 def summary(business_id: str, contact_id: str, group_ids: Iterable[str]) -> Optional[Dict[str, Dict[str, Any]]]:
     """{thread: {"last": row, "unread": n}} for the church conversation and
-    each of the member's groups that has notes. None when a read failed."""
+    each of the member's groups that has notes. None when a read failed.
+    A group's thread also carries "prayer": how many of its unread notes are
+    a request on its prayer wall (member_push.tell_group_prayer's note,
+    opening /my/groups/<id>/prayer), only when there is one: the new Home's
+    Prayer door reads it ("3 new"), from these same rows."""
     b, c = _q(business_id), _q(contact_id)
     own = _rows(f"/{NOTES}?business_id=eq.{b}&contact_id=eq.{c}&select={NOTE_FIELDS}"
                 f"&order=created_at.desc&limit=500")
@@ -372,6 +379,8 @@ def summary(business_id: str, contact_id: str, group_ids: Iterable[str]) -> Opti
         hit["last"] = r
         if is_new(r, seen.get(t, "")):
             hit["unread"] += 1
+            if t != CHURCH and PRAYER_URL_RE.match(str(r.get("url") or "")):
+                hit["prayer"] = hit.get("prayer", 0) + 1
     return out
 
 

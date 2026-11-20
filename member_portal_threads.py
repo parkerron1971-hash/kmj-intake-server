@@ -230,6 +230,10 @@ def thread_name(biz: Dict[str, Any], thread: str) -> str:
 # ─── Unread: the header's count and Home's card ──────────────────────
 
 BADGE: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("messages_badge", default=None)
+# The whole of counts() for the page being drawn (member_portal.serve keeps it
+# beside BADGE, from the same read): the new Home's Prayer door counts the
+# prayer-wall requests in it (prayer_new). None when it wasn't read.
+NOW: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar("messages_counts", default=None)
 _COUNTS: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
 COUNTS_SECONDS = 15
 CHAT_WINDOW_DAYS = 60
@@ -238,6 +242,19 @@ CHAT_WINDOW_DAYS = 60
 def forget(business_id: Any, contact_id: Any) -> None:
     """Something was just read here: the next count is fresh."""
     _COUNTS.pop((str(business_id), str(contact_id)), None)
+
+
+def prayer_new(got: Optional[Dict[str, Any]]) -> Tuple[int, List[str]]:
+    """(how many requests on the member's groups' prayer walls they haven't
+    seen, the groups they're in, most first) from counts()' answer (NOW):
+    the notes church_threads.summary counts as prayer. (0, []) without it."""
+    per = []
+    for t, v in ((got or {}).get("notes") or {}).items():
+        n = int((v or {}).get("prayer") or 0)
+        if n and str(t).startswith("group:"):
+            per.append((n, str(t)[len("group:"):]))
+    per.sort(key=lambda x: (-x[0], x[1]))
+    return sum(n for n, _ in per), [g for _, g in per]
 
 
 def may_chat(full: Optional[Dict[str, Any]]) -> bool:
