@@ -374,8 +374,9 @@ class Church:
                 names = {str(c["id"]): _plain(c.get("name")) for c in _need(
                     f"/contacts?business_id=eq.{_q(self.b)}&id=in.({','.join(_q(i) for i in people)})&select=id,name")}
             r = self.routing
-            held = {str(h["contact_id"]): str(h.get("role") or "") for h in (r[0] if r else [])
-                    if h.get("status") == "active"}
+            if r is None:
+                raise Unread("roles")       # whether a leader holds a role decides the hand-off
+            held = {str(h["contact_id"]): str(h.get("role") or "") for h in r[0] if h.get("status") == "active"}
             out = []
             for g in rows:
                 mine = [str(m["contact_id"]) for m in leads if str(m.get("group_id")) == str(g["id"])]
@@ -464,6 +465,8 @@ def _plan(ch: Church, key: str, pick: str, first: str, caller_cid: str) -> Dict[
         return {"how": "note", "what": what, "line": line}
     if key == "group":
         groups = ch.groups
+        if pick and groups is None:
+            return {"how": "unread", "line": f"Hand {first}’s group step to the group’s leader"}
         g = next((x for x in groups or [] if x["id"] == pick), None) if pick else None
         if not g:
             return note("find a group")
@@ -477,6 +480,8 @@ def _plan(ch: Church, key: str, pick: str, first: str, caller_cid: str) -> Dict[
                     "line": f"Hand {first}’s group step to {g['lead']['name']}, who leads {g['name']}"}
         return note(f"try {g['name']}")
     if key == "serve":
+        if pick and ch.teams is None:
+            return {"how": "unread", "line": f"Hand {first}’s step to serve on {pick} to its leader"}
         teams = ch.teams or []
         team = next((t for t in teams if t == pick), "") if pick else ""
         if not team:
@@ -664,17 +669,17 @@ def _kids(ch: Church, contact: Dict[str, Any], t: Dict[str, Any], start: Optiona
     """{line, chip, sentence, count}: the card's names, the member app's
     ages, or the kids desk's own children (first names and ages)."""
     b, cid = ch.b, str(contact["id"])
-    homes = _rows(f"/household_adults?business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}&select=household_id&limit=10") or []
+    homes = _need(f"/household_adults?business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}&select=household_id&limit=10")
     kids: List[Dict[str, Any]] = []
     came = False
     if homes:
         hids = ",".join(_q(h["household_id"]) for h in homes)
-        kids = [k for k in _rows(f"/children?business_id=eq.{_q(b)}&household_id=in.({hids})&active=eq.true"
-                                 "&select=id,first_name,birthdate&order=birthdate.asc&limit=12") or []
+        kids = [k for k in _need(f"/children?business_id=eq.{_q(b)}&household_id=in.({hids})&active=eq.true"
+                                 "&select=id,first_name,birthdate&order=birthdate.asc&limit=12")
                 if _plain(k.get("first_name"))]
         if kids and start:
             since = cfu._iso(start - timedelta(hours=12))
-            came = bool(_rows(f"/child_checkins?business_id=eq.{_q(b)}&household_id=in.({hids})"
+            came = bool(_need(f"/child_checkins?business_id=eq.{_q(b)}&household_id=in.({hids})"
                               f"&checked_in_at=gte.{_q(since)}&select=id&limit=1"))
     today = now.astimezone(tz).date()
     if kids:
@@ -746,8 +751,8 @@ def brief(business: Dict[str, Any], row: Dict[str, Any], *, viewer_cid: str = ""
         raise HTTPException(503, UNREAD)
     ids = {lid, viewer_cid} | {str(r.get("leader_contact_id") or "") for r in theirs}
     ids.discard("")
-    names = {str(c["id"]): _plain(c.get("name")) for c in (_rows(
-        f"/contacts?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in sorted(ids))})&select=id,name") or [])
+    names = {str(c["id"]): _plain(c.get("name")) for c in _need(
+        f"/contacts?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in sorted(ids))})&select=id,name")
     } if ids else {}
     caller_name = names.get(lid, "")
     start = _parse(meta.get("texted_at")) or _parse(row.get("created_at"))
@@ -810,16 +815,19 @@ def brief(business: Dict[str, Any], row: Dict[str, Any], *, viewer_cid: str = ""
     outcomes = _outcomes(asks, step, steps, status, due, tz, now, invite, first or "them")
 
     # The caller's other guests this week (the outcome sheet's foot).
-    others = []
+    others: List[Dict[str, str]] = []
+    others_read = True
     if lid:
         since = cfu._iso(now - timedelta(days=OTHERS_DAYS))
         rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}&status=eq.open"
-                     f"&created_at=gte.{_q(since)}&select=id,contact_id,card_key,path_kind&limit=50") or []
-        rows = [r for r in rows if guest_path.is_guest_follow_up(r) and str(r["id"]) != str(row["id"])]
+                     f"&created_at=gte.{_q(since)}&select=id,contact_id,card_key,path_kind&limit=50")
+        others_read = rows is not None
+        rows = [r for r in rows or [] if guest_path.is_guest_follow_up(r) and str(r["id"]) != str(row["id"])]
+        got_rows = (_rows(f"/contacts?business_id=eq.{_q(biz)}&id=in.({','.join(_q(r['contact_id']) for r in rows)})"
+                          "&select=id,name") if rows else [])
+        others_read = others_read and got_rows is not None
         if rows:
-            got = {str(c["id"]): _plain(c.get("name")) for c in (_rows(
-                f"/contacts?business_id=eq.{_q(biz)}&id=in.({','.join(_q(r['contact_id']) for r in rows)})"
-                "&select=id,name") or [])}
+            got = {str(c["id"]): _plain(c.get("name")) for c in got_rows or []}
             others = [{"follow_up_id": str(r["id"]), "name": got.get(str(r["contact_id"]), "")}
                       for r in rows if got.get(str(r["contact_id"])) and not _nameless(got.get(str(r["contact_id"])))]
 
@@ -849,6 +857,7 @@ def brief(business: Dict[str, Any], row: Dict[str, Any], *, viewer_cid: str = ""
         "asks": asks,
         "outcomes": outcomes,
         "others": others,
+        "others_read": others_read,
     }
 
 

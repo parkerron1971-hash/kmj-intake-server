@@ -156,6 +156,8 @@ class FakeDB:
     def get(self, path, **_):
         self.paths.append(path)
         table, _, qs = path.lstrip("/").partition("?")
+        if table in getattr(self, "broken", ()):
+            return None
         filters, limit = self._filters(qs)
         rows = [dict(r) for r in self.t.get(table, []) if self._match(r, filters)]
         return rows[:limit] if limit else rows
@@ -729,3 +731,30 @@ def test_the_member_pages_church_row_has_no_owner_and_the_brief_reads_one(db):
     assert b and b["guest"]["name"] == "Maria Lopez"
     assert gb.brief_for(row, fid(2), now=NOW.astimezone(timezone.utc))["guest"]["name"] == "Tyrell Hayes"
     assert gb.brief_for(row, "not-an-id") is None
+
+
+def test_a_group_read_that_fails_hands_nothing_and_writes_nothing(office, db):
+    db.broken = {"groups"}
+    r = _log(office, "talked", {"group": G_WOMEN, "serve": gb.SKIP, "baptism": gb.SKIP, "pastor": gb.SKIP,
+                                "class": gb.SKIP})
+    assert r.json()["did"] == ["Chief couldn’t check who takes “Find a group” just now, so it wasn’t handed on yet."]
+    assert _handoffs(db) == {}
+    assert not any(str(n["body"]).startswith(gb.ASKED) for n in _notes(db, fid(1)))
+    # Read again later, the same pick goes where it should.
+    db.broken = set()
+    r = _log(office, "talked", {"group": G_WOMEN, "serve": gb.SKIP, "baptism": gb.SKIP, "pastor": gb.SKIP,
+                                "class": gb.SKIP})
+    assert r.json()["did"] == ["Handed Maria’s “Find a group” to Alicia Grant."]
+    db.broken = {"church_leader_roles"}
+    did = gb.after_call(BIZ, fid(1), "talked", {"serve": "Hospitality Team", "class": gb.SKIP})
+    assert did and all("couldn’t" in d for d in did) and set(_handoffs(db)) == {"call:group"}
+
+
+def test_the_brief_never_says_no_kids_or_no_caller_on_a_failed_read(office, db):
+    db.broken = {"children"}
+    assert _get(office).status_code == 503
+    assert gb.brief_for(_biz(db), fid(1)) is None
+    db.broken = {"household_adults"}
+    assert _get(office).status_code == 503
+    db.broken = set()
+    assert _get(office).json()["others_read"] is True

@@ -20,6 +20,7 @@ decisions:
   - "The opening line: 'Hi {first}, this is {caller's first name} from {church without a trailing Church}. We loved having you (and the kids) {day}. I just wanted to say thank you for coming.' A Plan your visit guest and a member app guest get their own true line"
   - "How did it go: the office's POST /church/follow-ups/{id}/note takes `outcome` (talked/message/noanswer/notnow, the note then optional) and `picks`; office_note logs it as that kind and a reached one finishes Reach out (as leader_note does). The member page's POST /my/lead/note reads pick_<ask> fields. Both then call guest_brief.after_call"
   - "Talked hands each ask through church_follow_up.start as a normal follow-up, card_key call:<ask>, card_name 'Welcome call: <ask>', source_event call-ask:<guest follow-up>:<ask> (unique), first answer 'Asked for on their welcome call', and a note 'Asked for on their welcome call with <caller>': serve (the team picked) and baptism and pastor (pastor_ask) through choose(); a group to its leader when they hold a role (start's new `pick`: a decided hand-off); else a note on the guest's follow-up for People & Care, who hears by guest_calls.tell_login unless they made the call. Nothing twice: Chief's note 'Asked for on their welcome call: <label>.' on the guest's follow-up, the unique receipt, and an open hand-off of theirs (a call:<ask> one, or their own Baptism or Serve card) each say it's done"
+  - "A failed read decides nothing: the brief's kids, household and names are a 503 (never 'no kids' or a nameless opening line); a Talked whose groups, teams or roles couldn't be read hands nothing and writes no note for that ask (did says so), so logging it again hands it on. The caller's other guests are a convenience: a failed read leaves them out with others_read false (review of #2014)"
   - "Message, No answer, Not right now hand nothing on (Message finishes Reach out; Talked later still hands the asks on)"
   - "The invite line is New here's own rule (new_here._came_back): 'Keep Thursday's invite, since {first} hasn't been back yet', or 'Skip ...' once they have"
   - "The New here card (/new/<code>) asks, with the path on: Who invited you? (optional), Your kids' names and ages (hidden by CSS while Kids is None), What would you like? (member_im_new.WANTS), Best way to reach you (A call is fine / Text me instead). Kept in metadata.new_here.card (invited_by, kids_names, wants, reach); the follow-up's answers carry them, never the prayer. member_im_new asks Who invited you? and Best way to reach you (and labels ages 'Their names and ages') with the path on"
@@ -42,7 +43,7 @@ per tap (CSS :has, no script), pick_<ask> selects, after_call on Save.
 `new_here.py`: card_html's path questions, card_send and save_card.
 `member_im_new.py`: the two questions.
 
-Tests: `__tests__/test_guest_brief.py` (26): the brief's lines with and
+Tests: `__tests__/test_guest_brief.py` (28): the brief's lines with and
 without kids, who invited them and asks; the prayer flag (its words never
 read); real groups only; the texts; what Chief will do; access (the caller,
 the room's logins, admin, outsiders, the switch); each hand-off stream and no
