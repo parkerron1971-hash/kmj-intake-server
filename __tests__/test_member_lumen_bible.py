@@ -185,7 +185,7 @@ def test_the_reader_is_the_read_tab(bible, fake, monkeypatch):  # noqa: F811
     assert 'class="bb-v hl-gold" data-v="5"' in on and "bb-nm" in on and "bb-bm" in on
     # Share is the shared share sheet's: a verse
     dock = on[on.index('id="bb-dock"'):on.index('id="bb-note"')]
-    assert ('<a class="lm-share lm-selshare" href="/" data-share-kind="verse" data-share-from="reader" '
+    assert ('<a class="lm-share" data-share-kind="verse" data-share-from="reader" href="/" '
             'data-share-title="" data-share-sub="" data-share-id="" data-share-text="" data-share-tr="kjv">') in dock
     assert 'data-act="share"' not in on                                                # the sheet's, not the old dock's
     # Aa holds the size and the font; the translation is its own pill

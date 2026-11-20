@@ -323,7 +323,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
                        f'aria-label="Highlight {c}"></button>' for c in SWATCHES)
     # The share sheet reads the verse the member tapped (data-share-from="reader");
     # READ_JS keeps the same verse on the attributes as well.
-    shared = (f'<a class="lm-share lm-selshare" href="{VERSE_HREF}" data-share-kind="verse" data-share-from="reader" '
+    shared = (f'<a class="lm-share" data-share-kind="verse" data-share-from="reader" href="{VERSE_HREF}" '
               f'data-share-title="" data-share-sub="" data-share-id="" data-share-text="" data-share-tr="{_e(tr)}">'
               f'{_glyph("up", 16)}<span>Share</span></a>')
     dock = "" if not editable else f"""<div class="bb-dock lm-sel" id="bb-dock" role="group" aria-label="This verse" hidden>
@@ -957,7 +957,7 @@ window.addEventListener('load',function(){window.addEventListener('click',functi
 # can speak.
 READ_JS = r"""<script>(function(){
 var read=document.querySelector('.bb-read');if(!read)return;
-var dock=document.getElementById('bb-dock'),sh=dock?dock.querySelector('.lm-selshare'):null;
+var dock=document.getElementById('bb-dock'),sh=dock?dock.querySelector('.bb-dock-h .lm-share'):null;
 var nav=document.querySelector('.mb-nav'),toast=document.getElementById('bb-toast');
 function lift(){if(!dock)return;var r=nav?nav.getBoundingClientRect():null,up=0;
  if(r&&r.height&&r.top<window.innerHeight&&r.width>window.innerWidth*.6)up=Math.round(window.innerHeight-r.top);
@@ -1348,7 +1348,7 @@ body.lm .bb-dock{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bot
 body.lm.lm-tab .bb-dock{bottom:calc(76px + env(safe-area-inset-bottom,0px));}
 body.lm .bb-dock-h{gap:8px;}
 body.lm .bb-dock-ref{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 14px/1.2 var(--mb-ui);}
-body.lm .bb-dock .lm-selshare{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;border-radius:18px;
+body.lm .bb-dock-h .lm-share{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;border-radius:18px;
   box-shadow:inset 0 0 0 1.5px var(--lm-line);color:var(--fg);font:650 13.5px/1 var(--mb-ui);text-decoration:none;}
 body.lm .bb-x{width:32px;height:32px;background:var(--s1);}
 body.lm .bb-sws{gap:10px;margin-top:12px;}
@@ -1523,7 +1523,7 @@ body.lm .lm-stop{margin-top:24px;}
 }
 body.lm .lm-trs a:focus-visible,body.lm .lm-bsg:focus-visible,body.lm .lm-ver>summary:focus-visible,body.lm .lm-verpop a:focus-visible,
 body.lm .lm-book:focus-visible,body.lm .lm-pill:focus-visible,body.lm .lm-aa:focus-visible,body.lm .lm-rstep:focus-visible,
-body.lm .bb-dock .lm-selshare:focus-visible,body.lm .lm-wd>a:focus-visible,body.lm .lm-vod:focus-visible,body.lm .lm-mcov:focus-visible,
+body.lm .bb-dock-h .lm-share:focus-visible,body.lm .lm-wd>a:focus-visible,body.lm .lm-vod:focus-visible,body.lm .lm-mcov:focus-visible,
 body.lm .lm-aplan-t:focus-visible,body.lm .lm-pstart button:focus-visible,body.lm .lm-hlr:focus-visible,
 body.lm .lm-dfeat:focus-visible,body.lm .lm-drow:focus-visible,body.lm .lm-field-go:focus-visible,
 body.lm .lm-chips a:focus-visible,body.lm .lm-catch>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
