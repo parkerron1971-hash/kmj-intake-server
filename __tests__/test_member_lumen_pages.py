@@ -230,7 +230,9 @@ def test_home_on_the_day_says_today_and_shows_check_in(church, fake, monkeypatch
                          "family": [{"id": tct.ANA, "name": "Ana Rivera", "me": True}]}
     html = _client(fake, monkeypatch).get("/my").text
     up = _week(html)
-    assert '<p class="lm-wkk">Today · ' in up and "Sunday Worship" in up
+    # The check-in window opened "now", so after 5 PM in the church's zone the
+    # card says "Tonight ·" (member_lumen_home.when): either is on the day.
+    assert ('<p class="lm-wkk">Today · ' in up or '<p class="lm-wkk">Tonight · ' in up) and "Sunday Worship" in up
     assert 'action="/my/here"' in up and 'name="where" value="in"' in up and 'name="where" value="online"' in up
     assert f'name="people" value="{tct.ANA}"' in up
 
