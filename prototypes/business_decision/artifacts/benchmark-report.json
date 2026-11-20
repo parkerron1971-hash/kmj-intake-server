@@ -1,0 +1,69 @@
+{
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "logical_cpu_count": 22
+  },
+  "artifact_bytes": 73155,
+  "direct": {
+    "requests": 10000,
+    "wall_seconds": 0.4255456000100821,
+    "cpu_seconds": 0.4375,
+    "cpu_ms_per_decision": 0.04375,
+    "decisions_per_second_serial": 23499.24426374771,
+    "p50_ms": 0.02719997428357601,
+    "p95_ms": 0.09019998833537102,
+    "p99_ms": 0.14919997192919254
+  },
+  "process_memory_after_warmup": {
+    "resident_mb": 37.609375,
+    "peak_resident_mb": 37.609375
+  },
+  "process_memory_after_http": {
+    "resident_mb": 40.875,
+    "peak_resident_mb": 41.765625
+  },
+  "http": [
+    {
+      "concurrency": 1,
+      "requests": 500,
+      "errors": 0,
+      "requests_per_second": 207.9719387523367,
+      "wall_seconds": 2.40417050011456,
+      "cpu_seconds_client_and_server": 1.171875,
+      "p50_ms": 1.5892500523477793,
+      "p95_ms": 19.442700082436204,
+      "p99_ms": 26.62430005148053
+    },
+    {
+      "concurrency": 10,
+      "requests": 500,
+      "errors": 0,
+      "requests_per_second": 1004.0700982155746,
+      "wall_seconds": 0.49797320016659796,
+      "cpu_seconds_client_and_server": 0.828125,
+      "p50_ms": 9.73454990889877,
+      "p95_ms": 11.470400029793382,
+      "p99_ms": 13.07069999165833
+    },
+    {
+      "concurrency": 25,
+      "requests": 500,
+      "errors": 0,
+      "requests_per_second": 980.6565495405845,
+      "wall_seconds": 0.5098625000100583,
+      "cpu_seconds_client_and_server": 0.984375,
+      "p50_ms": 24.788349983282387,
+      "p95_ms": 27.21400000154972,
+      "p99_ms": 28.131900122389197
+    }
+  ],
+  "paid_api_calls": 0,
+  "paid_api_cost_usd": 0,
+  "limitations": [
+    "Local Windows/Linux machine, not a Railway capacity benchmark",
+    "HTTP client and demo server share a process/CPU; no real DB or frontier calls",
+    "Short bursts, not a sustained soak test; no guaranteed number of users",
+    "Model cost excludes the rest of the application and idle resource overhead"
+  ]
+}
