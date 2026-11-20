@@ -1940,7 +1940,7 @@ async def pin_route(request: Request):
 # ─── gatherings (group_gatherings) ───────────────────────────────────
 
 
-async def _meet_action(request: Request, act):
+async def _meet_action(request: Request, act, *, home: bool = False):
     import asyncio
     church, me, form, stop = await _who(request, "/my/groups")
     if stop:
@@ -1949,13 +1949,20 @@ async def _meet_action(request: Request, act):
     if not gid:
         return _go("/my/groups", err="group_gone")
     ok, code = await asyncio.to_thread(act, church["business"], me, gid, form)
-    return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
+    q = {"done": code} if ok else {"err": code}
+    if home and str(form.get("back") or "") == "/my":
+        # Asked from Home's "Up next" card (member_portal_lumen): back to Home.
+        from member_portal import _SECURE_HEADERS
+        return RedirectResponse("/my?" + "&".join(f"{k}={v}" for k, v in q.items()), status_code=303,
+                                headers=_SECURE_HEADERS)
+    return _go(_base(gid, "meet"), **q)
 
 
 @router.post("/my/groups/meet/rsvp", include_in_schema=False)
 async def meet_rsvp_route(request: Request):
     import group_gatherings as gg
-    return await _meet_action(request, lambda biz, me, gid, form: gg.rsvp(biz, me, gid, str(form.get("answer") or "")))
+    return await _meet_action(request, lambda biz, me, gid, form: gg.rsvp(biz, me, gid, str(form.get("answer") or "")),
+                              home=True)
 
 
 @router.post("/my/groups/meet/here", include_in_schema=False)

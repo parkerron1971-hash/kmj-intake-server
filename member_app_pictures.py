@@ -49,8 +49,10 @@ MAX_BYTES = 12 * 1024 * 1024
 LONGEST = 1600
 EDITORS_MAX = 25
 PICTURES_MAX = 300
-KEY_RE = re.compile(r"(home|signin|give|live|watch|groups|youth)|(tile|event):[a-z0-9-]{1,60}|(group|devotional):[0-9a-f-]{36}")
+KEY_RE = re.compile(r"(home|signin|give|live|watch|groups|youth|prayer)|(tile|event):[a-z0-9-]{1,60}|(group|devotional):[0-9a-f-]{36}")
 
+# Photo names that suit the prayer picture on Home (member_lumen_home).
+PRAYER_WORDS = ("pray", "prayer", "worship")
 # The spots every church has: key, what it's called, where it shows, its default picture.
 FIXED: Tuple[Tuple[str, str, str, str], ...] = (
     ("home", "Home's top photo", "Behind the next gathering on Home", "welcome"),
@@ -60,6 +62,11 @@ FIXED: Tuple[Tuple[str, str, str, str], ...] = (
     ("watch", "Watch, before the first message", "Until a message is posted", "messages"),
     ("groups", "Connect, before the first group", "Until a group is added", "groups"),
     ("youth", "Youth Home", "The top of the Youth side", "youth"),
+)
+# The new look's own spots (member_lumen: its Home's Also for you), listed
+# only where the new look shows.
+LUMEN_FIXED: Tuple[Tuple[str, str, str, str], ...] = (
+    ("prayer", "Prayer on Home", "The prayer picture under Also for you on Home", "prayer"),
 )
 
 POLICY = """You check a picture that a church's media team is putting on its own members' app: on Home, a tile, an event or group card. Members of every age, children too, will see it. Reply with ONLY a JSON object: {"verdict": "ok"} or {"verdict": "no"}.
@@ -149,8 +156,9 @@ def spots(biz: Dict[str, Any], occasions: Optional[List[Dict[str, Any]]],
     published devotionals (member_portal_devotionals)."""
     import member_portal_church as mpc
     from member_portal import portal_settings
+    import member_lumen
     out = [{"key": k, "label": label, "where": where, "kind": kind, "group": "Across the app"}
-           for k, label, where, kind in FIXED]
+           for k, label, where, kind in FIXED + (LUMEN_FIXED if member_lumen.page() else ())]
     saved = mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles")) or []
     tiles = saved or [{"title": "Ministries", "href": "/my/groups"}, {"title": "Church calendar", "href": "/my/events"},
                       {"title": "Prayer", "href": "/my/prayer"},
@@ -158,13 +166,18 @@ def spots(biz: Dict[str, Any], occasions: Optional[List[Dict[str, Any]]],
     out += [{"key": mpc.tile_key(t["title"]), "label": t["title"], "where": "A tile on Home",
              "kind": t.get("kind") or mpc.tile_kind(t["href"]), "group": "Home's tiles", "href": t["href"],
              "photo": t.get("photo") or "", "look": t.get("look") or "colour"} for t in tiles]
-    out += [{"key": key, "label": title, "where": "On This week and the calendar, every time it's on",
+    # The new look's Home shows these spots in Up next and Also for you too.
+    home = member_lumen.page()
+    out += [{"key": key, "label": title, "where": "On This week and the calendar, every time it's on"
+             + (", and on Home when it's next" if home else ""),
              "kind": "events", "group": "Events"} for key, title in _label_events(occasions)]
-    out += [{"key": f"group:{g['id']}", "label": str(g.get("name") or "A group"), "where": "Its card on Connect",
+    out += [{"key": f"group:{g['id']}", "label": str(g.get("name") or "A group"),
+             "where": "Its card on Connect" + (", and on Home when it meets next" if home else ""),
              "kind": "youth" if g.get("youth") else "groups", "group": "Groups"}
             for g in (groups or []) if g.get("id")][:40]
     out += [{"key": f"devotional:{d['id']}", "label": str(d.get("title") or "A devotional"),
-             "where": "Its cover in the Bible tab and on each of its days", "kind": "word", "group": "Devotionals"}
+             "where": "Its cover in the Bible tab and on each of its days" + (", and on Home" if home else ""),
+             "kind": "word", "group": "Devotionals"}
             for d in (devotionals or []) if d.get("id")][:40]
     return out
 
@@ -200,6 +213,8 @@ def current(biz: Dict[str, Any], site, pool: List[str], spot: Dict[str, str]) ->
         url, look = photos.choose(biz, key, pool, words=("live", "stream", "stage", "worship"))
     elif key == "youth":
         url, look = photos.choose(biz, key, pool, fallback=photos.named(biz, site, ("youth", "teen", "student")))
+    elif key == "prayer":
+        url, look = photos.choose(biz, key, pool, words=PRAYER_WORDS, look="colour")
     elif key.startswith("tile:"):
         import member_portal_church as mpc
         if spot.get("photo"):

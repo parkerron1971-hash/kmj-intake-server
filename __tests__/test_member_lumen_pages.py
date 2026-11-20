@@ -9,8 +9,9 @@
 #     the picture; a pushed page gets a plain back bar; the tab bar is
 #     Home · Watch · Bible · Connect · Give with Messages not a tab;
 #   - the bubble's count costs no read of its own (same reads as off);
-#   - Home: the next gathering with I'm coming, Today on the day, Live wins,
-#     the check-in card while check-in is open;
+#   - Home (Look 4.1, member_lumen_home; its own pins are
+#     test_member_lumen_home.py): Up next features the next gathering with
+#     I'm coming, carries check-in on the day, and Live wins;
 #   - Connect (/my/connect) is built from today's readers, and goes to
 #     Groups when the switch is off;
 #   - the bell's dot and the "I'm new here" slot are hooks that default to
@@ -64,6 +65,11 @@ def church(fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
     import member_portal_classes as mcl
     monkeypatch.setattr(mcl, "tab_on", lambda b, me: False)
+    # Home reads the church's clock (New York here): pinned to noon today.
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+    import member_portal_lumen as mlp
+    monkeypatch.setattr(mlp, "church_now", lambda b: datetime.combine(TODAY, time(12, 0), tzinfo=ZoneInfo("America/New_York")))
     monkeypatch.setenv("MEMBER_LUMEN", "on")
     return scene
 
@@ -190,18 +196,22 @@ def test_a_pushed_page_gets_a_back_bar(church, fake, monkeypatch):  # noqa: F811
     assert "aria-current" not in nav[:nav.index("</nav>")]                       # Messages sits over no tab
 
 
+def _up(html):
+    up = html[html.index('class="lm-up"'):]
+    return up[:up.index("</section>")]
+
+
 def test_home_leads_with_the_next_gathering(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
-    lead = html[html.index('class="lm-lead"'):]
-    lead = lead[:lead.index("</section>")]
-    assert "Sunday <em>Worship</em>" in lead
-    assert "This " in lead and "in 4 days" in lead
-    assert 'action="/my/rsvp"' in lead and "I&#x27;m coming" in lead or "I'm coming" in lead
-    assert "40 coming" in lead
+    up = _up(html)
+    assert '<h3 class="lm-f4t" id="lm-f4-t">Sunday Worship</h3>' in up
+    assert f'<p class="lm-f4k">This {(TODAY + timedelta(days=4)):%A}</p>' in up
+    assert 'action="/my/rsvp"' in up and "I&#x27;m coming" in up
+    assert "<b>40</b> going" in up
     assert "Coming up" in html and "Prayer Night" in html
     assert 'class="lm-page"' in html and "Verse of the day" in html          # the ivory verse card
     assert "How can we pray for you?" in html
-    assert 'class="lm-ck"' not in html                                      # check-in is off
+    assert 'class="lm-ck"' not in html and 'action="/my/here"' not in html  # check-in is off
 
 
 def test_home_on_the_day_says_today_and_shows_check_in(church, fake, monkeypatch):  # noqa: F811
@@ -211,18 +221,17 @@ def test_home_on_the_day_says_today_and_shows_check_in(church, fake, monkeypatch
                          "occasion": {"id": "o", "title": "Sunday Worship"}, "marks": {}, "settings": {},
                          "family": [{"id": tct.ANA, "name": "Ana Rivera", "me": True}]}
     html = _client(fake, monkeypatch).get("/my").text
-    assert "Today · " in html and "next after today" in html
-    ck = html[html.index('class="lm-ck"'):]
-    assert 'action="/my/here"' in ck and 'name="where" value="in"' in ck and 'name="where" value="online"' in ck
-    assert f'name="people" value="{tct.ANA}"' in ck
+    up = _up(html)
+    assert '<p class="lm-f4k">Today · ' in up and "Sunday Worship" in up
+    assert 'action="/my/here"' in up and 'name="where" value="in"' in up and 'name="where" value="online"' in up
+    assert f'name="people" value="{tct.ANA}"' in up
 
 
 def test_home_while_live(church, fake, monkeypatch):  # noqa: F811
     church["live"] = {"id": "l1", "title": "Sunday Worship"}
     html = _client(fake, monkeypatch).get("/my").text
-    lead = html[html.index('class="lm-lead"'):]
-    assert "Live now" in lead and 'href="/my/live">Join the room' in lead
-    assert 'class="lm-livechip"' in html
+    up = _up(html)
+    assert "Live now" in up and '<a class="lm-btn sm" href="/my/live" aria-describedby="lm-f4-t">Join the room</a>' in up
 
 
 def test_connect_is_the_people_hub(church, fake, monkeypatch):  # noqa: F811

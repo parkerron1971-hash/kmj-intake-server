@@ -1946,14 +1946,17 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     space = ctx.get("space")
     today = rp.today_for(biz)
 
-    async def checkin_card() -> str:
+    async def checkin_card():
         # While Sunday check-in is open its card leads Home (church_checkin).
+        # The new look also keeps what it was drawn from: its Up next card
+        # carries check-in, and its greeting the service's day and time.
         import church_checkin as cc
         import member_portal_checkin as mpk
         try:
             import member_lumen
             if member_lumen.page():
-                return mpk.lumen_card(await asyncio.to_thread(cc.card, biz, me), request)
+                c = await asyncio.to_thread(cc.card, biz, me)
+                return mpk.lumen_card(c, request), c
             return mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
         except Exception:
             logger.warning("member home: check-in card skipped", exc_info=True)
@@ -1965,15 +1968,27 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_portal_celebrations as mcl
     church_home = space not in ("kids", "youth")
     import sunday_serving as ssv
-    occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox = await asyncio.gather(
+    import member_lumen
+    lumen_home = member_lumen.page()
+    # The new look's Home (member_portal_lumen) reads a little more of the
+    # same: the groups with their next gathering and who's coming (kept
+    # 30 s; fresh on the page that comes back from their own answer), all of
+    # My serving (waiting() reads it anyway), the devotional itself, and
+    # whether someone just told the church it's their first time (kept).
+    import member_portal_lumen as mlp
+    devo_info: Optional[Dict[str, Any]] = {} if lumen_home else None
+    fresh = str(request.query_params.get("done") or request.query_params.get("err") or "").startswith("rsvp")
+    (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
+     told_us) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
-        asyncio.to_thread(mpc.groups_for, biz["id"], me),
+        asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
+        else asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
         asyncio.to_thread(lr.current, biz["id"]),
         asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today else _nothing(),
         # Today's devotional, and a reading plan of the member's own when
         # the church has none running (member_portal_devotionals).
-        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today)),
+        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today), info=devo_info),
         checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
         asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
         # "From the church" and the bell (member_portal_news).
@@ -1983,9 +1998,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
         asyncio.to_thread(mcl.home_asks, biz, me) if church_home and not preview else _nothing(),
         # Asks to serve waiting on this member (member_portal_serving).
-        asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
+        asyncio.to_thread(ssv.home if lumen_home else ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
         # Messages, while something there is unread (member_portal_threads).
-        _inbox_card(biz, me) if church_home else _nothing())
+        _inbox_card(biz, me) if church_home else _nothing(),
+        asyncio.to_thread(mlp.told, biz, me) if lumen_home and church_home else _nothing())
+    gnext, serving_info, ck = None, None, None
+    if lumen_home:
+        groups, gnext = groups if isinstance(groups, tuple) else (groups, None)
+        serving_info, serve_asks = serve_asks, (serve_asks or {}).get("asks") or []
+        checkin, ck = checkin if isinstance(checkin, tuple) else (checkin, None)
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
     devotional, own, own_done = extras
     if own and not today:
@@ -2007,8 +2028,6 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_posts, news_n = news if news else (None, 0)
     # No news reaches me yet: if I post, Home shows where it will go.
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
-    import member_lumen
-    lumen_home = member_lumen.page()
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
                                    "new_n": news_n} if lumen_home else {}))
@@ -2031,6 +2050,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             editbar = (f'<div class="mb-editbar" role="status"><span class="mb-editbar-ic">{_ui.icon("camera", 18)}</span>'
                        f'<span class="mb-editbar-t"><strong>Changing pictures</strong><span>Only you see these buttons.</span></span>'
                        f'<a class="mb-editbar-a" href="/my/pictures">All</a><a class="mp-go mb-editbar-done" href="/my">Done</a></div>')
+        import member_portal_checkin as mpk
         return _page(mlp.render_home(
             biz, site, me=me, occasions=occ, groups=groups, library=lib, live=live, bible=bible, where=where,
             plan_today=today, plan_done=done, devotional=devotional, checkin=checkin, serving=serving,
@@ -2038,7 +2058,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             news=news_html,
             news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
             cards=(mai.install_card(church_name), member_push.home_card(biz),
-                   member_asks.home_row(await _ask_entry(biz, me)))))
+                   member_asks.home_row(await _ask_entry(biz, me))),
+            ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
+            devo=devo_info, gnext=gnext, told_us=told_us))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
