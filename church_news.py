@@ -1185,10 +1185,14 @@ def held_words(business_id: str = Query(...), user: AuthedUser = Depends(require
     # Members' group posts the check held (member_posts), with their words.
     import member_posts
     posts = member_posts.held_posts(biz)
+    # Leaders' own moments the check held (member_moments), with their line.
+    import member_moments
+    posts += member_moments.held(biz)
     people = _people(biz, [r["contact_id"] for r in rows] + [p["contact_id"] for p in posts]) or {}
     return {"held": [{"id": r["id"], "post_id": r["post_id"], "body": r.get("body") or "", "created_at": r["created_at"],
                       "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]
-            + [{"id": p["id"], "post_id": p["post_id"], "body": p["body"], "created_at": p["created_at"], "kind": "post",
+            + [{"id": p["id"], "post_id": p["post_id"], "body": p["body"], "created_at": p["created_at"],
+                "kind": p.get("kind") or "post",
                 "name": (people.get(str(p["contact_id"] or "")) or {}).get("name") or "Someone"} for p in posts]}
 
 
@@ -1211,6 +1215,10 @@ def decide_held(comment_id: str, body: HeldIn, user: AuthedUser = Depends(requir
         # A member's group post the check held (member_posts) is decided the same way.
         import member_posts
         done = member_posts.decide_held(biz_id, cid, body.show)
+        if done is False:
+            # ...and so is a leader's moment the check held (member_moments).
+            import member_moments
+            done = member_moments.decide_held(biz_id, cid, body.show)
         if done is None:
             raise _unavailable()
         if done:
