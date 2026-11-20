@@ -53,7 +53,12 @@ Who serves when; they read both doors. Hours and "Can't serve with kids yet" are
 Away is the facts only; nothing reads an ask. Every read paged or chunked, quoted, the church's own.
 `CHURCH_WEEK` off | owner | on, owner when unset. No migration. Tests: `test_church_week.py` at New
 Hope (27), each rule broken once on purpose to see its test go red. The office page is the
-frontend's next PR; docs/CHURCH_SCHEDULE.md section 8 is its contract.
+frontend's next PR; docs/CHURCH_SCHEDULE.md section 8 is its contract. From its review (no leak, no
+blocker): tests now pin "Can't serve with kids yet" for whoever may see it (only none on record,
+never a past service, never under 18, by areas as well as the checks duty, no check read for anyone
+else) and the hours against the Serving page with every kind of credit (40 tests); the hours read
+for the week's people is bounded to the year; "Everything is filled" names only days a team has
+places; section 8.2 says exactly who reads checks, and 8.5 what was seen and left.
 
 **S2-5 (#1951): the volunteers' rules.** `church_schedule_volunteers.py` is new: the owner's call 3,
 "Volunteers need no yes to be away, unless the date is full or they already agreed to serve it;

@@ -365,6 +365,23 @@ def test_a_full_week_says_so_and_a_past_week_says_it_passed(app, db):
     assert {c["label"] for c in empty["departments"]} == {"Nothing this week"}
 
 
+def test_filled_is_said_only_of_days_a_team_has_places(app, db):
+    """No team has a place: the services are there, but nothing is said to
+    be filled. Only ChurchSavvy's teams have places, all of them taken:
+    Sunday is filled, and the outreach night (the Volunteers' alone) is
+    never named."""
+    places = list(db.t["serve_positions"])
+    db.t["serve_positions"] = []
+    body = week(app, "sunny")
+    assert [x["title"] for x in body["look"]] == ["Nothing is on the schedule this week."]
+    assert body["counts"]["on"] == body["counts"]["open"] == 0
+    db.t["serve_positions"] = [p for p in places if p["group_id"] == BAND]
+    assign(db, SUN, VOCALS, 2, db.who[HOPE]["n052"], "yes")
+    body = week(app, "sunny")
+    assert [x["title"] for x in body["look"]] == ["Everything is filled for Sunday."]
+    assert body["counts"]["open"] == 0
+
+
 def test_teams_with_no_department_still_show_and_a_closed_map_shows_every_team(app, db, monkeypatch):
     monkeypatch.setenv("CHURCH_MAP", "off")
     body = week(app, "sunny")
@@ -545,6 +562,145 @@ def test_hours_and_checks_are_church_servings_own_numbers(app, db):
     got = church_serving.checks_of(biz, nexts, NOW.astimezone(NY).date(), nexts)
     assert {c: s["status"] for c, s in got.items()} == {w["n041"]: "blocked", w["n043"]: "ok"}
     assert {c: every[c] for c in got} == {c: s["status"] for c, s in got.items()}
+
+
+# ─── 3. "Can't serve with kids yet", for whoever may see it ───────────
+
+def _leader_date(db, handle, on):
+    db.t["space_leaders"].append({"business_id": HOPE, "contact_id": db.who[HOPE][handle], "space": "kids",
+                                  "background_check_on": on})
+
+
+@pytest.mark.parametrize("set_up,status", [
+    (lambda db: contact(db, "n041").update(metadata={"serving": {"check_on": "2020-03-01"}}), "overdue"),
+    (lambda db: contact(db, "n041").update(metadata={"serving": {"check_on": "2024-12-01"}}), "due"),
+    (lambda db: contact(db, "n041").update(metadata={"serving": {"check_on": "2026-03-01"}}), "ok"),
+    (lambda db: _leader_date(db, "n041", "2026-05-01"), "ok"),             # the Kids leaders page's date
+    (lambda db: contact(db, "n041").update(birthdate="2012-01-01"), "teen"),
+    (lambda db: None, "blocked"),
+], ids=["ran_out", "runs_out_soon", "recorded", "leader_approval", "under_18", "none_on_record"])
+def test_only_no_check_on_record_reads_cant_serve_with_kids_yet(app, db, set_up, status):
+    """For whoever may read who's cleared: a check that ran out, or runs out
+    within the month, or one on record either way, is On; so is someone
+    under 18. Only none on record is "Can't serve with kids yet"."""
+    set_up(db)
+    biz = c3.church(db, HOPE)
+    lila = db.who[HOPE]["n041"]
+    got = church_serving.checks_of(biz, [lila], NOW.astimezone(NY).date(), {lila: {"day": "2026-11-22"}})
+    assert got[lila]["status"] == status
+    body = week(app, "sunny")
+    state = row(body, "Kids", SUN, "Nursery", 1)["state"]
+    assert state == ("cant_serve_kids" if status == "blocked" else "on"), status
+    assert ("Kids: Lila Penn can't serve with kids yet." in [x["title"] for x in body["look"]]) == (status == "blocked")
+
+
+def test_the_latest_check_date_is_the_one_that_counts(app, db):
+    """A leader approval that ran out and a newer check recorded on Serving:
+    the newer one counts (check_on), so the check is good."""
+    _leader_date(db, "n041", "2020-01-01")
+    contact(db, "n041")["metadata"] = {"serving": {"check_on": "2026-03-01"}}
+    assert church_serving.check_on([date(2020, 1, 1)], contact(db, "n041")) == date(2026, 3, 1)
+    assert church_serving.check_on([date(2026, 4, 1), date(2020, 1, 1)], {}) == date(2026, 4, 1)
+    biz = c3.church(db, HOPE)
+    lila = db.who[HOPE]["n041"]
+    got = church_serving.checks_of(biz, [lila], NOW.astimezone(NY).date(), {lila: {"day": "2026-11-22"}})
+    assert (got[lila]["status"], got[lila]["on"]) == ("ok", "2026-03-01")
+
+
+def test_a_past_service_never_says_cant_serve_with_kids_yet(app, db):
+    """This week (Nov 15 to 21): Lila, unchecked, served the Nursery on
+    Sunday the 15th (past) and is on it again at Saturday's event (to come).
+    Only Saturday says it."""
+    sat = "7f000000-0000-4000-8000-000000000021"
+    db.t["worship_services"].append(_service(sat, date(2026, 11, 21), 10, 0, kind="event", title="Fall festival"))
+    w = db.who[HOPE]
+    assign(db, P3, NURSERY, 1, w["n041"], "yes")
+    assign(db, sat, NURSERY, 1, w["n041"], "yes")
+    body = week(app, "sunny", None)
+    assert row(body, "Kids", P3, "Nursery", 1)["state"] == "on", "a past day is what happened"
+    assert row(body, "Kids", sat, "Nursery", 1)["state"] == "cant_serve_kids"
+    assert [x["title"] for x in body["look"] if x["kind"] == "cant_serve_kids"] == [
+        "Kids: Lila Penn can't serve with kids yet."]
+
+
+def test_a_reader_cleared_by_their_areas_sees_it_without_the_checks_duty(app, db):
+    """Reading who's cleared is Kids & youth's and People & care's as well as
+    the background checks duty's (church_serving: `checks`, not `record`). A
+    Manager with no lane working Worship & media and Kids & youth keeps the
+    Volunteers' door; with the checks duty moved to the volunteers keeper,
+    it doesn't record checks, and still reads who's cleared."""
+    u = stranger_seat(db, "n074", "manager", areas=["worship_media", "kids_youth"])
+    db.t["church_duty_holders"].append({"business_id": HOPE, "duty": "background_checks",
+                                        "user_id": db.who[HOPE]["sunny@"]})
+    me = church_serving._access(HOPE, AuthedUser(id=u, email=contact(db, "n074")["email"], role="authenticated"))
+    assert (me["checks"], me["record"]) == (True, False)
+    body = week(app, "n074")
+    assert body["can"]["checks"] is True
+    assert row(body, "Kids", SUN, "Nursery", 1)["state"] == "cant_serve_kids"
+
+
+def test_no_check_is_read_for_a_reader_who_cant_see_them(app, db):
+    """Who can't serve with kids yet is worked out only for those who may
+    see it: for anyone else not one check is read (the leaders' dates, the
+    Kids & youth teams' places)."""
+    checks = ("/space_leaders", "/church_area_places")
+    db.reads.clear()
+    week(app, "sunny")
+    assert {t for t in checks if any(p.startswith(t) for p in db.reads)} == set(checks), "the reader who may"
+    db.reads.clear()
+    week(app, "mila")
+    assert not [p for p in db.reads if p.startswith(checks)]
+
+
+# ─── 3. Hours: church_serving's own, for the week's people ────────────
+
+def test_hours_are_the_serving_pages_with_every_kind_of_credit(app, db):
+    """A gathering Lila led and was marked at (90 minutes), Dara away on the
+    one Sunday this year she said yes to (none), Hazel on two places at one
+    Sunday (their shared time once) and the office's two hours."""
+    w = db.who[HOPE]
+    gid = "7d500000-0000-4000-8000-000000000001"
+    db.t["groups"].append({"id": gid, "business_id": HOPE, "name": "Tuesday Moms", "kind": "group", "active": True})
+    db.t["group_members"] += [{"group_id": gid, "business_id": HOPE, "contact_id": w["n041"], "role": "leader"},
+                              {"group_id": gid, "business_id": HOPE, "contact_id": w["n042"], "role": "member"}]
+    mid = "7d600000-0000-4000-8000-000000000001"
+    db.t["group_meetings"].append({"id": mid, "business_id": HOPE, "group_id": gid, "met_on": "2026-10-06"})
+    db.t["group_meeting_attendance"] += [{"business_id": HOPE, "meeting_id": mid, "contact_id": w[h]}
+                                         for h in ("n041", "n042")]
+    db.t["serve_away"].append({"id": "7a000000-0000-4000-8000-000000000077", "business_id": HOPE,
+                               "contact_id": w["n042"], "starts_on": "2026-11-08", "ends_on": "2026-11-08",
+                               "note": "", "ask_id": None, "kind": None})
+    assign(db, P1, LOTS, 1, w["n061"], "yes")
+    assign(db, P1, CHECKIN, 1, w["n061"], "yes")
+    biz = c3.church(db, HOPE)
+    people = [w[h] for h in ("n041", "n042", "n043", "n050", "n051", "n060", "n061")]
+    page = church_serving.overview({"biz": biz, "checks": False, "record": False, "write": False, "role": "owner",
+                                    "uid": ""})
+    whole = {p["contact_id"]: p["minutes"] for p in page["people"]}
+    got = church_serving.minutes_of(biz, people, NY)
+    assert got == {c: whole.get(c, 0) for c in people}
+    assert (got[w["n041"]], got[w["n042"]], got[w["n061"]]) == (180 + 90, 0, 90 + 120)
+    body = week(app, "sunny")
+    assert row(body, "Kids", SUN, "Nursery", 1)["minutes"] == 270
+    assert row(body, "Kids", SUN, "Nursery", 2)["hours_words"] == "No hours yet", "away the day she said yes"
+    assert body["counts"]["hours"] == round((270 + 0 + 0 + 90 + 0 + 90 + 210) / 60, 1)
+
+
+def test_hours_read_only_this_years_yeses(app, db):
+    """Three years of Sundays the week's people said yes to: the week reads
+    their yeses at this year's services only (every assignments read names
+    the services), and the hours are this year's."""
+    w = db.who[HOPE]
+    for i in range(156):
+        sid = f"7f300000-0000-4000-8000-{i:012d}"
+        db.t["worship_services"].append(_service(sid, date(2023, 1, 1) + timedelta(weeks=i)))
+        for h in ("n041", "n050", "n060"):
+            assign(db, sid, NURSERY, 1, w[h], "yes")
+    db.reads.clear()
+    body = week(app, "sunny")
+    assert body["counts"]["hours"] == 9.5
+    said = [p for p in db.reads if p.startswith("/serve_assignments")]
+    assert said and all("service_id=in." in p for p in said), said
 
 
 # ─── 4. Private ───────────────────────────────────────────────────────

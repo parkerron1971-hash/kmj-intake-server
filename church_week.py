@@ -686,8 +686,9 @@ def week(me: Dict[str, Any], start: Any = None) -> Dict[str, Any]:
 
     items = [item for _key, item in sorted(look, key=lambda x: x[0])]
     if not items:
-        items = [{"kind": "clear", "title": _all_clear(services, teams, now), "details": [], "service_id": None,
-                  "day": None, "find": None}]
+        with_places = {s["svc"]["id"] for s in slots}
+        items = [{"kind": "clear", "title": _all_clear([s for s in services if s["id"] in with_places], teams, now),
+                  "details": [], "service_id": None, "day": None, "find": None}]
     this = _sunday_of(today)
     prev, nxt = first - timedelta(days=7), first + timedelta(days=7)
     total = sum((minutes or {}).get(c, 0) for c in shown_people) if minutes is not None else None
@@ -725,6 +726,10 @@ def _asked_words(asked_at: Any, zone, today: date) -> Optional[str]:
 
 
 def _all_clear(services: List[Dict[str, Any]], teams: List[Dict[str, Any]], now: datetime) -> str:
+    """The one line when nothing needs a look. `services` are only those at
+    which some team has a place this week: a service nothing serves (an
+    event date with only ChurchSavvy's teams, a team with no places) is
+    never said to be filled."""
     if not teams:
         return "No teams are on Who serves when yet."
     if not services:

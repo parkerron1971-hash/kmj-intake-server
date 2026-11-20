@@ -186,6 +186,7 @@ def _need(path: str) -> List[Dict[str, Any]]:
 
 PAGE = 1000          # the most rows one read returns (PostgREST's cap)
 MAX_ROWS = 100_000   # past this a read is refused, never cut short
+PEOPLE_PER_READ = 60  # a read with two lists of ids (people and services): sixty of each keeps it short
 
 
 def _need_all(path: str, order: str) -> List[Dict[str, Any]]:
@@ -447,8 +448,17 @@ def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[
         services = _need_in(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
                             f"&select=id,starts_at,items", "id", [r["service_id"] for r in said], "id") if said else []
     elif people is not None:
-        said = _need_in(f"/serve_assignments?business_id=eq.{b}&status=eq.yes&select=id,service_id,position_id,contact_id",
-                        "contact_id", people, "id") if people else []
+        # Bounded to the year: its services' ids first, then these people's
+        # yeses at those services (both lists chunked, so an address stays
+        # short), then the plans of the services they served.
+        year = [s["id"] for s in _need_all(
+            f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}&select=id",
+            "id")] if people else []
+        said = []
+        for part in (_chunks(people, PEOPLE_PER_READ) if year else []):
+            said += _need_in(f"/serve_assignments?business_id=eq.{b}&status=eq.yes&contact_id=in.({_ids(part)})"
+                             f"&select=id,service_id,position_id,contact_id", "service_id", year, "id",
+                             n=PEOPLE_PER_READ)
         services = _need_in(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
                             f"&select=id,starts_at,items", "id", [r["service_id"] for r in said], "id") if said else []
     else:
