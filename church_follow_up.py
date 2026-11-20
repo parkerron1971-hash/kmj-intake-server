@@ -600,25 +600,57 @@ def is_church(business: Dict[str, Any]) -> bool:
 
 
 def on_intake_form(business: Dict[str, Any], form: Dict[str, Any], submission: Dict[str, Any],
-                   contact_id: str, source_event: str = "") -> Optional[Dict[str, Any]]:
-    """intake_endpoint's hook, after the card's form_submit event."""
+                   contact_id: str, source_event: str = "", *, texts_ok: bool = False,
+                   phone: str = "") -> Optional[Dict[str, Any]]:
+    """intake_endpoint's hook, after the card's form_submit event. With the
+    Welcome Path on (guest_path), a guest card (a connect or Plan your visit
+    card, or the bulletin's guest card: new_here.form_door) puts the guest on
+    the path, door "form", with texts when they ticked "Text me" (`texts_ok`,
+    for `phone`); and a guest already handed on by another door gets a note
+    there instead of a second follow-up."""
     if not is_church(business) or not contact_id:
         return None
     kind = kind_for_form(form)
     if not kind:
         return None
-    return start(str(business["id"]), str(contact_id), card_key=f"form:{form.get('id')}",
-                 card_name=_plain(form.get("name")) or "Card", kind=kind,
-                 answers=answers_from_form(form, submission or {}), source_event=source_event)
+    biz, card_key = str(business["id"]), f"form:{form.get('id')}"
+    card_name = _plain(form.get("name")) or "Card"
+    answers = answers_from_form(form, submission or {})
+    import new_here
+    door = new_here.form_door(business, form)
+    if door and new_here.second_door(biz, contact_id, card_key, answers, f"Also sent the {card_name}."):
+        row = None
+    else:
+        row = start(biz, str(contact_id), card_key=card_key, card_name=card_name, kind=kind,
+                    answers=answers, source_event=source_event)
+    if door and not new_here.says_regular(answers):
+        new_here.enroll_by_id(biz, contact_id, door="form", texts_ok=bool(texts_ok), phone=phone or None)
+    return row
 
 
-def on_connect_card(business_id: str, contact_id: str, data: Dict[str, Any], receipt: str = "") -> Optional[Dict[str, Any]]:
-    """public_site's hook, after a website connect card is stored."""
+def on_connect_card(business_id: str, contact_id: str, data: Dict[str, Any], receipt: str = "", *,
+                    texts_ok: bool = False) -> Optional[Dict[str, Any]]:
+    """public_site's hook, after a website connect card is stored. With the
+    Welcome Path on, the guest joins the path, door "web" (texts when they
+    ticked "Text me" for the card's phone), unless the card says they're a
+    regular; a guest already handed on by another door gets a note there
+    instead of a second follow-up."""
     if not contact_id:
         return None
-    return start(str(business_id), str(contact_id), card_key="web:connect_card", card_name="Connect card",
-                 kind="connect", answers=answers_from_connect((data or {}).get("fields") or {}),
-                 source_event=str(receipt or ""))
+    import new_here
+    biz = str(business_id)
+    answers = answers_from_connect((data or {}).get("fields") or {})
+    path = new_here.path_on(biz)
+    if path and new_here.second_door(biz, contact_id, "web:connect_card", answers,
+                                     "Also sent the website connect card."):
+        row = None
+    else:
+        row = start(biz, str(contact_id), card_key="web:connect_card", card_name="Connect card",
+                    kind="connect", answers=answers, source_event=str(receipt or ""))
+    if path and not new_here.says_regular(answers):
+        new_here.enroll_by_id(biz, contact_id, door="web", texts_ok=bool(texts_ok),
+                              phone=new_here.mobile((data or {}).get("phone")) or None)
+    return row
 
 
 FIRST_CHECK_IN_KEY = "checkin:first"
