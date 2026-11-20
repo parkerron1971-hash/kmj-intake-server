@@ -2775,3 +2775,507 @@ cleared by its areas without the checks duty sees it, and nobody else's request 
 the hours equal the Serving page's with a gathering, an away day, two places one Sunday and the
 office's hours, and read only this year's yeses; "Everything is filled" is said only of days with
 places.
+
+---
+
+## 10. Step 3: Meetings and one calendar (S3-1)
+
+The pastor approved the mock and its five calls on 2026-11-20, each as recommended. Four screens:
+the office's church calendar gains two kinds, **Meeting** and **Away** (who is away, by name and
+dates, never why); **Set a meeting** (a name; who comes: every leader on the leaders list, the
+office, or a board; when, how long, where; how often; and a date check across a few candidate
+days showing who can't come and whether the room is free); **the meeting page** (who said "I'll
+be there", who said "I can't", who hasn't answered, and "Remind the ones who haven't answered";
+attendance, agenda, minutes and decisions as Board & minutes has them today); and **a leader's
+phone** ("Coming up" at the top of Dates, with I'll be there / I can't on each meeting they are
+in, and one private link that puts it all on their phone's calendar).
+
+**Where it stands.** S3-1 holds the tables and nothing else:
+`supabase/APPLY-2026-11-21-church-meetings.sql` (**not applied**), its real-Postgres check
+(`__tests__/church_meetings_db.mjs`), the export decision for the four new tables, and this
+section. No Python reads or writes any of it yet. 10.9 is the PR split for the rest.
+
+### 10.1 The five calls (the pastor's)
+
+As they were put to him, and his answer to each was yes, as recommended:
+
+1. **One home for every meeting.** Board & minutes is renamed **Meetings & minutes**. The
+   huddle, the leaders meeting, check-ins and each board sit side by side, each with agenda,
+   attendance and minutes as boards have now.
+2. **"Every leader" keeps itself up to date.** A meeting for every leader follows the leaders
+   list (`church_schedule.roster`): add an elder to the list and they are invited to the next
+   meeting, with nobody touching the meeting. The same for the office.
+3. **"I can't" needs no yes.** It is an answer to one meeting, not time off. A short optional
+   note, read only by whoever set the meeting (the meetings' keepers), the owner and whoever
+   oversees the office.
+4. **A reminder the day before, in the app.** Everyone who hasn't said "I can't" gets an app
+   notice the day before, never in quiet hours; email only when there is no app on their phone;
+   no texts.
+5. **A private link for their phone's calendar** (an ICS feed). It stays up to date. Anyone
+   with the link can see those dates, so the person can make a new one at any time and the old
+   one stops working.
+
+Also in the build, from the mock: setting a meeting books the room in Rooms & spaces
+(`church_spaces.py`) when it is free.
+
+### 10.2 The data model: `supabase/APPLY-2026-11-21-church-meetings.sql` (S3-1; not applied)
+
+The file is the source; this is the map of it. **Board & minutes' six tables stay the one home of
+every meeting** (call 1): a group that meets is a `church_boards` row, a meeting is a
+`church_board_meetings` row, and its agenda, attendance, decisions and minutes are the rows they
+are today. Nothing about a board changes.
+
+| Object | What it holds |
+|---|---|
+| `church_boards.kind` | `board` (it governs: its people give the board's yes on money, and it is a board on the leaders map) or `meeting` (it only meets: the huddle, the leaders meeting, check-ins). Every group there is today is a `board` |
+| `church_boards.audience` | Who comes. `members`: the group's own people, as every board has them. `leaders`: everyone on the leaders list. `office`: the office on it. A group for the list is always a `meeting` (`church_boards_list_is_meeting`), keeps its audience for good (trigger `church_boards_audience_kept`), and is the one open group of its name and audience, whatever its case (`church_boards_one_list_name`) |
+| `church_board_members.from_list` | A row the server keeps in step with the leaders list. On a group for the list every row is one; on any other group none is (trigger `church_board_members_follow_list`). One a person a group (`church_board_members_one_from_list`) |
+| `church_meeting_series` | A meeting that repeats: its group, a `weekday` (1 Monday to 7 Sunday), `pattern` (`weekly`, `every_other` counted from `starts_on`, or `month_nth` with `nth` 1 to 5, 5 the last), `starts_on`, `until_on`, `at_time` on the church's clock, `length_minutes` (5 to 720, 60 by default), `title`, `place`, `video_url`, the room (`space_id`), `made_through` (meetings exist up to this day) and who set it |
+| `church_board_meetings.series_id`, `series_day` | The series a meeting was made from and the day of it that it stands for (one meeting a day of a series: `church_board_meetings_one_a_day`). A series deleted leaves its meetings, keeping their day |
+| `church_board_meetings.length_minutes` | How long (5 to 720). Null on every meeting set before step 3: an hour wherever a length is needed |
+| `church_board_meetings.space_id`, `booking_id` | The room, and the booking made for it in `church_space_bookings` (of that room; one meeting a booking) |
+| `church_board_meetings.cancelled_at`, `cancelled_by` | Called off (a one-off) or skipped (one of a series). Only a meeting still `planned`. The row stays, so a series never makes that day again and a phone's calendar drops it |
+| `church_board_meetings.changed_alone_at` | Changed by itself; changing the series from a day on leaves it alone. Only a meeting of a series |
+| `church_meeting_answers` | "I'll be there" (`yes`) or "I can't" (`cant`): one a person a meeting (`primary key (meeting_id, member_id)`), keyed by their member row as `church_board_attendance` is; `for_starts_at` (the start the answer was given for); a private `note` of 200 at most, with `cant` only; who gave it (`by_user_id` or `by_contact_id`, never both) |
+| `church_meeting_notices` | The reminders' ledger: `day_before` or `nudge`, a person, a meeting, `for_day`; `claimed_at`, `sent_at`, `how` (`app`, `email` or `nobody`: never a text), `tries`, and `made_by` (a nudge only). One a person a meeting a kind a day (`church_meeting_notices_once`) |
+| `church_calendar_links` | A person's private link for their phone's calendar: `token_hash` (the sha256 of its key, 64 lower-case hex; the key itself is never kept), `made_by`, `revoked_at`, `last_read_at`. A key is one link's anywhere (`church_calendar_links_token`); one working link a person (`church_calendar_links_one_live`) |
+
+**Who comes: one member row a person, kept in step by the server.** A board's people are its
+member rows today, and everything else keys a person by that row: attendance
+(`church_board_attendance.member_id`), the quorum (`church_board.roster`), who moved and
+seconded a motion (foreign keys to the member row), a follow-up's person
+(`church_board_items.follow_up_member`), whom "Send minutes for approval" emails, and the member
+app's Board tab (`member_portal_board.boards_of`, by `contact_id`). So a meeting for every leader,
+or for the office, has member rows too: the server keeps them in step with the leaders list, and
+every one of those pieces works for the huddle as it does for the deacons, unchanged. Answers
+and reminders key a person the same way.
+
+The other way, a meeting's audience with answers and attendance keyed by `contact_id` and no
+member rows for the list, was turned down: it would need a second shape of attendance, of
+decisions (whose movers are member rows), of follow-ups, of the minutes email and of the meeting
+page, side by side with the first, for ever.
+
+**Keeping the list's rows in step** (S3-2, `church_meetings.keep_in_step`):
+
+- `leaders` is everyone on the leaders list: `church_schedule.roster(ch).people()`, its leaders
+  group and its office group both (an all-leaders meeting has the office staff in it). `office`
+  is the list's office group plus everyone counted among its leaders who has an office login
+  (decision 2 counts a leader with a login under leaders, and the Executive Pastor still comes to
+  the huddle): `roster.office | (roster.leaders & set(ch.person_login))`. The list's own add and
+  remove lists decide for both.
+- The rule, for one group: a person on the list with no row gets one (`from_list`, their
+  `contact_id`, `user_id` the login they are by `Church.person_login`, so an office person also
+  reads the group in the office app); a row whose person is back on the list is `active` again;
+  an active row whose person is off the list is `active = false`, as leaving a board is, so old
+  minutes keep the name. Nobody adds a person to a group for the list by hand
+  (`church_board_members_follow_list` refuses it), and the list never adds one to a board.
+- When: before anything reads who a group for the list is for (the meeting page, Set a meeting,
+  the date check, Coming up, the reminders), with the roster kept a minute a replica on the
+  member side (`roster_kept`, decision 17); and the hourly sweep keeps every group for the list
+  at an open church in step, so the calendar feed (which has no session to read the list with)
+  is at most an hour behind. Two replicas at once add a person once
+  (`church_board_members_one_from_list`; `on conflict (board_id, contact_id) where from_list do
+  nothing`). That is call 2: nobody touches the meeting.
+
+**`kind`: a meeting is never a board, and S3-2 must say so everywhere a board is meant.** Today
+every `church_boards` row is a board, and four readers treat every row as one. A huddle or a
+check-in read as a board would hand its people **the board's yes on money**. So, in the same
+pull request that first writes a `kind = 'meeting'` row (S3-2), each of these reads
+`kind=eq.board`:
+
+| Reader (at `c62547f7`) | What reading a meeting as a board would do |
+|---|---|
+| `church_money_levels._open_boards` (`:253-258`), feeding `board` and `board_people` | every leader (the leaders meeting) or every office login (the huddle) could give the **board's yes on a check request**, in the office app and in the member app (`/my/board/approvals`) |
+| `church_map._THINGS["board"]` (`:555`, read at `:653` and `:1009`) | the leaders map offers the huddle as a board a department can hang from |
+| `member_portal_board.boards_of` (`:335-349`) | every leader gets the member app's Board tab, showing the leaders meeting as their board (step 3 puts meetings under Coming up on Dates instead; S3-5 may show them on the Board tab too, by choice and by `kind`) |
+| `housing_allowance._check_links` (`:549-553`) | a decision recorded in the huddle could be picked as the board's vote on a minister's housing allowance |
+
+A lint test in S3-2 (`test_board_readers_name_kind`) scans every `church_boards` and
+`church_board_members` read outside `church_board.py` and `church_meetings*.py` and fails unless
+it names `kind` or is on a short pinned list with a reason, so a reader added later can't forget.
+The database backs one half of it: a group for the list can never be a board
+(`church_boards_list_is_meeting`). A check-in (a meeting of its own people) is held to `meeting`
+by the server alone; making one a board is the keepers' choice, on purpose.
+
+**A meeting that repeats.** The rule is `church_away_commitments`' own, column for column, so
+`church_schedule_repeats.days_of` works out a series' days as it does a commitment's: every
+Tuesday (the huddle), every other week from its first day, or the first to fourth or the last
+such day of the month (the leaders meeting on the third Saturday). In S3-3:
+
+- **How far ahead.** Every meeting of a series through 91 days ahead (13 weeks, the calendar's
+  window) exists as a row, so answers, the room and the phone's calendar all have something to
+  hold; the next is made as the window moves (the hourly sweep, which writes `made_through`).
+  Each is made with `on conflict (series_id, series_day) do nothing`, so two replicas make one.
+  `starts_at` is the day at `at_time` on the church's clock (`ch.tz`), worked out for each day,
+  so a meeting stays at 7 PM across the clock change.
+- **Editing one.** That meeting changes (its time, length, place, room) and is marked
+  `changed_alone_at`; it keeps its `series_day`, so the series never makes that day again.
+- **Editing all, from a day on.** The same rule (a new time, length, place or room): the series
+  row changes, and so does each of its meetings from that day on that is still `planned`, not
+  called off and not changed by itself. A new rule (another weekday, how often): the old series
+  ends the day before (`until_on`) and a new one starts that day, so nothing already made has to
+  become a different day; the old series' meetings after its end are taken out when nothing is
+  recorded on them (no agenda item, attendance mark or decision) and called off otherwise.
+- **Skipping one.** `cancelled_at`, and its booking is cancelled. Back on: `cancelled_at`
+  cleared, and the room booked again when it is still free.
+- **Ending a series.** `until_on`; its meetings after that day go as for a new rule.
+- **Deleting a series.** Its meetings stay, as one-off meetings with their day.
+
+**Answers** (call 3; S3-2):
+
+- `yes` or `cant`, and nothing else: no "maybe". "I can't" needs no yes and asks nobody.
+- `for_starts_at` is the meeting's start when the answer was given. Once the meeting moves, an
+  answer for the old time no longer counts as an answer: the person is listed with those who
+  haven't answered (with "said … for the old time" to whoever may read it) and is reminded as
+  they are. Nothing is deleted.
+- **The note**, 200 characters at most and with `cant` only (`church_meeting_answers_note`), is
+  read by the person who wrote it, the meetings' keepers (church_board's: the owner, an Admin,
+  the Manager holding the `meetings` duty), the login that set that meeting (`created_by`) and
+  whoever oversees the office (`church_schedule.office_overseers`), wherever they can open the
+  meeting. Never by anyone else on the meeting, never in a notice, a calendar feed, a log line or
+  the meeting's minutes. The sweep clears it 90 days after the meeting, as the schedule clears a
+  reason (decision 14): it can say why, and why can be medical.
+- A `cant` given before the meeting is ended reads as `excused` when "End the meeting" marks
+  everyone not yet marked (`church_board._mark_rest_absent` marks the rest absent today).
+- Answering is for a meeting still `planned`, not called off and not started; a seat that has
+  left (`active = false`) doesn't answer.
+
+**Reminders** (call 4; S3-6). The ledger is claim-before-send, as every notice here is:
+
+- `day_before`: on the hourly sweep, for each meeting whose day on the church's clock is
+  tomorrow, `planned` and not called off, each active seat that hasn't said `cant` **for the
+  current time** gets one: claimed by `insert … on conflict (meeting_id, member_id, kind, for_day)
+  do nothing returning id` with `claimed_at` set, sent, then `sent_at` and `how` written; let go
+  (the row deleted, or `claimed_at` cleared and `tries` counted) when nothing went, so the next
+  sweep tries. `for_day` is the meeting's own day, so a meeting moved to another day gets a fresh
+  one. Never in quiet hours (`member_push.quiet_hour`): the sweep waits; one that can't go on the
+  day before, outside quiet hours, isn't sent.
+- `nudge` ("Remind the ones who haven't answered", on the meeting page): each active seat with no
+  answer for the current time; once a day a person (`for_day` is the church's day it was
+  pressed); `made_by` is who pressed it. Outside quiet hours it is claimed and sent at once,
+  after the write; inside them it is saved unclaimed and the sweep sends it when they end.
+- How: a person, by `church_schedule_tell.to_person` (a push to their phone and a line in their
+  conversation with the church, and an email only when no phone was reached: "email only when
+  there is no app on their phone"); a seat with a login and no person, by
+  `church_schedule_tell.to_login`. `how` is `app`, `email` or `nobody`; there is no value for a
+  text, so nothing can record one. What it says: the meeting's name, the day and time, the place.
+  Never a note, never who else can't come.
+
+**The private link for a phone's calendar** (call 5; S3-6):
+
+- The key is `secrets.token_urlsafe(32)`; only its sha256 is kept (`token_hash`). The person is
+  shown the link once, when it is made; afterwards the page says when it was made and offers
+  "Make a new link" and "Stop this link".
+- One working link a person (`church_calendar_links_one_live`). A new link stops the old one
+  first (`revoked_at`), then goes in; two presses at once leave one working link, and the second
+  is told to try again. A stopped link stays stopped (the trigger refuses clearing or moving
+  `revoked_at`), and a link never changes church, person or key: a new one is a new row.
+- The feed, `GET /cal/{key}.ics`, needs no sign-in: it finds the link by `token_hash` with
+  `revoked_at` null (a stopped or unknown key is a 404, the same for both), then the meetings of
+  every group the person has an active seat on, from 30 days back to 180 ahead. Each event: the
+  meeting's name, its start and end (an hour when it has no length), the room or the place, and a
+  link to Coming up. A meeting called off is sent as cancelled for 30 days, so phones drop it.
+  Never an agenda, a note, an answer or who else is coming. That is what "anyone with the link
+  can see those dates" means, and the page says so beside the link.
+- `last_read_at` is written at most once an hour a link, so a phone's polling costs no writes.
+  The feed is rate-limited by the key's hash, never by the key.
+
+**The room.** Setting a meeting with a room checks it with `church_spaces.clashes` for the
+meeting's time. Free: a booking is made (its title the meeting's name, `booked_by` the login that
+set the meeting), `booked` when that login books straight away under Rooms & spaces' own rules
+(the owner, an Admin, the Manager who does the rooms) and `requested` otherwise, waiting for
+whoever does the rooms, as any room request does; `booking_id` names it. Taken: the meeting is
+saved without a booking and the page says the room is taken that day (by what, as Rooms &
+spaces would show this login). Two presses at once: the booking table's own exclusion
+constraint refuses the second booked one (23P01), read as taken. A meeting moved, by itself or
+with its series, moves its booking (re-checked; taken at the new time, the booking is cancelled
+and the page says so). Called off, skipped or deleted: its booking is cancelled. A booking
+cancelled from Rooms & spaces leaves the meeting naming the room with a cancelled booking, and
+the page says it isn't booked. A series' meetings each book their own room as they are made.
+
+**Guards**
+
+- `church_boards_kind`, `church_boards_audience`, `church_boards_list_is_meeting`, and
+  `church_boards_audience_kept` (before an update of `audience`: a group keeps who it is for; a
+  change of audience would leave a group for the list holding hand-added rows, or a board holding
+  the list's).
+- `church_boards_one_list_name` (unique on church, audience and `lower(name)`, where the audience
+  isn't `members` and the group isn't archived): Set a meeting pressed twice for "Leaders meeting"
+  finds or makes one. A closed group frees its name; boards may share a name, as they always could.
+- `church_board_members_follow_list` (before insert, and before an update of `from_list`,
+  `board_id` or `business_id`): a row is the list's exactly when its group follows the list, and
+  a row the list adds names one of the church's people. A person deleted (their `contact_id` set
+  null by the board's own key) checks nothing, and their row stays, for old minutes.
+- `church_meetings_same_business`, one function on five tables, each check made only when a
+  write names what it checks, so a foreign key setting something null (a room, a booking, a
+  series, a person or a login deleted) checks nothing: a series' room is its church's; a
+  meeting's series is the same church's and the same group's, its room its church's, and its
+  booking its church's and of its room (checked when the booking is written, so whoever moves a
+  meeting to another room writes its booking in the same update); an answer's and a reminder's
+  seat is on the meeting's group; the person who answered is the church's; a calendar link's
+  person is the church's, and the link keeps its church, person and key and, once stopped, stays
+  stopped. A series' group is its church's by its foreign key, which carries the church.
+- The constraints: a series' `nth` with `month_nth` only, its end after its start, every other
+  week starting on its weekday, its length; a meeting of a series names its day, its length,
+  only a `planned` meeting called off and who called it off only with when, "changed by itself"
+  only in a series; an answer's note with `cant` only and 1 to 200 characters after trimming, by
+  a login or a person never both; a reminder sent only once claimed and always with how, made
+  by someone only as a nudge; a link's hash 64 lower-case hex characters.
+
+**Server-only.** All four new tables: RLS on, no policies, `anon` and `authenticated` revoked,
+`service_role` granted. All three functions: execute revoked from `public`, `anon` and
+`authenticated`; none is `security definer`. The board's and the rooms' tables keep exactly the
+grants they had.
+
+**What goes with what.** A church deleted takes everything of its own. A group deleted takes its
+series, meetings, seats, answers and reminders. A meeting deleted takes its answers and
+reminders (its booking is Rooms & spaces' own; S3-2 cancels it first). A seat deleted takes its
+answers and reminders. A series deleted leaves its meetings as one-offs that keep their day. A
+room deleted leaves its meetings and series with no room, and its bookings go with it (leaving
+the meetings with no booking); a booking deleted leaves its meeting. A person deleted takes their
+calendar link; their seats stay with no person, as a board's always have, and so do answers given
+from them, with nobody named. A login deleted leaves everything it named, with nobody in its
+place. The check deletes a church both ways round (its groups before its rooms, and its rooms
+first, which sets its meetings' room and booking to nothing before the meetings go).
+
+**How it goes in.** One transaction, `lock_timeout` 5s, safe to run twice, ends with `NOTIFY
+pgrst`. Additive: no table, column, row or existing constraint is dropped or rewritten (the
+file's own triggers are dropped and made again, as every file here does). The new columns are
+null, `false`, `'board'` or `'members'` by a constant default on every existing row, so no row is
+rewritten. The three checks on `church_boards`, the four on `church_board_meetings` and its four
+foreign keys are validated as they go in, not `NOT VALID`: the tables are small (a church has a
+few boards and some dozens of meetings) and every row passes. The foreign keys take a short lock
+on `church_meeting_series`, `church_spaces`, `church_space_bookings` and `auth.users` and read
+none of them. The Check and Rollback blocks are at the end of the file.
+
+**The Rollback block** loses every series, answer, reminder and link, and keeps every board,
+member, meeting, item, attendance mark, decision, room and booking (meetings made from a series
+stay as one-offs). Run it only with the code that reads these columns rolled back first. Its
+first line closes (archives) every `kind = 'meeting'` group: once `kind` is gone a huddle would
+read as a board, and the board's money yes reads open boards only. Its second takes out a
+meeting called off with nothing recorded on it, which would otherwise read as planned again; one
+with an agenda, attendance or a decision stays.
+
+**What the deployed code sees the moment it runs** (read in `church_board.py`,
+`member_portal_board.py`, `church_money_levels.py`, `church_map.py`, `sample_church_data.py` and
+`account_lifecycle.py` at `c62547f7`, and run for real in the check):
+
+- Every read of the board tables names its columns (`MEMBER_FIELDS`, `MEETING_FIELDS`,
+  `ITEM_FIELDS`, `DECISION_FIELDS`, the boards' own list); none is `select=*` except the export.
+  So no read returns anything new, and nothing reads `kind` or `audience` before S3-2.
+- No write sends a new column. A new board is a `board` for its own `members`; a new seat is not
+  the list's; a new meeting has no series, length, room or booking and is not called off. Every
+  write church_board.py makes (a board and its edit, a seat, its title, leaving and coming back,
+  a meeting through planned, in progress, minutes drafted and back, attendance by upsert, the
+  agenda carried forward by `on conflict (carried_from)`, a decision, a meeting deleted with its
+  agenda) passes every new constraint and trigger untouched (the check makes each of them).
+- Nothing writes a `kind = 'meeting'` row, so the four readers above still see only boards.
+- The export (`select=*`) carries the new columns of the three board tables: `kind`,
+  `audience`, `from_list`, and on a meeting a series id, a room id and a booking id the export
+  leaves out or doesn't re-import. None is private. A restored group for the list has its seats
+  made again by the next keeping in step (its seats aren't re-imported, as no board's are).
+
+**Checked** on PGlite 0.5.8 (PostgreSQL 18.3; production may be an older Postgres, and nothing
+here is new behaviour): `__tests__/church_meetings_db.mjs`, 332 checks, in CI's database
+job. Each rule of the file was broken once in a scratch copy to see the check go red
+(75 rules; the PR lists them).
+
+### 10.3 Who can't come: the date check's inputs (S3-3)
+
+`POST /church/meetings/check` and Set a meeting's own look before it saves. Its inputs: who comes
+(a board's or a meeting's own seats, or the leaders list's people for `leaders` or `office`, as
+keeping in step would seat them), one to eight candidate days (none in the past, three months at
+most), the time and length, and the room if one is named. For each day:
+
+| Can't come because | Read from | Shown |
+|---|---|---|
+| away that day | `serve_away` (the facts) | the name, "away" |
+| an ask to be away still waiting | `church_away_asks` (`state = 'asked'`), only those the reader may read (`church_schedule.calendar`'s `waiting` rule) | the name, "asked to be away" |
+| something that repeats falls on it | `church_away_commitments` (`church_schedule_repeats.days_of`) | the name, "something that repeats": what it is only where `sees_label` says |
+| another meeting they're in overlaps the time | `church_board_meetings` of their other groups, `planned` and not called off | the name, "in another meeting": which one only if the reader may open it |
+
+and the room: `free`, `taken` (a booked booking overlaps), or `asked for` (only a request
+overlaps; it isn't a block) for that time. Then the day with the fewest who can't come. Never a
+reason, a note or what a thing that repeats is. Chief's `check_dates` (#1995, step 5) reads the
+first three the same way; S3-3 makes one function both call.
+
+### 10.4 The rename
+
+Board & minutes becomes **Meetings & minutes** wherever `CHURCH_MEETINGS` is open for the
+church; with it closed, every word stays as it is today. What changes (S3-2 and the office PR):
+
+| Where | Today | With step 3 open |
+|---|---|---|
+| The office menu (the frontend; item id `board`) | Board & minutes | Meetings & minutes. `GET /church/board/status` gains `name` and `meetings: bool`, and the menu shows the name it is given |
+| The office page's title and empty state | Board & minutes, "Boards" | Meetings & minutes: the meetings and the boards side by side |
+| `church_my_week.py:84` (the `meetings` duty's link) | "Open Board & minutes" | "Open Meetings & minutes" |
+| `church_money_levels.py:398`, `housing_allowance.py:362` (advice that names the page) | "… in Board & minutes" | "… in Meetings & minutes" |
+| `church_board.NOT_CHURCH` | "Board & minutes are for churches" | "Meetings & minutes are for churches" |
+| `church_board.py`'s and `member_portal_board.py`'s docstrings, this doc, `docs/MIGRATIONS.md` | Board & minutes | Meetings & minutes (formerly Board & minutes), as each is next touched |
+
+What stays: every route (`/church/board/…`, `/my/board`), the menu item's id, the tables' names,
+the `meetings` duty (its label already reads "Meetings and minutes", `church_duties.py:129`), the
+office lane's words (`church_areas.py:385`), and the member app's **Board** tab, which is a
+board's. Chief's map (`chief_map.py`'s `board` units, the leaders map's) means boards and reads
+`kind=eq.board`; nothing of Chief's is renamed. Tests that assert the old words
+(`test_housing_allowance.py:300`) change with S3-2.
+
+### 10.5 Who may do what
+
+From church_board's rules (`_access`, `may_write`) and the schedule's (`office_overseers`):
+
+| What | Who |
+|---|---|
+| Open Meetings & minutes | as Board & minutes today: the meetings' keepers (the owner, an Admin, the Manager holding `meetings`) every group; anyone else the groups they have a seat on (a seat with their login, the list's included) |
+| Make a group for every leader or the office | the keepers |
+| Make a board, or a meeting of its own people (a check-in) | the keepers, as setting up a board is today |
+| Set, edit, skip or call off a meeting; set, edit or end a series | a board or a meeting of its own people: the keepers and its own writer seats (`may_write`, as today); a group for the list: **the keepers only** |
+| Agenda, attendance, minutes, decisions | as today on a board; on a group for the list, the keepers only: a seat the list gave reads and answers, and never writes (nobody granted it) |
+| Answer for yourself | the person, in the member app (their seat by `contact_id`); a login, in the office app (a seat with that login, or with the login's person) |
+| Mark someone's answer for them ("she called to say she can't") | whoever may write the meeting; `by_user_id` says who |
+| Read who said what (names) | whoever may open the meeting page. In the member app, a person reads their own answer and how many said they'll be there, never who can't |
+| Read an "I can't" note | the person, the keepers, the login that set the meeting, whoever oversees the office |
+| Remind the ones who haven't answered | whoever may write the meeting |
+| The date check | whoever may set a meeting for that audience; waiting asks only as `church_schedule.calendar` lets them |
+| Make or stop a calendar link | the person, in the member app; an office login for its own person, in the office app |
+| The church calendar's Meeting and Away | every office login that reads the church calendar: a meeting's name, time and room (as its room booking already shows there); Away, the names and dates of the people on the leaders list, from the facts only, never a kind, a reason or a waiting ask |
+
+### 10.6 Switches
+
+`CHURCH_MEETINGS`: `off` | `owner` | `on`, **unset means `owner`** (the platform owner's own
+church, and his own login), as `CHURCH_SCHEDULE` and `CHURCH_WEEK` do. It opens only where
+`CHURCH_BOARD` is open too. A group for the list, the date check's leaders and Coming up also
+need the leaders schedule (`church_schedule.on`); where it is closed, Set a meeting offers
+boards only. `church_meetings.ready()` asks `church_meeting_answers` (one transaction makes all
+four tables) by `church_schedule.ready`'s rule, with a `_FORCE` pin that `conftest` sets to False
+for every other suite. Until it says yes, Meetings & minutes is Board & minutes exactly: its
+name, its reads (no new column named), its writes. Read on **both** services: the routes on
+`kmj-intake-server`, the sweep (making meetings ahead, keeping the list in step, reminders,
+clearing notes) on `kmj-intake-worker`, as `.env.example` says for the schedule.
+
+### 10.7 The routes the next PRs add
+
+Office (`/church/meetings/…`, beside the board's unchanged `/church/board/…`; session and gate as
+`church_board`'s: `require_user`, `business_access.assert_access`, then the keepers' rules):
+
+| Route | Body / answers | PR |
+|---|---|---|
+| `GET /church/board/status` | gains `name` ("Meetings & minutes" or "Board & minutes") and `meetings: bool` | S3-2 |
+| `POST /church/meetings` | `{business_id, name, who: 'leaders'\|'office'\|'group:<id>', starts_at, length_minutes?, place?, video_url?, space_id?, repeat?: {pattern, weekday, nth?, until_on?}}`. For `leaders` or `office` the open group of that name and audience is found, or made (`church_boards_one_list_name`: two presses make one). `{meeting, series?, room: 'booked'\|'requested'\|'taken'\|null}` | S3-2 (one-off), S3-3 (`repeat`, the room) |
+| `POST /church/meetings/check` | the date check (10.3): `{business_id, who, days: [..], time, length_minutes, space_id?}` → `{days: [{day, cant: [{contact_id, name, why}], room}], best}` | S3-3 |
+| `GET /church/meetings/{id}/answers?business_id=` | `{coming: [seat], cant: [seat + note?], waiting: [seat], moved: bool}`; `note` only for its readers | S3-2 |
+| `PUT /church/meetings/{id}/answers` | `{business_id, member_id?, answer: 'yes'\|'cant'\|null, note?}`; no `member_id` is the login's own seat | S3-2 |
+| `POST /church/meetings/{id}/remind` | `{business_id}` → how many it went to now, and how many wait out quiet hours | S3-6 |
+| `PATCH /church/meetings/{id}` | `{business_id, starts_at?, length_minutes?, place?, space_id?}`: this one (`changed_alone_at` in a series) | S3-3 |
+| `POST /church/meetings/{id}/call-off`, `/back-on` | skip one or call off a one-off; and back | S3-3 |
+| `PATCH /church/meetings/series/{id}` | `{business_id, from, at_time?, length_minutes?, place?, space_id?, weekday?, pattern?, nth?, until_on?}`: all, from a day on | S3-3 |
+| `GET /church/meetings/calendar?business_id=&from=&to=` | the church calendar's two kinds: `{meetings: [{id, name, starts_at, ends_at, room, called_off}], away: [{contact_id, name, starts_on, ends_on}]}` (93 days at most) | S3-3 |
+
+Member app (`include_in_schema=False`, `_signed_in`, never the preview, `rate_limit.allow_strict(
+"member_action", …)`, a 303 back with a short code, as Dates' routes are):
+
+| Route | Form | PR |
+|---|---|---|
+| `GET /my/lead/dates` | "Coming up" at the top: the next 30 days of meetings of every group they have a seat on, soonest first, with their answer and how many are coming | S3-5 |
+| `POST /my/lead/dates/meetings/{id}/answer` | `ans (yes\|cant), note` | S3-5 |
+| `POST /my/lead/dates/calendar-link`, `/calendar-link/stop` | make a new link (shown once), or stop it | S3-6 |
+| `GET /cal/{key}.ics` | public, no session: the feed (10.2) | S3-6 |
+
+### 10.8 Lifecycle registration
+
+All four new tables are in `account_lifecycle.EXPORT_EXCLUDED`, each with its reason, as step 1's
+and step 2's are (built, S3-1):
+
+| Table | Reason, in short |
+|---|---|
+| `church_meeting_series` | cites its group, its room and the login that set it by ids an import mints anew; the meetings it made are exported with the board's tables; a restored church sets its repeating meetings again |
+| `church_meeting_answers` | keyed by seats and meetings that aren't re-imported, a private note, and who answered as a sign-in user id |
+| `church_meeting_notices` | the reminders' sent-once ledger: the server's own, nothing a church keeps |
+| `church_calendar_links` | a hash of a private key that must never come back to life in a restore; the person makes a new link |
+
+The three board tables stay where they are (`BUSINESS_CHILD_TABLES`; the meetings, seats,
+agenda, attendance and decisions not re-imported); their export now carries the new columns
+(10.2).
+
+### 10.9 PR split
+
+Each is safe alone: `CHURCH_MEETINGS` defaults to `owner`, `ready()` is false until the file is
+applied, and `conftest` pins it off for every other suite. The plan first split the rest in four
+(server, office, phone, reminders and the link); the server half is split in two here, because
+its first part changes who counts as a board and should be reviewed alone.
+
+| PR | Contains | Migration first? |
+|---|---|---|
+| **S3-1 Migration** (this) | `APPLY-2026-11-21-church-meetings.sql`; its `docs/MIGRATIONS.md` row; `EXPORT_EXCLUDED`; `__tests__/church_meetings_db.mjs` and its `ci.yml` line; this section; the work log. No Python | this is it |
+| **S3-2 Groups and answers** (server) | `church_meetings.py`: the switch, `ready`, keeping the list in step, `kind=eq.board` in the four readers of 10.2 **and the lint that pins them**, Set a meeting for a one-off (a group for the list found or made), the answers and the note's readers, the meeting page's who comes and answers, `cant` read as excused at the end, the rename's words; `church_schedule_fake` taught the tables | yes |
+| **S3-3 Series, rooms and the date check** (server) | series made ahead, edit one, edit all from a day, skip, end; the room booked, moved and let go; the date check (shared with Chief's `check_dates`); the church calendar's route; the sweep's making ahead and keeping in step; `TICKS` | yes |
+| **S3-4 The office** (frontend) | Meetings & minutes: the groups side by side, Set a meeting with the date check, the meeting page's answers and Remind, Meeting and Away on the church calendar | after S3-2 and S3-3 |
+| **S3-5 The phone** (member app, this repo) | Coming up on Dates, I'll be there / I can't with the note; whether the Board tab shows meetings | after S3-2 |
+| **S3-6 Reminders and the link** (server and member app) | the day-before sweep, Remind's sending, quiet hours, email only without the app, notes cleared at 90 days; the calendar link (make, stop, show once) and the feed | after S3-2 and S3-3 |
+| S3-7 (optional) Chief | "Set the leaders meeting for the third Saturday", "who's coming Tuesday?": verbs over S3-2 and S3-3 in the shape of #1995, no rule of their own | after S3-3 |
+
+### 10.10 Decided while writing S3-1
+
+All decided in the build; none is the pastor's call, and any can be reopened with him.
+
+1. **A group that meets is a `church_boards` row**, and step 3 adds no table for groups. Call 1
+   is one home, and Board & minutes already is the home of agenda, attendance and minutes.
+2. **`kind` (board or meeting) beside `audience`.** Audience alone can't tell a board from a
+   check-in of two hand-picked people, and only a board may give the board's yes on money. Every
+   existing row is a board.
+3. **Seats for the list are member rows kept in step by the server** (`from_list`), not answers
+   and attendance keyed by `contact_id`: everything that keys a person on a board keeps working,
+   at the price of the four readers of 10.2 and a sync. The reason is in 10.2.
+4. **A group for the list is always a meeting and keeps its audience**, enforced in the
+   database, so no order of edits can leave a board holding the list's seats or a group for the
+   list holding hand-added ones.
+5. **`leaders` is both of the list's groups; `office` is its office group plus its leaders who
+   have an office login.** (Open question 1.)
+6. **A series is its own table**, not columns on the group: a board meets monthly and also holds
+   a called meeting, and editing one or all, skipping and ending need their own row. Its rule is
+   the commitments' rule, column for column, so the code that works out its days already exists.
+7. **One meeting a day of a series** (unique), and **a skipped meeting stays as a row**
+   (`cancelled_at`) rather than being deleted, so the series never makes it again, its answers
+   stay, and a phone's calendar is told it is off. `made_through` keeps a meeting deleted by hand
+   from being made again.
+8. **A new rule splits the series** (the old ends, a new starts) instead of moving meetings
+   already made to other days.
+9. **An answer records the start it was given for** (`for_starts_at`), so a meeting moved needs
+   no answers deleted and nobody's "I can't" is silently carried to a new time.
+10. **No "maybe".** The calls name two answers.
+11. **The note is 200 characters, with `cant` only, and cleared at 90 days**, as a schedule
+    reason is.
+12. **Reminders are one ledger with two kinds** (`day_before`, `nudge`), claimed by insert, one a
+    person a meeting a kind a day; `how` has no value for a text.
+13. **One working calendar link a person**, a stopped link stays stopped, only a hash is kept,
+    and a link never changes its key: making a new one is the only way to change it.
+14. **The room's booking follows Rooms & spaces' own rules** (booked straight away by those who
+    may, a request otherwise), and a taken room never blocks the meeting.
+15. **Same-church checks are triggers, checked only when a write names what they check**, as
+    step 1's and step 2's are, so a foreign key setting something null can never refuse a
+    delete. Composite foreign keys carry the church where a row cascades with its parent (an
+    answer, a reminder, a series).
+16. **The constraints and foreign keys on the board tables are validated as they go in**, not
+    `NOT VALID`: small tables, every row passes, and nothing to come back for.
+17. **The Rollback closes meeting groups and takes out empty called-off meetings** before it
+    drops `kind` and `cancelled_at`, so rolling back can't turn a huddle into a board or bring a
+    called-off meeting back onto someone's calendar.
+18. **One open group for the list a name** (unique, whatever its case), so two presses of Set a
+    meeting never make two leaders meetings, each inviting every leader. Boards keep sharing a
+    name if they do.
+19. **Its date is 2026-11-21**, and it needs no other step's file but Board & minutes' and Rooms &
+    spaces' (both applied in October).
+
+### 10.11 Open questions for the pastor
+
+1. **Does "every leader" include the office staff who lead nothing?** Built as yes: the leaders
+   list's two groups both come to a meeting for every leader. If not, `leaders` becomes the
+   list's leaders group alone.
+2. **Should an Admin read an "I can't" note?** Admins are keepers of the meetings in Board &
+   minutes today, and call 3 gives the note to the keepers, so built as yes. (The schedule keeps
+   a leader's reason from Admins, decision 7.)
+3. **Should the people at a meeting see who else can't come**, by name, in the member app? Built
+   as no: they see their own answer and how many are coming; the meeting page in the office
+   shows names to whoever may open it.
+4. **The calendar link: only meetings, or their own away dates and Sundays they serve too?**
+   Built as meetings only for now; the same link can carry more later without a new one.
