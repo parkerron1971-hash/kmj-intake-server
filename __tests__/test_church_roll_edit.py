@@ -96,6 +96,7 @@ def _client(monkeypatch, role="manager", email=OWNER_EMAIL):
 def test_capitals_and_two_in_one_and_a_guess_from_the_texts():
     assert cre.cased("keisha o'neal mcallister") == "Keisha O'Neal McAllister"
     assert cre.cased("maria de la cruz") == "Maria de la Cruz"
+    assert cre.cased("Elevation of Grace") == "Elevation of Grace" and not cre.needs_case("Elevation of Grace")
     assert cre.cased("Diane clayta- trigge") == "Diane Clayta- Trigge"
     assert cre.cased("JOHN SMITH JR") == "John Smith Jr"
     assert cre.cased("DeShawn LaToya Price") == "DeShawn LaToya Price"     # already capitalised: as typed

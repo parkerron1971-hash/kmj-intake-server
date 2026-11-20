@@ -64,7 +64,8 @@ FOUND = {"friend": "Friend or family", "online": "Online", "drove_by": "Drove by
 ADD_STATUS = {"first_time": "lead", "coming_back": "lead", "member": "active"}
 MOST_PEOPLE = 12              # one Add people sheet
 MOST_HISTORY = 50
-PARTICLES = {"de", "la", "del", "della", "der", "van", "von", "da", "di", "du", "le", "dos", "das", "y", "bin", "ibn", "al"}
+PARTICLES = {"de", "la", "del", "della", "der", "van", "von", "da", "di", "du", "le", "dos", "das", "y", "bin", "ibn", "al",
+             "of", "the", "and", "for", "in"}       # "Elevation of Grace": a ministry's small words stay small
 SUFFIX_UP = {"ii", "iii", "iv", "vi"}
 SUFFIX_CAP = {"jr": "Jr", "sr": "Sr", "jr.": "Jr.", "sr.": "Sr."}
 # The tables whose rows point at a person and move on a merge. Anything
