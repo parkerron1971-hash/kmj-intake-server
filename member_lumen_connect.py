@@ -725,6 +725,9 @@ CSS = Template("""
 .lm .lm-pswitch>span{flex:1;min-width:0;}
 .lm .lm-pswitch b{display:block;font:650 14.5px/1.25 var(--mb-ui);}
 .lm .lm-pswitch small{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mb-ui);color:var(--fg2);}
+/* their birthday, asked once above Post (member_posts): the Bible's field, close under its heading */
+.lm .lm-pbday .lm-field{margin-top:0;}
+.lm .lm-pbday .lm-pguard{margin-top:10px;}
 .lm .lm-mpform.js:not(.is-church) .lm-pkinds,.lm .lm-mpform.js.is-church .lm-pcomments,
 .lm .lm-mpform.js.is-prayer .lm-pphoto,.lm .lm-mpform.js.is-prayer .lm-pcomments,.lm .lm-mpform.js.is-prayer .lm-pkinds{display:none;}
 .lm .lm-gheld{display:flex;gap:8px;align-items:flex-start;margin:12px 20px 0;}

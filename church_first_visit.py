@@ -45,6 +45,13 @@ index keeps once however often a check-in is sent. Anyone in the family
 already in follow-up keeps that one. It is routed like a connect card:
 the welcome role, else the senior role, else the office.
 
+The Welcome Path (2026-11-20, guest_path.py): with it on, that adult also
+joins New here's path, the one a guest who texts the word is on (join_path:
+door "kids" for the kids desk, "desk" for the office's First time). Its
+texts go only to a phone that already has a yes to the church's texts (the
+kids desk's "Text me" box when the family was added); either way the guest
+is on the path and gets their call.
+
 Switched by CHURCH_AREAS: only when church_areas.mode() is "on" (a
 Thursday switch-on). Best effort: nothing here blocks, slows or fails a
 check-in, and a failure is printed (only print() reaches Railway's logs).
@@ -214,7 +221,25 @@ def welcome_kids(business_id: str, entry_id: str, occasion: str, household_id: s
                                              said=line_for(occasion, kids), family_ids=family)
     if row:
         _say("welcome follow-up started (kids desk)", biz)
+    join_path(biz, guardian, "kids", now or _now())
     return row
+
+
+def join_path(biz: str, contact_id: str, door: str, visit_at: Optional[datetime]) -> None:
+    """The Welcome Path (guest_path, 2026-11-20): a first-time family's adult
+    joins the same path as a guest who texts the word, door "kids" or
+    "desk". Their texts go only when that phone already has a yes to the
+    church's texts (the kids desk's "Text me" box when the family was added,
+    or any yes kept at this church: new_here.enroll_by_id reads it); either
+    way they're on the path and get their call. One guest, one path: a
+    family already on one this week starts nothing new. Off, nothing
+    happens. Never raises."""
+    try:
+        import new_here
+        if new_here.path_on(biz):
+            new_here.enroll_by_id(biz, contact_id, door=door, texts_ok=None, visit_at=visit_at)
+    except Exception as e:
+        _say("path not joined", biz, e)
 
 
 def _recent(ts: Any, since: datetime) -> bool:
@@ -278,7 +303,7 @@ def _sweep(now: datetime) -> int:
             continue
         handed.add((biz, f"first-visit:{key}"))  # a second adult of the same family, same sweep
         try:
-            if _welcome_checked_in(biz, str(r["entry_id"]), cid, home, key):
+            if _welcome_checked_in(biz, str(r["entry_id"]), cid, home, key, r.get("checked_in_at")):
                 started += 1
         except Exception as e:
             _say("welcome failed (first time)", biz, e)
@@ -288,7 +313,7 @@ def _sweep(now: datetime) -> int:
 
 
 def _welcome_checked_in(biz: str, entry_id: str, contact_id: str, household_id: Optional[str],
-                        key: str) -> Optional[Dict[str, Any]]:
+                        key: str, checked_in_at: Any = None) -> Optional[Dict[str, Any]]:
     family = [contact_id]
     if household_id:
         adults = _rows(f"/household_adults?household_id=eq.{_q(household_id)}&business_id=eq.{_q(biz)}"
@@ -299,8 +324,10 @@ def _welcome_checked_in(biz: str, entry_id: str, contact_id: str, household_id: 
     kids = _kids_here_if_first(biz, entry_id, household_id, family)
     if kids is None:
         return None
-    return church_follow_up.on_first_check_in(biz, contact_id, family_key=key,
-                                             said=line_for(_occasion(biz, entry_id), kids), family_ids=family)
+    row = church_follow_up.on_first_check_in(biz, contact_id, family_key=key,
+                                            said=line_for(_occasion(biz, entry_id), kids), family_ids=family)
+    join_path(biz, contact_id, "desk", _parse(checked_in_at))
+    return row
 
 
 def _occasion(biz: str, entry_id: str) -> str:

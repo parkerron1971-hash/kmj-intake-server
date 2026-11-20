@@ -536,3 +536,89 @@ def test_the_switch_is_read_through_the_module_never_an_alias():
     src = open(os.path.join(ROOT, "church_first_visit.py"), encoding="utf-8").read()
     assert "import church_areas\n" in src and "church_areas.mode() == \"on\"" in src
     assert not re.search(r"from\s+church_areas\s+import", src)
+
+
+# ─── The Welcome Path (2026-11-20) ────────────────────────────────────
+# With it on, the first-time adult also joins New here's path: door "kids"
+# for the kids desk, "desk" for the office's First time. Texts only for a
+# phone with a yes kept at the church; on the path (and called) either way.
+
+ANA_PHONE = "+12315550142"
+GUEST_PHONE = "+12315550143"
+
+
+@pytest.fixture
+def path(db, monkeypatch):
+    import new_here
+    from zoneinfo import ZoneInfo
+    db.t["businesses"][0]["settings"] = {"new_here": {"on": True}}
+    db.t.update(sms_numbers=[{"business_id": BIZ, "status": "active", "phone_number": "+12315550199"}],
+                sms_opt_outs=[], sms_consents=[], chief_scheduled_actions=[])
+    for c in db.t["contacts"]:
+        c["phone"] = {ANA: ANA_PHONE, GUEST: GUEST_PHONE}.get(c["id"], c["phone"])
+        c.setdefault("metadata", {})
+    monkeypatch.setattr(new_here, "path_on", lambda biz: True)
+    monkeypatch.setattr(new_here, "switched_on", lambda biz: True)
+    monkeypatch.setattr(new_here, "tz_of", lambda b: ZoneInfo("America/New_York"))
+    monkeypatch.setattr(new_here, "_origin", lambda biz: "https://lovecity.example")
+    return db
+
+
+def _mine(db, cid):
+    person = next(c for c in db.t["contacts"] if c["id"] == cid)
+    return (person.get("metadata") or {}).get("new_here") or {}
+
+
+def test_a_first_time_family_with_a_yes_at_the_kids_desk_joins_the_path_with_texts(path):
+    path.t["sms_consents"].append({"business_id": BIZ, "phone": ANA_PHONE, "source": "kids_checkin"})
+    kids_in([MIA, LEO], adult=ANA)
+    mine = _mine(path, ANA)
+    assert mine["door"] == "kids" and mine["texts_ok"] is True and mine["texts"] == "on" and mine["texted_at"]
+    steps = {r["action"]["step"] for r in path.t["chief_scheduled_actions"]}
+    assert {"welcome", "monday", "invite"} <= steps
+    assert {r["action"]["door"] for r in path.t["chief_scheduled_actions"]} == {"kids"}
+    assert len(follow_ups(path)) == 1, "and still one welcome follow-up"
+    kids_in([MIA], entry=NEXT_WEEK, adult=ANA)
+    assert len(path.t["chief_scheduled_actions"]) == len(steps), "one family, one path"
+
+
+def test_without_a_yes_the_family_is_on_the_path_and_nothing_is_texted(path):
+    kids_in([MIA, LEO], adult=ANA)
+    mine = _mine(path, ANA)
+    assert mine["door"] == "kids" and mine["texts_ok"] is False and mine["texts"] == "no_yes"
+    assert path.t["chief_scheduled_actions"] == [] and len(follow_ups(path)) == 1
+
+
+def test_a_family_thats_been_before_never_joins(path):
+    path.t["child_checkins"].append({"id": str(uuid.uuid4()), "business_id": BIZ, "entry_id": LAST_WEEK,
+                                     "child_id": MIA, "household_id": HOME, "code": "ACDE",
+                                     "checked_in_at": ago(days=7), "checked_out_at": ago(days=7)})
+    kids_in([MIA], adult=ANA)
+    assert _mine(path, ANA) == {}
+
+
+def test_the_offices_first_time_joins_the_path_as_the_welcome_desk(path):
+    path.t["sms_consents"].append({"business_id": BIZ, "phone": GUEST_PHONE, "source": "texts_page"})
+    first_time(path, GUEST)
+    assert asyncio.run(cfv.sweep()) == 1
+    mine = _mine(path, GUEST)
+    assert mine["door"] == "desk" and mine["texts"] == "on"
+    actions = path.t["chief_scheduled_actions"]
+    assert {r["action"]["door"] for r in actions} == {"desk"}
+    asyncio.run(cfv.sweep())
+    assert len(path.t["chief_scheduled_actions"]) == len(actions), "the sweep's re-reads start nothing"
+
+
+def test_the_offices_first_time_without_a_yes_is_never_texted(path):
+    first_time(path, GUEST)
+    asyncio.run(cfv.sweep())
+    assert _mine(path, GUEST)["texts"] == "no_yes" and path.t["chief_scheduled_actions"] == []
+
+
+def test_with_the_path_off_a_first_check_in_is_as_it_was(path, monkeypatch):
+    import new_here
+    monkeypatch.setattr(new_here, "path_on", lambda biz: False)
+    path.t["sms_consents"].append({"business_id": BIZ, "phone": ANA_PHONE, "source": "kids_checkin"})
+    kids_in([MIA, LEO], adult=ANA)
+    assert _mine(path, ANA) == {} and path.t["chief_scheduled_actions"] == []
+    assert len(follow_ups(path)) == 1

@@ -40,6 +40,17 @@ churches do on Sunday ("New here? Text NEW to ..."), done our way:
                login doesn't plan Sunday). Who changes them: _may_edit (the
                weekly text's login, and since 2026-11-17 the first-time
                guests', church_duties first_guests).
+  EVERY DOOR   since 2026-11-20 (the Welcome Path, guest_path.py): a guest
+               from the kids desk, the welcome desk, the website's connect
+               card, a church's guest card or the member app joins the same
+               path and gets these texts once they've said yes ("Text me");
+               see "every door" below (enroll).
+  WEEKS TWO TO SIX  with the Welcome Path on (guest_path_weeks.py): the two
+               roads' texts (back, thinking, next_step, door_open), the
+               Monday note signed by the senior pastor (signature), the
+               Saturday heads-up (heads_up), all in settings.new_here; a
+               guest's hold holds every text here too, and none goes past
+               the week's limits (run_scheduled asks guest_path_weeks).
 
 Who: NEW_HERE = off | owner | on; unset is "owner", the platform's own
 church (member_asks.platform_church). A church also turns it on itself
@@ -105,8 +116,30 @@ DEFAULTS: Dict[str, Any] = {
                         "A real person reads every text.")},
     "invite": {"on": True,
                "text": "We'd love to see you again this Sunday. Reply and we'll save you a seat and meet you at the door."},
+    # Weeks two to six (the Welcome Path, guest_path_weeks.py): the two roads.
+    "back": {"on": True,
+             "text": "So good to see you again, {first name}! We'd love to help you find your place here."},
+    "thinking": {"on": True,
+                 "text": "Thinking of you this week, {first name}. No need to reply. We're glad you came."},
+    "next_step": {"on": True, "event_id": None,
+                  "text": ("{first name}, our {event} is {when}. We'd love for you to come. Just reply and we'll save "
+                           "your seats.")},
+    "door_open": {"on": True,
+                  "text": "We're still so glad you visited, {first name}. Our door is always open, any Sunday."},
+    # The Monday note signed by the senior pastor: `name` is the church's own
+    # words for the signature ("Pastor James"); empty is whoever holds the
+    # senior role (guest_path_weeks.signer).
+    "signature": {"on": True, "name": ""},
+    # The Saturday heads-up to the team: the greeters, and the kids desk for
+    # families with kids.
+    "heads_up": {"greeters": True, "kids": True},
 }
-HEARD = ("A friend or family", "Online", "Drove by", "Social media", "Other")
+# The road texts (weeks two to six), each {on, text}; next_step adds event_id.
+PATH_TEXTS = ("back", "thinking", "next_step", "door_open")
+EVENT = "{event}"
+WHEN = "{when}"
+SIGNER_MAX = 40
+HEARD =("A friend or family", "Online", "Drove by", "Social media", "Other")
 KIDS = ("None", "1", "2", "3 or more")
 
 
@@ -188,6 +221,21 @@ def settings_of(business: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 hours = base["hours"]
             out[step]["hours"] = min(6, max(1, hours))
+    for step in PATH_TEXTS:
+        mine = saved.get(step) if isinstance(saved.get(step), dict) else {}
+        base = DEFAULTS[step]
+        text = str(mine.get("text") or "").strip()
+        out[step] = {"on": bool(mine.get("on", base["on"])), "text": text[:MAX_TEXT] if text else base["text"]}
+        if step == "next_step":
+            event = str(mine.get("event_id") or "").strip()
+            out[step]["event_id"] = event if re.fullmatch(r"[0-9a-fA-F-]{36}", event) else None
+            if EVENT not in out[step]["text"] or WHEN not in out[step]["text"]:
+                out[step]["text"] = base["text"]
+    sig = saved.get("signature") if isinstance(saved.get("signature"), dict) else {}
+    out["signature"] = {"on": bool(sig.get("on", DEFAULTS["signature"]["on"])),
+                        "name": " ".join(str(sig.get("name") or "").split())[:SIGNER_MAX]}
+    heads = saved.get("heads_up") if isinstance(saved.get("heads_up"), dict) else {}
+    out["heads_up"] = {k: bool(heads.get(k, v)) for k, v in DEFAULTS["heads_up"].items()}
     return out
 
 
@@ -366,11 +414,22 @@ def on_text(business_id: str, phone: str, body: str) -> Optional[Dict[str, str]]
     mine = dict((contact.get("metadata") or {}).get("new_here") or {})
     now = _now()
     last = _parse(mine.get("texted_at"))
-    again = bool(last and now - last < timedelta(days=REVISIT_DAYS))
+    on_path = bool(last and now - last < timedelta(days=REVISIT_DAYS))
+    # With the Welcome Path on (guest_path), the word is also a door. A guest
+    # already on another door's path this week whose texts never started
+    # (no yes there) said yes by texting the word: the texts start now, on
+    # that same path. One guest, one path: anyone else this week is the
+    # same visit, as before.
+    path = path_on(business_id)
+    again = on_path and (not path or _texting(mine))
     mine["code"] = mine.get("code") or new_code()
-    if not again:
+    if not on_path:
         mine["texted_at"] = _iso(now)
         mine["visits"] = int(mine.get("visits") or 0) + 1
+        if path:
+            mine["door"] = "text"
+    if path and not again:
+        mine.update(texts_ok=True, texts="on", welcome_at=_iso(now))
     if not _keep(business_id, contact, mine):
         return None
     if not again:
@@ -405,31 +464,75 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
     biz_id = str(business.get("id") or "")
     step = str(action.get("step") or "")
     contact_id, phone = str(action.get("contact_id") or ""), str(action.get("phone") or "")
-    if step not in STEPS or not contact_id or not phone:
+    if step not in PATH_STEPS or not contact_id or not phone:
         return True, "Not a New here text; nothing sent."
     fresh = await asyncio.to_thread(_business, biz_id)
     if not fresh:
         return False, "The church couldn't be read; not sent."
     settings = settings_of(fresh)
-    if not switched_on(biz_id) or not settings["on"] or not settings[step]["on"]:
+    if not switched_on(biz_id) or not settings["on"] or (step != WELCOME and not settings[step]["on"]):
         return True, "New here, or this text, is off now; not sent."
+    # A guest from a door that isn't a text is on the Welcome Path: turned
+    # off, its texts stop too (the text door's go on as they always did).
+    door = str(action.get("door") or "text")
+    path = await asyncio.to_thread(path_on, biz_id)
+    if (step == WELCOME or door != "text") and not path:
+        return True, "The Welcome Path is off now; not sent."
     if not sms_alerts.alerts_enabled():
         return True, "Automated texts are paused; not sent."
     people = await asyncio.to_thread(
-        _rows, f"/contacts?id=eq.{_q(contact_id)}&business_id=eq.{_q(biz_id)}&select=id,name,phone&limit=1")
+        _rows, f"/contacts?id=eq.{_q(contact_id)}&business_id=eq.{_q(biz_id)}&select=id,name,phone,metadata&limit=1")
     if people is None:
         return False, "The guest couldn't be read; not sent."
     if not people:
         return True, "The guest is no longer on the church's list; not sent."
+    gpw = None
+    if path:
+        # The Welcome Path's rules (guest_path_weeks): a reply waiting on a
+        # person holds every automatic text (it waits, never dropped), and
+        # no more than the week's texts the guest said yes to.
+        import guest_path_weeks as gpw
+        mine = (people[0].get("metadata") or {}).get("new_here") or {}
+        if isinstance(mine, dict) and mine.get("hold"):
+            kept = await asyncio.to_thread(gpw.wait_for_hold, fresh, people[0], action, _now())
+            if kept is not None:
+                return kept
+            # The hold was cleared a moment ago: the text goes on now.
+        if step != WELCOME:
+            why = gpw.limit_says(mine if isinstance(mine, dict) else {}, _now())
+            if why:
+                return True, gpw.LIMIT_WORDS[why]
     import texting_hours
     local = _now().astimezone(tz_of(fresh))
     if not texting_hours.in_auto_window(fresh, local):
+        if step == WELCOME:
+            # The welcome never just goes missing: it waits for the morning.
+            when = welcome_time(fresh, _now())
+            row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/chief_scheduled_actions", {
+                "business_id": biz_id, "label": f"New here: {WELCOME}", "action": dict(action),
+                "run_at": when.isoformat()})
+            if not (isinstance(row, list) and row):
+                return False, "Outside the church's texting hours, and the welcome couldn't be moved."
+            return True, "Outside the church's texting hours; the welcome waits for the morning."
         return True, "Outside the church's texting hours; not sent."
     if step == "invite" and await asyncio.to_thread(
             _came_back, biz_id, contact_id, _parse(action.get("texted_at"))):
         return True, "They came back; the invite isn't needed."
     name = str(fresh.get("name") or "").strip()
-    body = sms_service.compose_outbound_body(name, fill(settings[step]["text"], name=first_name(people[0].get("name"))))
+    guest_name = first_name(people[0].get("name"))
+    if step == WELCOME:
+        code = str(((people[0].get("metadata") or {}).get("new_here") or {}).get("code") or "")
+        if not code:
+            return True, "The guest has no card to send; not sent."
+        words = fill(settings["welcome"], name=guest_name,
+                     link=await asyncio.to_thread(card_link, biz_id, code))
+    else:
+        words = fill(settings[step]["text"], name=guest_name)
+        if step == "monday" and gpw is not None:
+            # The Monday note, signed by the senior pastor (a setting, on
+            # unless the church turned it off; no name found, no signature).
+            words = gpw.sign(words, await asyncio.to_thread(gpw.signer, fresh, settings))
+    body = sms_service.compose_outbound_body(name, words)
     async with httpx.AsyncClient(timeout=15) as client:
         if await sms_service.is_opted_out(client, phone, biz_id):
             return True, "They said STOP; not sent."
@@ -439,7 +542,412 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
                                          telnyx_id=sid or "", sent_by="system")
         except Exception as e:  # noqa: BLE001
             return False, f"The text didn't go: {e}"[:240]
+    if gpw is not None:
+        await asyncio.to_thread(gpw.log_sent, biz_id, contact_id, _now())
     return True, f"Sent the New here {step} text."
+
+
+# ─── every door: the Welcome Path ─────────────────────────────────────
+#
+# Kevin, 2026-11-20, on the Welcome Path mock: "capture visitors, place them
+# in a flow where they receive automated texts from the church", then
+# "build". Until now only a guest who texted the word got these texts; the
+# kids desk, the welcome desk's First time, the website's connect card, a
+# church's guest cards (Plan your visit, the bulletin's card) and the member
+# app's "I'm new here" each handed the guest to a leader and texted nothing.
+# Every door now joins the same path, through the code above:
+#
+#   enroll()        a guest from any door (guest_path.DOORS) is put on the
+#                   path: contacts.metadata.new_here gets `door`, `texted_at`
+#                   (the path's start, for every door), `texts_ok` (they said
+#                   yes) and a card code, beside New here's own keys; and
+#                   `texts`: "on", or why the texts didn't start (WHY_NOT).
+#                   When they can go, the welcome (the church's welcome words,
+#                   its card link and the carrier words) is queued for now,
+#                   inside the church's automatic-text hours, else the next
+#                   morning's; then the Monday note and the invite, as the
+#                   text door plans them, and the thank-you only for a guest
+#                   who was at church that day (the kids desk, the welcome
+#                   desk). When they can't, the guest is on the path anyway,
+#                   so they're listed and still get their call.
+#                   One guest is one path: a second door inside REVISIT_DAYS
+#                   never starts a second set of texts (it starts the first
+#                   set when the first door had no yes and this one has).
+#   keep_yes()      a door's "Text me" yes, as an sms_consents row
+#                   (YES_SOURCES), with the request's address and browser.
+#   text_me_words() the box's words, the way the phone companies ask for
+#                   them, shown only where a yes would bring these texts.
+#   second_door()   a second door's card is a note on the guest's open
+#                   welcome follow-up, never a second follow-up.
+#
+# All of it is behind guest_path.switched_on (path_on): off, every door does
+# exactly what it did before.
+
+WELCOME = "welcome"                         # the welcome as a scheduled step (doors that aren't a text)
+PATH_STEPS = (WELCOME,) + STEPS
+WELCOME_SPARE = timedelta(minutes=10)       # less than this left in the hours: the next morning's
+# sms_consents.source for a yes given at each door.
+YES_SOURCES = {"kids": "kids_checkin", "web": "connect_card", "form": "guest_form", "app": "member_app_new"}
+TEXT_ME = "Text me."
+TEXT_ME_WORDS = ("Yes, {church} may text me about my visit and next steps, up to 4 msgs a week. "
+                 "Msg & data rates may apply. Reply STOP to end, HELP for help.")
+# The kids desk asks out loud: the person at the desk ticks it for the family.
+TEXT_ME_ASK = ("Ask first, and tick only if they say yes: “May {church} text you about your visit and "
+               "next steps? Up to 4 msgs a week. Msg & data rates may apply. Reply STOP to end, HELP for "
+               "help.”")
+WHY_NOT = {
+    "new_here_off": "New here is off",
+    "no_yes": "No yes to texts",
+    "no_phone": "No mobile number",
+    "no_number": "No church texting number",
+    "stopped": "Said STOP",
+    "unread": "Couldn't be checked or queued",
+}
+# A card that says they're a regular isn't a first-time guest's.
+_VISIT_Q = re.compile(r"visit|first time|been here|been before|attend|how (long|often)", re.I)
+_REGULAR_A = re.compile(r"\bregular\b|\bmember\b|\ba while\b|\byears\b", re.I)
+
+
+def path_on(business_id: Any) -> bool:
+    """guest_path.switched_on: the Welcome Path for this church. A read
+    that fails is a no: every door does what it did before."""
+    try:
+        import guest_path
+        return bool(guest_path.switched_on(business_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def mobile(phone: Any) -> str:
+    """A number a text can go to (+1 and ten digits), or "". An office's
+    "x2" extension is dropped first, as the kids desk reads one."""
+    from sms_service import normalize_phone
+    raw = re.split(r"(?i)\s*(?:x|ext\.?|extension)\s*\d", str(phone or ""))[0]
+    out = normalize_phone(re.sub(r"[^\d+]", "", raw))
+    return out if re.fullmatch(r"\+1[2-9]\d{9}", out or "") else ""
+
+
+def says_regular(answers: Any) -> bool:
+    """A card whose answer about visiting says they're a regular (or a
+    member, or coming for years): not a first-time guest's path."""
+    for a in answers or []:
+        if isinstance(a, dict) and _VISIT_Q.search(str(a.get("q") or "")) and _REGULAR_A.search(str(a.get("a") or "")):
+            return True
+    return False
+
+
+def can_text(business: Optional[Dict[str, Any]], number: Optional[str] = None) -> bool:
+    """Whether a guest's yes would bring New here's texts from this church
+    now: the Welcome Path on, New here open (NEW_HERE) and switched on by the
+    church, and its own active number. A "Text me" box shows only then."""
+    if not business or not is_church(business):
+        return False
+    biz = str(business.get("id") or "")
+    if not biz or not path_on(biz) or not switched_on(biz) or not settings_of(business)["on"]:
+        return False
+    return bool(number if number is not None else own_number(biz))
+
+
+def text_me_words(business: Optional[Dict[str, Any]], *, ask: bool = False) -> str:
+    """The "Text me" box's words for this church: who texts, about how many
+    a week, rates, STOP and HELP. "" where the box doesn't show (can_text).
+    `ask`: the kids desk's, read out to the family. Never raises."""
+    try:
+        if not can_text(business):
+            return ""
+    except Exception:  # noqa: BLE001
+        return ""
+    church = " ".join(str((business or {}).get("name") or "").split()) or "our church"
+    return (TEXT_ME_ASK if ask else TEXT_ME_WORDS).format(church=church)
+
+
+def form_door(business: Optional[Dict[str, Any]], form: Optional[Dict[str, Any]]) -> bool:
+    """A church card that is a guest door: a connect card or a Plan your
+    visit card (church_follow_up.kind_for_form), or the card the church
+    picked for its bulletin's guest code (guest_card.py), with the path on."""
+    try:
+        if not business or not form or not is_church(business) or not path_on(business.get("id")):
+            return False
+        import church_follow_up
+        import guest_path
+        if church_follow_up.kind_for_form(form) in guest_path.GUEST_FORM_KINDS:
+            return True
+        picked = (((business.get("settings") or {}).get("new_here") or {}).get("guest_form"))
+        return bool(picked) and str(picked) == str(form.get("id") or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def text_me_for_form(business: Optional[Dict[str, Any]], form: Optional[Dict[str, Any]]) -> str:
+    """The box's words for a church card's public page, or "": only a guest
+    door (form_door) that asks for a phone (the field the intake endpoint
+    reads, "phone"), at a church whose texts would go (can_text)."""
+    try:
+        if not form_door(business, form):
+            return ""
+        if not any(isinstance(f, dict) and str(f.get("name") or "").strip() == "phone"
+                   for f in (form or {}).get("fields") or []):
+            return ""
+        return text_me_words(business)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def keep_yes(business_id: Any, phone: Any, *, source: str, name: str = "", ip: str = "",
+             user_agent: str = "") -> bool:
+    """A guest's "Text me" yes, kept as an sms_consents row: the number,
+    their name, where they said it (`source`, YES_SOURCES), when, and the
+    address and browser the request came from where it has them. The same
+    yes from the same door is kept once. False when there's no number a text
+    can go to, or it didn't save. Sync; never raises."""
+    try:
+        number = mobile(phone)
+        if not number or not source:
+            return False
+        biz = str(business_id)
+        had = _rows(f"/sms_consents?business_id=eq.{_q(biz)}&phone=eq.{_q(number)}&source=eq.{_q(source)}"
+                    "&select=id&limit=1")
+        if had:
+            return True
+        saved = sb_clients.sb_post_as_service("/sms_consents", {
+            "phone": number, "name": " ".join(str(name or "").split())[:120] or None, "source": str(source)[:40],
+            "business_id": biz, "consented_at": _iso(_now()),
+            "ip": (ip or "")[:64] or None, "user_agent": (user_agent or "")[:300] or None})
+        return isinstance(saved, list) and bool(saved)
+    except Exception as e:  # noqa: BLE001
+        print(f"[new_here] {str(business_id)[:8]}: a yes to texts wasn't kept ({type(e).__name__})", flush=True)
+        return False
+
+
+def has_yes(business_id: Any, phone: Any) -> Optional[bool]:
+    """Whether this number has a yes to this church's texts (an sms_consents
+    row of the church's). None when it couldn't be read."""
+    number = mobile(phone)
+    if not number:
+        return False
+    rows = _rows(f"/sms_consents?business_id=eq.{_q(business_id)}&phone=eq.{_q(number)}&select=id&limit=1")
+    return None if rows is None else bool(rows)
+
+
+def _stopped(business_id: str, phone: str) -> Optional[bool]:
+    rows = _rows(f"/sms_opt_outs?phone=eq.{_q(phone)}&or=(business_id.is.null,business_id.eq.{_q(business_id)})"
+                 "&select=phone&limit=1")
+    return None if rows is None else bool(rows)
+
+
+def _texting(mine: Dict[str, Any]) -> bool:
+    """Whether this path's texts started: a door's whose texts went on, and
+    the text door's always (the word is the yes, and every path before the
+    Welcome Path was the text door's)."""
+    if mine.get("texts") == "on":
+        return True
+    return bool(mine.get("texted_at")) and str(mine.get("door") or "text") == "text"
+
+
+def welcome_time(business: Dict[str, Any], now: datetime) -> datetime:
+    """When a door's welcome goes (UTC): now when it's inside the church's
+    automatic-text hours with a little to spare, else when they next open."""
+    import texting_hours
+    hours = texting_hours.of(business)
+    tz = tz_of(business)
+    local = now.astimezone(tz)
+    opens = datetime.combine(local.date(), time(hours["auto_from"], 0), tzinfo=tz)
+    closes = datetime.combine(local.date(), time(hours["auto_until"], 0), tzinfo=tz)
+    if opens <= local and local + WELCOME_SPARE <= closes:
+        return now.astimezone(timezone.utc)
+    if local < opens:
+        return opens.astimezone(timezone.utc)
+    return datetime.combine(local.date() + timedelta(days=1), time(hours["auto_from"], 0),
+                            tzinfo=tz).astimezone(timezone.utc)
+
+
+def plan_path(business: Dict[str, Any], start: datetime, settings: Dict[str, Any], *, welcome: datetime,
+              visit_at: Optional[datetime] = None) -> Dict[str, datetime]:
+    """{step: when, in UTC} for a guest from a door that isn't a text: the
+    welcome at `welcome`; the Monday note and the invite from the path's
+    start, as plan_times plans the text door's, never within an hour of the
+    welcome; and the thank-you only for a guest who was at church
+    (`visit_at`: the kids desk, the welcome desk), `hours` after the visit,
+    on that day, at least an hour after the welcome."""
+    import texting_hours
+    gap = timedelta(hours=1)
+    out: Dict[str, datetime] = {WELCOME: welcome}
+    later = plan_times(business, start, settings)
+    for step in ("monday", "invite"):
+        if step in later:
+            out[step] = max(later[step], welcome + gap)
+    if visit_at and settings["thanks"]["on"]:
+        thanks = plan_times(business, visit_at, settings).get("thanks")
+        if thanks:
+            tz = tz_of(business)
+            latest = datetime.combine(visit_at.astimezone(tz).date(),
+                                      time(texting_hours.of(business)["auto_until"] - 1, 45), tzinfo=tz)
+            thanks = max(thanks, welcome + gap)
+            if thanks <= latest:
+                out["thanks"] = thanks.astimezone(timezone.utc)
+    return out
+
+
+def _why_not(business: Dict[str, Any], settings: Dict[str, Any], number: str, texts_ok: Optional[bool]) -> str:
+    """"" when a door's texts can go to this guest now, else why not (a
+    WHY_NOT key). `texts_ok` None: their yes couldn't be read ("unread")."""
+    biz = str(business["id"])
+    if not switched_on(biz) or not settings["on"]:
+        return "new_here_off"
+    if texts_ok is None:
+        return "unread"
+    if not texts_ok:
+        return "no_yes"
+    if not number:
+        return "no_phone"
+    if not own_number(biz):
+        return "no_number"
+    stopped = _stopped(biz, number)
+    if stopped is None:
+        return "unread"
+    return "stopped" if stopped else ""
+
+
+def _queue(business: Dict[str, Any], contact_id: str, phone: str, plan: Dict[str, datetime], *,
+           door: str, texted_at: datetime) -> List[str]:
+    """One chief_scheduled_actions row per planned step, the welcome first:
+    a welcome that doesn't save queues nothing after it. The steps saved."""
+    saved: List[str] = []
+    for step in sorted(plan, key=lambda s: s != WELCOME):
+        row = sb_clients.sb_post_as_service("/chief_scheduled_actions", {
+            "business_id": str(business["id"]),
+            "label": f"New here: {step}",
+            "action": {"type": KIND, "step": step, "contact_id": contact_id, "phone": phone,
+                       "texted_at": _iso(texted_at), "door": door},
+            "run_at": plan[step].isoformat(),
+        })
+        if isinstance(row, list) and row:
+            saved.append(step)
+        elif step == WELCOME:
+            break
+    return saved
+
+
+def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]], *, door: str,
+           texts_ok: Optional[bool], phone: Optional[str] = None, visit_at: Optional[datetime] = None,
+           now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """Put a guest from any door on the Welcome Path (see above). `phone` is
+    the number they said yes for (the contact's own when not given);
+    `visit_at` when they were at church, for a door that saw them there.
+    `texts_ok` None: whether they said yes couldn't be read. They're on the
+    path with texts "unread", never "no yes", and the next door this week
+    (or the same one again) tries again; a door that says no never settles
+    it either way. A path whose welcome couldn't be queued is "unread" too.
+    New here's metadata as saved, or what it already was when they're on a
+    path this week; None when it isn't this path's (not a church, the path
+    is off, not a door) or the guest couldn't be saved. Sync; never raises."""
+    import guest_path
+    biz = str((business or {}).get("id") or "")
+    try:
+        if door not in guest_path.DOORS or not biz or not contact or not contact.get("id"):
+            return None
+        if not is_church(business) or not path_on(biz):
+            return None
+        now = now or _now()
+        mine = guest_path.guest_meta(contact)
+        last = _parse(mine.get("texted_at"))
+        on_path = bool(last and now - last < timedelta(days=REVISIT_DAYS))
+        # One guest, one path: on a path this week nothing starts again, but
+        # for texts the earlier door had no yes for (a yes now), or couldn't
+        # read (read again now).
+        if on_path and (_texting(mine) or texts_ok is False
+                        or (texts_ok is None and mine.get("texts") != "unread")):
+            return mine
+        if not on_path:
+            mine.update(door=door, texted_at=_iso(now), visits=int(mine.get("visits") or 0) + 1)
+            for key in ("texts", "welcome_at"):
+                mine.pop(key, None)
+        mine["texts_ok"] = bool(texts_ok)
+        mine["code"] = mine.get("code") or new_code()
+        number = mobile(contact.get("phone") if phone is None else phone)
+        settings = settings_of(business)
+        why = _why_not(business, settings, number, texts_ok)
+        welcome = None if why else welcome_time(business, now)
+        if welcome:
+            mine.update(texts="on", welcome_at=_iso(welcome))
+        else:
+            mine["texts"] = why
+        if not _keep(biz, contact, mine):
+            print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't saved to the path", flush=True)
+            return None
+        if welcome:
+            saved = _queue(business, str(contact["id"]), number,
+                           plan_path(business, now, settings, welcome=welcome, visit_at=visit_at),
+                           door=str(mine.get("door") or door), texted_at=visit_at or now)
+            if WELCOME not in saved:
+                # Nothing is queued: never "texts on" for texts that won't go.
+                print(f"[new_here] {biz[:8]}: the welcome for a guest from the {door} door wasn't queued",
+                      flush=True)
+                mine["texts"] = "unread"
+                mine.pop("welcome_at", None)
+                _keep(biz, contact, mine)
+        return mine
+    except Exception as e:  # noqa: BLE001 — a door never fails for the path
+        print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't put on the path "
+              f"({type(e).__name__})", flush=True)
+        return None
+
+
+def enroll_by_id(business_id: Any, contact_id: Any, *, door: str, texts_ok: Optional[bool],
+                 phone: Optional[str] = None, visit_at: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """enroll() for a door that has ids: the church and the guest read
+    fresh. `texts_ok` None reads it: whether their number already has a yes
+    to the church's texts (the kids desk's box, the welcome desk's office),
+    tried twice; a read that still fails is "unread", never a no. Sync;
+    never raises."""
+    biz = str(business_id or "")
+    try:
+        if not biz or not contact_id or not path_on(biz):
+            return None
+        business = _business(biz)
+        people = _rows(f"/contacts?id=eq.{_q(contact_id)}&business_id=eq.{_q(biz)}"
+                       "&select=id,name,phone,metadata&limit=1")
+        if not business or not people:
+            return None
+        if texts_ok is None:
+            number = people[0].get("phone") if phone is None else phone
+            texts_ok = has_yes(biz, number)
+            if texts_ok is None:            # one more try: a blip shouldn't decide it
+                texts_ok = has_yes(biz, number)
+        return enroll(business, people[0], door=door, texts_ok=texts_ok, phone=phone, visit_at=visit_at)
+    except Exception as e:  # noqa: BLE001
+        print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't read for the path "
+              f"({type(e).__name__})", flush=True)
+        return None
+
+
+def second_door(business_id: Any, contact_id: Any, card_key: str, answers: List[Dict[str, str]],
+                said: str) -> bool:
+    """With the Welcome Path on: a guest whose welcome follow-up from another
+    door is open gets a note on it with what this door said (`said`, then the
+    answers), never a second follow-up. One guest, one path, one caller. True
+    when that note went on; False to start one as before (the path is off,
+    none is open, the open one is this card's own, or the read failed: then
+    church_follow_up.start decides as it always has). Never raises."""
+    biz, cid = str(business_id or ""), str(contact_id or "")
+    try:
+        if not biz or not cid or not path_on(biz):
+            return False
+        import church_follow_up
+        import guest_path
+        rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
+                     "&status=in.(open,handed_back)&select=id,card_key,path_kind&order=created_at.asc&limit=20")
+        first = next((r for r in rows or [] if guest_path.is_guest_follow_up(r)
+                      and str(r.get("card_key") or "") != str(card_key)), None)
+        if not first:
+            return False
+        text = "; ".join(f"{a.get('q')} {a.get('a')}" for a in answers or [] if isinstance(a, dict))
+        note = church_follow_up._note(biz, str(first["id"]), "chief", "note",
+                                      (said + (f" {text}" if text else ""))[:1800])
+        return note is not None
+    except Exception as e:  # noqa: BLE001
+        print(f"[new_here] {biz[:8]}: a second door's note wasn't added ({type(e).__name__})", flush=True)
+        return False
 
 
 # ─── the card ─────────────────────────────────────────────────────────
@@ -633,9 +1141,12 @@ def save_card(business: Dict[str, Any], guest: Dict[str, Any], form: Dict[str, s
         if kids and kids != "None":
             answers.append({"q": "Kids with them", "a": kids})
         visit = str(mine.get("texted_at") or "")[:10]
-        church_follow_up.start(biz, cid, card_key=CARD_KEY, card_name="New here card", kind="connect",
-                               answers=answers, source_event=f"new-here:{cid}:{visit}"[:80],
-                               what="New here cards", route_answers=[])
+        # A guest who came in by another door (the kids desk, the website's
+        # card) already has someone on it: the card is a note on that one.
+        if not second_door(biz, cid, CARD_KEY, answers, "Filled in the New here card."):
+            church_follow_up.start(biz, cid, card_key=CARD_KEY, card_name="New here card", kind="connect",
+                                   answers=answers, source_event=f"new-here:{cid}:{visit}"[:80],
+                                   what="New here cards", route_answers=[])
     except Exception as e:  # noqa: BLE001
         logger.warning("new here: follow-up not started for %s: %s", biz[:8], e)
     return True
@@ -743,9 +1254,15 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
     """This week's guests, newest first, with where each one stands: the
     ones who texted the word, and (since 2026-11-19) members who said "I'm
     new here" in the member app (member_im_new), each with `from` ("text" or
-    "app") and `app_at`. None when it couldn't be read."""
+    "app") and `app_at`. Since the Welcome Path (2026-11-20), every door's
+    guest (their texted_at is the path's start), each with `door` (a
+    guest_path.DOORS key: metadata door, else "text" for one who texted the
+    word and "app" for the member app), `texts_ok` and `texts` (WHY_NOT), and
+    the follow-up any door made for them. None when it couldn't be read."""
+    import guest_path
     import member_im_new
     biz = str(business["id"])
+    welcome_path = path_on(biz)
     since_dt = _now() - timedelta(days=days)
     since = _iso(since_dt)
     people = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>texted_at=gte.{_q(since)}"
@@ -762,10 +1279,17 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
     if not people:
         return []
     ids = ",".join(_q(p["id"]) for p in people)
-    follows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({ids})"
-                    f"&card_key=eq.{_q(CARD_KEY)}&select=contact_id,status,step,leader_contact_id,created_at"
-                    "&order=created_at.desc") or []
-    if app_only:
+    if welcome_path:
+        # Every door's welcome follow-up (the kids desk's, the website's, a
+        # church card's, New here's, the member app's), the newest first.
+        follows = [f for f in _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({ids})"
+                                    "&select=contact_id,status,step,leader_contact_id,created_at,card_key,path_kind"
+                                    "&order=created_at.desc") or [] if guest_path.is_guest_follow_up(f)]
+    else:
+        follows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({ids})"
+                        f"&card_key=eq.{_q(CARD_KEY)}&select=contact_id,status,step,leader_contact_id,created_at"
+                        "&order=created_at.desc") or []
+    if app_only and not welcome_path:
         # The member app's own follow-up first (someone who texted long ago
         # and has that one open got a note on it instead: it shows then).
         app_ids = ",".join(_q(p["id"]) for p in app_only)
@@ -789,6 +1313,8 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
         card = mine.get("card") if isinstance(mine.get("card"), dict) else None
         app = _app_of(p)
         texted = bool(mine.get("texted_at"))
+        door = str(mine.get("door") or ("text" if texted else "app"))
+        door = door if door in guest_path.DOORS else "text"
         f = by_contact.get(str(p["id"]))
         reached = bool(f and (f.get("status") == "done" or int(f.get("step") or 0) >= 1))
         out.append({
@@ -797,9 +1323,12 @@ def guests_of(business: Dict[str, Any], *, days: int = LIST_DAYS) -> Optional[Li
             "phone_last4": re.sub(r"\D", "", str(p.get("phone") or ""))[-4:],
             "texted_at": mine.get("texted_at"),
             # A member who told the church in the app: their answers are the card.
-            "card_at": mine.get("card_at") or (None if texted else app.get("at")),
+            "card_at": mine.get("card_at") or (app.get("at") if door == "app" or not texted else None),
             "card": card or (_app_card(app) if app else None),
-            "from": "text" if texted else "app",
+            "from": "app" if door == "app" else "text",
+            "door": door,
+            "texts_ok": bool(mine["texts_ok"]) if "texts_ok" in mine else door == "text",
+            "texts": mine.get("texts") or ("on" if door == "text" else None),
             "app_at": app.get("at"),
             "follow_up": None if not f else {
                 "leader": leaders.get(str(f.get("leader_contact_id") or ""), ""),
@@ -859,7 +1388,23 @@ def overview(business: Dict[str, Any], *, can_edit: bool) -> Dict[str, Any]:
         "texts_per_guest": 1 + sum(1 for s in STEPS if settings[s]["on"]),
         # When the texts go (Text → Texting hours): the room says it in words.
         "hours": _hours(business),
+        # Weeks two to six, the signature and the Saturday heads-up, only
+        # where the Welcome Path is on: a room that doesn't get this shows
+        # week one alone, as before.
+        **({"path": _path_view(business, settings)} if path_on(biz) else {}),
     }
+
+
+def _path_view(business: Dict[str, Any], settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """guest_path_weeks.room_view, or None when it couldn't be read (the room
+    says so and keeps week one)."""
+    try:
+        import guest_path_weeks
+        return guest_path_weeks.room_view(business, settings)
+    except Exception as e:  # noqa: BLE001 — the room still reads week one
+        print(f"[new_here] {str(business.get('id'))[:8]}: the path's view wasn't read ({type(e).__name__})",
+              flush=True)
+        return None
 
 
 @router.get("/new-here/{business_id}")
@@ -880,6 +1425,22 @@ class StepIn(BaseModel):
     hours: Optional[int] = None
 
 
+class PathStepIn(BaseModel):
+    on: bool = True
+    text: str = Field("", max_length=MAX_TEXT)
+    event_id: Optional[str] = Field(None, max_length=40)
+
+
+class SignatureIn(BaseModel):
+    on: bool = True
+    name: str = Field("", max_length=SIGNER_MAX)
+
+
+class HeadsUpIn(BaseModel):
+    greeters: bool = True
+    kids: bool = True
+
+
 class NewHereIn(BaseModel):
     on: bool
     word: str = Field("NEW", max_length=12)
@@ -887,10 +1448,45 @@ class NewHereIn(BaseModel):
     thanks: StepIn
     monday: StepIn
     invite: StepIn
+    # Weeks two to six, the signature and the Saturday heads-up (the Welcome
+    # Path). Each is optional: a room that doesn't send one (Text › New here,
+    # an app from before) leaves what's saved exactly as it was.
+    back: Optional[PathStepIn] = None
+    thinking: Optional[PathStepIn] = None
+    next_step: Optional[PathStepIn] = None
+    door_open: Optional[PathStepIn] = None
+    signature: Optional[SignatureIn] = None
+    heads_up: Optional[HeadsUpIn] = None
+
+
+# "Reply YES": YES is a word the phone companies read as "start my texts
+# again" (sms_routing.START_WORDS), never a church's reply word.
+_REPLY_START = re.compile(r"\breply\s+(?:with\s+)?[\"'“‘]?(?:yes|start|join|unstop)\b", re.I)
+
+
+def _path_text(step: str, s: PathStepIn) -> Dict[str, Any]:
+    text = " ".join((s.text or DEFAULTS[step]["text"]).split())
+    if CARD_LINK in text:
+        raise HTTPException(400, "Only the welcome carries the card's link.")
+    if _REPLY_START.search(text):
+        raise HTTPException(400, "YES means \"start my texts again\" to the phone companies. Ask them to just "
+                                 "reply instead.")
+    out: Dict[str, Any] = {"on": bool(s.on), "text": text}
+    if step == "next_step":
+        if EVENT not in text or WHEN not in text:
+            raise HTTPException(400, "Keep {event} and {when} in the next step's words: they become your event's "
+                                     "name and its day.")
+        event = (s.event_id or "").strip()
+        if event and not re.fullmatch(r"[0-9a-fA-F-]{36}", event):
+            raise HTTPException(400, "Pick one of your church's upcoming events.")
+        out["event_id"] = event or None
+    return out
 
 
 def clean(body: NewHereIn) -> Dict[str, Any]:
-    """What gets saved, or a 400 that says what to change."""
+    """What gets saved, or a 400 that says what to change. The Welcome
+    Path's keys only when the room sent them (merge never touches a key it
+    isn't given)."""
     word = re.sub(r"[^A-Za-z]", "", body.word or "").upper()
     if not re.fullmatch(r"[A-Z]{2,12}", word):
         raise HTTPException(400, "The word is 2 to 12 letters, like NEW or HELLO.")
@@ -911,6 +1507,14 @@ def clean(body: NewHereIn) -> Dict[str, Any]:
         out[step] = {"on": bool(s.on), "text": text}
         if step == "thanks":
             out[step]["hours"] = min(6, max(1, int(s.hours or DEFAULTS["thanks"]["hours"])))
+    for step in PATH_TEXTS:
+        s = getattr(body, step)
+        if s is not None:
+            out[step] = _path_text(step, s)
+    if body.signature is not None:
+        out["signature"] = {"on": bool(body.signature.on), "name": " ".join((body.signature.name or "").split())}
+    if body.heads_up is not None:
+        out["heads_up"] = {"greeters": bool(body.heads_up.greeters), "kids": bool(body.heads_up.kids)}
     return out
 
 
@@ -930,7 +1534,17 @@ def put_new_here(business_id: str, body: NewHereIn, user: AuthedUser = Depends(r
     # endpoint keeps inside new_here (the church's guest card, guest_card.py),
     # stay as they are, whatever was written a moment ago.
     import business_settings
-    settings = business_settings.merge(biz, set=clean(body), under=["new_here"])
+    saving = clean(body)
+    picked = (saving.get("next_step") or {}).get("event_id")
+    if picked and picked != settings_of(business)["next_step"]["event_id"]:
+        # A newly picked next step is one of the church's own upcoming events.
+        import guest_path_weeks
+        coming = guest_path_weeks.events_coming(business)
+        if coming is None:
+            raise HTTPException(503, "Your events couldn't be read just now. Try again in a minute.")
+        if not any(e["entry_id"] == picked for e in coming):
+            raise HTTPException(400, "That event isn't coming up in Services & Events. Pick another.")
+    settings = business_settings.merge(biz, set=saving, under=["new_here"])
     if settings is None:
         raise HTTPException(503, "That didn't save just now. Try again in a minute.")
     return overview({**business, "settings": settings}, can_edit=True)
@@ -1202,6 +1816,10 @@ async def resend_card(business_id: str, body: ResendIn, user: AuthedUser = Depen
     mine = ((people[0].get("metadata") or {}).get("new_here") or {}) if people else {}
     if not people or not mine.get("code") or not people[0].get("phone"):
         raise HTTPException(404, "That guest didn't come through New here.")
+    # A guest from another door who never said yes to texts (the Welcome
+    # Path's texts_ok) is called, never texted.
+    if mine.get("texts_ok") is False:
+        raise HTTPException(409, "They haven't said yes to the church's texts, so the card can't be texted to them.")
     phone = str(people[0]["phone"])
     link = await asyncio.to_thread(card_link, biz, mine["code"])
     text = sms_service.compose_outbound_body(
