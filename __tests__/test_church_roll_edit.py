@@ -318,6 +318,81 @@ def test_a_number_never_counts_in_this_week(church, monkeypatch):
 
 
 def test_a_seat_below_staff_cannot_change_the_roll(church, monkeypatch):
+    # business_access refuses a seat below manager before the roll's gate runs.
     t = _client(monkeypatch, role="member")
-    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"first": "X"}).status_code in (403, 404)
-    assert t.post("/church/roll/people", params=Q, json={"people": [{"first": "X"}], "status": "first_time"}).status_code in (403, 404)
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"first": "X"}).status_code == 404
+    assert t.post("/church/roll/people", params=Q, json={"people": [{"first": "X"}], "status": "first_time"}).status_code == 404
+
+
+# ─── a write that fails says so (the fake answers as Supabase does) ───
+
+def test_a_family_move_that_fails_never_leaves_them_in_no_family(church, monkeypatch):
+    t = _client(monkeypatch)
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"start": "The Carter family"}}).status_code == 200
+    old = next(a["household_id"] for a in church.t["household_adults"] if a["contact_id"] == CALVIN)
+    import church_families
+    monkeypatch.setattr(church_families, "make_family", lambda *a, **k: None)
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"start": "Another"}}).status_code == 503
+    assert [a["household_id"] for a in church.t["household_adults"] if a["contact_id"] == CALVIN] == [old]
+    monkeypatch.setattr(church_families, "join_family", lambda *a, **k: False)
+    other = church.t["households"][0]["id"] if church.t["households"][0]["id"] != old else None
+    hid = other or str(uuid.uuid4())
+    if not other:
+        church.t["households"].append({"id": hid, "business_id": BIZ, "name": "The Others"})
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"join": hid}}).status_code == 503
+    assert [a["household_id"] for a in church.t["household_adults"] if a["contact_id"] == CALVIN] == [old]
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path: False)
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"leave": True}}).status_code == 503
+
+
+def test_a_family_move_writes_the_new_family_before_leaving_the_old(church, monkeypatch):
+    t = _client(monkeypatch)
+    t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"start": "The Carter family"}})
+    t.patch(f"/church/roll/person/{DANA}", params=Q, json={"family": {"start": "The Dana family"}})
+    dana_home = next(a["household_id"] for a in church.t["household_adults"] if a["contact_id"] == DANA)
+    assert t.patch(f"/church/roll/person/{CALVIN}", params=Q, json={"family": {"join": dana_home}}).status_code == 200
+    assert [a["household_id"] for a in church.t["household_adults"] if a["contact_id"] == CALVIN] == [dana_home]
+
+
+def test_a_grade_that_didnt_save_is_not_saved(church, monkeypatch):
+    t = _client(monkeypatch)
+    hid = str(uuid.uuid4())
+    church.t["households"].append({"id": hid, "business_id": BIZ, "name": "The Carter family"})
+    church.t["children"].append({"id": "kid-1", "business_id": BIZ, "household_id": hid, "contact_id": DANA,
+                                 "grade": "", "birthdate": None, "active": True})
+    real = sb_clients.sb_patch_as_service
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **k: None if path.startswith("/children") else real(path, body, **k))
+    r = t.patch(f"/church/roll/person/{DANA}", params=Q, json={"grade": "4th"})
+    assert r.status_code == 503 and "grade" in r.json()["detail"]
+
+
+def test_a_childs_allergies_that_didnt_save_come_back_as_a_warning(church, monkeypatch):
+    t = _client(monkeypatch)
+    real = sb_clients.sb_post_as_service
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, prefer="return=representation", **k: None if path == "/child_care_notes"
+                        else real(path, body, prefer, **k))
+    r = t.post("/church/roll/people", params=Q, json={
+        "people": [{"first": "Jordan", "last": "Price"}, {"first": "Kai", "last": "Price", "kind": "child", "allergies": "Peanuts"}],
+        "family": {"name": "Price"}, "status": "first_time"})
+    assert r.status_code == 200 and r.json()["household_id"]
+    assert "Kai’s allergies didn’t save" in r.json()["warning"]
+
+
+def test_a_merge_hides_the_other_record_before_anything_moves(church, monkeypatch):
+    t = _client(monkeypatch)
+    _add(church, TWICE, "Ruth Abner", status="active", meta={"imported_from": "Subsplash"})
+    real = sb_clients.sb_patch_as_service
+    order = []
+
+    def patch(path, body, **k):
+        order.append(path.split("?")[0] + (":merged" if isinstance(body.get("metadata"), dict) and body["metadata"].get("merged_into") else ""))
+        return None if path.startswith("/sms_messages") else real(path, body, **k)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    r = t.post("/church/roll/merge", params=Q, json={"keep": TWICE, "drop": NUMBER})
+    assert r.status_code == 200 and "sms_messages" in r.json()["left"]
+    assert order.index("/contacts:merged") < order.index("/events")
+    assert _c(church, NUMBER)["metadata"]["merged_into"] == TWICE
+    # The texts that didn't move stay on the hidden record, and a retry is refused.
+    assert t.post("/church/roll/merge", params=Q, json={"keep": TWICE, "drop": NUMBER}).status_code == 409
