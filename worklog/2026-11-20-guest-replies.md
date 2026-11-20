@@ -23,7 +23,8 @@ decisions:
   - "Words: \"<Name> answered the church's text\" / \"“<reply, 90 chars>” Their texts are on hold until you reply.\" (someone replies, for First-time guests). A nameless guest is \"A guest at (555) 123-4567\""
   - "Quiet hours (member_push.quiet_hour) hold the telling; the sweep tells after. At most one alert a guest every 10 minutes: hold_tell (owed) / hold_told_at claimed in the guest's row before sending; nothing went → owed again. Replies inside the 10 minutes are told by the sweep after, with the latest words"
   - "Cleared by: POST /sms/send after a text went (the Text room; Chief's send_sms_core and the scheduler's sends never come through it), or a REACHED note (Talked, Left a message) by anyone but Chief on the guest's follow-up (church_follow_up._note → on_outcome). hold false, hold_answered_at/_by, note \"Answered by <name>.\" (\"Answered in Text.\" when the login's name can't be read)"
-  - "Sweep (guest_replies.sweep, every 10 minutes, scheduler job guest_replies_sweep): churches with an active own number and the path on, contacts with metadata->new_here->>hold=eq.true (per church). Owed alerts; a day after hold_since the caller is reminded once (hold_reminded_at); three days after, the office's alert once (hold_alerted_at, dedup key guest-reply-waited-<contact>-<hold_since>). Never cleared by time"
+  - "Sweep (guest_replies.sweep, every 10 minutes, scheduler job guest_replies_sweep): churches with an active own number and the path on, contacts with metadata->new_here->>hold=eq.true and something still to do (an alert owed, or the three-day alert not raised), per church, 500 a page up to 5,000. Owed alerts; a day after hold_since the caller is reminded once (hold_reminded_at); three days after, the office's alert once (hold_alerted_at, dedup key guest-reply-waited-<contact>-<hold_since>). Never cleared by time"
+  - "A note that doesn't save is said in the log; the alert still goes (it carries the words) and the text is in Text"
   - "A read that fails decides nothing: no contact → no hold; no follow-up → held, nobody told until the sweep can read; who-to-tell unread → owed again"
   - "No migration: contacts.metadata.new_here and existing note kinds"
 related: [2026-11-20-guest-welcome-path.md, 2026-11-20-who-calls-our-guests.md, 2026-11-20-guests-room.md, 2026-11-20-guest-path-every-door.md, 2026-11-14-new-here-guest-texts.md]
@@ -42,4 +43,4 @@ nav/link/label; defaults unchanged), `guest_path_weeks.update` (the shared
 hold_v guard), the scheduler job in `kmj_intake_automation.py`, and the
 sample-church job list.
 
-Tests: `__tests__/test_guest_replies.py` (47).
+Tests: `__tests__/test_guest_replies.py` (49). After the merge, 5844 passed across the 177 test files that import what changed.

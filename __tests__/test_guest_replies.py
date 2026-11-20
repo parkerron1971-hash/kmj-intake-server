@@ -121,6 +121,13 @@ def w(g, told, monkeypatch):
     plain_get = g.get
 
     def get(path, **kw):
+        off = re.search(r"&offset=(\d+)", path)
+        if off:                                    # PostgREST's paging
+            path = path.replace(off.group(0), "")
+            lim = re.search(r"&limit=(\d+)", path)
+            rows = plain_get(re.sub(r"&limit=\d+", "", path), **kw)
+            start = int(off.group(1))
+            return rows[start:start + int(lim.group(1))] if lim else rows[start:]
         if path.startswith("/sms_messages") and "order=created_at.desc" in path:
             rows = plain_get(re.sub(r"&limit=\d+", "", path), **kw)
             rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
@@ -574,6 +581,29 @@ def test_a_login_nobody_can_reach_falls_to_the_offices_alert(w, monkeypatch):
     assert _reply(w, "Thank you!") == "told"
     [(title, body, _)] = w.told["gc_alert"]
     assert "Renee Ellis has their call." in body and "Thank you" not in body
+
+
+def test_the_sweep_pages_through_held_guests_and_skips_the_ones_with_nothing_left(w, monkeypatch):
+    monkeypatch.setattr(gr, "HELD_PAGE", 2)
+    for i in range(5):
+        w.t["contacts"].append({"id": cid(60 + i), "business_id": BIZ, "name": f"Guest {i}", "phone": f"+1555999000{i}",
+                                "created_at": f"2026-11-22T17:0{i}:00Z", "metadata": {"new_here": {
+                                    "door": "web", "texted_at": gr._iso(SUNDAY), "hold": True,
+                                    "hold_since": gr._iso(MONDAY), "hold_v": 1,
+                                    **({"hold_alerted_at": gr._iso(MONDAY)} if i == 0 else {})}}})
+    held = gr.held_guests(BIZ)
+    assert sorted(c["name"] for c in held) == ["Guest 1", "Guest 2", "Guest 3", "Guest 4"],         "every page read; a hold that has had everything isn't read again"
+    stats = gr.sweep(MONDAY + timedelta(days=3, minutes=5))
+    assert stats["office"] == 4
+
+
+def test_a_note_that_doesnt_save_is_said_and_the_alert_still_goes(w, monkeypatch, capsys):
+    real = w.post
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, **kw: None if path.startswith("/church_follow_up_notes") else
+                        real(path, body, **kw))
+    assert _reply(w, "Thank you!") == "told"
+    assert _notes(w) == [] and "a note didn't save" in capsys.readouterr().out
 
 
 def test_unread_numbers_skip_the_sweep(w, monkeypatch):

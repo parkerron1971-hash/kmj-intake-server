@@ -81,7 +81,8 @@ QUOTE_MAIL = 600
 NOTE_MAX = 1500
 TRIES = 3
 TEXT_NAV = "operate:sms"            # the Text room; ":<contact id>" opens their texts
-HELD_PAGE = 500
+HELD_PAGE = 500                     # held guests read a page at a time
+HELD_MAX = 5000                     # ... and at most this many a church a sweep
 
 
 class Unread(Exception):
@@ -537,11 +538,16 @@ def _history(biz: str, fu: Optional[Dict[str, Any]], verb: str, line: str) -> No
     church_history.note(biz, verb, line, target_type="church_follow_up", target_id=fu["id"])
 
 
-def _note(biz: str, fu: Optional[Dict[str, Any]], body: str) -> None:
+def _note(biz: str, fu: Optional[Dict[str, Any]], body: str) -> bool:
+    """A note on the guest's follow-up. False (and said in the log) when it
+    didn't save: the alert still carries the words, and the text is in Text."""
     if not fu:
-        return
+        return False
     import church_follow_up as cfu
-    cfu._note(biz, str(fu["id"]), "chief", "note", body)
+    if cfu._note(biz, str(fu["id"]), "chief", "note", body):
+        return True
+    print(f"[guest_replies] a note didn't save (business {biz[:8]}, follow-up {str(fu['id'])[:8]})", flush=True)
+    return False
 
 
 def _tell_claimed(business: Dict[str, Any], contact: Dict[str, Any], fu: Optional[Dict[str, Any]], reply: str,
@@ -777,6 +783,24 @@ def sweep_one(business: Dict[str, Any], contact: Dict[str, Any], now: datetime, 
             _change(biz, cid, _unclaim_stamp("hold_reminded_at", after["hold_reminded_at"]))
 
 
+def held_guests(biz: str) -> Optional[List[Dict[str, Any]]]:
+    """The church's held guests with something still to do (an alert owed,
+    or the three-day alert not yet raised), a page at a time. A hold that has
+    had everything waits for a person without being read again. None when a
+    page couldn't be read."""
+    out: List[Dict[str, Any]] = []
+    while len(out) < HELD_MAX:
+        page = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>hold=eq.true"
+                     "&or=(metadata->new_here->>hold_tell.eq.true,metadata->new_here->>hold_alerted_at.is.null)"
+                     f"&select=id,name,phone,metadata&order=created_at.asc,id.asc&limit={HELD_PAGE}&offset={len(out)}")
+        if page is None:
+            return None
+        out += page
+        if len(page) < HELD_PAGE:
+            break
+    return out
+
+
 def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     """Every 10 minutes (the scheduler): each church with its own number and
     the Welcome Path on, each guest whose reply waits. A church that can't
@@ -803,8 +827,7 @@ def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
             business = _business(biz)
             if not business or not _is_church(business):
                 continue
-            held = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>hold=eq.true"
-                         f"&select=id,name,phone,metadata&order=created_at.asc&limit={HELD_PAGE}")
+            held = held_guests(biz)
             if held is None:
                 continue
             stats["churches"] += 1
