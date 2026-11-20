@@ -2,7 +2,7 @@
 title: Guest Welcome Path (visitor flow upgrade)
 date: 2026-11-20
 agent: Claude Code (Claude Opus 5.5)
-asked: "we need to upgrade the visitor flow experience ... chief should be sending a follow up call to the admin of people and care or a church should be able to assign who should be over this", then "by default the calls goes to people and care until we get a welcome team ... allow this to be selected by any church", then "build"
+asked: 'upgrade the visitor flow: capture visitors, automated texts from the church, Chief hands the follow-up call to the People & Care admin or whoever the church assigns; then "by default the calls goes to people and care until we get a welcome team ... allow this to be selected by any church"; then "build"'
 status: in progress
 prs: []
 migrations: []
