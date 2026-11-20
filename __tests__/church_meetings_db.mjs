@@ -50,7 +50,8 @@ const pastor = 'cccccccc-5555-4555-8555-555555555555';     // the owner's own pe
 const outsider = 'cccccccc-2222-4222-8222-222222222222';   // the other church's
 const nobody = 'eeeeeeee-9999-4999-8999-999999999999';
 const TABLES = ['church_calendar_links', 'church_meeting_answers', 'church_meeting_notices', 'church_meeting_series'];
-const FUNCTIONS = ['church_board_members_follow_list', 'church_boards_audience_kept', 'church_meetings_same_business'];
+const FUNCTIONS = ['church_board_members_follow_list', 'church_boards_audience_kept', 'church_meetings_same_business',
+  'church_space_bookings_meeting_room'];
 const BOARD_TABLES = ['church_boards', 'church_board_members', 'church_board_meetings', 'church_board_items',
   'church_board_attendance', 'church_board_decisions', 'church_spaces', 'church_space_bookings'];
 const hash = c => c.repeat(64);
@@ -190,14 +191,20 @@ same(await all(`SELECT DISTINCT series_id, series_day, length_minutes, space_id,
   booking_id: null, cancelled_at: null, cancelled_by: null, changed_alone_at: null }]);
 // The file's Check block, run on the live database's shape (old rows only): it answers as it says.
 const asked = block('-- Check:', '-- Rollback');
-same(asked.length, 5);
-same(await all(asked[0]), TABLES.map(relname => ({ relname, relrowsecurity: true, policies: 0, browser_reads: false,
-  anon_reads: false })));
-// …and it would say so if the browser could read one: each role's read, given and taken back.
-for (const [role, key] of [['anon', 'anon_reads'], ['authenticated', 'browser_reads']]) {
-  await db.exec(`GRANT SELECT ON public.church_calendar_links TO ${role}`);
-  same((await all(asked[0])).filter(r => r[key]).map(r => r.relname), ['church_calendar_links']);
-  await db.exec(`REVOKE SELECT ON public.church_calendar_links FROM ${role}`);
+same(asked.length, 7);
+const CHECKED = ['church_board_meetings', 'church_board_members', 'church_boards', ...TABLES];
+same(await all(asked[0]), CHECKED.map(relname => ({ relname, relrowsecurity: true, policies: 0, browser_reads: false,
+  browser_writes: false, anon_reads: false, anon_writes: false })));
+// …and it would say so if the browser could read or change one: each role's
+// read, insert, update and delete, given and taken back, on a new table and an old one.
+for (const t of ['church_calendar_links', 'church_board_meetings']) {
+  for (const [role, who] of [['anon', 'anon'], ['authenticated', 'browser']]) {
+    for (const [grant, key] of [['SELECT', 'reads'], ['INSERT', 'writes'], ['UPDATE', 'writes'], ['DELETE', 'writes']]) {
+      await db.exec(`GRANT ${grant} ON public.${t} TO ${role}`);
+      same((await all(asked[0])).filter(r => r[`${who}_${key}`]).map(r => r.relname), [t]);
+      await db.exec(`REVOKE ${grant} ON public.${t} FROM ${role}`);
+    }
+  }
 }
 same((await all(asked[1])).map(x => `${x.table_name}.${x.column_name}`), ['church_board_meetings.booking_id',
   'church_board_meetings.cancelled_at', 'church_board_meetings.cancelled_by', 'church_board_meetings.changed_alone_at',
@@ -207,8 +214,22 @@ same(await all(asked[2]), ['church_board_meetings_alone', 'church_board_meetings
   'church_board_meetings_called_off', 'church_board_meetings_cancelled_by_fkey', 'church_board_meetings_length',
   'church_board_meetings_series_day', 'church_board_meetings_series_id_fkey', 'church_board_meetings_space_id_fkey',
   'church_boards_audience', 'church_boards_kind', 'church_boards_list_is_meeting'].map(conname => ({ conname, convalidated: true })));
-same(await all(asked[3]), FUNCTIONS.map(proname => ({ proname, browser_runs: false, anon_runs: false })));
-same(await one(asked[4]), { groups: 0, list_rows: 0, meetings: 0 });
+// The unique indexes the guards rest on, and which are partial (never named in on_conflict).
+const UNIQUE = [['church_board_meetings_one_a_day', false], ['church_board_meetings_one_booking', false],
+  ['church_board_members_one_from_list', true], ['church_boards_one_list_name', true],
+  ['church_calendar_links_one_live', true], ['church_calendar_links_token', false], ['church_meeting_notices_once', false]];
+same(await all(asked[3]), UNIQUE.map(([indexname, partial]) => ({ indexname, partial })));
+// The triggers, each on its table and enabled; one turned off shows.
+const TRIGGERS = [['church_board_meetings', 'church_meetings_same_business'], ['church_board_members', 'church_board_members_follow_list'],
+  ['church_boards', 'church_boards_audience_kept'], ['church_calendar_links', 'church_meetings_same_business'],
+  ['church_meeting_answers', 'church_meetings_same_business'], ['church_meeting_notices', 'church_meetings_same_business'],
+  ['church_meeting_series', 'church_meetings_same_business'], ['church_space_bookings', 'church_space_bookings_meeting_room']];
+same(await all(asked[4]), TRIGGERS.map(([on_table, tgname]) => ({ on_table, tgname, tgenabled: 'O' })));
+await db.exec('ALTER TABLE church_boards DISABLE TRIGGER church_boards_audience_kept');
+same((await all(asked[4])).filter(r => r.tgenabled !== 'O').map(r => r.tgname), ['church_boards_audience_kept']);
+await db.exec('ALTER TABLE church_boards ENABLE TRIGGER church_boards_audience_kept');
+same(await all(asked[5]), FUNCTIONS.map(proname => ({ proname, browser_runs: false, anon_runs: false })));
+same(await one(asked[6]), { groups: 0, list_rows: 0, meetings: 0 });
 
 // The indexes it makes, by name, and a word on each new table and on the private note.
 same((await all(`SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND (tablename = ANY($1)
@@ -219,10 +240,8 @@ same((await all(`SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AN
    'church_calendar_links_token', 'church_meeting_answers_member', 'church_meeting_answers_pkey',
    'church_meeting_notices_member', 'church_meeting_notices_once', 'church_meeting_notices_pkey',
    'church_meeting_notices_unsent', 'church_meeting_series_by_group', 'church_meeting_series_pkey']);
-same((await all(`SELECT indexname, indexdef LIKE 'CREATE UNIQUE%' AS one FROM pg_indexes WHERE indexname IN
-  ('church_board_members_one_from_list', 'church_board_meetings_one_a_day', 'church_board_meetings_one_booking',
-   'church_calendar_links_one_live', 'church_calendar_links_token', 'church_meeting_notices_once', 'church_boards_one_list_name')
-  ORDER BY 1`)).map(x => x.one), [true, true, true, true, true, true, true]);
+same((await all(`SELECT indexname, indexdef LIKE 'CREATE UNIQUE%' AS one FROM pg_indexes WHERE indexname = ANY($1)
+  ORDER BY 1`, [UNIQUE.map(u => u[0])])).map(x => x.one), UNIQUE.map(() => true));
 same((await all(`SELECT relname FROM pg_class WHERE relname = ANY($1) AND obj_description(oid, 'pg_class') IS NOT NULL
   ORDER BY 1`, [TABLES])).map(x => x.relname), TABLES);
 assert.match((await one(`SELECT col_description('public.church_meeting_answers'::regclass,
@@ -340,9 +359,25 @@ await refuses(`UPDATE church_board_members SET board_id = $1 WHERE id = $2`, [hu
 await ok(`UPDATE church_board_members SET active = false, updated_at = now() WHERE id = $1`, [lClerk.id]);   // off the list
 await ok(`UPDATE church_board_members SET active = true, name = 'Cora Lane' WHERE id = $1`, [lClerk.id]);   // back on it
 await ok(`UPDATE church_board_members SET title = 'Note taker' WHERE id = $1`, [hClerk.id]);
-// Two replicas keeping it in step at once: the second insert of a person adds nothing.
-same((await all(`INSERT INTO church_board_members(business_id, board_id, contact_id, name, from_list) VALUES ($1, $2, $3, 'x', true)
-  ON CONFLICT (board_id, contact_id) WHERE from_list DO NOTHING RETURNING id`, [b1, huddle.id, clerk])).length, 0);
+// A list seat stays its person's: never moved to someone else (a person deleted sets it to nobody, below).
+await refuses(`UPDATE church_board_members SET contact_id = $1 WHERE id = $2`, [elder, hClerk.id], /stays its person's/);
+await refuses(`UPDATE church_board_members SET contact_id = $1, name = 'x' WHERE id = $2`, [deacon, lElder.id], /stays its person's/);
+await ok(`UPDATE church_board_members SET contact_id = $1 WHERE id = $2`, [clerk, hClerk.id]);            // the same person: a no-op
+await ok(`UPDATE church_board_members SET contact_id = $1 WHERE id = $2`, [deacon, cPastor.id]);          // a hand seat, as always
+await ok(`UPDATE church_board_members SET contact_id = $1 WHERE id = $2`, [pastor, cPastor.id]);
+// Two replicas keeping it in step at once, the way PostgREST can write it: one
+// person a request, and the second plain insert of the same person is a 23505
+// (a 409), read as "already seated". PostgREST's on_conflict names columns and
+// no predicate, so it can't land on this partial index at all (42P10).
+await refuses(...fromList(huddle, clerk), /duplicate key value violates unique constraint "church_board_members_one_from_list"/);
+await assert.rejects(db.query(...fromList(huddle, clerk)), e => e.code === '23505'); checks++;
+await refuses(`INSERT INTO church_board_members(business_id, board_id, contact_id, name, from_list) VALUES ($1, $2, $3, 'x', true)
+  ON CONFLICT (board_id, contact_id) DO NOTHING`, [b1, huddle.id, clerk], /no unique or exclusion constraint matching/);
+// The same for an open group for the list of the same name: a 23505, then read it again.
+await assert.rejects(db.query(...put('church_boards', { business_id: b1, name: 'THE STAFF HUDDLE', kind: 'meeting',
+  audience: 'office' })), e => e.code === '23505' && /church_boards_one_list_name/.test(e.message)); checks++;
+same((await one(`SELECT id FROM church_boards WHERE business_id = $1 AND audience = 'office' AND lower(name) = 'the staff huddle'
+  AND NOT archived`, [b1])).id, huddle.id);
 
 // ─── A meeting that repeats ─────────────────────────────────────────────
 const series = more => put('church_meeting_series', { business_id: b1, board_id: huddle.id, weekday: 2, pattern: 'weekly',
@@ -375,7 +410,15 @@ await refuses(`UPDATE church_meeting_series SET space_id = $1 WHERE id = $2`, [t
 await ok(`UPDATE church_meeting_series SET space_id = $1, made_through = '2027-03-02', updated_at = now() WHERE id = $2`,
   [van.id, sHuddle.id]);
 await ok(`UPDATE church_meeting_series SET space_id = null WHERE id = $1`, [sHuddle.id]);
-await refuses(`UPDATE church_meeting_series SET business_id = $1 WHERE id = $2`, [b2, sHuddle.id], /church_meeting_series_group/);
+// A series stays with its group and its church, with meetings or without.
+// First to another group of the same church, which nothing else would refuse.
+await refuses(`UPDATE church_meeting_series SET board_id = $1 WHERE id = $2`, [leaders.id, sCheckins.id], /A series stays with its group/);
+await refuses(`UPDATE church_meeting_series SET board_id = $1 WHERE id = $2`, [leaders.id, sHuddle.id], /A series stays with its group/);
+await refuses(`UPDATE church_meeting_series SET business_id = $1 WHERE id = $2`, [b2, sHuddle.id], /A series stays with its group/);
+await refuses(`UPDATE church_meeting_series SET board_id = $1, business_id = $2 WHERE id = $3`, [theirBoard.id, b2, sHuddle.id],
+  /A series stays with its group/);
+await ok(`UPDATE church_meeting_series SET board_id = $1, title = 'Huddle', until_on = '2027-12-31' WHERE id = $2`,
+  [huddle.id, sHuddle.id]);                                                               // its own group named again: nothing moves
 
 // ─── A meeting: its series, its length, its room, called off ────────────
 const meeting = more => put('church_board_meetings', { business_id: b1, board_id: huddle.id,
@@ -385,6 +428,20 @@ const tue2 = (await db.query(...meeting({ series_id: sHuddle.id, series_day: '20
   length_minutes: 60 }))).rows[0]; checks++;
 await refuses(...meeting({ series_id: sHuddle.id }), /church_board_meetings_series_day/);
 await refuses(...meeting({ series_id: sHuddle.id, series_day: '2026-12-01' }), /church_board_meetings_one_a_day/);
+// Made ahead the way PostgREST writes it (on_conflict=series_id,series_day,
+// ignore duplicates: a column list and no predicate): the day already made
+// adds nothing and fails nothing, and a new day lands. A partial index here
+// would make this a 42P10 for every call.
+const makeAhead = `INSERT INTO church_board_meetings(business_id, board_id, starts_at, series_id, series_day) VALUES
+  ($1, $2, '2026-12-01T14:00:00Z', $3, '2026-12-01'), ($1, $2, '2026-12-15T14:00:00Z', $3, '2026-12-15')
+  ON CONFLICT (series_id, series_day) DO NOTHING RETURNING series_day::text`;
+same((await all(makeAhead, [b1, huddle.id, sHuddle.id])).map(r => r.series_day), ['2026-12-15']);
+same((await all(makeAhead, [b1, huddle.id, sHuddle.id])).length, 0);
+await ok(`DELETE FROM church_board_meetings WHERE series_id = $1 AND series_day = '2026-12-15'`, [sHuddle.id]);
+same((await one(`SELECT indexdef FROM pg_indexes WHERE indexname = 'church_board_meetings_one_a_day'`)).indexdef.includes(' WHERE '),
+  false);
+// One-off meetings (no series) never clash with each other under the plain index.
+same(await n(`church_board_meetings WHERE series_id IS NULL AND business_id = $1`, [b1]) >= 2, true);
 await refuses(...meeting({ board_id: leaders.id, series_id: sHuddle.id, series_day: '2026-12-15' }), /That series is not this meeting's/);
 const theirSeries = await add('church_meeting_series', { business_id: b2, board_id: theirBoard.id, weekday: 1, pattern: 'weekly',
   starts_on: '2026-12-07', at_time: '19:00' });
@@ -423,9 +480,24 @@ await ok(`UPDATE church_board_meetings SET space_id = $1, booking_id = $2 WHERE 
 await refuses(...meeting({ space_id: hall.id, booking_id: kHall, starts_at: '2026-12-20T15:00:00Z' }),
   /church_board_meetings_one_booking/);                                                  // one meeting a booking
 await ok(...meeting({ space_id: hall.id, booking_id: kWaiting, starts_at: '2026-12-22T15:00:00Z' }));   // a request waits as a booking
-// Moved to another room with its booking, in one update; then the room alone, as nothing names a new booking.
+// Moved to another room with its booking, in one update, and back.
 await ok(`UPDATE church_board_meetings SET space_id = $1, booking_id = $2 WHERE id = $3`, [van.id, kVan, sat.id]);
 await ok(`UPDATE church_board_meetings SET space_id = $1, booking_id = $2 WHERE id = $3`, [hall.id, kHall, sat.id]);
+// The room changed alone, its booking still the old room's: refused. With the booking let go in the same update: fine.
+await refuses(`UPDATE church_board_meetings SET space_id = $1 WHERE id = $2`, [van.id, sat.id], /not for this meeting's room/);
+await ok(`UPDATE church_board_meetings SET space_id = $1, booking_id = null WHERE id = $2`, [van.id, sat.id]);
+await ok(`UPDATE church_board_meetings SET space_id = $1, booking_id = $2 WHERE id = $3`, [hall.id, kHall, sat.id]);
+await ok(`UPDATE church_board_meetings SET space_id = $1 WHERE id = $2`, [hall.id, sat.id]);                    // the same room again
+// From Rooms & spaces' side: a booking a meeting names keeps its room; one no meeting names moves as always.
+const chapel = await add('church_spaces', { business_id: b1, name: 'Chapel' });                 // a free room: only the rule refuses
+await refuses(`UPDATE church_space_bookings SET space_id = $1 WHERE id = $2`, [chapel.id, kHall], /change its room from the meeting/);
+await refuses(`UPDATE church_space_bookings SET space_id = $1, title = 'Moved' WHERE id = $2`, [chapel.id, kHall],
+  /change its room from the meeting/);
+await ok(`UPDATE church_space_bookings SET status = 'cancelled', updated_at = now() WHERE id = $1`, [kHall]);   // decided there
+await ok(`UPDATE church_space_bookings SET status = 'booked', start_at = start_at + interval '0 minutes' WHERE id = $1`, [kHall]);
+await ok(`UPDATE church_space_bookings SET space_id = $1 WHERE id = $2`, [hall.id, kHall]);                       // the same room
+const kLoose = await booking(van, '2026-12-26T15:00:00Z', '2026-12-26T16:00:00Z');
+await ok(`UPDATE church_space_bookings SET space_id = $1 WHERE id = $2`, [hall.id, kLoose]);
 // Called off: only a meeting not yet held, and who called it off goes with when.
 await ok(`UPDATE church_board_meetings SET cancelled_at = now(), cancelled_by = $1 WHERE id = $2`, [u1, tue2.id]);
 await refuses(`UPDATE church_board_meetings SET status = 'in_progress' WHERE id = $1 AND status = 'planned'`, [tue2.id],
@@ -526,6 +598,10 @@ await ok(...notice({ member_id: hPastor.id, claimed_at: '2026-11-30T15:00:00Z', 
   tries: 20 }));
 await ok(...notice({ member_id: hPastor.id, for_day: '2026-12-01', claimed_at: '2026-11-30T15:00:00Z',
   sent_at: '2026-11-30T15:00:01Z', how: 'nobody' }));
+// The time changed after the day-before reminder went: one "moved" notice a person for the new day.
+await ok(...notice({ member_id: hPastor.id, kind: 'moved', for_day: '2026-12-01' }));
+await refuses(...notice({ member_id: hPastor.id, kind: 'moved', for_day: '2026-12-09', made_by: u1 }), /church_meeting_notices_made_by/);
+await refuses(...notice({ member_id: hPastor.id, kind: 'moved', for_day: '2026-12-01' }), /church_meeting_notices_once/);
 await refuses(`UPDATE church_meeting_notices SET member_id = $1 WHERE id = $2`, [mDeacon.id, nudge.id], /not one of this meeting's people/);
 await refuses(`UPDATE church_meeting_notices SET how = null WHERE id = $1`, [got[0].id], /church_meeting_notices_sent/);
 await refuses(`UPDATE church_meeting_notices SET claimed_at = null WHERE id = $1`, [got[0].id], /church_meeting_notices_sent/);
@@ -570,6 +646,29 @@ same(await one(`SELECT contact_id FROM church_calendar_links WHERE token_hash = 
   { contact_id: elder });
 same(await one(`SELECT count(*)::int AS n FROM church_calendar_links WHERE token_hash = $1 AND revoked_at IS NULL`, [hash('a')]),
   { n: 0 });                                                                              // the old key opens nothing
+
+// ─── Twice again, with every new kind of row in place ───────────────────
+// Meeting groups for the list and of their own people, list seats (one left
+// the list and came back), series, meetings made from them, one changed by
+// itself and one skipped, rooms and bookings, answers with a note, reminders
+// sent, waiting and claimed, live and stopped calendar links: the file once
+// more changes nothing, in the catalog or in any row.
+const everything = async () => {
+  const out = {};
+  for (const { relname } of await all(`SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'
+    ORDER BY relname`)) {
+    out[relname] = (await all(`SELECT j FROM (SELECT to_jsonb(x) AS j FROM public.${relname} x) s ORDER BY j::text`)).map(r => r.j);
+  }
+  return out;
+};
+same([await n(`church_boards WHERE kind = 'meeting'`) >= 3, await n(`church_board_members WHERE from_list`) >= 4,
+  await n(`church_board_meetings WHERE cancelled_at IS NOT NULL`) >= 1, await n(`church_board_meetings WHERE changed_alone_at IS NOT NULL`) >= 1,
+  await n(`church_calendar_links WHERE revoked_at IS NOT NULL`) >= 1, await n(`church_meeting_notices WHERE sent_at IS NULL`) >= 1,
+  await n(`church_meeting_answers WHERE note IS NOT NULL`) >= 1], [true, true, true, true, true, true, true]);
+const rowsNow = await everything();
+await db.exec(FILE);
+same(await catalog(), cat1);
+same(await everything(), rowsNow);
 
 // ─── Server-only ────────────────────────────────────────────────────────
 for (const t of TABLES) {
@@ -705,10 +804,10 @@ const filled = async () => {
   const bd = await add('church_boards', { business_id: b1, name: 'Deacons' });
   const room = await add('church_spaces', { business_id: b1, name: 'Fellowship hall' });
   const s = await add('church_meeting_series', { business_id: b1, board_id: g.id, weekday: 6, pattern: 'month_nth', nth: 3,
-    starts_on: '2026-12-19', at_time: '10:00', space_id: room.id, created_by: u1 });
+    starts_on: '2031-01-18', at_time: '10:00', space_id: room.id, created_by: u1 });
   const seat = await add('church_board_members', { business_id: b1, board_id: g.id, contact_id: elder, name: 'Eli', from_list: true });
   const seat2 = await add('church_board_members', { business_id: b1, board_id: bd.id, contact_id: deacon, name: 'Dana' });
-  for (const [day, at] of [['2026-12-19', '2026-12-19T15:00:00Z'], ['2027-01-16', '2027-01-16T15:00:00Z']]) {
+  for (const [day, at] of [['2031-01-18', '2031-01-18T15:00:00Z'], ['2031-02-15', '2031-02-15T15:00:00Z']]) {
     const k = (await add('church_space_bookings', { business_id: b1, space_id: room.id, title: 'Leaders meeting', start_at: at,
       end_at: new Date(Date.parse(at) + 3600e3).toISOString(), status: 'booked' })).id;
     const m = await add('church_board_meetings', { business_id: b1, board_id: g.id, starts_at: at, series_id: s.id, series_day: day,
@@ -717,7 +816,7 @@ const filled = async () => {
       for_starts_at: at, by_contact_id: elder });
     await add('church_meeting_notices', { business_id: b1, meeting_id: m.id, member_id: seat.id, kind: 'day_before', for_day: day });
   }
-  const bm = await add('church_board_meetings', { business_id: b1, board_id: bd.id, starts_at: '2026-12-10T23:00:00Z',
+  const bm = await add('church_board_meetings', { business_id: b1, board_id: bd.id, starts_at: '2031-03-10T23:00:00Z',
     space_id: room.id });
   await add('church_board_attendance', { business_id: b1, meeting_id: bm.id, member_id: seat2.id, status: 'present' });
   await add('church_calendar_links', { business_id: b1, contact_id: elder, token_hash: hash('1') });
@@ -725,11 +824,11 @@ const filled = async () => {
   const tg = await add('church_boards', { business_id: b2, name: 'Their huddle', kind: 'meeting', audience: 'office' });
   const tseat = await add('church_board_members', { business_id: b2, board_id: tg.id, contact_id: outsider, name: 'x', from_list: true });
   const ts = await add('church_meeting_series', { business_id: b2, board_id: tg.id, weekday: 2, pattern: 'weekly',
-    starts_on: '2026-12-01', at_time: '09:00' });
-  const tm = await add('church_board_meetings', { business_id: b2, board_id: tg.id, starts_at: '2026-12-01T14:00:00Z',
-    series_id: ts.id, series_day: '2026-12-01' });
+    starts_on: '2031-01-07', at_time: '09:00' });
+  const tm = await add('church_board_meetings', { business_id: b2, board_id: tg.id, starts_at: '2031-01-07T14:00:00Z',
+    series_id: ts.id, series_day: '2031-01-07' });
   await add('church_meeting_answers', { business_id: b2, meeting_id: tm.id, member_id: tseat.id, answer: 'yes',
-    for_starts_at: '2026-12-01T14:00:00Z' });
+    for_starts_at: '2031-01-07T14:00:00Z' });
   await add('church_calendar_links', { business_id: b2, contact_id: outsider, token_hash: hash('2') });
 };
 const counts = async () => {
@@ -756,35 +855,73 @@ for (const [last, order] of [
 }
 
 // ─── The file's own Rollback block, as written ──────────────────────────
-// With rows in everything: the catalog is back as the board and spaces files
-// left it; every board, member, meeting, item, attendance mark, decision,
-// room and booking is still there; a meeting group is closed (archived), so
-// nothing reads it as a board; a meeting called off with nothing recorded is
-// gone, and one with an agenda stays; and the file goes in again afterwards.
+// With rows in everything (meetings far enough ahead that they are still to
+// come whenever this runs): before the columns go, every room held for a
+// meeting that won't happen is let go (a meeting group's meetings still to
+// come, called-off ones, a series' empty ones ahead), those meetings with
+// nothing recorded are taken out, every meeting group is closed and every list
+// seat let go; a board's own meetings ahead with an agenda, and its one-off
+// meetings, keep their rooms. Afterwards the catalog is back as the board and
+// spaces files left it, every board, member, item, attendance mark, decision,
+// room and booking is still there, and the file goes in again.
 db = await stand();
 const before = await catalog();
 await db.exec(FILE);
 const applied = await catalog();
 same(applied, cat1);
 await filled();
-const g = (await one(`SELECT id FROM church_boards WHERE business_id = $1 AND kind = 'meeting'`, [b1])).id;
-const offEmpty = await add('church_board_meetings', { business_id: b1, board_id: g, starts_at: '2027-02-01T15:00:00Z',
-  cancelled_at: '2026-11-20T15:00:00Z' });
-const offKept = await add('church_board_meetings', { business_id: b1, board_id: g, starts_at: '2027-03-01T15:00:00Z',
-  cancelled_at: '2026-11-20T15:00:00Z' });
+const G = (await one(`SELECT id FROM church_boards WHERE business_id = $1 AND kind = 'meeting'`, [b1])).id;
+const BD = (await one(`SELECT id FROM church_boards WHERE business_id = $1 AND name = 'Deacons'`, [b1])).id;
+const room2 = (await add('church_spaces', { business_id: b1, name: 'Room 2' })).id;
+const BS = (await add('church_meeting_series', { business_id: b1, board_id: BD, weekday: 4, pattern: 'month_nth', nth: 1,
+  starts_on: '2031-01-02', at_time: '19:00', space_id: room2 })).id;
+const roomFor = async at => (await add('church_space_bookings', { business_id: b1, space_id: room2, title: 'A meeting',
+  start_at: at, end_at: new Date(Date.parse(at) + 3600e3).toISOString(), status: 'booked' })).id;
+const meetingAt = async (board, at, more = {}) => {
+  const k = await roomFor(at);
+  return { id: (await add('church_board_meetings', { business_id: b1, board_id: board, starts_at: at, space_id: room2,
+    booking_id: k, ...more })).id, k };
+};
+const gEmpty = await meetingAt(G, '2031-04-01T15:00:00Z');                                   // a meeting group's, ahead, empty
+const gAgenda = await meetingAt(G, '2031-04-08T15:00:00Z');                                  // a meeting group's, ahead, with an agenda
+await add('church_board_items', { business_id: b1, meeting_id: gAgenda.id, title: 'Kept' });
+const gPast = await meetingAt(G, '2020-06-01T15:00:00Z');                                    // a meeting group's, long past, not held
+const bSeriesEmpty = await meetingAt(BD, '2031-01-02T23:00:00Z', { series_id: BS, series_day: '2031-01-02' });
+const bSeriesAgenda = await meetingAt(BD, '2031-02-06T23:00:00Z', { series_id: BS, series_day: '2031-02-06' });
+await add('church_board_items', { business_id: b1, meeting_id: bSeriesAgenda.id, title: 'The roof' });
+const bOneOff = await meetingAt(BD, '2031-05-01T23:00:00Z');                                 // a board's own one-off, ahead, empty
+const offEmpty = await meetingAt(BD, '2031-06-01T23:00:00Z', { cancelled_at: '2026-11-20T15:00:00Z' });
+const offKept = await meetingAt(BD, '2031-06-08T23:00:00Z', { cancelled_at: '2026-11-20T15:00:00Z' });
 await add('church_board_items', { business_id: b1, meeting_id: offKept.id, title: 'An item kept' });
-const kept = { boards: await n('church_boards'), members: await n('church_board_members'), meetings: await n('church_board_meetings'),
-  items: await n('church_board_items'), attendance: await n('church_board_attendance'), spaces: await n('church_spaces'),
-  bookings: await n('church_space_bookings') };
+const filledRooms = (await all(`SELECT booking_id FROM church_board_meetings WHERE board_id = $1 AND series_id IS NOT NULL
+  ORDER BY starts_at`, [G])).map(r => r.booking_id);
+same(filledRooms.length, 2);
+const listSeats = (await all(`SELECT id FROM church_board_members WHERE from_list AND active`)).map(r => r.id);
+same(listSeats.length >= 2, true);
+const tally = async () => ({ boards: await n('church_boards'), members: await n('church_board_members'),
+  meetings: await n('church_board_meetings'), items: await n('church_board_items'), attendance: await n('church_board_attendance'),
+  spaces: await n('church_spaces'), bookings: await n('church_space_bookings') });
+const kept = await tally();
 const undo = block('-- Rollback');
-assert.ok(undo.length >= 10); checks++;
+assert.ok(undo.length >= 14); checks++;
 for (const statement of undo) await db.exec(statement);
 same(await catalog(), before);
-same({ boards: await n('church_boards'), members: await n('church_board_members'), meetings: await n('church_board_meetings'),
-  items: await n('church_board_items'), attendance: await n('church_board_attendance'), spaces: await n('church_spaces'),
-  bookings: await n('church_space_bookings') }, { ...kept, meetings: kept.meetings - 1 });
-same([await n('church_board_meetings WHERE id = $1', [offEmpty.id]), await n('church_board_meetings WHERE id = $1', [offKept.id])],
-  [0, 1]);
+// Nothing lost but the meetings that won't happen and had nothing in them: the
+// group's two empty series meetings and its empty one ahead, the board's empty
+// series meeting ahead, the empty one called off, and the other church's
+// group's empty series meeting ahead (the rollback is the whole database's).
+same(await tally(), { ...kept, meetings: kept.meetings - 6 });
+const there = async m => n('church_board_meetings WHERE id = $1', [m.id]);
+same([await there(gEmpty), await there(gAgenda), await there(gPast), await there(bSeriesEmpty), await there(bSeriesAgenda),
+  await there(bOneOff), await there(offEmpty), await there(offKept)], [0, 1, 1, 0, 1, 1, 0, 1]);
+// Rooms: let go for everything that won't happen; kept for what will, and for the past.
+const status = async k => (await one(`SELECT status FROM church_space_bookings WHERE id = $1`, [k])).status;
+same([await status(gEmpty.k), await status(gAgenda.k), await status(gPast.k), await status(bSeriesEmpty.k),
+  await status(bSeriesAgenda.k), await status(bOneOff.k), await status(offEmpty.k), await status(offKept.k)],
+  ['cancelled', 'cancelled', 'booked', 'cancelled', 'booked', 'booked', 'cancelled', 'cancelled']);
+same([await status(filledRooms[0]), await status(filledRooms[1])], ['cancelled', 'cancelled']);
+// Every list seat let go; every meeting group closed; the board as it was.
+same(await all(`SELECT DISTINCT active FROM church_board_members WHERE id = ANY($1)`, [listSeats]), [{ active: false }]);
 same(await all(`SELECT name, archived FROM church_boards WHERE business_id = $1 ORDER BY name`, [b1]),
   [{ name: 'Deacons', archived: false }, { name: 'Leaders meeting', archived: true }]);
 await db.exec(FILE);

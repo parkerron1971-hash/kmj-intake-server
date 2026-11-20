@@ -50,12 +50,22 @@
 --                           since reads as not answered); a private note with
 --                           "I can't" only.
 --   church_meeting_notices  the reminders' claim-before-send ledger: the day
---                           before, and "Remind the ones who haven't answered";
---                           one a person a meeting a kind a day.
+--                           before, "Remind the ones who haven't answered",
+--                           and "moved" (the time changed after the day-before
+--                           reminder went); one a person a meeting a kind a day.
 --   church_calendar_links   a person's private link for their phone's
 --                           calendar: only a hash of its key is kept; one
 --                           working link a person; a stopped link stays
 --                           stopped.
+--   church_space_bookings   gains one trigger and nothing else: a booking a
+--                           meeting names keeps its room (the room changes from
+--                           the meeting, with a new booking).
+--
+-- The unique indexes the server writes against are plain where PostgREST must
+-- name them (one meeting a day of a series: on_conflict=series_id,series_day).
+-- The partial ones (one list seat a person, one open list group a name, one
+-- working calendar link a person) are never named in on_conflict: the server
+-- inserts one row and reads a 409 (23505) as "already there", then reads again.
 --
 -- Server-only: every new table RLS on with no policies, anon and
 -- authenticated revoked, service_role granted; every function revoked from
@@ -112,13 +122,16 @@ end $$;
 -- One open group for the list a name (whatever its case), so Set a meeting
 -- pressed twice for "Leaders meeting" finds or makes one. Boards are not
 -- touched: two of a church's boards may share a name, as they always could.
+-- PostgREST can't name a partial or an expression index in on_conflict, so
+-- the server inserts, reads a 409 (23505) as "made just now", and reads again.
 create unique index if not exists church_boards_one_list_name
   on public.church_boards (business_id, audience, lower(name)) where audience <> 'members' and not archived;
 
 -- One row a person on a group that follows the list, so two replicas keeping
 -- it in step at once never add someone twice. A person deleted leaves their
 -- row (the board's own rule, for old minutes) with no person, and two such
--- rows never clash.
+-- rows never clash. Partial, so the server seats one person a request and
+-- reads a 409 (23505) as "already seated", never on_conflict.
 create unique index if not exists church_board_members_one_from_list
   on public.church_board_members (board_id, contact_id) where from_list;
 
@@ -140,14 +153,21 @@ create trigger church_boards_audience_kept
   for each row execute function public.church_boards_audience_kept();
 
 -- A member row is the list's exactly when its group follows the list, and a
--- row the list adds is one of the church's people. Checked when a row is
--- added, or moved to another group, or marked; a person deleted (their
--- contact set null by the board's own key) checks nothing.
+-- row the list adds is one of the church's people and stays that person's.
+-- Checked when a row is added, or moved to another group, or marked, or its
+-- person changed; a person deleted (their contact set null by the board's own
+-- key) checks nothing. What it can't see (a hand write that marks a row the
+-- list's, or seats someone again) the server refuses: on a group for the list
+-- only the keeping in step writes seats (docs/CHURCH_SCHEDULE.md 10.2).
 create or replace function public.church_board_members_follow_list() returns trigger
 language plpgsql set search_path = public as $$
 declare
   a text;
 begin
+  if tg_op = 'UPDATE' and new.from_list and new.contact_id is not null
+     and new.contact_id is distinct from old.contact_id then
+    raise exception 'A seat from the list stays its person''s';
+  end if;
   if tg_op = 'INSERT' or new.from_list is distinct from old.from_list
      or new.board_id is distinct from old.board_id or new.business_id is distinct from old.business_id then
     select b.audience into a from public.church_boards b
@@ -171,7 +191,7 @@ revoke all on function public.church_board_members_follow_list() from public, an
 
 drop trigger if exists church_board_members_follow_list on public.church_board_members;
 create trigger church_board_members_follow_list
-  before insert or update of from_list, board_id, business_id on public.church_board_members
+  before insert or update of from_list, board_id, business_id, contact_id on public.church_board_members
   for each row execute function public.church_board_members_follow_list();
 
 -- ─── A meeting that repeats ─────────────────────────────────────────────
@@ -273,11 +293,14 @@ begin
 end $$;
 
 -- One meeting a day of a series, however many replicas make them ahead; one
--- meeting a booking; and the reminders' window.
+-- meeting a booking; and the reminders' window. The two unique indexes are
+-- plain, not partial: nulls are distinct, so one-off meetings and meetings with
+-- no booking never clash, and PostgREST's on_conflict=series_id,series_day
+-- (which sends no predicate) can name the first.
 create unique index if not exists church_board_meetings_one_a_day
-  on public.church_board_meetings (series_id, series_day) where series_id is not null;
+  on public.church_board_meetings (series_id, series_day);
 create unique index if not exists church_board_meetings_one_booking
-  on public.church_board_meetings (booking_id) where booking_id is not null;
+  on public.church_board_meetings (booking_id);
 create index if not exists church_board_meetings_coming
   on public.church_board_meetings (starts_at) where status = 'planned' and cancelled_at is null;
 
@@ -312,7 +335,7 @@ create table if not exists public.church_meeting_notices(
   business_id uuid not null references public.businesses(id) on delete cascade,
   meeting_id uuid not null,
   member_id uuid not null,
-  kind text not null check (kind in ('day_before', 'nudge')),
+  kind text not null check (kind in ('day_before', 'nudge', 'moved')),
   for_day date not null,
   made_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
@@ -357,10 +380,13 @@ create unique index if not exists church_calendar_links_one_live
 
 -- ─── Everything named is the church's own ───────────────────────────────
 
--- A series' group is its church's (its foreign key carries the church) and
--- so is its room. A meeting's series is the same church's and the same
--- group's; its room is its church's; its booking is its church's and is of
--- its room. An answer's or a reminder's person sits on the meeting's group,
+-- A series' group is its church's (its foreign key carries the church), so
+-- is its room, and a series never moves to another group or church (its
+-- meetings would be left hanging off another group's series). A meeting's
+-- series is the same church's and the same group's; its room is its church's;
+-- its booking is its church's and is of its room, checked when the booking is
+-- written and again when the room changes. An answer's or a reminder's person
+-- sits on the meeting's group,
 -- and the person who answered is the church's. A calendar link's person is
 -- the church's, and the link never changes church, person or key, and once
 -- stopped stays stopped. Each is checked only when a write names it: a
@@ -371,6 +397,10 @@ create or replace function public.church_meetings_same_business() returns trigge
 language plpgsql set search_path = public as $$
 begin
   if tg_table_name = 'church_meeting_series' then
+    if tg_op = 'UPDATE' and (new.board_id is distinct from old.board_id
+                             or new.business_id is distinct from old.business_id) then
+      raise exception 'A series stays with its group: make a new one';
+    end if;
     if new.space_id is not null
        and (tg_op = 'INSERT' or new.space_id is distinct from old.space_id
             or new.business_id is distinct from old.business_id) then
@@ -397,10 +427,13 @@ begin
         raise exception 'That room is not in this church';
       end if;
     end if;
-    -- Checked when the booking is written: whoever moves a meeting to another
-    -- room writes its booking in the same update.
+    -- Checked when the booking is written, and when the room changes to
+    -- another: whoever moves a meeting to another room writes its booking (or
+    -- none) in the same update. A room deleted sets the room to nothing, which
+    -- checks nothing.
     if new.booking_id is not null
-       and (tg_op = 'INSERT' or new.booking_id is distinct from old.booking_id) then
+       and (tg_op = 'INSERT' or new.booking_id is distinct from old.booking_id
+            or (new.space_id is not null and new.space_id is distinct from old.space_id)) then
       if not exists (select 1 from public.church_space_bookings bk
                      where bk.id = new.booking_id and bk.business_id = new.business_id
                        and bk.space_id = new.space_id) then
@@ -448,7 +481,7 @@ revoke all on function public.church_meetings_same_business() from public, anon,
 
 drop trigger if exists church_meetings_same_business on public.church_meeting_series;
 create trigger church_meetings_same_business
-  before insert or update of space_id, business_id on public.church_meeting_series
+  before insert or update of space_id, business_id, board_id on public.church_meeting_series
   for each row execute function public.church_meetings_same_business();
 drop trigger if exists church_meetings_same_business on public.church_board_meetings;
 create trigger church_meetings_same_business
@@ -467,6 +500,27 @@ create trigger church_meetings_same_business
   before insert or update on public.church_calendar_links
   for each row execute function public.church_meetings_same_business();
 
+-- The other side of "a booking is of its meeting's room": Rooms & spaces may
+-- approve, decline or cancel a booking a meeting names, and the meeting page
+-- reads where it stands, but its room changes only from the meeting (a new
+-- booking for the new room). Its times are the server's to keep in step
+-- (S3-3 refuses a time change from Rooms & spaces in plain words).
+create or replace function public.church_space_bookings_meeting_room() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if new.space_id is distinct from old.space_id
+     and exists (select 1 from public.church_board_meetings m where m.booking_id = new.id) then
+    raise exception 'This booking is for a meeting: change its room from the meeting';
+  end if;
+  return new;
+end $$;
+revoke all on function public.church_space_bookings_meeting_room() from public, anon, authenticated;
+
+drop trigger if exists church_space_bookings_meeting_room on public.church_space_bookings;
+create trigger church_space_bookings_meeting_room
+  before update of space_id on public.church_space_bookings
+  for each row execute function public.church_space_bookings_meeting_room();
+
 -- ─── Server-only ────────────────────────────────────────────────────────
 
 do $$ declare t text; begin
@@ -483,7 +537,7 @@ comment on column public.church_boards.kind is
 comment on column public.church_boards.audience is
   'Meetings & minutes: who comes. members = the group''s own people; leaders = everyone on the leaders list; office = the office on it. A group for the list is a meeting, keeps its audience, and its people are kept in step with the list by the server (from_list).';
 comment on column public.church_board_members.from_list is
-  'Meetings & minutes: a row the server keeps in step with the leaders list (a group whose audience is leaders or office). Never written by hand; leaving the list is active = false, as leaving a board is.';
+  'Meetings & minutes: a row the server keeps in step with the leaders list (a group whose audience is leaders or office), one a person, and that person''s for good. Only the keeping in step writes seats on such a group; leaving the list is active = false, as leaving a board is.';
 comment on table public.church_meeting_series is
   'Meetings & minutes: a meeting that repeats (weekly, every other week from starts_on, or the nth weekday of the month; church_away_commitments'' rule), at at_time on the church''s clock. Its meetings are church_board_meetings rows made ahead through made_through. Server-only (RLS on, no policies).';
 comment on column public.church_board_meetings.series_day is
@@ -503,7 +557,7 @@ comment on column public.church_meeting_answers.note is
 comment on column public.church_meeting_answers.for_starts_at is
   'The meeting''s start when the answer was given. Once the meeting moves, the answer no longer counts as one for the new time.';
 comment on table public.church_meeting_notices is
-  'Meetings & minutes: the reminders'' ledger. day_before (the sweep, the day before, outside quiet hours) and nudge ("Remind the ones who haven''t answered"); one a person a meeting a kind a day, claimed before it is sent and let go when nothing went. Server-only.';
+  'Meetings & minutes: the reminders'' ledger. day_before (the sweep, the day before, outside quiet hours), nudge ("Remind the ones who haven''t answered") and moved (the time changed after the day-before reminder went); one a person a meeting a kind a day, claimed before it is sent and let go when nothing went. Server-only.';
 comment on table public.church_calendar_links is
   'Meetings & minutes: a person''s private link for their phone''s calendar. Only the sha256 of its key is kept. One working link a person; making a new one stops the old (revoked_at), and a stopped link stays stopped. Server-only.';
 
@@ -515,11 +569,14 @@ notify pgrst, 'reload schema';
 --   select c.relname, c.relrowsecurity,
 --          (select count(*) from pg_policies p where p.schemaname = 'public' and p.tablename = c.relname) as policies,
 --          has_table_privilege('authenticated', c.oid, 'select') as browser_reads,
---          has_table_privilege('anon', c.oid, 'select') as anon_reads
+--          has_table_privilege('authenticated', c.oid, 'insert,update,delete') as browser_writes,
+--          has_table_privilege('anon', c.oid, 'select') as anon_reads,
+--          has_table_privilege('anon', c.oid, 'insert,update,delete') as anon_writes
 --     from pg_class c where c.relnamespace = 'public'::regnamespace
---      and c.relname in ('church_meeting_series','church_meeting_answers','church_meeting_notices','church_calendar_links')
+--      and c.relname in ('church_meeting_series','church_meeting_answers','church_meeting_notices','church_calendar_links',
+--                        'church_boards','church_board_members','church_board_meetings')
 --    order by c.relname;
---   -- 4 rows: true, 0, false, false
+--   -- 7 rows: true, 0, false, false, false, false
 --   select table_name, column_name from information_schema.columns
 --    where table_schema = 'public'
 --      and ((table_name = 'church_boards' and column_name in ('kind','audience'))
@@ -536,13 +593,26 @@ notify pgrst, 'reload schema';
 --                      'church_board_meetings_called_off','church_board_meetings_alone')
 --    order by conname;
 --   -- 11 rows, convalidated true
+--   select indexname, indexdef like '% WHERE %' as partial from pg_indexes
+--    where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
+--      and indexname in ('church_board_meetings_one_a_day','church_board_meetings_one_booking',
+--                        'church_board_members_one_from_list','church_boards_one_list_name',
+--                        'church_calendar_links_one_live','church_calendar_links_token','church_meeting_notices_once')
+--    order by indexname;
+--   -- 7 rows: church_board_meetings_one_a_day false, church_board_meetings_one_booking false, church_board_members_one_from_list true, church_boards_one_list_name true, church_calendar_links_one_live true, church_calendar_links_token false, church_meeting_notices_once false
+--   select tgrelid::regclass::text as on_table, tgname, tgenabled from pg_trigger
+--    where not tgisinternal and tgname in ('church_boards_audience_kept','church_board_members_follow_list',
+--                                          'church_meetings_same_business','church_space_bookings_meeting_room')
+--    order by 1, 2;
+--   -- 8 rows, tgenabled O: church_board_meetings church_meetings_same_business; church_board_members church_board_members_follow_list; church_boards church_boards_audience_kept; church_calendar_links, church_meeting_answers, church_meeting_notices, church_meeting_series church_meetings_same_business; church_space_bookings church_space_bookings_meeting_room
 --   select p.proname,
 --          has_function_privilege('authenticated', p.oid, 'execute') as browser_runs,
 --          has_function_privilege('anon', p.oid, 'execute') as anon_runs
 --     from pg_proc p where p.pronamespace = 'public'::regnamespace
---      and p.proname in ('church_boards_audience_kept','church_board_members_follow_list','church_meetings_same_business')
+--      and p.proname in ('church_boards_audience_kept','church_board_members_follow_list','church_meetings_same_business',
+--                        'church_space_bookings_meeting_room')
 --    order by p.proname;
---   -- 3 rows: false, false
+--   -- 4 rows: false, false
 --   select (select count(*) from church_boards where kind <> 'board' or audience <> 'members') as groups,
 --          (select count(*) from church_board_members where from_list) as list_rows,
 --          (select count(*) from church_board_meetings
@@ -550,13 +620,26 @@ notify pgrst, 'reload schema';
 --               or booking_id is not null or cancelled_at is not null or changed_alone_at is not null) as meetings;
 --   -- 0, 0, 0
 --
--- Rollback (loses every series, answer, reminder mark and calendar link; every board, member, meeting, item, attendance mark and decision stays, and so do meetings made from a series, as one-off meetings). Run it with the code that reads these columns (S3-2 on) rolled back first. A meeting group (kind 'meeting') would read as a board once its kind is gone, so the first line closes each one (archived, as a closed board is, and the board's money yes reads open boards only), and a meeting called off with nothing recorded is taken out rather than read as planned again:
---   update public.church_boards set archived = true where kind = 'meeting';
---   delete from public.church_board_meetings m where m.cancelled_at is not null
+-- Rollback (loses every series, answer, reminder mark and calendar link; every board, member, item, attendance mark and decision stays, and so does every meeting with anything recorded on it). Run it with the code that reads these columns (S3-2 on) rolled back first. Before the columns go, nothing may be left that would read wrong without them: a room held for a meeting that won't happen is let go (a meeting group's meeting not yet held, one called off, and one a series made ahead with nothing recorded); meetings that won't happen and have nothing recorded are taken out (called off, or not yet held and made by a series or a meeting group's); every meeting group is closed (archived: once kind is gone it would read as a board, and the board's money yes reads open boards only); and every seat the list gave is let go. A meeting called off with an agenda, attendance or a decision stays, and reads as planned again: delete it by hand if it should go.
+--   update public.church_space_bookings b set status = 'cancelled', updated_at = now()
+--     from public.church_board_meetings m, public.church_boards g
+--    where m.booking_id = b.id and g.id = m.board_id and b.status in ('requested', 'booked')
+--      and m.status = 'planned' and m.starts_at > now()
+--      and (g.kind = 'meeting' or m.cancelled_at is not null
+--           or (m.series_id is not null
+--               and not exists (select 1 from public.church_board_items i where i.meeting_id = m.id)
+--               and not exists (select 1 from public.church_board_attendance a where a.meeting_id = m.id)
+--               and not exists (select 1 from public.church_board_decisions d where d.meeting_id = m.id)));
+--   delete from public.church_board_meetings m using public.church_boards g
+--    where g.id = m.board_id and m.status = 'planned'
+--      and (m.cancelled_at is not null or (m.starts_at > now() and (m.series_id is not null or g.kind = 'meeting')))
 --      and not exists (select 1 from public.church_board_items i where i.meeting_id = m.id)
 --      and not exists (select 1 from public.church_board_attendance a where a.meeting_id = m.id)
 --      and not exists (select 1 from public.church_board_decisions d where d.meeting_id = m.id);
+--   update public.church_boards set archived = true where kind = 'meeting';
+--   update public.church_board_members set active = false, updated_at = now() where from_list and active;
 --   drop table if exists public.church_meeting_notices, public.church_meeting_answers, public.church_calendar_links;
+--   drop trigger if exists church_space_bookings_meeting_room on public.church_space_bookings;
 --   drop trigger if exists church_meetings_same_business on public.church_board_meetings;
 --   drop trigger if exists church_board_members_follow_list on public.church_board_members;
 --   drop trigger if exists church_boards_audience_kept on public.church_boards;
@@ -582,6 +665,7 @@ notify pgrst, 'reload schema';
 --     drop constraint if exists church_boards_audience,
 --     drop constraint if exists church_boards_kind,
 --     drop column if exists kind, drop column if exists audience;
+--   drop function if exists public.church_space_bookings_meeting_room();
 --   drop function if exists public.church_meetings_same_business();
 --   drop function if exists public.church_board_members_follow_list();
 --   drop function if exists public.church_boards_audience_kept();
