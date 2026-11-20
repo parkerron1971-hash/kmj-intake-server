@@ -230,10 +230,13 @@ def db(monkeypatch):
     monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: PLATFORM if uid == OWNER else "")
     monkeypatch.setattr(payroll_deposits, "marked", lambda biz: ({}, False))
     import church_money_ticks
+    import rate_limit
     church_money_ticks._READY.update(yes=False, until=0.0)
     po._CACHE.clear()
+    rate_limit._buckets.clear()
     yield fake
     po._CACHE.clear()
+    rate_limit._buckets.clear()
 
 
 # ─── A Stripe stand-in ────────────────────────────────────────────────
@@ -573,10 +576,16 @@ def test_the_bank_tick_without_who_gave_shows_no_names_and_no_card_numbers(db, s
     rows = feed(MANAGER)["rows"]
     assert rows and all(r["who"] is None for r in rows)
     assert {r["how"] for r in rows} <= {"Card", "Apple Pay", "Google Pay", "Link"}       # no last four
+    # The church's day only, never the time of day: with the amount, the fund
+    # and the method, a time could point at one person in a small church.
+    assert [r["when"] for r in rows][:3] == ["2026-11-18", "2026-11-17", "2026-11-16"]
     assert feed(MANAGER, q="ada")["rows"] == []                   # a name can't be found by searching for it
     text = run(po.payments_feed_csv(BIZ, "month", None, None, user=_u(MANAGER))).body.decode()
-    head = next(csv.reader(io.StringIO(text)))
-    assert "From" not in head and "Ada" not in text and "Lovett" not in text and "4242" not in text
+    table = list(csv.reader(io.StringIO(text)))
+    assert table[0] == ["Date", "For", "How", "Amount", "Refunded", "Stripe fee", "Fee covered by the giver",
+                        "Where it is", "Payout"]
+    assert table[1] == ["2026-11-18", "General", "Apple Pay", "100.00", "", "3.20", "yes", "On the way", "po_next"]
+    assert "Ada" not in text and "Lovett" not in text and "4242" not in text and "10:00" not in text
 
 
 def test_the_bank_tick_at_work_with_who_gave_refunds_and_names(db, stripe, monkeypatch):
@@ -810,3 +819,121 @@ def test_the_download_for_the_books(db, stripe):
     gifts = list(csv.reader(io.StringIO(run(po.payments_feed_csv(BIZ, "month", "gifts", None,
                                                                  user=_u(OWNER))).body.decode())))
     assert len(gifts) == 5
+
+
+# ─── After the security review (2026-11-20) ───────────────────────────
+
+def test_the_cache_drops_what_has_run_out_on_every_read_and_write(db, stripe, monkeypatch):
+    clock = [1_000_000.0]
+    monkeypatch.setattr(po, "_wall", lambda: clock[0])
+    overview(OWNER)
+    assert po._CACHE and any(v[2] >= 7 for v in po._CACHE.values())      # the month's charges are held
+    clock[0] += po.CACHE_SECONDS
+    assert po._cached(("nobody", "-", "balance")) is None                 # a read ...
+    assert po._CACHE == {}                                                 # ... drops every one that ran out
+    po._keep(("a", "-", "balance"), {"pending": 0, "available": 0})
+    clock[0] += po.CACHE_SECONDS + 1
+    po._keep(("b", "-", "balance"), {"pending": 0, "available": 0})       # ... and so does a write
+    assert list(po._CACHE) == [("b", "-", "balance")]
+
+
+def test_the_cache_is_held_under_its_entries_and_rows_oldest_out_first(db, monkeypatch):
+    clock = [2_000_000.0]
+    monkeypatch.setattr(po, "_wall", lambda: clock[0])
+    monkeypatch.setattr(po, "CACHE_MAX_ROWS", 5)
+    for name in ("one", "two", "three"):
+        po._keep((name, "-", "charges"), {"rows": [{}, {}, {}], "complete": True})
+        clock[0] += 1
+    assert list(po._CACHE) == [("three", "-", "charges")]                # 3 + 3 > 5: the older ones go
+    monkeypatch.setattr(po, "CACHE_MAX_ROWS", 10_000)
+    monkeypatch.setattr(po, "CACHE_MAX", 2)
+    for name in ("four", "five"):
+        po._keep((name, "-", "balance"), {"pending": 0, "available": 0})
+        clock[0] += 1
+    assert list(po._CACHE) == [("four", "-", "balance"), ("five", "-", "balance")]
+    assert sum(v[2] for v in po._CACHE.values()) <= 10_000
+
+
+def test_the_download_is_rate_limited_per_login(db, stripe, monkeypatch):
+    import rate_limit
+    monkeypatch.setitem(rate_limit._LIMITS, "payments_feed_csv", (1, 600))
+    run(po.payments_feed_csv(BIZ, "month", None, None, user=_u(OWNER)))
+    with pytest.raises(HTTPException) as e:
+        run(po.payments_feed_csv(BIZ, "month", None, None, user=_u(OWNER)))
+    assert e.value.status_code == 429 and e.value.detail == po.DOWNLOADS_429
+    assert e.value.headers == {"Retry-After": "600"}
+    monkeypatch.setenv("CHURCH_MONEY_TICKS", "on")
+    tick(db, ADMIN, "see", bank=True)
+    run(po.payments_feed_csv(BIZ, "month", None, None, user=_u(ADMIN)))   # another login has its own
+
+
+def test_the_feed_is_rate_limited_per_login(db, stripe, monkeypatch):
+    import rate_limit
+    monkeypatch.setitem(rate_limit._LIMITS, "payments_feed", (2, 60))
+    feed(OWNER)
+    feed(OWNER, filter="gifts")
+    with pytest.raises(HTTPException) as e:
+        feed(OWNER, q="lovett")
+    assert e.value.status_code == 429 and e.value.detail == po.FEED_429
+
+
+def test_only_a_read_that_goes_to_stripe_takes_from_the_stripe_budget(db, stripe, monkeypatch):
+    import rate_limit
+    monkeypatch.setitem(rate_limit._LIMITS, "payments_stripe", (1, 600))
+    clock = [3_000_000.0]
+    monkeypatch.setattr(po, "_wall", lambda: clock[0])
+    overview(OWNER)                                        # cold: Stripe is read, one taken
+    overview(OWNER)                                        # kept: nothing taken
+    feed(OWNER)                                            # the feed's payouts and charges are kept too
+    n = len(stripe.calls)
+    clock[0] += po.CACHE_SECONDS + 1
+    with pytest.raises(HTTPException) as e:                # cold again, and the budget is spent
+        overview(OWNER)
+    assert e.value.status_code == 429 and e.value.detail == po.STRIPE_429
+    assert len(stripe.calls) == n                          # refused before Stripe was asked
+    with pytest.raises(HTTPException) as e:
+        feed(OWNER)
+    assert e.value.status_code == 429
+    for _ in range(3):
+        assert overview(ADMIN)["can"]["see_bank"] is False    # no bank part: Stripe is never asked, never limited
+
+
+def test_a_csv_cell_that_starts_like_a_formula_after_spaces_is_text(db, stripe):
+    names = {"ch_fail": " =HYPERLINK(\"http://x\",\"y\")", "ch_4": "\t+cmd|' /C calc'!A0",
+             "ch_2": "​@SUM(1+1)", "ch_3": "  Ann   \n Lee  "}
+    stripe.charges = [dict(c, billing_details={"name": names.get(c["id"])}, invoice=None,
+                           payment_intent=None, metadata={}) for c in stripe.charges]
+    rows = list(csv.reader(io.StringIO(run(po.payments_feed_csv(BIZ, "month", None, None,
+                                                                user=_u(OWNER))).body.decode())))
+    by_amount = {r[5]: r for r in rows[1:]}
+    assert by_amount["50.00"][2] == "'=HYPERLINK(\"http://x\",\"y\")"
+    assert by_amount["40.00"][2] == "'+cmd|' /C calc'!A0"
+    assert by_amount["250.00"][2] == "'@SUM(1+1)"
+    assert by_amount["60.00"][2] == "Ann Lee"
+    assert all(not cell[:1] in ("=", "+", "-", "@", " ", "\t") for r in rows for cell in r)
+    feed_rows = {r["id"]: r for r in feed(OWNER)["rows"]}
+    assert feed_rows["ch_3"]["who"] == "Ann Lee" and feed_rows["ch_fail"]["who"].startswith("=")   # JSON: as given
+
+
+def test_off_or_not_a_church_is_a_404_for_everyone_before_any_door(db, stripe, monkeypatch):
+    for who in (STRANGER, OTHER_ADMIN, VIEWER):
+        assert status_of(overview, who, SHOP) == 404
+    monkeypatch.setenv("PAYMENTS_OVERVIEW", "off")
+    for who in (OWNER, ADMIN, STRANGER, OTHER_ADMIN, VIEWER):
+        assert status_of(overview, who) == 404, who
+        assert status_of(feed, who) == 404, who
+    monkeypatch.setenv("PAYMENTS_OVERVIEW", "owner")
+    assert status_of(overview, STRANGER, OTHER) == 404       # Riverbend isn't the platform owner's church
+    assert status_of(overview, STRANGER) == 403              # open here, so the door answers
+    db.reads.clear()
+    status_of(overview, STRANGER, SHOP)
+    assert not any("business_users" in r or "business_collaborators" in r for r in db.reads)   # no door asked
+
+
+def test_ids_are_matched_whole_never_up_to_a_trailing_newline(db, stripe):
+    assert po._UUID.fullmatch(BIZ) and not po._UUID.fullmatch(BIZ + "\n")
+    assert po._STRIPE_ID.fullmatch("po_next") and not po._STRIPE_ID.fullmatch("po_next\n")
+    assert status_of(overview, OWNER, BIZ + "\n") == 404
+    assert status_of(feed, OWNER, after="ch_1\n") == 400
+    src = pathlib.Path(ROOT, "payments_overview.py").read_text(encoding="utf-8")
+    assert "_UUID.match(" not in src and "_STRIPE_ID.match(" not in src

@@ -93,7 +93,8 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
 PERIODS = ("week", "month", "year")
 FILTERS = ("all", "gifts", "store", "events", "refunded", "disputed", "on_the_way")
 CACHE_SECONDS = 60
-CACHE_MAX = 400
+CACHE_MAX = 200            # kept Stripe reads, all churches together ...
+CACHE_MAX_ROWS = 10_000    # ... and the charges, payouts and payout gifts they hold
 CHARGE_PAGES = 10          # 1,000 charges: a week or a month always; a big church's year is counted from records
 PAYOUT_PAGES = 3           # a year of weekday payouts is about 260
 ITEM_PAGES = 2             # the next payout's gifts
@@ -107,8 +108,9 @@ MATCH_AFTER_DAYS = 2       # a payout this old with no bank row is one to match 
 UNMATCHED_MAX = 3
 Q_MAX = 80
 
-_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-_STRIPE_ID = re.compile(r"^[A-Za-z0-9_]{3,80}$")
+# Always fullmatch: "$" would let a trailing newline through.
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_STRIPE_ID = re.compile(r"[A-Za-z0-9_]{3,80}")
 
 BANK_KEPT = "Bank and payouts are kept by the people the owner gave them to."
 NOT_CONNECTED = "stripe account not connected"
@@ -148,27 +150,29 @@ class Access(NamedTuple):
 
 
 def _access(business_id: str, user: AuthedUser) -> Access:
-    """The page's gate, then what this login may see on it. Raises the
-    door's own refusal (403/404), or 404 when the page is off for the church
-    or the business isn't a church."""
-    if not isinstance(business_id, str) or not _UUID.match(business_id):
-        raise HTTPException(404, "business not found")
+    """The page's gate, then what this login may see on it. 404, for anyone,
+    when the page is off for the church or the business isn't a church: the
+    switch and the kind of business are asked BEFORE any door, so a refusal
+    never tells a stranger that an id is a church. Then the door's own
+    refusal (403)."""
+    if not isinstance(business_id, str) or not _UUID.fullmatch(business_id):
+        raise HTTPException(404, "Not Found")
     b = quote(business_id, safe="")
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{b}&select=id,name,type,owner_id,settings,stripe_account_id&limit=1")
     if rows is None:
         raise HTTPException(503, "Payments couldn't be read just now. Try again.")
     if not rows:
-        raise HTTPException(404, "business not found")
-    biz = rows[0]
-    # The church wall at the books: the owner, an Admin, the accountant (and
-    # with the giving tick on, any tick). A business that isn't a church or
-    # nonprofit comes back NOT_ASKED: not this page's.
-    passed = church_money_gate.require_money(business_id, user, "see", "books", business=biz)
-    import church_follow_up
-    if passed.by == church_money_gate.NOT_ASKED or not church_follow_up.is_church(biz):
         raise HTTPException(404, "Not Found")
-    if not open_for(business_id):
+    biz = rows[0]
+    import church_follow_up
+    if not church_follow_up.is_church(biz) or not open_for(business_id):
+        raise HTTPException(404, "Not Found")
+    # The church wall at the books: the owner, an Admin, the accountant (and
+    # with the giving tick on, any tick). Only a business that isn't a church
+    # or nonprofit comes back NOT_ASKED, and none reaches here; kept as a no.
+    passed = church_money_gate.require_money(business_id, user, "see", "books", business=biz)
+    if passed.by == church_money_gate.NOT_ASKED:
         raise HTTPException(404, "Not Found")
     # Who gave what and the payouts: the church's Giving keeper holds the
     # owner to the key too, as the Stripe proxy does.
@@ -420,26 +424,45 @@ class StripeDown(Exception):
     pass
 
 
-_CACHE: Dict[Tuple[str, str, str], Tuple[float, Any]] = {}
+# key → (when read, the value, how many rows it holds). The rows carry
+# givers' names and cards' last four, so nothing is kept past its minute:
+# every read and every write drops what has run out, and the whole cache is
+# held under CACHE_MAX entries and CACHE_MAX_ROWS rows, the oldest out first.
+_CACHE: Dict[Tuple[str, str, str], Tuple[float, Any, int]] = {}
 
 
 def _wall() -> float:
     return time.time()
 
 
+def _size(value: Any) -> int:
+    rows = value.get("rows") if isinstance(value, dict) else value
+    return len(rows) if isinstance(rows, list) else 1
+
+
+def _prune(now: float) -> None:
+    for k in [k for k, v in _CACHE.items() if now - v[0] >= CACHE_SECONDS]:
+        _CACHE.pop(k, None)
+    held = sum(v[2] for v in _CACHE.values())
+    if len(_CACHE) <= CACHE_MAX and held <= CACHE_MAX_ROWS:
+        return
+    for k, v in sorted(_CACHE.items(), key=lambda kv: kv[1][0]):
+        if len(_CACHE) <= CACHE_MAX and held <= CACHE_MAX_ROWS:
+            break
+        _CACHE.pop(k, None)
+        held -= v[2]
+
+
 def _cached(key: Tuple[str, str, str]) -> Optional[Tuple[float, Any]]:
+    _prune(_wall())
     hit = _CACHE.get(key)
-    if hit and _wall() - hit[0] < CACHE_SECONDS:
-        return hit
-    return None
+    return (hit[0], hit[1]) if hit else None
 
 
 def _keep(key: Tuple[str, str, str], value: Any) -> float:
     at = _wall()
-    _CACHE[key] = (at, value)
-    if len(_CACHE) > CACHE_MAX:
-        for k, _ in sorted(_CACHE.items(), key=lambda kv: kv[1][0])[: CACHE_MAX // 4]:
-            _CACHE.pop(k, None)
+    _CACHE[key] = (at, value, _size(value))
+    _prune(at)
     return at
 
 
@@ -525,6 +548,15 @@ OTHER_METHODS = {"link": "Link", "cashapp": "Cash App Pay", "paypal": "PayPal", 
 METHOD_WORDS = {"card": "Card", "bank": "Bank account", "other": "Other", **WALLETS, **OTHER_METHODS}
 
 
+def _text(v: Any) -> str:
+    """Text as it is shown: every run of whitespace one space, none at the
+    ends, and no invisible characters in front."""
+    return " ".join(str(v if v is not None else "").split()).lstrip(_INVISIBLE)
+
+
+_INVISIBLE = "\u200b\u200c\u200d\u2060\ufeff"
+
+
 def _int(v: Any) -> int:
     try:
         return max(0, int(v or 0))
@@ -547,7 +579,7 @@ def _charge(c: Dict[str, Any]) -> Dict[str, Any]:
         "description": str(c.get("description") or "")[:120],
         "metadata": {k: md.get(k) for k in ("source_type", "source_id", "fund", "giver_name", "covered_fee_cents",
                                              "frequency") if md.get(k) not in (None, "")},
-        "billing_name": str(bill.get("name") or "")[:120] or None,
+        "billing_name": _text(bill.get("name"))[:120] or None,
         "method": key, "how": words,
         "fee": _int(bt.get("fee")) if bt else None, "net": int(bt.get("net") or 0) if bt else None,
         "available_on": int(bt.get("available_on") or 0) if bt else None,
@@ -619,6 +651,33 @@ def _scope(name: str, p: "Period") -> str:
     return "-" if name in ("balance", "account", "disputes") else f"{p.key}:{p.start.isoformat()}"
 
 
+def _tenant(biz_id: str, acct: str) -> str:
+    """Kept per church AND its connected account: a church that reconnects
+    to another account never sees the old one's numbers."""
+    return f"{biz_id}:{acct}"
+
+
+def cold(biz_id: str, acct: str, p: "Period", names: Tuple[str, ...]) -> bool:
+    """Whether answering would go to Stripe: a part asked for isn't kept.
+    (The gifts inside a payout are read only with the payouts, so they ride
+    on the payouts' answer.)"""
+    return any(_cached((_tenant(biz_id, acct), _scope(n, p), n)) is None for n in names if n != "items")
+
+
+FEED_429 = "That's a lot of looking at once. Try again in a minute."
+DOWNLOADS_429 = "That's a lot of downloads at once. Try again in a few minutes."
+STRIPE_429 = "Stripe has been asked a lot in the last few minutes. Try again in a few minutes."
+
+
+def _slow_down(bucket: str, user: AuthedUser, words: str) -> None:
+    """The per-login limiter in front of anything that can read Stripe or a
+    whole period (rate_limit.allow: fail-open, as on every practitioner
+    screen). A refusal is a 429 with a plain sentence and Retry-After."""
+    import rate_limit
+    if not rate_limit.allow(bucket, str(user.id)):
+        raise HTTPException(429, words, headers={"Retry-After": str(rate_limit.retry_after(bucket))})
+
+
 async def stripe_parts(biz_id: str, acct: str, p: "Period", names: Tuple[str, ...]
                        ) -> Tuple[Dict[str, Any], Optional[float], List[str]]:
     """The parts asked for: (part → value, the oldest read's time, the parts
@@ -628,9 +687,7 @@ async def stripe_parts(biz_id: str, acct: str, p: "Period", names: Tuple[str, ..
     got: Dict[str, Any] = {}
     times: List[float] = []
     failed: List[str] = []
-    # Kept per church AND its connected account: a church that reconnects to
-    # another account never sees the old one's numbers.
-    tenant = f"{biz_id}:{acct}"
+    tenant = _tenant(biz_id, acct)
 
     async def read(client: httpx.AsyncClient, key: Tuple[str, str, str], name: str, arg: Any = None) -> None:
         hit = _cached(key)
@@ -654,7 +711,7 @@ async def stripe_parts(biz_id: str, acct: str, p: "Period", names: Tuple[str, ..
             jobs = []
             for po in pending_payouts(got["payouts"])[:2]:
                 pid = str(po.get("id") or "")
-                if not po.get("automatic") or not _STRIPE_ID.match(pid):
+                if not po.get("automatic") or not _STRIPE_ID.fullmatch(pid):
                     # Only an automatic payout can be asked for its gifts.
                     got[f"items:{pid}"] = {"rows": None, "complete": False}
                     continue
@@ -793,7 +850,7 @@ def shares(counts: Dict[str, int]) -> List[Dict[str, Any]]:
 
 def _names(biz_id: str, contact_ids: List[str]) -> Dict[str, str]:
     """Contact names for these ids, at this church only."""
-    ids = sorted({c for c in contact_ids if c and _UUID.match(str(c))})
+    ids = sorted({c for c in contact_ids if c and _UUID.fullmatch(str(c))})
     out: Dict[str, str] = {}
     for i in range(0, len(ids), 100):
         rows = sb_clients.sb_get_as_service(
@@ -809,11 +866,11 @@ def _names(biz_id: str, contact_ids: List[str]) -> Dict[str, str]:
 
 def _who(ch: Dict[str, Any], rec: Optional[Dict[str, Any]], names: Dict[str, str]) -> Optional[str]:
     if rec and rec.get("contact_id") and str(rec["contact_id"]) in names:
-        return names[str(rec["contact_id"])]
+        return _text(names[str(rec["contact_id"])])[:120] or None
     if rec and rec.get("name"):
-        return " ".join(str(rec["name"]).split())[:120] or None
+        return _text(rec["name"])[:120] or None
     md = ch.get("metadata") or {}
-    return (" ".join(str(md.get("giver_name") or "").split())[:120] or ch.get("billing_name") or None)
+    return _text(md.get("giver_name"))[:120] or _text(ch.get("billing_name"))[:120] or None
 
 
 def _needs_names(biz_id: str, rows: List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]], see: bool
@@ -833,7 +890,7 @@ def _has_bank_link(biz_id: str) -> Optional[bool]:
 
 
 def _matched(biz_id: str, payout_ids: List[str]) -> set:
-    ids = [i for i in payout_ids if _STRIPE_ID.match(str(i or ""))]
+    ids = [i for i in payout_ids if _STRIPE_ID.fullmatch(str(i or ""))]
     out: set = set()
     for i in range(0, len(ids), 50):
         rows = sb_clients.sb_get_as_service(
@@ -932,7 +989,7 @@ def bank_blocks(biz_id: str, parts: Dict[str, Any], p: Period, placer: Placer, l
 def dispute_items(parts: Dict[str, Any], tz) -> List[Dict[str, Any]]:
     out = []
     for d in sorted(parts.get("disputes") or [], key=lambda d: int(d.get("due_by") or 0)):
-        if not _STRIPE_ID.match(str(d.get("id") or "")):
+        if not _STRIPE_ID.fullmatch(str(d.get("id") or "")):
             continue
         due = _from_ts(d.get("due_by"))
         base = "https://dashboard.stripe.com/" + ("" if d.get("livemode") else "test/")
@@ -1106,8 +1163,10 @@ async def payments_overview(biz: str, period: Optional[str] = None,
         "can": _can(a),
     }
     if a.see_bank:
-        parts, checked, failed = await stripe_parts(
-            bid, str(a.biz["stripe_account_id"]), p, ("balance", "account", "disputes", "payouts", "charges", "items"))
+        wanted = ("balance", "account", "disputes", "payouts", "charges", "items")
+        if cold(bid, str(a.biz["stripe_account_id"]), p, wanted):
+            _slow_down("payments_stripe", user, STRIPE_429)
+        parts, checked, failed = await stripe_parts(bid, str(a.biz["stripe_account_id"]), p, wanted)
         out["checked_at"] = _z(datetime.fromtimestamp(checked, timezone.utc)) if checked else None
         placer = Placer(parts.get("payouts"))
         charges = parts.get("charges")
@@ -1155,11 +1214,21 @@ def _how(ch: Dict[str, Any], a: Access) -> str:
     return ch["how"] if a.see_names else METHOD_WORDS.get(ch["method"], "Online")
 
 
-def feed_row(ch: Dict[str, Any], rec: Optional[Dict[str, Any]], placer: Placer, names: Dict[str, str],
-             a: Access) -> Dict[str, Any]:
-    w, words, pid = where(ch, placer)
+def _when(ch: Dict[str, Any], a: Access, tz) -> Optional[str]:
+    """When it was given. To the second for a login that may see who gave;
+    for one that may not, the church's day only ("2026-11-18"): a time, with
+    the amount, the fund and the method, could point at one person in a
+    small church."""
     at = _from_ts(ch["created"])
-    return {"id": ch["id"], "when": _z(at) if at else None,
+    if at is None:
+        return None
+    return _z(at) if a.see_names else at.astimezone(tz).date().isoformat()
+
+
+def feed_row(ch: Dict[str, Any], rec: Optional[Dict[str, Any]], placer: Placer, names: Dict[str, str],
+             a: Access, tz) -> Dict[str, Any]:
+    w, words, pid = where(ch, placer)
+    return {"id": ch["id"], "when": _when(ch, a, tz),
             "who": _who(ch, rec, names) if a.see_names else None, "for": _for(ch, rec), "kind": _kind(ch, rec),
             "how": _how(ch, a), "method": ch["method"], "cents": ch["cents"], "refunded_cents": ch["refunded_cents"],
             "fee_cents": ch.get("fee"), "fee_covered": _covered(ch) > 0, "where": w, "where_words": words,
@@ -1193,8 +1262,8 @@ def _matches(ch: Dict[str, Any], rec: Optional[Dict[str, Any]], placer: Placer, 
 Pair = Tuple[Dict[str, Any], Optional[Dict[str, Any]]]
 
 
-async def _feed_source(a: Access, p: Period) -> Tuple[Dict[str, Any], Optional[float], Links, Placer, List[Pair],
-                                                      bool]:
+async def _feed_source(a: Access, p: Period, user: AuthedUser
+                       ) -> Tuple[Dict[str, Any], Optional[float], Links, Placer, List[Pair], bool]:
     """What the feed and its download read: the period's charges (kept, or
     read now) with each one's record, and where the payouts put them. The
     rows are Stripe's charges, so they are the bank part's, the Payouts tab's
@@ -1203,8 +1272,10 @@ async def _feed_source(a: Access, p: Period) -> Tuple[Dict[str, Any], Optional[f
         raise HTTPException(403, BANK_KEPT)
     if not a.biz.get("stripe_account_id"):
         raise HTTPException(409, NOT_CONNECTED)
-    parts, checked, failed = await stripe_parts(str(a.biz["id"]), str(a.biz["stripe_account_id"]), p,
-                                                ("payouts", "charges"))
+    wanted = ("payouts", "charges")
+    if cold(str(a.biz["id"]), str(a.biz["stripe_account_id"]), p, wanted):
+        _slow_down("payments_stripe", user, STRIPE_429)
+    parts, checked, failed = await stripe_parts(str(a.biz["id"]), str(a.biz["stripe_account_id"]), p, wanted)
     if failed:
         raise HTTPException(503, "Stripe couldn't be read just now. Try again in a minute.")
     rows, _before, _bad = await asyncio.to_thread(_records, str(a.biz["id"]), p, False)
@@ -1217,7 +1288,7 @@ async def _feed_source(a: Access, p: Period) -> Tuple[Dict[str, Any], Optional[f
 async def _more_charges(a: Access, p: Period, after: str, pages: int, links: Links) -> Tuple[List[Pair], bool]:
     """The period's charges past the kept ones, read now (the kept read
     stops at CHARGE_PAGES): (rows, whether that was all of them)."""
-    if not _STRIPE_ID.match(after or ""):
+    if not _STRIPE_ID.fullmatch(after or ""):
         return [], True
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -1237,11 +1308,12 @@ async def payments_feed(biz: str, period: Optional[str] = None, filter: Optional
     time. `next` is the cursor for the next page (starting_after)."""
     a = _access(biz, user)
     key, f, search = _period_key(period), _filter_key(filter), _search(q)
-    if starting_after is not None and not _STRIPE_ID.match(starting_after):
+    if starting_after is not None and not _STRIPE_ID.fullmatch(starting_after):
         raise HTTPException(400, "That page isn't valid. Start again.")
+    _slow_down("payments_feed", user, FEED_429)
     p = period_of(key, _clock(a.biz))
     bid = str(a.biz["id"])
-    _parts, checked, links, placer, pairs, complete = await _feed_source(a, p)
+    _parts, checked, links, placer, pairs, complete = await _feed_source(a, p, user)
     # A search reads names only for a login that may see them, so the names
     # of every row are needed first; otherwise only the page's own.
     by_name = search is not None and a.see_names
@@ -1292,17 +1364,18 @@ async def payments_feed(biz: str, period: Optional[str] = None, filter: Optional
     shown = None
     if live_after is None:
         shown = sum(1 for c, rec in pairs[:pos] if _matches(c, rec, placer, f, search, a, names)) + len(picked)
-    return {"rows": [feed_row(c, rec, placer, names, a) for c, rec in picked], "has_more": has_more,
+    return {"rows": [feed_row(c, rec, placer, names, a, p.tz) for c, rec in picked], "has_more": has_more,
             "next": last[0] if has_more else None, "shown": shown, "total": total,
             "checked_at": _z(datetime.fromtimestamp(checked, timezone.utc)) if checked else None,
             "period": _period_json(p), "filter": f, "can": _can(a)}
 
 
 def _cell(v: Any) -> str:
-    """Text a spreadsheet won't run: a cell that starts like a formula is set
-    as text (church_reports._cell)."""
-    s = str(v if v is not None else "")
-    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+    """Text a spreadsheet won't run (church_reports._cell): whitespace is
+    collapsed and trimmed FIRST, so " =HYPERLINK(...)" is caught too, then a
+    cell that starts like a formula is set as text."""
+    s = _text(v)
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
 
 
 def _dollars(c: Optional[int]) -> str:
@@ -1313,13 +1386,14 @@ def _dollars(c: Optional[int]) -> str:
 async def payments_feed_csv(biz: str, period: Optional[str] = None, filter: Optional[str] = None,
                             q: Optional[str] = None, user: AuthedUser = Depends(require_user)) -> Response:
     """Every row of the feed in the period, for the books (the filter and
-    search as on the page). Names only for a login that may see who gave;
-    without that, there is no From column at all."""
+    search as on the page). Names and times only for a login that may see who
+    gave; without that, there is no From and no Time column at all."""
     a = _access(biz, user)
     key, f, search = _period_key(period), _filter_key(filter), _search(q)
+    _slow_down("payments_feed_csv", user, DOWNLOADS_429)
     p = period_of(key, _clock(a.biz))
     bid = str(a.biz["id"])
-    _parts, _checked, links, placer, pairs, complete = await _feed_source(a, p)
+    _parts, _checked, links, placer, pairs, complete = await _feed_source(a, p, user)
     if not complete and pairs:
         more, complete = await _more_charges(a, p, pairs[-1][0]["id"], CSV_PAGES, links)
         pairs = pairs + more
@@ -1332,12 +1406,12 @@ async def payments_feed_csv(biz: str, period: Optional[str] = None, filter: Opti
     head = ["Date", "Time", "From", "For", "How", "Amount", "Refunded", "Stripe fee", "Fee covered by the giver",
             "Where it is", "Payout"]
     if not a.see_names:
-        head.remove("From")
+        head = [h for h in head if h not in ("Time", "From")]
     w.writerow(head)
     for c, rec in pairs:
         if not _matches(c, rec, placer, f, search, a, names):
             continue
-        row = feed_row(c, rec, placer, names, a)
+        row = feed_row(c, rec, placer, names, a, p.tz)
         at = _from_ts(c["created"])
         local = at.astimezone(p.tz) if at else None
         cells = [local.date().isoformat() if local else "", local.strftime("%H:%M") if local else "",
@@ -1345,7 +1419,7 @@ async def payments_feed_csv(biz: str, period: Optional[str] = None, filter: Opti
                  _dollars(row["refunded_cents"]) if row["refunded_cents"] else "", _dollars(row["fee_cents"]),
                  "yes" if row["fee_covered"] else "", row["where_words"], row["payout_id"] or ""]
         if not a.see_names:
-            cells.pop(2)
+            del cells[1:3]                      # no time of day and no name
         w.writerow([_cell(x) for x in cells])
     if not complete:
         w.writerow([_cell("More gifts and payments than one download holds. Choose a shorter period for the rest.")])
