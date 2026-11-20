@@ -352,6 +352,39 @@ def test_a_back_field_cannot_leave_the_news_pages(fake, monkeypatch):
     assert r.headers["location"] == f"/my#p-{P_CHURCH}"
 
 
+def test_react_answers_json_for_homes_feed(fake, monkeypatch):
+    # Home's feed (member_lumen_feed) asks for JSON: {ok, on, kind}, the same checks and toggle as the form post.
+    fake.t["church_posts"].append(_post(P_CHURCH))
+    JSON = {"accept": "application/json"}
+    c = _client(monkeypatch, _me(MONIQUE))
+    r = c.post("/my/news/react", data={"id": P_CHURCH, "kind": "love", "back": "/my"}, headers=JSON)
+    assert r.status_code == 200 and r.json() == {"ok": True, "on": True, "kind": "love"}
+    assert r.headers["cache-control"] == "no-store" and "location" not in r.headers
+    assert [(x["contact_id"], x["kind"]) for x in fake.t["church_post_reactions"]] == [(MONIQUE, "love")]
+    assert c.post("/my/news/react", data={"id": P_CHURCH, "kind": "love"}, headers=JSON).json() == {
+        "ok": True, "on": False, "kind": "love"}
+    assert fake.t["church_post_reactions"] == []
+    # Refusals say why, write nothing, and never redirect.
+    r = _client(monkeypatch, None, "preview").post("/my/news/react", data={"id": P_CHURCH, "kind": "love"}, headers=JSON)
+    assert r.status_code == 403 and r.json()["code"] == "preview" and fake.t["church_post_reactions"] == []
+    r = _client(monkeypatch, None).post("/my/news/react", data={"id": P_CHURCH, "kind": "love"}, headers=JSON)
+    assert r.status_code == 401 and r.json()["code"] == "signed_out"
+    c = _client(monkeypatch, _me(MONIQUE))
+    r = c.post("/my/news/react", data={"id": P_GROUP, "kind": "love"}, headers=JSON)        # not hers to see
+    assert r.status_code == 404 and r.json()["ok"] is False and fake.t["church_post_reactions"] == []
+    r = c.post("/my/news/react", data={"id": P_CHURCH, "kind": "shout"}, headers=JSON)
+    assert r.json()["ok"] is False and fake.t["church_post_reactions"] == []
+    monkeypatch.setattr(mpc, "_allowed", lambda church, who: False)
+    r = c.post("/my/news/react", data={"id": P_CHURCH, "kind": "love"}, headers=JSON)
+    assert r.status_code == 429 and r.json()["code"] == "slow" and fake.t["church_post_reactions"] == []
+    # Without JSON, the form post is as it was: back where it came from.
+    monkeypatch.setattr(mpc, "_allowed", lambda church, who: True)
+    r = c.post("/my/news/react", data={"id": P_CHURCH, "kind": "love", "back": "/my"})
+    assert r.status_code == 303 and r.headers["location"] == f"/my#p-{P_CHURCH}"
+    state = {}
+    assert cn.react(BIZ, MONIQUE, P_CHURCH, "love", state) == (True, "", P_CHURCH) and state == {"on": False}
+
+
 def test_a_comment_route_lands_on_the_comments(fake, monkeypatch):
     _screen(monkeypatch, "ok")
     fake.t["church_posts"].append(_post(P_CHURCH))

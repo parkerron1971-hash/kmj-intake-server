@@ -262,13 +262,50 @@ def test_loved_by_names_the_newest_love_that_isnt_mine(church, monkeypatch):
         if r["post_id"] == P["noah"] and r["contact_id"] == tct.CAL:
             r["created_at"] = _ago(minutes=1)
     noah = _art(_feed(_client(church, monkeypatch).get("/my").text), f"p-{P['noah']}")
-    assert '<p class="lf-likes">Loved by <b>Cal</b> and <b>2 others</b></p>' in noah
+    assert '<p class="lf-likes" data-n="2" data-by="Cal">Loved by <b>Cal</b> and <b>2 others</b></p>' in noah
     church.t["church_post_reactions"][:] = [r for r in church.t["church_post_reactions"]
                                             if not (r["post_id"] == P["noah"] and r["contact_id"] != tct.ANA)]
     noah = _art(_feed(_client(church, monkeypatch).get("/my").text), f"p-{P['noah']}")
     assert '<p class="lf-likes">Loved by <b>you</b></p>' in noah
     denise = _art(_feed(_client(church, monkeypatch).get("/my").text), f"p-{P['denise']}")
     assert "lf-likes" not in denise                                                # Prayers only says how many pray
+
+
+def test_loved_by_updates_in_place_from_the_servers_answer(church, monkeypatch):
+    # Love and Praying are the feed's own forms (lf-rxf), answered by its script, which redraws "Loved by" on
+    # the phone from the line's data (the counts without Ana's own, who), then takes the route's JSON "on" as
+    # the truth. The next page draws what the phone drew.
+    c = _client(church, monkeypatch)
+    noah = _art(_feed(c.get("/my").text), f"p-{P['noah']}")
+    assert '<p class="lf-likes" data-n="2" data-by="Ben">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah
+    assert re.findall(r'<form method="post" action="/my/news/react" class="(\w+-rxf)">', noah) == ["lf-rxf", "lf-rxf"]
+    r = c.post("/my/news/react", data={"id": P["noah"], "kind": "love", "back": "/my"}, headers=JSON)
+    assert r.status_code == 200 and r.json() == {"ok": True, "on": False, "kind": "love"}
+    noah = _art(_feed(c.get("/my").text), f"p-{P['noah']}")
+    assert '<p class="lf-likes" data-n="2" data-by="Ben">Loved by <b>Ben</b> and <b>1 other</b></p>' in noah
+    assert 'class="lf-act lv" type="submit" aria-pressed="false"' in noah
+    assert c.post("/my/news/react", data={"id": P["noah"], "kind": "pray"}, headers=JSON).json()["on"] is True
+    noah = _art(_feed(c.get("/my").text), f"p-{P['noah']}")
+    assert '<p class="lf-likes" data-n="2" data-by="Ben">Loved by <b>Ben</b> and <b>1 other</b> · <span>1 praying</span></p>' in noah
+    # Prayers only: Love is the feed's form; "I'm praying" keeps today's (RX_JS), its count its own.
+    denise = _art(_feed(c.get("/my").text), f"p-{P['denise']}")
+    assert 'class="lf-rxf"' in denise and 'class="nw-rxf"' in denise and "lf-likes" not in denise
+
+
+def test_the_feeds_script_redraws_loved_by_and_trusts_the_server():
+    js = mlf.JS
+    assert "form.lf-rxf" in js and "form.lf-rxf" not in mpn.RX_JS and "lf-rxf" not in mpn.RX_JS   # one answer each
+    assert "x.on" in js and "likes(c)" in js                          # the server's "on" is the truth, then redraw
+    for words in ("'Loved by '", "' and '", "' other'", "'you'", "'person':'people'", "' praying'", "' · '"):
+        assert words in js, words                                      # the server's own words (_likes)
+    assert "createTextNode" in js and "innerHTML" not in js.split("function likes")[1].split("d.addEventListener")[0]
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    src = js.replace("<script>", "").replace("</script>", "")
+    res = subprocess.run(["node", "--check", "-"], input=src, capture_output=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
 
 
 # ─── double-tap ──────────────────────────────────────────────────────

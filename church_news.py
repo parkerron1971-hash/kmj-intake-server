@@ -649,8 +649,11 @@ def _live_post(business_id: str, me_id: str, post_id: str) -> Optional[Dict[str,
     return p
 
 
-def react(business_id: str, me_id: str, post_id: str, kind: str) -> Tuple[bool, str, str]:
-    """Toggle one reaction. (ok, code, post_id)."""
+def react(business_id: str, me_id: str, post_id: str, kind: str,
+          state: Optional[Dict[str, Any]] = None) -> Tuple[bool, str, str]:
+    """Toggle one reaction. (ok, code, post_id). `state`, when given, gets
+    "on": whether the member's reaction is there now (Home's feed redraws
+    "Loved by" from it: member_portal_news' JSON answer; no read more)."""
     if kind not in REACTIONS:
         return False, "error", ""
     p = _live_post(business_id, me_id, post_id)
@@ -666,12 +669,16 @@ def react(business_id: str, me_id: str, post_id: str, kind: str) -> Tuple[bool, 
     if have:
         ok = sb_clients.sb_delete_as_service(
             f"/church_post_reactions?post_id=eq.{_q(pid)}&contact_id=eq.{_q(me_id)}&kind=eq.{kind}&business_id=eq.{_q(business_id)}")
+        if ok and state is not None:
+            state["on"] = False
         return (True, "", pid) if ok else (False, "error", pid)
     # return=representation: a minimal write hands back None even when it worked.
     ok = sb_clients.sb_post_as_service(
         "/church_post_reactions?on_conflict=post_id,contact_id,kind",
         {"post_id": pid, "contact_id": str(me_id), "business_id": str(business_id), "kind": kind},
         prefer="resolution=ignore-duplicates,return=representation")
+    if ok is not None and state is not None:
+        state["on"] = True                   # a duplicate (another tab got there first) is on all the same
     return (True, "", pid) if ok is not None else (False, "error", pid)
 
 

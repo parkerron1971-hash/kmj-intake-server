@@ -172,10 +172,12 @@ def test_home_is_the_feed_with_comments_under_each_post(church, monkeypatch):
     order = re.findall(r'<article class="lf-post" id="p-([^"]+)"', feed)
     assert order == [P["worship"], P["noah"], P["food"], P["denise"]]           # pinned first, then newest
     noah = _card(html, "noah")
-    # Loved by: the newest Love that isn't Ana's, by first name, and how many more.
-    assert '<p class="lf-likes">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah
-    # Love · Praying: News' react forms, answered in place (RX_JS), back to Home; Save at the right.
-    forms = re.findall(r'<form method="post" action="/my/news/react" class="nw-rxf">.*?name="kind" value="(\w+)">'
+    # Loved by: the newest Love that isn't Ana's, by first name, and how many more; its data (the loves
+    # without Ana's, who) lets the feed's script redraw it after a tap.
+    assert '<p class="lf-likes" data-n="2" data-by="Ben">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah
+    # Love · Praying: News' react forms, the feed's own class (its script answers them in place), back to
+    # Home; Save at the right.
+    forms = re.findall(r'<form method="post" action="/my/news/react" class="lf-rxf">.*?name="kind" value="(\w+)">'
                        r'<input type="hidden" name="back" value="/my">', noah)
     assert forms == ["love", "pray"]
     assert re.search(r'class="lf-act lv" type="submit" aria-pressed="true" aria-label="Love"', noah)   # Ana loves it

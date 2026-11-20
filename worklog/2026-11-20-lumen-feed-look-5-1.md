@@ -11,7 +11,6 @@ left_undone:
   - "No 'Maybe' on an event (no storage for it), and no 'M from your groups': who answered isn't read per group. 'N going' is the event's own count."
   - "No 'Elena chose prayers only. Send her a note': a group's prayer request has no prayers-only choice (the wall has no comments at all), so the sentence wouldn't be true. The request shows the asker by first name, as the wall promises ('The group sees your first name'), not 'Elena Ruiz' as the mock does."
   - "A group's Board post has no Love, Praying or Comment: the Board keeps none of those. It shows who posted, the words and 'Open <group>' (the mock's group icon), and no 'Got it' (that would need the seen read). The pastors' word to every group (group_id null) isn't in the feed."
-  - "'Loved by …' doesn't change in place when the member taps Love or double-taps; the heart button does. It is right on the next page."
   - "The group items and the newest message are Home's only; the all-posts page (/my/news) keeps the church's posts. A message a post carries draws in full on Home (it has the sermon library) and as a plain row on the all-posts page (no new read there)."
   - "Saved posts lists the 30 newest saved (the record keeps 100); no paging."
   - "The Home that answers 'I prayed' without JavaScript reads the group items fresh; with JavaScript the button answers in place. On another server copy the kept group items (30 s) can show the old state for up to 30 seconds after a reload."
@@ -34,7 +33,7 @@ decisions:
   - "The group page (#1985, #1992) draws its members' posts with card() and its held post with _source/_picture/_words; those now wear the Look 5.1 card, and so does its Board card (member_portal_groups._lumen_post_card: the same header, words, Got it and the leader's tools), so the page reads as one stream. A held post: a gold edge, the shield note inside the 20 px padding, Take it down."
   - "Reads (harness over the test fake, by table): Home (after #1994) cold 39 → 43 (+group_members, +group_posts, +group_prayers, +contacts: the group items, once per 30 s per member), warm 25 → 25. /my/news 14 / 14, Me 1 / 1, Connect 5 / 5, a post's page 23 / 23 (warm). The church's clock is still read once for the whole feed. Saved posts (new page): 8 warm."
   - "CSS in member_lumen_feed.CSS (the hashed Lumen file, before the type block, which stays last): every rule under .lm, tokens only (var(--bg), --fg, --s1, --lm-line, --acc, --acc-fill, --on-acc, --lm-tint-12) except white on photos (the play disc, the heart, the +N veil). New classes are lf-* so they can't meet the six other helpers' blocks. Motion only with the phone's yes; reduced motion keeps the heart's fade alone."
-related: [2026-11-20-lumen-see-all-posts.md, 2026-11-19-member-lumen-home-feed.md, 2026-11-20-lumen-dark-light.md, 2026-10-20-group-prayer-wall.md]
+related: [2026-11-20-lumen-tidy-ups.md, 2026-11-20-lumen-see-all-posts.md, 2026-11-19-member-lumen-home-feed.md, 2026-11-20-lumen-dark-light.md, 2026-10-20-group-prayer-wall.md]
 ---
 `member_lumen_feed.py` is rewritten to the Look 5.1 anatomy (card, message_card,
 prayer_card, group_post_card, composer, saved_page; the comment line; the
