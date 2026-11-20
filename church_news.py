@@ -167,6 +167,30 @@ def is_pastoral(business_id: str, contact_id: str) -> Optional[bool]:
     return any((by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS for r in roles)
 
 
+def pastors_among(business_id: str, contact_ids) -> Optional[set]:
+    """Which of these people hold an active senior or pastoral role
+    (is_pastoral's answer), in two reads however many there are: their roles
+    together, and the church's roles. None when a read failed."""
+    import church_roles as cr
+    import messaging_router as mr
+    ids = sorted({str(c) for c in contact_ids if c})
+    if not ids:
+        return set()
+    roles = sb_clients.sb_get_as_service(
+        f"/church_leader_roles?business_id=eq.{_q(business_id)}&contact_id=in.({_ids(ids)})"
+        f"&status=eq.active&select=contact_id,role&limit=500")
+    if roles is None:
+        return None
+    if not roles:
+        return set()
+    defs = cr.defs(str(business_id))
+    if defs is None:
+        return None
+    by = cr.by_key(defs)
+    return {str(r["contact_id"]) for r in roles
+            if (by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS}
+
+
 def picked(business_id: str, contact_id: str) -> Optional[bool]:
     rows = sb_clients.sb_get_as_service(
         f"/church_news_posters?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(contact_id)}&select=contact_id&limit=1")
@@ -239,19 +263,72 @@ def matches(p: Dict[str, Any], filt: str) -> bool:
     return p.get("kind") in FILTER_KINDS.get(filt, set())
 
 
-def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str) -> Optional[List[Dict[str, Any]]]:
+def preview_of(shown: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A post's newest one or two shown comments for Home's feed, one reply
+    in: the comment with the newest activity and its newest reply; with no
+    reply there, the comment before it too. Oldest first, as a thread reads.
+    `shown`: the post's shown comments, any order."""
+    rows = sorted(shown, key=lambda r: str(r.get("created_at") or ""))
+    by = {str(r["id"]): r for r in rows}
+    tops: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        parent = str(r.get("reply_to") or "")
+        key = parent if parent in by and not by[parent].get("reply_to") else str(r["id"])
+        tops.setdefault(key, []).append(r)
+    # Each thread (a comment, then its replies) by its newest moment.
+    threads = sorted(tops.items(), key=lambda kv: str(kv[1][-1].get("created_at") or ""))
+    if not threads:
+        return []
+    key, last = threads[-1]
+    top = by.get(key) or last[0]
+    replies = [r for r in last if str(r["id"]) != str(top["id"])]
+    if replies:
+        return [dict(top), {**replies[-1], "is_reply": True}]
+    if len(threads) > 1:
+        k2, before = threads[-2]
+        return [dict(by.get(k2) or before[0]), dict(top)]
+    return [dict(top)]
+
+
+def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str,
+              previews: bool = False, batch: bool = False) -> Optional[List[Dict[str, Any]]]:
     """Authors, ministry names, reaction counts and mine, comment counts,
-    and what each post carries (an event, a sermon)."""
+    and what each post carries (an event, a sermon). `previews` (Home's feed
+    in the new look): the count read also brings the comments' words, so
+    each post carries its newest one or two (preview_of) with their writers
+    (in the same people read), how many people reacted (rx_people), and the
+    newest person, not this member, who loved it (lover: same read).
+    `batch` (the all-posts page, feed_page): whose authors are pastors in two
+    reads together (pastors_among), not two for each new author."""
     if not rows:
         return []
     ids = _ids(r["id"] for r in rows)
     b = _q(business_id)
     rx = sb_clients.sb_get_as_service(f"/church_post_reactions?business_id=eq.{b}&post_id=in.({ids})"
-                                      f"&select=post_id,contact_id,kind&limit=50000")
+                                      + ("&select=post_id,contact_id,kind,created_at&order=created_at.desc&limit=50000"
+                                         if previews else "&select=post_id,contact_id,kind&limit=50000"))
     cm = sb_clients.sb_get_as_service(f"/church_post_comments?business_id=eq.{b}&post_id=in.({ids})&status=eq.shown"
-                                      f"&select=post_id&limit=50000")
+                                      + ("&select=post_id,id,contact_id,reply_to,body,created_at&order=created_at.desc&limit=50000"
+                                         if previews else "&select=post_id&limit=50000"))
+    shown_by: Dict[str, List[Dict[str, Any]]] = {}
+    writers: List[Any] = []
+    if previews and cm is not None:
+        for x in cm:
+            shown_by.setdefault(str(x["post_id"]), []).append(x)
+        for r in rows:
+            r["preview"] = preview_of(shown_by.get(str(r["id"]), []))
+            writers += [c.get("contact_id") for c in r["preview"]]
+    # Look 5.1's "Loved by Maya and 156 others": the newest Love that isn't
+    # this member's, by name, in the same people read.
+    lovers: Dict[str, str] = {}
+    if previews and rx is not None:
+        for x in rx:
+            pid_ = str(x["post_id"])
+            if x["kind"] == "love" and pid_ not in lovers and str(x["contact_id"]) != str(me_id):
+                lovers[pid_] = str(x["contact_id"])
+        writers += list(lovers.values())
     authors = _people(business_id, [r.get("posted_by") for r in rows] + [r.get("person_id") for r in rows]
-                      + [r.get("partner_id") for r in rows])
+                      + [r.get("partner_id") for r in rows] + writers)
     gids = {str(r["group_id"]) for r in rows if r.get("group_id")} | {
         str(g) for r in rows if isinstance(r.get("attach"), dict) for g in (r["attach"].get("groups") or [])}
     groups = (sb_clients.sb_get_as_service(f"/groups?business_id=eq.{b}&id=in.({_ids(gids)})&select=id,name")
@@ -260,6 +337,9 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str) -> Optio
         return None
     gname = {str(g["id"]): g.get("name") or "" for g in groups}
     pastoral: Dict[str, bool] = {}
+    if batch:
+        got = pastors_among(business_id, [r.get("posted_by") for r in rows]) or set()
+        pastoral = {str(r.get("posted_by")): str(r.get("posted_by")) in got for r in rows if r.get("posted_by")}
     for r in rows:
         pid = str(r["id"])
         mine = [x for x in rx if str(x["post_id"]) == pid]
@@ -281,6 +361,13 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str) -> Optio
         r["pastor"] = pastoral.get(a, False)
         if not isinstance(r.get("attach"), dict):
             r["attach"] = {}
+        if previews:
+            r["rx_people"] = len({str(x["contact_id"]) for x in mine})
+            r["lover"] = authors.get(lovers.get(pid, "")) or {}
+            for c in r.get("preview") or []:
+                c["person"] = authors.get(str(c.get("contact_id") or "")) or {}
+                c["mine"] = str(c.get("contact_id") or "") == str(me_id)
+                c["status"] = "shown"
     _attachments(business_id, rows)
     return rows
 
@@ -323,11 +410,71 @@ def feed(business_id: str, me_id: str, filt: str = "", today: str = "") -> Optio
     return _decorate(business_id, rows[:40], me_id)
 
 
-def home_view(business_id: str, me_id: str) -> Tuple[Optional[List[Dict[str, Any]]], int]:
+PAGE = 10
+PAGE_READ_MAX = 400
+
+
+def page_window(page: int) -> int:
+    """How many of the newest posts one page of the all-posts page reads: 80
+    (News' own read) for the first two pages, then four posts for each one
+    shown, up to 400."""
+    return min(max(FEED_READ, page * PAGE * 4), PAGE_READ_MAX)
+
+
+def page_count(page: int) -> int:
+    """The deepest page there is (the last one the read can reach)."""
+    return max(1, min(int(page or 1), PAGE_READ_MAX // PAGE))
+
+
+def feed_page(business_id: str, me_id: str, filt: str = "", today: str = "",
+              page: int = 1) -> Optional[Dict[str, Any]]:
+    """One page of the all-posts page (the News page in the member app's new
+    look, opened from Home's See all posts): ten posts, pinned first, then
+    newest, each as Home's feed draws it (previews: its newest comments; how
+    many people reacted), with whose authors are pastors read together.
+    Today's birthdays and anniversaries come on the first page only, apart
+    (`today`), as News shows them. One read of the posts (page_window), the
+    member's groups, and the decorations for this page's posts only.
+    {posts, today, more: another page follows, total: posts counted in the
+    read, page}; None when a read failed."""
+    page = page_count(page)
+    rows = sb_clients.sb_get_as_service(
+        f"/church_posts?business_id=eq.{_q(business_id)}&status=eq.posted&removed_at=is.null"
+        f"&select={POST_SELECT}&order=created_at.desc&limit={page_window(page)}")
+    groups = my_groups(business_id, me_id)
+    if rows is None or groups is None:
+        return None
+    now = _now()
+    mine = set(groups)
+    rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
+            and (not is_person_celebration(r) or (today and str(r.get("celebrate_on")) == today))]
+    rows.sort(key=when_of, reverse=True)
+    rows.sort(key=lambda r: not pinned_now(r, now))
+    rows = [r for r in rows if matches(r, filt)]
+    people = [r for r in rows if is_person_celebration(r)] if page == 1 else []
+    rest = [r for r in rows if not is_person_celebration(r)]
+    start = (page - 1) * PAGE
+    shown = rest[start:start + PAGE]
+    done = _decorate(business_id, shown + people, me_id, previews=True, batch=True)
+    if done is None:
+        return None
+    return {"posts": done[:len(shown)], "today": done[len(shown):], "more": len(rest) > start + PAGE,
+            "total": len(rest), "page": page}
+
+
+def home_view(business_id: str, me_id: str, previews: bool = False,
+              count: Optional[Dict[str, Any]] = None) -> Tuple[Optional[List[Dict[str, Any]]], int]:
     """Home's "From the church" (the first four posts, decorated) and the
     bell's count of posts from the last two weeks this member hasn't opened.
     Read in one go, beside Home's other reads. (None, 0) when a read failed:
-    Home leaves the section out rather than wait or say "nothing"."""
+    Home leaves the section out rather than wait or say "nothing".
+    `previews` (Home's feed in the new look, member_lumen_feed): each post
+    also carries its newest comments (_decorate) and `seen`, whether this
+    member has opened it (from the bell's own read; older than two weeks
+    counts as seen; None when that read failed).
+    `count` (Home's See all posts): filled with n, how many posts the
+    all-posts page lists (feed_page's total, birthdays aside), from this
+    same read; None when the read came back full, so more may be there."""
     rows = sb_clients.sb_get_as_service(
         f"/church_posts?business_id=eq.{_q(business_id)}&status=eq.posted&removed_at=is.null"
         f"&select={POST_SELECT}&order=created_at.desc&limit=40")
@@ -336,6 +483,9 @@ def home_view(business_id: str, me_id: str) -> Tuple[Optional[List[Dict[str, Any
         return None, 0
     now = _now()
     mine = set(groups)
+    if count is not None:
+        count["n"] = None if len(rows) >= 40 else sum(
+            1 for r in rows if is_live(r, now) and reaches(r, mine, me_id) and not is_person_celebration(r))
     # A birthday, anniversary or milestone is Home's "Celebrating today", not
     # "From the church" (News keeps them all).
     rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
@@ -345,6 +495,7 @@ def home_view(business_id: str, me_id: str) -> Tuple[Optional[List[Dict[str, Any
     since = (now - timedelta(days=14)).isoformat()
     recent = [str(r["id"]) for r in rows if str(r.get("created_at") or "") >= since]
     unseen_n = 0
+    have: Optional[set] = set()
     if recent:
         seen = sb_clients.sb_get_as_service(
             f"/church_post_seen?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(me_id)}"
@@ -352,9 +503,15 @@ def home_view(business_id: str, me_id: str) -> Tuple[Optional[List[Dict[str, Any
         if seen is not None:
             have = {str(s["post_id"]) for s in seen}
             unseen_n = sum(1 for r in recent if r not in have)
+        else:
+            have = None
     rows.sort(key=when_of, reverse=True)
     rows.sort(key=lambda r: not pinned_now(r, now))
-    return _decorate(business_id, rows[:4], me_id), unseen_n
+    if previews:
+        fresh = set(recent)
+        for r in rows[:4]:
+            r["seen"] = None if have is None else (str(r["id"]) in have or str(r["id"]) not in fresh)
+    return _decorate(business_id, rows[:4], me_id, previews), unseen_n
 
 
 def one(business_id: str, me_id: str, post_id: str) -> Optional[Dict[str, Any]]:
@@ -519,10 +676,11 @@ def react(business_id: str, me_id: str, post_id: str, kind: str) -> Tuple[bool, 
 
 
 async def comment(business: Dict[str, Any], me: Dict[str, Any], post_id: str, text: str,
-                  reply_to: str = "") -> Tuple[bool, str, str]:
+                  reply_to: str = "", saved: Optional[Dict[str, Any]] = None) -> Tuple[bool, str, str]:
     """A comment, checked first. (ok, code, post_id). Codes: 'commented',
     'comment_held' (the safety officers look first), 'care' (crisis words:
-    held, the pastor told, the writer shown 988)."""
+    held, the pastor told, the writer shown 988). `saved`, when given, gets
+    the saved row under "row" (Home's feed draws it from that)."""
     import msg_screen
     business_id = str(business["id"])
     text = re.sub(r"[ \t]+\n", "\n", str(text or "")).strip()[:COMMENT_MAX]
@@ -558,6 +716,8 @@ async def comment(business: Dict[str, Any], me: Dict[str, Any], post_id: str, te
         **({"reply_to": reply} if reply else {})})
     if not isinstance(row, list) or not row:
         return False, "error", pid
+    if saved is not None:
+        saved["row"] = {**row[0], "is_reply": bool(reply)}
     if verdict == "self_harm":
         import member_portal_messaging as mpm
         await asyncio.to_thread(mpm.care_alert, business_id, me)
@@ -785,6 +945,9 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         })
     held = _get(f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id,post_id,contact_id,body,created_at"
                 f"&order=created_at.desc&limit=50")
+    # Members' group posts the check held (member_posts), beside the comments.
+    import member_posts
+    held_posts = member_posts.held_posts(biz_id)
     reports = _get(f"/church_post_reports?business_id=eq.{b}&status=eq.open&select=comment_id&limit=500")
     titles = {p["id"]: p["title"] for p in posts}
     posters = _get(f"/church_news_posters?business_id=eq.{b}&select=contact_id,added_at&limit=200")
@@ -815,9 +978,12 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         "seen_week": len({str(s["contact_id"]) for s in saw}),
         "posts_month": sum(1 for p in posts if p["status"] == "posted" and str(p.get("created_at") or "") >= (now - timedelta(days=30)).isoformat()),
         "held": [{"id": h["id"], "post_id": h["post_id"], "post_title": titles.get(str(h["post_id"]), ""),
-                  "created_at": h["created_at"]} for h in held],
+                  "created_at": h["created_at"]} for h in held]
+        + [{"id": h["id"], "post_id": h["post_id"], "post_title": h["post_title"], "created_at": h["created_at"],
+            "kind": "post"} for h in held_posts],
         "safety": {"comments_open": comments_open(business), "officers": mr.officer_count(biz_id),
-                   "min_officers": mr.MIN_OFFICERS, "held_week": sum(1 for h in held if str(h["created_at"]) >= week),
+                   "min_officers": mr.MIN_OFFICERS,
+                   "held_week": sum(1 for h in held + held_posts if str(h["created_at"]) >= week),
                    "reports_open": len(reports)},
         "posters": [{"contact_id": str(p["contact_id"]), "name": (poster_people.get(str(p["contact_id"])) or {}).get("name") or ""}
                     for p in posters],
@@ -1016,9 +1182,14 @@ def held_words(business_id: str = Query(...), user: AuthedUser = Depends(require
     mr.require_officer(biz, user)
     rows = _get(f"/church_post_comments?business_id=eq.{_q(biz)}&status=eq.held"
                 f"&select=id,post_id,contact_id,body,created_at&order=created_at.desc&limit=50")
-    people = _people(biz, [r["contact_id"] for r in rows]) or {}
+    # Members' group posts the check held (member_posts), with their words.
+    import member_posts
+    posts = member_posts.held_posts(biz)
+    people = _people(biz, [r["contact_id"] for r in rows] + [p["contact_id"] for p in posts]) or {}
     return {"held": [{"id": r["id"], "post_id": r["post_id"], "body": r.get("body") or "", "created_at": r["created_at"],
-                      "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]}
+                      "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]
+            + [{"id": p["id"], "post_id": p["post_id"], "body": p["body"], "created_at": p["created_at"], "kind": "post",
+                "name": (people.get(str(p["contact_id"] or "")) or {}).get("name") or "Someone"} for p in posts]}
 
 
 class HeldIn(BaseModel):
@@ -1037,6 +1208,13 @@ def decide_held(comment_id: str, body: HeldIn, user: AuthedUser = Depends(requir
     mr.require_officer(biz_id, user)
     rows = _get(f"/church_post_comments?id=eq.{_q(cid)}&business_id=eq.{_q(biz_id)}&status=eq.held&select=id&limit=1")
     if not rows:
+        # A member's group post the check held (member_posts) is decided the same way.
+        import member_posts
+        done = member_posts.decide_held(biz_id, cid, body.show)
+        if done is None:
+            raise _unavailable()
+        if done:
+            return {"ok": True}
         raise HTTPException(404, "That comment was already decided.")
     patch = {"status": "shown"} if body.show else {"status": "removed", "removed_by": "officer",
                                                     "removed_at": _now().isoformat()}

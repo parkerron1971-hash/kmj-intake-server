@@ -169,6 +169,13 @@ _cors_origins = [
 # it. Pure ASGI; it never wraps a response it lets through.
 from sample_church_guard import SampleChurchGuard
 app.add_middleware(SampleChurchGuard)
+# Is this request from the Android app (android_app.py)? Its WebView's user
+# agent carries SolutionistAndroid/; Chief then never sells our plans or
+# add-ons in its replies (Google Play's payments policy). Pure ASGI: it only
+# sets a ContextVar for the request and clears it after, so where it sits
+# in the stack doesn't matter; every route and the tasks they start see it.
+from android_app import AndroidAppMarker
+app.add_middleware(AndroidAppMarker)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -470,6 +477,16 @@ app.include_router(church_schedule_router)
 # switch; 404 until supabase/APPLY-2026-11-20-church-schedule-limits.sql too.
 from church_schedule_limits import router as church_schedule_limits_router
 app.include_router(church_schedule_limits_router)
+# Things that repeat (/church/schedule/commitments; church_schedule_repeats.py,
+# S1-7): "I work every other Saturday", said once. The same switch; step 1's
+# tables (church_away_commitments is in that file).
+from church_schedule_repeats import router as church_schedule_repeats_router
+app.include_router(church_schedule_repeats_router)
+# The week (/church/week, /church/week/status; church_week.py): every
+# department's volunteers for one week, with hours, read only, for whoever
+# keeps Who serves when (2026-11-19; CHURCH_WEEK off | owner | on, owner when unset).
+from church_week import router as church_week_router
+app.include_router(church_week_router)
 from church_job_descriptions import router as church_job_descriptions_router
 app.include_router(church_job_descriptions_router)
 # One sheet per person (church_sheet.py): a login's job, areas, duties and what
@@ -653,11 +670,35 @@ app.include_router(member_portal_checkin_router)
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# A member's Look in the new look (member_lumen_look.py): POST /my/look,
+# Light, Dark or Same as my phone. BEFORE public_site_router.
+from member_lumen_look import router as member_lumen_look_router
+app.include_router(member_lumen_look_router)
+# Watch in the new look (member_lumen_watch.py): POST /my/sermons/progress
+# and /my/sermons/save (where a member is in a message, and Save), and the
+# church's weekly service for the calendar (GET /my/sermons/live.ics, public).
+# BEFORE public_site_router.
+from member_lumen_watch import router as member_lumen_watch_router
+app.include_router(member_lumen_watch_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.
 from member_app_pictures import router as member_app_pictures_router
 app.include_router(member_app_pictures_router)
+# Meet the pastor (member_pastor.py): POST /my/pastor/note, the pastor's
+# welcome note, for the same people as the pictures. BEFORE public_site_router.
+from member_pastor import router as member_pastor_router
+app.include_router(member_pastor_router)
+# Members post (member_posts.py): POST /my/post (in their own groups, or to
+# the whole church through a pastor), /my/post/remove, /my/post/switch.
+# BEFORE public_site_router.
+from member_posts import router as member_posts_router
+app.include_router(member_posts_router)
+# Share in the new look (member_lumen_share.py): the sheet's script
+# (GET /my/share.<hash>.js) and a story picture of the church's own content
+# (GET /my/story/<kind>/<id>.png). BEFORE public_site_router.
+from member_lumen_share import router as member_lumen_share_router
+app.include_router(member_lumen_share_router)
 # A member's own highlights, notes and bookmarks in the Bible
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router
@@ -1956,6 +1997,17 @@ async def startup():
                           id="church_money_asks", max_instances=1)
     except Exception as e:
         print(f"   [warn] giving requests sweep not scheduled: {e}")
+    # Payroll reminders (payroll_reminders.py, Payroll the free version):
+    # hourly, three days before an approve-by day, a tax deposit or a form
+    # date that is still open, one alert to whoever works payroll; the day
+    # before, one to the owner. Each is claimed in payroll_reminders_sent
+    # first, so nobody hears it twice. PAYROLL_REMINDERS=off: reads nothing.
+    try:
+        import payroll_reminders as _payroll_reminders
+        scheduler.add_job(g("payroll_reminders", _payroll_reminders.tick), "interval", hours=1,
+                          id="payroll_reminders", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] payroll reminders not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
     # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
     # consent rule, event-based dedupe + per-business toggle all live in

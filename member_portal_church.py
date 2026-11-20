@@ -269,6 +269,16 @@ def _roster_modules(business_id: str) -> Optional[List[Dict[str, Any]]]:
     return mods if isinstance(mods, list) else None
 
 
+def clock_of(v: Any) -> str:
+    """'HH:MM' from an occasion's date when it carries a time on the
+    church's own clock ('2026-11-22T10:30'); '' for a bare date, junk, or
+    a time with an offset (it would need the church's zone to read)."""
+    m = re.fullmatch(r"\d{4}-\d\d-\d\d[T ](\d\d):(\d\d)(:\d\d(\.\d+)?)?", str(v or "").strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return ""
+    return f"{m.group(1)}:{m.group(2)}"
+
+
 def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """The church's upcoming occasions, each with this person's answer.
     None when the read failed (the page says so; it never shows "nothing
@@ -302,6 +312,12 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         signups = er.read_signups(entry.get("data") or {}, f["signups_field"]) if f else []
         mine = next((s for s in signups if is_mine(s, me)), None)
         o["mine"] = ({"status": mine.get("status") or "yes", "role": mine.get("role")} if mine else None)
+        # Its start time when the date says one ("2026-11-22T10:30"), for the
+        # new Home's date leaf; today's look shows the day only.
+        o["time"] = clock_of((entry.get("data") or {}).get(f["date_field"])) if f else ""
+        # Whether it is on the public events page (a member may share it in the
+        # new look, member_lumen_share); today's look doesn't read it.
+        o["public"] = er.is_public(entry.get("data") or {})
     import church_event_signups
     return church_event_signups.annotate(str(business_id), out, contact_id=str(me["id"]))
 
@@ -475,6 +491,8 @@ def update_details(business_id: str, contact_id: str, details: Dict[str, Any]) -
 # a tap.
 
 GROUP_KINDS = {"small_group": "Small group", "team": "Serving team", "class": "Class", "ministry": "Ministry"}
+# A group's regular time (group_gatherings), read with the group.
+_SCHEDULE = "meet_day,meet_time,meet_skips,meet_every,meet_from,meet_nth,meet_address"
 
 
 def _first(name: Any) -> str:
@@ -486,7 +504,8 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
     read (the page says "try again" rather than showing no groups)."""
     groups = sb_clients.sb_get_as_service(
         f"/groups?business_id=eq.{business_id}&active=eq.true"
-        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,youth&order=name.asc&limit=500")
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,youth,chat_on,"
+        f"{_SCHEDULE}&order=name.asc&limit=500")
     members = sb_clients.sb_get_as_service(
         f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role,can_host_live&limit=20000")
     if groups is None or members is None:
@@ -520,9 +539,17 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
                         if str(m["group_id"]) == gid and m.get("role") == "leader" and str(m["contact_id"]) in names],
             "full": bool(g.get("capacity")) and count.get(gid, 0) >= int(g["capacity"]),
             "mode": join_mode(g), "asked": gid in asked,
+            # How many are in it, for the new look's Find your people
+            # (member_lumen_connect): counted from the members read above.
+            "count": count.get(gid, 0),
         }
         if gid in my_role:
-            mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth"))})
+            # The regular time and who's in it, for the new Home's "Up next"
+            # (member_portal_lumen.next_gathering): read with the group, no
+            # read of their own; today's look doesn't show them.
+            mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth")),
+                         "sched": {k: g.get(k) for k in _SCHEDULE.split(",")}, "chat_on": g.get("chat_on"),
+                         "member_ids": [str(m["contact_id"]) for m in members if str(m["group_id"]) == gid]})
         elif item["mode"] != "invite" and not item["full"]:
             open_.append(item)
     # Live group meetings (member_portal_group_live.py) for the groups
@@ -876,7 +903,8 @@ def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     else:
         import member_app_samples as samples
         hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
-        body = hint + '<div class="lm-evs">' + "".join(_lumen_occasion(o) for o in occasions) + "</div>"
+        body = hint + '<div class="lm-evs">' + "".join(_lumen_occasion(o, share=_lumen_share(biz, site, o))
+                                                       for o in occasions) + "</div>"
         if any(o.get("signup") for o in occasions):
             import church_event_signups
             body = church_event_signups.MEMBER_CSS + body
@@ -884,13 +912,29 @@ def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     return _shell(biz, site, "Coming up", f"{head}{_flash(request)}{body}", tab="events", who=who)
 
 
-def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events") -> str:
+def _lumen_share(biz: Dict[str, Any], site, o: Dict[str, Any]) -> str:
+    """Share for one occasion in the new look (member_lumen_share): only a
+    public one while the church's public events page is on, linking that
+    page; '' otherwise. Its picture is the one the church gave the event,
+    when that is already on its website (mls.event_picture)."""
+    import member_lumen_share as mls
+    if not mls.event_shareable(biz, o):
+        return ""
+    title = o.get("title") or "Event"
+    pic = mls.event_picture(biz, site, title)
+    when = " · ".join(x for x in (o.get("date_label") or "", o.get("location") or "") if x)
+    return mls.link("event", mls.EVENTS_HREF, title, mls.icon("share", 19), sub=when, img=pic,
+                    sid=o.get("entry_id") or "", cls="lm-evshare", label=f"Share {title}")
+
+
+def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events", share: str = "") -> str:
     """One occasion in the new look: its day in the margin (the weekday and
     month small in coral, the date in the serif), what and where, then what
     fits this person's answer, posting the same forms occasion_card posts
     (I'm coming, You're coming, Just attend instead, Can't make it), and
     "Sign up to serve" opening the roles still open. Nothing offered can
-    only fail, as there: a full occasion offers neither."""
+    only fail, as there: a full occasion offers neither. `share` is its
+    Share (_lumen_share), a quiet icon beside the title."""
     import member_app_samples as samples
     import member_app_ui as ui
     import member_lumen_people as lp
@@ -950,8 +994,8 @@ def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events") -> str:
     sample = ui.sample_tag() if samples.is_sample(o) else ""
     said_html = f'<p class="lm-evst">{said}</p>' if said else ""
     row_html = f'<div class="lm-evrow">{"".join(row)}</div>' if row else ""
-    return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt">'
-            f'<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
+    return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt{" has-share" if share else ""}">'
+            f'{share}<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
             f'{row_html}{serve}</div></article>')
 
 

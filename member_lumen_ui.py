@@ -13,13 +13,24 @@ THE SHEET. One more shared file beside /my/app.<hash>.css: /my/lumen.<hash>.css
 Every rule sits under body.lm, so the file draws nothing on any other page.
 It reads the colours the app's sheet already defines from the church's
 palette (--acc, --acc-fill, --on-acc, --bg, --s1, the family inks), worked
-out on the white base: Lumen is always white, whatever base the church
-picked for today's look (member_app_ui.base_of).
+out on the white base (member_app_ui.base_of).
 
-THE PIECES. The top bar of a main tab (logo and name; the message bubble with
-the unread count, the bell, the profile picture), a pushed page's plain back
-bar, the tab bar (Home · Watch · Bible · Connect · Give, a colour line that
-slides to the tab you're on), and the small blocks the pages are made of.
+DARK. The member's look (member_lumen_look: Light, Dark, Same as my phone)
+turns the page dark with one layer over the white one: the near-black of
+the approved "Look 4: black base" board (#0A0A0B, its surfaces, its warm
+whites), the church's colour lifted to its "lit" shade for words (readable
+on black, then lightened the way the reader does), the family inks their
+dark shades, hairlines and tints remade for a dark page. Written once
+(DARK_TOKENS, and each block's own dark rules) and used twice by dark():
+under body.lm.lm-dark, and under body.lm.lm-auto inside a
+prefers-color-scheme: dark query. The Bible reader keeps its warm night
+and Watch its cinema black, each a narrower rule over this one.
+
+THE PIECES. The top bar of a main tab (logo and name; the bell, the message
+bubble with the unread count, the profile picture: Look 5.1's order), a
+pushed page's plain back bar, the tab bar (Look 5.1: Home · Watch · Connect ·
+Bible · Give, flat, with a hairline on top), and the small blocks the pages
+are made of.
 
 Pure functions, no I/O.
 """
@@ -30,12 +41,13 @@ from html import escape
 from string import Template
 from typing import Any, Dict, Optional, Tuple
 
-# The tabs, in Lumen's order. Messages is not a tab: it opens from the bubble.
+# The tabs, in Lumen's order (Look 5.1, Kevin 2026-11-20: Home · Watch ·
+# Connect · Bible · Give). Messages is not a tab: it opens from the bubble.
 TABS = (
     ("home", "/my", "Home"),
     ("watch", "/my/sermons", "Watch"),
-    ("bible", "/my/bible", "Bible"),
     ("connect", "/my/connect", "Connect"),
+    ("bible", "/my/bible", "Bible"),
     ("give", "/my/give", "Give"),
 )
 # The pages that are a main tab: they get the full top bar. Every other page
@@ -59,6 +71,14 @@ ICONS = {
     "person": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     "tv": '<rect x="2.5" y="4" width="19" height="13" rx="3"/><path d="m10.5 8.3 4 2.2-4 2.2z"/><path d="M8 21h8"/>',
     "playfill": '<path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/>',
+    # Look 5.1 (Home's doors, the composer, the moments' viewer)
+    "image": '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+    "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    "hands": '<path d="M11.4 4.6 9 10.2v4.6l-3.2 3.1 2.6 2.6L12 17V5.3c0-.4-.3-.7-.6-.7z"/>'
+             '<path d="M12.6 4.6 15 10.2v4.6l3.2 3.1-2.6 2.6L12 17"/>',
+    "hand": '<path d="M18 11V6a2 2 0 0 0-4 0"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>'
+            '<path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+    "smile": '<circle cx="12" cy="12" r="9.5"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01"/><path d="M15 9h.01"/>',
 }
 
 
@@ -72,6 +92,46 @@ def ic(name: str, size: int = 22) -> str:
 
 def _e(s: Any) -> str:
     return escape(str(s if s is not None else ""), quote=True)
+
+
+def dark(css: str) -> str:
+    """Rules for the dark look, written under body.lm.lm-dark, and the same
+    rules for Same as my phone (body.lm.lm-auto) while the phone is dark."""
+    return css + "@media (prefers-color-scheme:dark){" + css.replace(".lm-dark", ".lm-auto") + "}\n"
+
+
+# The dark layer's colours (member_lumen_look). The page's own names, so
+# every part of every page (the new look's and today's pieces inside it)
+# turns with it; the church's colour as words is its lit shade (4.5:1 on
+# black: member_app_ui.palette) lightened a little more; its button colour
+# stays the church's unless that is too deep for near-black (then the page
+# carries a lifted one: member_lumen_look.dark_tokens); the tints are the
+# church's colour over near-black, stronger than on white so they still
+# read as a surface.
+DARK_TOKENS = (
+    "--bg:#0A0A0B;--s1:#161618;--s2:#202023;--s3:#2E2E32;--line:rgba(255,255,255,.1);"
+    "--fg:#F4F2EE;--fg2:#AAA7A1;--fg3:#8F8C86;"
+    "--acc:var(--acc-lit);--accent:var(--acc);--focus:var(--acc);"
+    "--bar:rgba(10,10,11,.82);--hair:rgba(244,242,238,.1);"
+    "--surface:var(--bg);--input-surface:var(--s1);--text-primary:var(--fg);--text-secondary:var(--fg2);"
+    "--text-muted:var(--fg3);--border:var(--line);--mb-surface:var(--s1);--mb-surface-2:var(--s2);"
+    "--mb-line:var(--line);--error:#FF6B5E;"
+    "--gold-ink:var(--gold-lit);--teal-ink:var(--teal-lit);--violet-ink:var(--violet-lit);--coral-ink:var(--coral-lit);"
+    "--gold-deep:var(--gold-night);--teal-deep:var(--teal-night);--violet-deep:var(--violet-night);"
+    "--coral-deep:var(--coral-night);--acc-deep:var(--acc-night);"
+    "--lm-line:rgba(255,255,255,.1);--lm-shadow:rgba(0,0,0,.6);--lm-paper:#F1E8D4;--lm-raise:var(--s3);"
+    "--lm-mint:#12332B;--lm-mint-ink:#8EDBC9;--lm-live:#FF6B6B;"
+    "color-scheme:dark;"
+)
+DARK_MIX = (
+    "--acc:color-mix(in oklab,var(--acc-lit) 62%,#fff);"
+    "--acc-soft:color-mix(in srgb,var(--acc-fill) 18%,transparent);--mb-soft:var(--acc-soft);"
+    "--mb-soft-line:color-mix(in srgb,var(--acc-fill) 40%,transparent);"
+    "--lm-tint:color-mix(in srgb,var(--acc-fill) 12%,var(--bg));--lm-tint-6:color-mix(in srgb,var(--acc-fill) 8%,var(--bg));"
+    "--lm-tint-10:color-mix(in srgb,var(--acc-fill) 16%,var(--bg));--lm-tint-12:color-mix(in srgb,var(--acc-fill) 26%,var(--bg));"
+    "--lm-gold-tint:color-mix(in srgb,var(--gold) 14%,var(--bg));--lm-ring:color-mix(in srgb,var(--acc-fill) 50%,transparent);"
+    "--lm-mint:color-mix(in srgb,var(--teal) 22%,var(--bg));"
+)
 
 
 def italic_last(text: Any) -> str:
@@ -153,11 +213,11 @@ def bell(dot: bool) -> str:
 
 def nav(active: Optional[str], *, lead: bool = False, board: bool = False, serve: bool = False,
         side: Tuple[str, str] = ("", "")) -> str:
-    """The tab bar: Home · Watch · Bible · Connect · Give, and a leader's
-    Serve (or Lead) tab or a board member's Board tab last, as today. The
-    current tab is in the church's colour with a short line over it that
-    slides to the next tab as the page changes (a view transition; none
-    with reduced motion). Keeps the class names the early loading and the
+    """The tab bar (Look 5.1): Home · Watch · Connect · Bible · Give, and a
+    leader's Serve (or Lead) tab or a board member's Board tab last, as
+    today. A flat bar the width of the phone with a hairline on top, an
+    icon and a label each; the current tab in the church's colour, its icon
+    a little heavier. Keeps the class names the early loading and the
     cross-fade look for (.mb-nav, .mb-tab: member_app_ui.EARLY_RULES,
     MOTION_CSS), and the computer's sidebar parts (`side`)."""
     import member_app_ui as ui
@@ -172,17 +232,14 @@ def nav(active: Optional[str], *, lead: bool = False, board: bool = False, serve
     cur = TAB_OF.get(active or "", "")
     if cur == "board" and lead:
         cur = "lead"
-    keys = [t[0] for t in tabs]
-    at = keys.index(cur) if cur in keys else -1
     items = []
     for key, href, label, paths in tabs:
         here = ' aria-current="page"' if key == cur else ""
         items.append(f'<a class="mb-tab" href="{href}"{here}><i class="mb-tab-p"><svg width="24" height="24" '
                      f'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" '
                      f'stroke-linejoin="round" aria-hidden="true" focusable="false">{paths}</svg></i><span>{label}</span></a>')
-    ind = f'<span class="lm-ind" aria-hidden="true"></span>' if at >= 0 else ""
-    return (f'<nav class="mb-nav lm-nav mp-noprint" aria-label="Main" style="--n:{len(tabs)};--i:{max(at, 0)}">'
-            f'{side[0]}{ind}{"".join(items)}{side[1]}</nav>')
+    return (f'<nav class="mb-nav lm-nav mp-noprint" aria-label="Main" style="--n:{len(tabs)}">'
+            f'{side[0]}{"".join(items)}{side[1]}</nav>')
 
 
 # The bar at the top turns solid as the page slides under it, and the page's
@@ -226,24 +283,26 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
     --lm-gold-tint:color-mix(in srgb,var(--gold) 9%,var(--bg));--lm-ring:color-mix(in srgb,var(--acc-fill) 38%,transparent);}
 }
 .lm .lm-ic{display:block;flex:none;}
+body.lm{--lm-raise:var(--bg);--lm-mint:#DCF0EA;--lm-mint-ink:#0b4a40;--lm-live:#c4162a;}
 
-/* the top bar: logo and name; the bubble, the bell, you. White, no glow, a thin rule in the church's colour */
-.lm .mb-top{min-height:62px;max-width:600px;padding-top:calc(6px + env(safe-area-inset-top,0px));padding-bottom:6px;background:var(--bg);}
-.lm.lm-tab .mb-top::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--acc-fill);}
+/* the top bar (Look 5.1): the church's mark and name; the bell, the bubble, you. The page's own colour, no rule under it */
+.lm .mb-top{min-height:56px;max-width:600px;padding-top:calc(4px + env(safe-area-inset-top,0px));padding-bottom:4px;background:var(--bg);}
 .lm .mb-top.is-solid{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;}
-.lm.lm-tab .mb-top.is-solid{box-shadow:none;}
+.lm.lm-tab .mb-top.is-solid{box-shadow:0 1px 0 var(--lm-line);}
 .lm-brand{gap:10px;}
-.lm-logo{width:36px;height:36px;flex:none;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--acc-fill);
-  color:var(--on-acc);font:italic 500 15px/1 var(--mb-serif);letter-spacing:0;}
+.lm-logo{width:30px;height:30px;flex:none;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--acc-fill);
+  color:var(--on-acc);font:italic 600 13px/1 var(--mb-serif);letter-spacing:0;}
 .lm-logo.has-img{background:#fff;box-shadow:inset 0 0 0 1px var(--lm-line);}
 .lm-logo img{width:100%;height:100%;object-fit:contain;}
-.lm-name{font:700 17px/1.1 var(--mb-ui);letter-spacing:-.015em;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lm-name{font:750 17px/1.1 var(--mb-ui);letter-spacing:-.012em;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lm .mb-top-right{gap:4px;}
-.lm-icb{position:relative;width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--fg);text-decoration:none;}
-.lm-cnt{position:absolute;top:3px;right:1px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--acc-fill);color:var(--on-acc);
-  font:700 9.5px/17px var(--mb-ui);text-align:center;box-shadow:0 0 0 2px var(--bg);}
-.lm-bdot{position:absolute;top:9px;right:10px;width:8px;height:8px;border-radius:50%;background:var(--acc-fill);box-shadow:0 0 0 2px var(--bg);}
-.lm .mb-avatar{width:34px;height:34px;margin-left:4px;font-size:12px;font-weight:700;background:var(--s1);box-shadow:inset 0 0 0 1px var(--lm-line);}
+.lm.lm-tab .mb-top-right{gap:0;margin-right:-10px;}
+.lm-icb{position:relative;width:44px;height:44px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--fg);text-decoration:none;}
+.lm-cnt{position:absolute;top:5px;right:3px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--acc-fill);color:var(--on-acc);
+  font:700 10.5px/18px var(--mb-ui);text-align:center;box-shadow:0 0 0 2px var(--bg);}
+.lm-bdot{position:absolute;top:11px;right:12px;width:8px;height:8px;border-radius:50%;background:var(--acc-fill);box-shadow:0 0 0 2px var(--bg);}
+.lm .mb-avatar{width:30px;height:30px;margin:0 7px;font-size:11px;font-weight:700;color:var(--fg2);background:var(--s2);box-shadow:none;}
+.lm .mb-avatar.has-photo{box-shadow:inset 0 0 0 1px var(--lm-line);}
 .lm .mb-avatar[aria-current]{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--acc-fill);}
 /* a pushed page: a plain back bar */
 .lm.lm-push .mb-top{min-height:58px;}
@@ -254,7 +313,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 
 /* the page */
 .lm .mp-shell{padding:0 20px 40px;}
-.lm .mp-shell.mb-has-nav{padding-bottom:calc(112px + env(safe-area-inset-bottom,0px));}
+.lm .mp-shell.mb-has-nav{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px));}
 .lm .mp-foot{margin-top:44px;color:var(--fg3);}
 /* today's pages under the new look: the big title in serif, its accent word in the church's colour */
 .lm .mb-lt h1{font:400 40px/1.02 var(--mb-serif);letter-spacing:-.025em;}
@@ -327,7 +386,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-wtag{display:inline-flex;margin-top:6px;font:700 10px/1 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--lm-violet);}
 .lm-chev{color:var(--fg3);}
 .lm-aic{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--k,var(--acc));background:var(--lm-tint);}
-.lm-gmini{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;background:#DCF0EA;color:#0b4a40;
+.lm-gmini{width:40px;height:40px;border-radius:12px;flex:none;display:grid;place-items:center;background:var(--lm-mint);color:var(--lm-mint-ink);
   font:italic 500 15px/1 var(--mb-serif);}
 
 /* the check-in card on Sunday morning */
@@ -369,7 +428,7 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
   display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.18);}
 
 /* Connect */
-.lm-gart{position:relative;display:block;height:150px;border-radius:14px;overflow:hidden;background:#DCF0EA;color:#0b4a40;}
+.lm-gart{position:relative;display:block;height:150px;border-radius:14px;overflow:hidden;background:var(--lm-mint);color:var(--lm-mint-ink);}
 .lm-gart>span{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-gart b{position:absolute;left:14px;right:14px;bottom:12px;z-index:1;font:italic 400 30px/1 var(--mb-serif);letter-spacing:-.015em;}
 .lm-gart.has-ph b{color:#fff;text-shadow:0 1px 12px rgba(0,0,0,.35);}
@@ -395,28 +454,21 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-rooms{margin-top:34px;border-top:1px solid var(--lm-line);}
 .lm-room .lm-aic{color:var(--k,var(--acc));}
 
-/* the tab bar: a solid white bar with a thin line on top (nothing shows through it, in any engine),
-   the church colour on the tab you're on, a line that slides */
-.lm .mb-nav.lm-nav{grid-template-columns:repeat(var(--n),minmax(0,1fr));left:0;right:0;bottom:0;width:auto;margin-left:0;border-radius:0;
-  padding:0 8px env(safe-area-inset-bottom,0px);background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;
-  border-top:1px solid var(--lm-line);box-shadow:none;}
-.lm .lm-nav .mb-tab{min-height:64px;justify-content:center;gap:5px;padding-top:0;color:var(--fg3);font:600 10.5px/1 var(--mb-ui);letter-spacing:0;
-  transition:color .25s;}
+/* the tab bar (Look 5.1): flat, the width of the phone, a hairline on top, solid (nothing shows through it, in
+   any engine); an icon and a label each, the tab you're on in the church's colour with a heavier icon */
+.lm .mb-nav.lm-nav{grid-template-columns:repeat(var(--n),minmax(0,1fr));left:0;right:0;bottom:0;width:auto;max-width:none;margin:0;
+  border:0;border-top:1px solid var(--lm-line);border-radius:0;padding:4px 4px max(env(safe-area-inset-bottom,0px),6px);
+  background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:none;}
+.lm .lm-nav .mb-tab{min-height:52px;justify-content:center;gap:3px;padding-top:0;border-radius:0;color:var(--fg3);
+  font:600 11px/1 var(--mb-ui);letter-spacing:0;transition:color .25s;}
 .lm .lm-nav .mb-tab[aria-current],.lm .lm-nav .mb-tab[aria-current][data-hue]{color:var(--acc);}
+.lm .lm-nav .mb-tab[aria-current] svg{stroke-width:2.1;}
 .lm .lm-nav .mb-tab-p,.lm .lm-nav .mb-tab[aria-current] .mb-tab-p{width:auto;height:auto;background:none;}
-.lm-ind{position:absolute;top:-1px;left:8px;width:calc((100% - 16px) / var(--n));height:2px;display:flex;justify-content:center;
-  transform:translateX(calc(var(--i) * 100%));pointer-events:none;}
-.lm-ind::after{content:"";width:28px;height:2px;border-radius:2px;background:var(--acc-fill);}
-@media (prefers-reduced-motion:no-preference){
-  html:active-view-transition .lm-ind{view-transition-name:lm-ind;}
-  ::view-transition-group(lm-ind){animation-duration:.42s;animation-timing-function:cubic-bezier(.3,1.2,.5,1);}
-}
 @media (min-width:1100px){
   .lm .mb-nav.lm-nav{top:0;bottom:0;left:0;right:auto;width:92px;display:flex;flex-direction:column;justify-content:center;align-items:center;
     gap:6px;padding:24px 8px;border-top:0;box-shadow:1px 0 0 var(--lm-line);}
   .lm .lm-nav .mb-tab{width:76px;min-height:60px;border-radius:16px;}
   .lm .lm-nav .mb-tab[aria-current]{background:var(--lm-tint);}
-  .lm-ind{display:none;}
 }
 @media (min-width:1200px){
   .lm .mb-nav.lm-nav{width:252px;align-items:stretch;justify-content:flex-start;gap:2px;padding:22px 14px 16px;}
@@ -429,28 +481,54 @@ body.lm{--lm-paper:#F7F0E1;--lm-ink:#22190b;--lm-ink2:#6a5426;--lm-gold:var(--go
 .lm-icb:focus-visible,.lm-btn:focus-visible,.lm-wrow:focus-visible,.lm-pray:focus-visible,.lm-room:focus-visible,.lm-tile:focus-visible,
 .lm-acad:focus-visible,.lm-page:focus-visible,.lm-gcard:focus-visible,.lm-more:focus-visible,.lm-circle:focus-visible,.lm-brand:focus-visible
 {outline:2px solid var(--acc);outline-offset:2px;}
-""")
+""" + "\n/* the dark look (member_lumen_look): one layer over the white page */\n" + dark(
+    "body.lm.lm-dark{" + DARK_TOKENS + "}"
+    "@supports (background:color-mix(in srgb,red 50%,blue)){body.lm.lm-dark{" + DARK_MIX + "}}"
+    "html:has(>body.lm.lm-dark){background:#0A0A0B;color-scheme:dark;}"
+    # the reader's warm night (member_lumen_bible) at the page's edge too
+    "html:has(>body.lm.lm-dark .lm-read),html:has(>body.lm.lm-dark .lm-dd){background:#100E0B;}"
+    # a gold button keeps dark words on the lighter gold
+    "body.lm.lm-dark .lm-btn.gold{color:#1A1205;}"
+    # a white logo plate and the photo's play dot stay white; the plain page's picture behind a photo goes dark
+    "body.lm.lm-dark .lm-logo.has-img{box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);}"
+    "body.lm.lm-dark .lm-gart.has-ph b{text-shadow:0 1px 12px rgba(0,0,0,.5);}"
+))
 
 
 def templates() -> Tuple[Template, ...]:
     """The sheet's parts, in order: the foundation's rules, then each page's
     own block (member_lumen_bible.CSS: the Bible, its reader and plans;
-    member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give, Watch and
-    Live; member_lumen_people.CSS_PEOPLE: Messages and the people pages;
-    member_lumen_motion.CSS: how it all moves, and Watch and Live as a
-    cinema; member_lumen_moments.CSS: the moments in Prayer, Give and
-    Messages), and last the type (member_lumen_fonts: the faces and the
-    church's pairing, which set every block's fonts).
+    member_lumen_classes.CSS: Classes; member_lumen_give.CSS: Give and Live;
+    member_lumen_people.CSS_PEOPLE: Messages and the people pages;
+    member_lumen_motion.CSS: how it all moves, and Live as a cinema;
+    member_lumen_moments.CSS: the moments in Prayer, Give and Messages; member_lumen_feed.CSS: Home's feed and
+    the comments under each post; member_lumen_home.CSS: the top of Home, Look 5.1;
+    member_lumen_devotional.CSS: the devotional on the Bible tab and its
+    day; member_pastor.CSS: Meet the pastor; member_lumen_connect.CSS: Connect and a group's page, Look 5.1;
+    member_lumen_watch.CSS: Watch, a series and a message, Look 5.1; member_lumen_stories.CSS: Home's moments
+    and their viewer; member_lumen_share.CSS: the share sheet; member_mini.CSS: the mini player), and
+    last the type (member_lumen_fonts: the faces and the church's pairing, which set every block's fonts).
     member_app_ui.sheet("lumen") serves them as one file."""
     import member_lumen_bible
     import member_lumen_classes
+    import member_lumen_connect
+    import member_lumen_devotional
+    import member_lumen_feed
     import member_lumen_fonts
     import member_lumen_give
+    import member_lumen_home
     import member_lumen_moments
     import member_lumen_motion
     import member_lumen_people
+    import member_lumen_share
+    import member_lumen_stories
+    import member_lumen_watch
+    import member_mini
+    import member_pastor
     return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
-            member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS,
+            member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS, member_lumen_feed.CSS,
+            member_lumen_home.CSS, Template(member_lumen_devotional.CSS), member_pastor.CSS, member_lumen_connect.CSS,
+            member_lumen_watch.CSS, member_lumen_stories.CSS, member_lumen_share.CSS, member_mini.CSS,
             member_lumen_fonts.template())
 
 

@@ -1011,6 +1011,58 @@
      "caption": "Volunteers",
      "pages": [
       {
+       "key": "operate:volunteer-week",
+       "tab": "operate",
+       "sub": "volunteer-week",
+       "name": "Volunteers’ week",
+       "sees": "every",
+       "what": "See every department’s week: who is on, who is away, the open places and the hours served.",
+       "words": [
+        "volunteers week",
+        "volunteers’ week",
+        "volunteers' week",
+        "volunteer week",
+        "week by department",
+        "who is on",
+        "who is serving",
+        "open places",
+        "department schedule"
+       ],
+       "answers": [
+        {
+         "id": "see-who-is-on-this-week-by-department",
+         "q": "See who is on this week, by department",
+         "a": "Each department has its own card with every place, who is on it and their answer. Look at first, above the cards, says what is short or waiting.",
+         "words": [
+          "volunteers this week",
+          "week by department",
+          "who is on sunday",
+          "department volunteers"
+         ]
+        },
+        {
+         "id": "find-someone-for-an-open-place",
+         "q": "Find someone for an open place",
+         "a": "Press Find someone on the open place. Who serves when opens on that team with the place picked, so you can ask someone there.",
+         "words": [
+          "fill an open place",
+          "short a volunteer",
+          "replace someone who is away"
+         ]
+        },
+        {
+         "id": "look-at-another-week",
+         "q": "Look at another week",
+         "a": "Press the arrows beside the week’s dates to go a week back or ahead. Back to this week returns to now.",
+         "words": [
+          "next week volunteers",
+          "last week volunteers",
+          "week before"
+         ]
+        }
+       ]
+      },
+      {
        "key": "operate:volunteer-teams",
        "tab": "operate",
        "sub": "volunteer-teams",
@@ -2059,6 +2111,97 @@
          ]
         }
        ]
+      },
+      {
+       "key": "operate:leaders-dates",
+       "tab": "operate",
+       "sub": "leaders-dates",
+       "name": "Leaders’ dates",
+       "sees": "every",
+       "what": "Say yes to leaders’ time away, see who is away each Sunday, and set how many can be away at once.",
+       "words": [
+        "leaders dates",
+        "leaders’ dates",
+        "leaders' dates",
+        "leaders schedule",
+        "time off",
+        "time away",
+        "day off",
+        "days off",
+        "vacation",
+        "leave",
+        "who is away",
+        "protected day",
+        "protected days",
+        "blackout"
+       ],
+       "answers": [
+        {
+         "id": "say-yes-to-a-leaders-time-away",
+         "q": "Say yes to a leader’s time away",
+         "a": "Under Waiting for a yes, press Yes on their ask, or Not this one to add a short note. When it went up past the number, the card says why first, and your yes makes an exception.",
+         "words": [
+          "approve time off",
+          "time off request",
+          "leave request",
+          "day off request",
+          "leader vacation"
+         ]
+        },
+        {
+         "id": "see-who-is-away-on-a-sunday",
+         "q": "See who is away on a Sunday",
+         "a": "Under The next eight Sundays, press a Sunday to see who is away and who covers for them. Each one reads Open, One left, Full or Protected.",
+         "words": [
+          "leaders away",
+          "who is off",
+          "who is out sunday",
+          "away calendar"
+         ]
+        },
+        {
+         "id": "add-someone-to-the-leaders-list",
+         "q": "Add someone to the leaders list",
+         "a": "Under Who’s on the leaders list, type their name in Add a leader by name and press it in the list. Remove takes a name off, and Put back brings one back.",
+         "words": [
+          "add an elder to the schedule",
+          "leaders schedule list",
+          "take a leader off the schedule"
+         ]
+        },
+        {
+         "id": "set-how-many-leaders-can-be-away",
+         "q": "Set how many leaders can be away at once",
+         "a": "Under Numbers and days press Change beside Leaders or The office, type the number and press Save. A department’s number is set with Set beside its name.",
+         "words": [
+          "limit time off",
+          "how many off at once",
+          "too many gone",
+          "department limit"
+         ]
+        },
+        {
+         "id": "protect-a-sunday-from-time-away",
+         "q": "Protect a Sunday from time away",
+         "a": "Under Protected days, pick the day, type what it is and press Protect. On a protected day only the pastor or whoever oversees the office says yes to time away.",
+         "words": [
+          "blackout date",
+          "no time off on easter",
+          "protected day",
+          "nobody off that sunday"
+         ]
+        },
+        {
+         "id": "keep-two-leaders-from-being-away-together",
+         "q": "Keep two leaders from being away together",
+         "a": "Under Can’t be away together, pick the two people, add a short note and press Add. When one asks for days the other is away, it comes to you, and the one asking is never told who.",
+         "words": [
+          "not off at the same time",
+          "pair two leaders",
+          "same time off"
+         ]
+        }
+       ]
       }
      ]
     }
@@ -2159,11 +2302,7 @@
         "card payments",
         "online gifts",
         "refund",
-        "refunds",
-        "payroll",
-        "pay staff",
-        "contractor",
-        "1099"
+        "refunds"
        ],
        "answers": [
         {
@@ -2367,6 +2506,191 @@
           "save a grant",
           "grant deadline",
           "grants board"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "caption": "Money going out",
+     "pages": [
+      {
+       "key": "operate:pay-staff",
+       "tab": "operate",
+       "sub": "pay-staff",
+       "name": "Pay staff",
+       "sees": "money",
+       "what": "Run payroll: hours, every line, pay stubs, the tax deposit dates and the year-end W-2 worksheets.",
+       "words": [
+        "payroll",
+        "pay staff",
+        "pay the staff",
+        "paycheck",
+        "paychecks",
+        "pay stub",
+        "pay stubs",
+        "stub",
+        "salary",
+        "wages",
+        "w-2",
+        "w2",
+        "w-3",
+        "w-4",
+        "w4",
+        "941",
+        "tax deposit",
+        "tax deposits",
+        "eftps",
+        "withholding",
+        "housing allowance",
+        "pay the pastor",
+        "pastor salary",
+        "quarterly",
+        "year end payroll"
+       ],
+       "answers": [
+        {
+         "id": "start-a-pay-run",
+         "q": "Start a pay run",
+         "a": "Press Start the run (it names the next payday), check the dates and the hours, and press Draft the run. Then type each person’s federal and state income tax under Look it over.",
+         "words": [
+          "run payroll",
+          "do payroll",
+          "pay the staff",
+          "new pay run",
+          "payday"
+         ]
+        },
+        {
+         "id": "approve-a-pay-run",
+         "q": "Approve a pay run",
+         "a": "Open the run and go to Look it over. When every line has its income tax, press Approve the run. Nothing is paid yet.",
+         "words": [
+          "approve payroll",
+          "check the payroll",
+          "look over payroll"
+         ]
+        },
+        {
+         "id": "mark-payroll-paid",
+         "q": "Mark payroll as paid",
+         "a": "Once the church’s bank has sent the pay, open the run, go to Pay your people and press Mark paid. Each person with an email address gets their pay stub.",
+         "words": [
+          "payroll went out",
+          "staff got paid",
+          "record payroll"
+         ]
+        },
+        {
+         "id": "print-a-pay-stub",
+         "q": "Print a pay stub",
+         "a": "Under Pay your people press Print stub beside the person, or press See the stubs on a paid run. Each stub has Print, Download PDF and Email it.",
+         "words": [
+          "pay stub",
+          "paycheck stub",
+          "pay statement",
+          "email a stub"
+         ]
+        },
+        {
+         "id": "send-the-payroll-tax-deposit",
+         "q": "Send the payroll tax deposit",
+         "a": "Open the run’s Tax deposits step or the Deposit calendar. Press Pay on EFTPS.gov to pay the IRS there, then press Mark sent so the reminders stop.",
+         "words": [
+          "eftps",
+          "941 deposit",
+          "irs deposit",
+          "payroll taxes",
+          "tax deposit"
+         ]
+        },
+        {
+         "id": "set-the-state-withholding-due-date",
+         "q": "Set the state withholding due date",
+         "a": "On the Deposit calendar, under How the church deposits, press Change. Pick once a month or twice a week, and type the day of the month your state wants its withholding.",
+         "words": [
+          "state taxes",
+          "state deposit",
+          "semiweekly",
+          "monthly depositor"
+         ]
+        },
+        {
+         "id": "get-the-w-2s-ready",
+         "q": "Get the W-2s ready",
+         "a": "Press Quarters and year-end. It lists what is missing before the W-2s go out, each person’s W-2 boxes and the W-3 totals. Download everything gives the worksheets for you or your accountant to file.",
+         "words": [
+          "w-2",
+          "w2",
+          "w-3",
+          "form 941",
+          "year end payroll",
+          "quarterly report"
+         ]
+        },
+        {
+         "id": "add-someone-to-payroll",
+         "q": "Add someone to payroll",
+         "a": "Press Add a person, fill in their name, how they are paid and how often, and press Add. The pastor then presses W-4 on their row to copy in their W-4.",
+         "words": [
+          "new employee",
+          "hire someone",
+          "add staff",
+          "w-4"
+         ]
+        }
+       ]
+      },
+      {
+       "key": "operate:contractors",
+       "tab": "operate",
+       "sub": "contractors",
+       "name": "Contractors",
+       "sees": "money",
+       "what": "Pay someone who isn’t on staff, like a sound tech, and keep what they were paid for their 1099-NEC.",
+       "words": [
+        "contractor",
+        "contractors",
+        "1099",
+        "1099-nec",
+        "w-9",
+        "w9",
+        "pay a contractor",
+        "sound tech",
+        "freelancer",
+        "pay a musician"
+       ],
+       "answers": [
+        {
+         "id": "add-a-contractor",
+         "q": "Add a contractor",
+         "a": "Press + Add Contractor, type their name and email, and press Add. Then press Send onboarding so they can set up how they get paid and give their W-9.",
+         "words": [
+          "new contractor",
+          "w-9",
+          "freelancer",
+          "sound tech"
+         ]
+        },
+        {
+         "id": "pay-a-contractor",
+         "q": "Pay a contractor",
+         "a": "Once their row reads Ready to pay, press Pay, type the amount and what it was for, and press Send. The payment is kept for their 1099-NEC.",
+         "words": [
+          "pay a musician",
+          "pay the sound tech",
+          "contractor payment"
+         ]
+        },
+        {
+         "id": "see-a-contractors-total-for-their-1099",
+         "q": "See a contractor’s total for their 1099",
+         "a": "Press Their 1099-NEC, in Quarters and year-end. It lists each contractor paid this year, the amount and whether their W-9 is on file.",
+         "words": [
+          "1099",
+          "1099-nec",
+          "contractor total"
          ]
         }
        ]

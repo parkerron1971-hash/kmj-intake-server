@@ -65,6 +65,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
+import android_app
 import sb_clients
 import sample_church
 from auth_supabase import AuthedUser, require_user
@@ -104,8 +105,14 @@ COACHING = ("In the sample church, Chief answers questions about Grace Street Fe
 HERE = "I'm here. Ask me anything about Grace Street Fellowship."
 
 
+# Inside the Android app (android_app) Chief never points to choosing a plan:
+# Google Play's payments policy, and the app has no "Start your own church"
+# button. The lines below drop that clause there; the browser keeps it.
+
 def capped_line(cap: int) -> str:
-    return f"That's your {cap}. Chief keeps going in your own church once you choose a plan."
+    return android_app.wording(
+        f"That's your {cap}. Chief keeps going in your own church once you choose a plan.",
+        f"That's all {cap} of your questions in the sample church.")
 
 
 def welcome_line(left: Optional[int], cap: int) -> str:
@@ -115,8 +122,9 @@ def welcome_line(left: Optional[int], cap: int) -> str:
     if left is None:
         return base
     if left <= 0:
-        return (f"Welcome back to {sample_church.NAME}. You've asked your {cap} questions here; "
-                "Chief keeps going in your own church once you choose a plan.")
+        back = f"Welcome back to {sample_church.NAME}. You've asked your {cap} questions here"
+        return android_app.wording(
+            back + "; Chief keeps going in your own church once you choose a plan.", back + ".")
     if left >= cap:
         return f"{base} I'll answer {cap} questions here."
     return f"{base} You have {left} {'question' if left == 1 else 'questions'} left here."
@@ -207,7 +215,21 @@ def _tail(visitor: str, last: bool) -> str:
     if last:
         lines.append("This is their last question here. Answer it fully and don't end "
                      "by offering to do more.")
+    if android_app.in_android_app():
+        lines.append(APP_RULES)
     return "\n".join(lines)
+
+
+# Inside the Android app (android_app): after the cache breakpoint, so the
+# cached rules and digest are the same bytes for every visitor.
+APP_RULES = (
+    "This person is using the Android app, where there is no \"Start your own church\" "
+    "button and Google Play's rules apply. Never mention that button, plans, prices or "
+    "choosing a plan, and never point them to one, even when they ask what Chief does in "
+    "their own church. Only if they ask how to start their own church, say in plain words, "
+    "with no link: \"Your own church starts when you choose its plan in Settings → Billing "
+    "and plan. Sign in at mysolutionist.app in a browser to do it.\" Write mysolutionist.app "
+    "as plain text, never as a link.")
 
 
 @dataclass

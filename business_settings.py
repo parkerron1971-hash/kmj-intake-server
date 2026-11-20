@@ -82,6 +82,7 @@ SERVER_KEYS: Tuple[str, ...] = (
     "client_sources", "concierge", "doc_defaults", "giving", "journeys", "member_portal",
     "messaging", "new_here", "news", "reading_plan", "site_prefs", "sms_replies", "studio",
     "superbill", "texting_hours",
+    "payroll",              # PUT /payroll/settings (payroll_calendar): deposit schedule, the state's day
 )
 
 # Keys the app's login may set when it makes a business and never change

@@ -30,6 +30,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
+import member_cache
 import sb_clients
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,71 @@ def view(business: Dict[str, Any], g: Dict[str, Any], me_id: str, people: List[D
     return out
 
 
+# Who answered for one gathering, for the new Home's "Up next" card
+# (member_portal_lumen.next_gathering): kept ANSWERS_SECONDS per gathering on
+# each server copy, like the Home's other kept reads (member_cache); a
+# member's own answer forgets it on the copy that saved it, and Home reads it
+# fresh on the page that comes back from that answer. The Meet tab (view())
+# always reads it fresh.
+ANSWERS_SECONDS = 30.0
+_ANSWERS = member_cache.Kept("group_rsvps", ANSWERS_SECONDS)
+
+
+def answers(business_id: str, group_id: str, day: date, *, fresh: bool = False) -> Optional[Dict[str, str]]:
+    """{contact id: going | maybe | no} for one gathering, or None when it
+    couldn't be read (a failed read is never kept)."""
+    key = (str(business_id), str(group_id), day.isoformat())
+    if not fresh:
+        hit, got = _ANSWERS.get(key)
+        if hit:
+            return got
+    rows = sb_clients.sb_get_as_service(
+        f"/group_rsvps?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}&met_on=eq.{day.isoformat()}"
+        f"&select=contact_id,answer&limit=5000")
+    if not isinstance(rows, list):
+        return None
+    out = {str(r["contact_id"]): str(r.get("answer") or "") for r in rows}
+    _ANSWERS.put(key, out, tag=str(business_id))
+    return out
+
+
+def answers_many(business_id: str, wanted: List[Tuple[str, date]], *,
+                 fresh: bool = False) -> Dict[Tuple[str, str], Optional[Dict[str, str]]]:
+    """answers() for several gatherings at once (the new Home's This week
+    and its moments: each of the member's groups' next gathering). What's
+    kept answers from memory; the rest come back in ONE read (their groups
+    and days together, sorted out here), each then kept as answers() keeps
+    it. {(group id, day iso): {contact id: answer}, or None when it couldn't
+    be read}. One gathering costs exactly what answers() costs."""
+    out: Dict[Tuple[str, str], Optional[Dict[str, str]]] = {}
+    miss: List[Tuple[str, date]] = []
+    for gid, day in wanted:
+        key = (str(business_id), str(gid), day.isoformat())
+        hit, got = (False, None) if fresh else _ANSWERS.get(key)
+        if hit:
+            out[(str(gid), day.isoformat())] = got
+        elif (str(gid), day) not in miss:
+            miss.append((str(gid), day))
+    if len(miss) == 1:
+        gid, day = miss[0]
+        out[(gid, day.isoformat())] = answers(business_id, gid, day, fresh=True)
+    elif miss:
+        gids = sorted({g for g, _ in miss})
+        days = sorted({d.isoformat() for _, d in miss})
+        rows = sb_clients.sb_get_as_service(
+            f"/group_rsvps?business_id=eq.{_q(business_id)}&group_id=in.({','.join(_q(g) for g in gids)})"
+            f"&met_on=in.({','.join(days)})&select=group_id,met_on,contact_id,answer&limit=20000")
+        for gid, day in miss:
+            if not isinstance(rows, list):
+                out[(gid, day.isoformat())] = None
+                continue
+            got = {str(r["contact_id"]): str(r.get("answer") or "") for r in rows
+                   if str(r.get("group_id")) == gid and str(r.get("met_on") or "")[:10] == day.isoformat()}
+            _ANSWERS.put((str(business_id), gid, day.isoformat()), got, tag=str(business_id))
+            out[(gid, day.isoformat())] = got
+    return out
+
+
 def guests(business_id: str, meeting_id: str) -> Optional[List[Dict[str, Any]]]:
     """First-time guests named at one gathering, in the order they came."""
     rows = sb_clients.sb_get_as_service(
@@ -326,7 +392,11 @@ def rsvp(business: Dict[str, Any], me: Dict[str, Any], group_id: str, answer: st
         {"business_id": str(business["id"]), "group_id": str(g["id"]), "met_on": nxt.isoformat(),
          "contact_id": str(me["id"]), "answer": answer, "updated_at": datetime.now(timezone.utc).isoformat()},
         prefer="resolution=merge-duplicates,return=representation")
-    return (True, f"rsvp_{answer}") if isinstance(rows, list) and rows else (False, "error")
+    if isinstance(rows, list) and rows:
+        key = (str(business["id"]), str(g["id"]), nxt.isoformat())
+        _ANSWERS.forget(lambda k, _tag: k == key)
+        return True, f"rsvp_{answer}"
+    return False, "error"
 
 
 def _meeting_id(business_id: str, group_id: str, day: date) -> Optional[str]:

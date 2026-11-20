@@ -403,20 +403,21 @@ def test_coming_up_and_prayer_read_what_todays_pages_read(calendar, monkeypatch,
 # ─── a group's page, Me, My details, Your alerts, News ───────────────
 
 
-def test_a_groups_page_is_a_serif_name_faces_and_one_segmented_control(gchurch, monkeypatch):  # noqa: F811
+def test_a_groups_page_is_a_cover_a_serif_name_and_four_tabs(gchurch, monkeypatch):  # noqa: F811
+    # Look 5.1 (member_lumen_connect; its own pins are test_member_lumen_connect.py).
     monkeypatch.setenv("MEMBER_LUMEN", "on")
     html = group_page(gchurch, tmm.ANA, f"/my/groups/{tmm.GRP}").text
-    assert '<header class="lm-ghead">' in html and '<section class="gs-hero' not in html
-    assert re.search(r'<h1 class="lm-disp" id="gs-name">[^<]*<em>[^<]+</em></h1>', html)
-    assert re.search(r"<span>\d+ (person|people)</span>", html)                 # a member sees how many
-    seg = html[html.index('<nav class="lm-gseg"'):]
+    assert '<header class="lm-gh">' in html and '<section class="gs-hero' not in html
+    assert re.search(r'<h1 class="lm-gname" id="gs-name">[^<]+</h1>', html)
+    assert re.search(r"Members only · \d+ (person|people)", html)              # a member sees how many
+    seg = html[html.index('<nav class="lm-gtabs"'):]
     seg = seg[:seg.index("</nav>")]
     hrefs = re.findall(r'<a href="([^"]+)"', seg)
     assert hrefs[0] == f"/my/groups/{tmm.GRP}" and f"/my/groups/{tmm.GRP}/people" in hrefs
-    assert f'<a href="/my/groups/{tmm.GRP}" aria-current="page">Home' in seg
-    assert '<nav class="gs-tabs"' not in html
-    top = _top(html)
-    assert 'href="/my/connect"' in top and "Connect" in top                      # pushed from Connect
+    assert f'<a href="/my/groups/{tmm.GRP}" aria-current="page">Posts' in seg
+    assert '<nav class="gs-tabs"' not in html and '<header class="mb-top' not in html
+    cover = html[html.index('<div class="lm-gcov'):]
+    assert '<a class="lm-fab l" href="/my/connect" data-back aria-label="Back">' in cover   # back to Connect
 
 
 def test_off_a_groups_page_is_todays(gchurch, monkeypatch):  # noqa: F811
@@ -479,9 +480,11 @@ def test_news_in_the_new_look(calendar, monkeypatch):
     import church_news as cn
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
-    monkeypatch.setattr(cn, "feed", lambda b, me_id, filt="", today=None: [
+    # The new look's News is the all-posts page (member_lumen_feed.all_posts, one page of feed_page).
+    monkeypatch.setattr(cn, "feed_page", lambda b, me_id, filt="", today=None, page=1: {"posts": [
         {"id": "00000000-0000-4000-8000-000000000811", "kind": "announcement", "title": "Food Drive", "body": "Saturday",
-         "pinned": False, "created_at": now, "published_at": now, "reactions": {}, "mine": [], "comment_count": 0}])
+         "pinned": False, "created_at": now, "published_at": now, "rx": {}, "my_rx": [], "comment_n": 0}],
+        "today": [], "more": False, "total": 1, "page": 1})
     monkeypatch.setattr(cn, "can_post", lambda b, me_id: {})
     monkeypatch.setattr(cn, "mark_seen", lambda *a, **k: None)
     monkeypatch.setattr(cn, "comments_open", lambda b: False)

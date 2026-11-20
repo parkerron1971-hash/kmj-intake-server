@@ -291,7 +291,10 @@ def _e(s: Any) -> str:
 
 def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, Any]]]:
     """Everyone at this church with exactly this address (a household can
-    share one). An exact, case-insensitive match — wildcards escaped.
+    share one), each with their photo record, their Look in the new look
+    (member_lumen_look), where they are in the church's messages
+    (member_lumen_watch) and their saved posts (member_feed_more): read here
+    so a page needs no read for them. An exact, case-insensitive match — wildcards escaped.
     None when the read FAILED: that is "try again", never "not on the
     list". Reads one past MAX_HOUSEHOLD so an over-shared address shows."""
     em = norm_email(email)
@@ -301,7 +304,9 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
-        f"&select=id,name,email,birthdate,photo:metadata->member_photo&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
+        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
+        f"saved:metadata->member_saved"
+        f"&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and norm_email(r.get("email")) == em]
@@ -318,7 +323,9 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
-        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo&order=created_at.asc&limit=20")
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look,watch:metadata->member_watch,"
+        f"saved:metadata->member_saved"
+        f"&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and _last10(r.get("phone")) == digits]
@@ -651,7 +658,8 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
            wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
-           lumen_head: str = "", lumen_dark: bool = False) -> str:
+           lumen_head: str = "", lumen_dark: bool = False, lumen_bar_colour: str = "",
+           lumen_reader: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -672,9 +680,15 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     new look (the reader's chapter and Aa); today's look ignores it.
     `lumen_head` (a conversation in the new look: member_lumen_people.thead)
     is its face and name in the bar at the top; today's look ignores it.
-    `lumen_dark` (the Bible reader at night, member_lumen_bible) draws the
-    page dark under the new look, the phone's bar with it; today's look
-    ignores it."""
+    `lumen_dark` draws the page dark under the new look whatever the
+    member's look; today's look ignores it. Every new-look page wears the
+    member's look (member_lumen_look: Light, Dark or Same as my phone, the
+    phone's bar with it); `lumen_reader` (the Bible reader and a
+    devotional's day) lets the reader's moon on this phone turn it either
+    way. `lumen_bar_colour` is the phone's bar colour for a page whose bar
+    has its own colour under the new look (a devotional's day,
+    member_lumen_devotional: its deep green, by day and at night); today's
+    look ignores it."""
     import member_app_ui as ui
     import member_app_install as mai
     from public_form_theme import resolve_theme, css_vars
@@ -740,29 +754,52 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     # address, in place of today's Google Fonts link.
     fonts = ui.FONTS
     moves = ""
+    meta = f'<meta name="theme-color" content="{bar_colour}">'
     if signed_in and member_lumen.page():
         import member_lumen_fonts
         import member_lumen_motion
         fonts = member_lumen_fonts.head(biz)
         # Listening before the page is first revealed (member_lumen_motion.JS).
         moves = "\n" + member_lumen_motion.JS
+        # A page with a marked player (the message) keeps it playing while the
+        # member moves around, under the mini player (member_mini); '' elsewhere.
+        import member_mini
+        script = script + member_mini.page_script(body)
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
-        # Every page under Watch is a cinema (member_lumen_motion): the same
-        # dark switch as the reader at night, in the cinema's black.
+        # The member's look (member_lumen_look): lm-dark (Dark), lm-auto (Same
+        # as my phone), nothing (Light), decided by the server so the page
+        # arrives in it. Every page under Watch is a cinema
+        # (member_lumen_motion): always dark, in the cinema's black; the
+        # reader follows its moon, in its warm night.
+        import member_lumen_bible
+        import member_lumen_look as mll
         cine = member_lumen_motion.cine(tab)
-        if lumen_dark or cine:
-            import member_lumen_bible
-            body_cls = body_cls[:-1] + ' lm-dark"'
-            bar_colour = member_lumen_motion.CINE_BG if cine else member_lumen_bible.NIGHT_BG
+        look = "dark" if lumen_dark else mll.page_look(reader=lumen_reader, cine=cine)
+        if mll.body_class(look):
+            body_cls = body_cls[:-1] + f' {mll.body_class(look)}"'
+        night = (member_lumen_motion.CINE_BG if cine else
+                 member_lumen_bible.NIGHT_BG if lumen_reader or lumen_dark else mll.DARK_BG)
+        day = bar_colour
+        if lumen_bar_colour:
+            day = night = lumen_bar_colour
+        meta = mll.theme_meta(look, day, night)
+        # The church's button colour on near-black, where its own is too deep
+        # for it; Me carries it whatever the look (its control turns the page).
+        if mll.here() != "light" or tab == "me":
+            moves = mll.dark_tokens(biz, theme) + moves
+        # Share (member_lumen_share): the sheet's script, on a page with a
+        # share control only.
+        import member_lumen_share
+        script = script + member_lumen_share.page_js(body)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="{bar_colour}">
+{meta}
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
 {fonts}
@@ -827,10 +864,28 @@ def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Option
     top, cls, tabbar, scroll = _lumen_frame(
         biz, theme, title, tab=tab, who=who, back=None, bare=False, bar=True, ctx=ctx, name=name, logo=logo,
         word=word, avatar=avatar, side=side, body_cls=_body_class(False, space, tab, False))
+    # The member's look, as _shell wears it (member_lumen_look; the page's
+    # head carries the phone's bar: lumen_head_look).
+    import member_lumen_look as mll
+    if mll.body_class(mll.page_look()):
+        cls = cls[:-1] + f' {mll.body_class(mll.page_look())}"'
     # How the page moves (member_lumen_motion). _shell puts it in the <head>;
     # this page draws its own, so it rides at the foot.
     import member_lumen_motion
     return top, cls, tabbar + ui.early(), scroll + member_lumen_motion.JS
+
+
+def lumen_head_look(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
+    """What a page that draws its own document (lumen_chrome) adds to its
+    head for a member whose look isn't Light: the phone's bar in the look
+    and the church's lifted button colour (member_lumen_look). '' for Light,
+    so that page is what it was."""
+    import member_app_ui as ui
+    import member_lumen_look as mll
+    look = mll.page_look()
+    if look == "light":
+        return ""
+    return mll.theme_meta(look, ui.palette(biz, theme)["bg"], mll.DARK_BG) + mll.dark_tokens(biz, theme)
 
 
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
@@ -842,9 +897,10 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
 
     A main tab (Home, Watch, Bible, Connect, Give) with no way back gets the
     full bar: the church's logo and name on the left (Home keeps the space
-    switcher for someone with more than one space); on the right the message
-    bubble with the unread count (member_portal_threads' count, already read
-    for this page), the bell and the profile picture. Every other page is
+    switcher for someone with more than one space); on the right, in Look
+    5.1's order, the bell (its dot), the message bubble with the unread count
+    (member_portal_threads' count, already read for this page) and the
+    profile picture. Every other page is
     pushed: a plain back bar, its own back link or, with none, Back to the
     tab it was opened over (the browser's history; Home without it).
     `extra` = (middle, right) puts more in a pushed page's bar: the reader's
@@ -876,8 +932,8 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
             left = f'<a class="mb-brand lm-brand" href="/my"><img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}"></a>'
         else:
             left = lm.brand(name, logo)
-        right = ((lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else "")
-                 + lm.bell(member_lumen.BELL.get()) + avatar)
+        right = (lm.bell(member_lumen.BELL.get()) + (lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else "")
+                 + avatar)
     else:
         href, label = back or ("/my", "Back")
         mark = "" if back else " data-back"
@@ -962,7 +1018,7 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
         return render_give_page(
             biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
             app={"head": (member_lumen_fonts.head(biz) + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme, lumen=True)}"
-                          f"<style>{GIVE_CSS}</style>"),
+                          f"<style>{GIVE_CSS}</style>" + lumen_head_look(biz, theme)),
                  "top": mlg.give_top(name, funds, preview=preview), "name": me.get("name") or "",
                  "email": me.get("email") or "", "preview": preview, "form": mlg.give_form(biz, me),
                  "body": body, "bar": bar, "foot": nav + scroll + mlg.GIVE_JS})
@@ -1300,9 +1356,10 @@ def _lumen_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     """Me in the new look (member_lumen_people): your circle (tap it for a
     photo: the same form and script), your name in the serif, your giving
     on the church's soft band (the year's total and Give; the months, the
-    other years, each gift and the statement under it), then one plain list
-    of the same doors render_me shows, and sign out. Opened from the
-    picture at the top, it goes back to wherever it was opened."""
+    other years, each gift and the statement under it), your Look (Light,
+    Dark, Same as my phone: member_lumen_look), then one plain list of the
+    same doors render_me shows, and sign out. Opened from the picture at
+    the top, it goes back to wherever it was opened."""
     import member_asks
     import member_messaging_rules as rules
     import member_photos as ph
@@ -1365,6 +1422,9 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
     if msgs_on or inbox:
         doors.append(door("/my/messages", "Messages"))
     doors.append(door("/my/prayer", "Prayer"))
+    # Look 5.1: where the feed's Save goes (member_feed_more, /my/news/saved).
+    if cfu.is_church(biz):
+        doors.append(door("/my/news/saved", "Saved posts"))
     if asks:
         doors.append(door("/my/ask", "Ask the church"))
     if give_url:
@@ -1382,7 +1442,9 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
     life = (f'<div class="lm-lst">{"".join(doors)}</div>'
             f'<div class="lm-out mp-noprint">{switch}<form method="post" action="/my/signout">'
             f'<button class="lm-txtbtn" type="submit">Sign out</button></form></div>')
-    return _shell(biz, site, "Me", you + giving + life, tab="me", who=me, script=script)
+    import member_lumen_look as mll
+    look = mll.control(mll.here(), palette_for(biz, site)["bg"])
+    return _shell(biz, site, "Me", you + giving + look + life, tab="me", who=me, script=script + mll.script())
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
@@ -1458,6 +1520,14 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     # The new look (member_lumen: MEMBER_LUMEN), decided once for this page.
     import member_lumen
     await member_lumen.decide(request, {"business": biz, "session": sess})
+    if member_lumen.here():
+        # ...and the member's look in it (member_lumen_look: no read).
+        import member_lumen_look
+        member_lumen_look.decide(request, sess, biz)
+    # ...and whether a message plays on while they move around (member_mini:
+    # MEMBER_MINI_PLAYER; only in the new look, no read).
+    import member_mini
+    await member_mini.decide(sess, biz)
     if sess and sess.get("me") and not sess.get("unavailable"):
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.
@@ -1487,11 +1557,14 @@ async def serve(request: Request, path: str) -> HTMLResponse:
             ctx = dict(ctx, lead=lead, board=board)
         msp.CURRENT.set(ctx)
         mpt.BADGE.set(int(unread["total"]) if unread and mpt._in_church(ctx) else None)
+        mpt.NOW.set(unread if unread and mpt._in_church(ctx) else None)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
         resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
-    return resp
+    # The mini player's frame (member_mini): its own site's frame may show the
+    # page, for someone the switch shows it to; every other answer as it was.
+    return member_mini.allow_frame(request, resp)
 
 
 async def _nothing():
@@ -1760,6 +1833,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         spot = mapic.find_spot(biz, str(request.query_params.get("key") or ""), occ_all, groups_all, devs_all)
         if not spot:
             return RedirectResponse("/my/pictures", status_code=303, headers=_SECURE_HEADERS)
+        if spot["key"] == "pastor":
+            # Meet the pastor's spot: with nothing chosen, their own photo or their initials (member_pastor).
+            import member_pastor
+            p = await asyncio.to_thread(member_pastor.who, biz)
+            if p:
+                spot = {**spot, "own": member_pastor.spot_default(p)}
         return _page(mapic.render_spot(biz, site, request, me, spot))
     if sub == "/my/details":
         import member_directory as mdir
@@ -1861,20 +1940,38 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         rest = sub[len("/my/sermons"):].strip("/")
         import member_portal_bible as mpb
+        import member_lumen
+        lumen = member_lumen.page()
         if not rest:
             series = str(request.query_params.get("series") or "")
             # Watch leads with live, or the next gathering: all three at once.
+            # The new look also shows the church's weekly service time
+            # (member_lumen_watch.service_slot: kept ten minutes).
             import live_router as lr
-            lib, live, occ = await asyncio.gather(asyncio.to_thread(mps.load_library, biz["id"]),
-                                                  asyncio.to_thread(lr.current, biz["id"]),
-                                                  asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
+            import member_lumen_watch as mlw
+            lib, live, occ, service = await asyncio.gather(
+                asyncio.to_thread(mps.load_library, biz["id"]), asyncio.to_thread(lr.current, biz["id"]),
+                asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+                asyncio.to_thread(mlw.service_slot, biz)
+                if lumen and not series and request.query_params.get("view") != "series" else _nothing())
             lib, occ = fill(lib, "library"), fill(occ, "occasions")
+            extra = ({"view": str(request.query_params.get("view") or ""), "service": service,
+                      "show_all": request.query_params.get("all") == "1"} if lumen else {})
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
                                             bible=mpb.prefs(request)[0], live=live or None,
-                                            next_occ=(occ or [None])[0]),
+                                            next_occ=(occ or [None])[0], **extra),
                          200 if lib is not None else 503)
         lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
-        page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
+        extra = {}
+        if lumen and lib is not None and UUID_RE.match(rest):
+            # A message with questions shows "Talk about it in <group>" for a
+            # group whose chat is open to the member (kept a minute).
+            import member_lumen_watch as mlw
+            s = next((x for x in lib["sermons"] if str(x["id"]) == rest), None)
+            groups = (await asyncio.to_thread(mlw.talk_groups, biz, me)
+                      if s and mlw.questions(s.get("questions")) else [])
+            extra = {"listen": request.query_params.get("listen") == "1", "groups": groups}
+        page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0], **extra)
                 if UUID_RE.match(rest) else None)
         if page is None:
             return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)
@@ -1926,6 +2023,18 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/board" or sub.startswith("/my/board/"):
         import member_portal_board as mpb
         return await mpb.serve(request, church, me, sub, preview=preview)
+    # Meet the pastor (member_pastor), in the new look: whoever holds the
+    # church's senior role. Today's look has no such page (to Home, as any
+    # page it doesn't know).
+    if sub == "/my/pastor":
+        import member_lumen
+        import member_pastor
+        p = await asyncio.to_thread(member_pastor.who, biz) if member_lumen.page() else None
+        if not p:
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        write = await asyncio.to_thread(member_pastor.may_message, biz, me, p["id"])
+        return _page(member_pastor.render_page(biz, site, request, me, p, can_edit=can_picture, write=write,
+                                               edit=request.query_params.get("edit") == "pictures"))
     # Connect, the people hub, in the new look (member_portal_lumen); today's
     # look has Groups there instead.
     if sub == "/my/connect":
@@ -1936,6 +2045,16 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         data, new_card = await asyncio.gather(mlp.connect_data(biz, me, preview=preview),
                                               asyncio.to_thread(member_lumen.new_here_card, biz, me))
         return _page(mlp.render_connect(biz, site, request, me, data, new_card=new_card or ""))
+    # A member's post (member_posts): the new look's composer. The owner's
+    # preview shows it (nothing saves) with the church's posting switch.
+    if sub == "/my/post":
+        import member_lumen
+        if not member_lumen.page():
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        import member_posts
+        html, status = await member_posts.serve(request, biz, site, me,
+                                                owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:")))
+        return _page(html, status)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
@@ -1946,14 +2065,17 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     space = ctx.get("space")
     today = rp.today_for(biz)
 
-    async def checkin_card() -> str:
+    async def checkin_card():
         # While Sunday check-in is open its card leads Home (church_checkin).
+        # The new look also keeps what it was drawn from: its Up next card
+        # carries check-in, and its greeting the service's day and time.
         import church_checkin as cc
         import member_portal_checkin as mpk
         try:
             import member_lumen
             if member_lumen.page():
-                return mpk.lumen_card(await asyncio.to_thread(cc.card, biz, me), request)
+                c = await asyncio.to_thread(cc.card, biz, me)
+                return mpk.lumen_card(c, request), c
             return mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
         except Exception:
             logger.warning("member home: check-in card skipped", exc_info=True)
@@ -1965,27 +2087,59 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_portal_celebrations as mcl
     church_home = space not in ("kids", "youth")
     import sunday_serving as ssv
-    occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox = await asyncio.gather(
+    import member_lumen
+    lumen_home = member_lumen.page()
+    # The new look's Home (member_portal_lumen) reads a little more of the
+    # same: the groups with their next gathering and who's coming (kept
+    # 30 s; fresh on the page that comes back from their own answer), all of
+    # My serving (waiting() reads it anyway), the devotional itself, and
+    # whether someone just told the church it's their first time (kept).
+    import member_portal_lumen as mlp
+    devo_info: Optional[Dict[str, Any]] = {} if lumen_home else None
+    fresh = str(request.query_params.get("done") or request.query_params.get("err") or "").startswith("rsvp")
+    feed_kw = _feed_previews()
+    # Look 5.1's feed also carries the member's groups' posts and prayer
+    # requests (member_feed_more: kept 30 s; fresh on the Home that answers
+    # their own "I prayed").
+    import member_feed_more as mfm
+    feed_fresh = str(request.query_params.get("done") or "") in mfm.FRESH_DONE
+    (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
+     told_us, feed_more) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
-        asyncio.to_thread(mpc.groups_for, biz["id"], me),
+        asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
+        else asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
         asyncio.to_thread(lr.current, biz["id"]),
         asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today else _nothing(),
         # Today's devotional, and a reading plan of the member's own when
         # the church has none running (member_portal_devotionals).
-        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today)),
+        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today), info=devo_info),
         checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
         asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
-        # "From the church" and the bell (member_portal_news).
-        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"])) if church_home else _nothing(),
+        # "From the church" and the bell (member_portal_news); the new look
+        # also asks, after it, whether the member may write to the pastor who
+        # posted the word its moments show (member_portal_lumen.news_and_reply:
+        # kept ten minutes, only when a pastor posted in the last three days).
+        (mlp.news_and_reply(biz, me, feed_kw, preview=preview) if lumen_home else
+         asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"]), **feed_kw)) if church_home else _nothing(),
         asyncio.to_thread(cn.comments_open, biz) if church_home else _nothing(),
         # "Celebrating today" and the church's once-only question (member_portal_celebrations).
         asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
         asyncio.to_thread(mcl.home_asks, biz, me) if church_home and not preview else _nothing(),
         # Asks to serve waiting on this member (member_portal_serving).
-        asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
+        asyncio.to_thread(ssv.home if lumen_home else ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
         # Messages, while something there is unread (member_portal_threads).
-        _inbox_card(biz, me) if church_home else _nothing())
+        _inbox_card(biz, me) if church_home else _nothing(),
+        mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing(),
+        mfm.gather(biz, me, fresh=feed_fresh) if lumen_home and church_home else _nothing())
+    gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
+    if lumen_home:
+        told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
+        groups, gnext, week_g = groups if isinstance(groups, tuple) else (groups, None, [])
+        if church_home:
+            news, write = news
+        serving_info, serve_asks = serve_asks, (serve_asks or {}).get("asks") or []
+        checkin, ck = checkin if isinstance(checkin, tuple) else (checkin, None)
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
     devotional, own, own_done = extras
     if own and not today:
@@ -2007,10 +2161,11 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_posts, news_n = news if news else (None, 0)
     # No news reaches me yet: if I post, Home shows where it will go.
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
-    import member_lumen
-    lumen_home = member_lumen.page()
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
-                               **({"title": "What's happening", "more": "News"} if lumen_home else {}))
+                               **({"title": "What's happening", "more": "News", "me": me, "site": site,
+                                   "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n"),
+                                   "extras": feed_more, "library": lib}
+                                  if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
     import member_portal_serving as mpsv
@@ -2030,6 +2185,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             editbar = (f'<div class="mb-editbar" role="status"><span class="mb-editbar-ic">{_ui.icon("camera", 18)}</span>'
                        f'<span class="mb-editbar-t"><strong>Changing pictures</strong><span>Only you see these buttons.</span></span>'
                        f'<a class="mb-editbar-a" href="/my/pictures">All</a><a class="mp-go mb-editbar-done" href="/my">Done</a></div>')
+        import member_portal_checkin as mpk
         return _page(mlp.render_home(
             biz, site, me=me, occasions=occ, groups=groups, library=lib, live=live, bible=bible, where=where,
             plan_today=today, plan_done=done, devotional=devotional, checkin=checkin, serving=serving,
@@ -2037,7 +2193,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             news=news_html,
             news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
             cards=(mai.install_card(church_name), member_push.home_card(biz),
-                   member_asks.home_row(await _ask_entry(biz, me)))))
+                   member_asks.home_row(await _ask_entry(biz, me))),
+            ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
+            devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
+            write=write))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
@@ -2045,6 +2204,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                              edit=can_picture and request.query_params.get("edit") == "pictures",
                              news=news_html, news_n=mpn.home_bell(news), celebrate=celebrate,
                              ask=member_asks.home_row(await _ask_entry(biz, me)), inbox=inbox or ""))
+
+
+def _feed_previews() -> Dict[str, Any]:
+    """Home's feed in the new look carries each post's newest comments and
+    whether it was opened (church_news.home_view previews, in the reads Home
+    already makes), and counts the posts for See all posts (`count`, filled
+    from the same read); today's look asks nothing more."""
+    import member_lumen
+    return {"previews": True, "count": {}} if member_lumen.page() else {}
 
 
 def _inbox_space() -> bool:

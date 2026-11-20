@@ -29,6 +29,10 @@ WHAT IS KEPT, AND FOR HOW LONG (per server copy, in memory):
     These only draw the tab bar; the Lead and Board pages read who may see
     what on their own. A "no" is kept only when no read behind it failed
     (sb_clients.failures counts the ones a helper answers as "nothing").
+  - Home's feed items from the member's groups (member_feed_more.gather:
+    their Board posts and prayer requests), per (church, member):
+    FEED_SECONDS (30). Marking a request forgets that member's copy on the
+    server copy that saved it; a partial read is never kept.
 Left alone, read every time: what is unread (member_portal_threads keeps it
 15 s already), a member's spaces (space_leaders decides who reaches the Youth
 and Kids rooms: a leader taken off must lose them at once), and every page's
@@ -51,6 +55,7 @@ ENV = "MEMBER_CACHE"
 CHURCH_SECONDS = 60.0
 PEOPLE_SECONDS = 30.0
 TAB_SECONDS = 60.0
+FEED_SECONDS = 30.0
 MAX_ITEMS = 2000
 
 
@@ -118,6 +123,7 @@ class Kept:
 churches = Kept("church", CHURCH_SECONDS)
 people = Kept("people", PEOPLE_SECONDS)
 tabs = Kept("tabs", TAB_SECONDS, copy_value=False)
+feed = Kept("feed", FEED_SECONDS)
 
 
 def forget_church(business_id: Any) -> int:
@@ -129,5 +135,5 @@ def forget_church(business_id: Any) -> int:
 
 def forget_all() -> None:
     """For the tests."""
-    for k in (churches, people, tabs):
+    for k in (churches, people, tabs, feed):
         k.clear()

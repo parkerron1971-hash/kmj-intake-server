@@ -17,6 +17,23 @@ import io
 from typing import Any, Dict
 
 
+def nec_threshold(year: Any) -> float:
+    """The 1099-NEC reporting line for payments made in a tax year: $2,000
+    for payments made in 2026 and later, $600 before (Instructions for Forms
+    1099-MISC and 1099-NEC, 2026: the threshold rose for payments made after
+    December 31, 2025). The one place every 1099 surface asks."""
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        y = 2026
+    return 2000.0 if y >= 2026 else 600.0
+
+
+def nec_threshold_words(year: Any) -> str:
+    """"$2,000" or "$600"."""
+    return f"${nec_threshold(year):,.0f}"
+
+
 DISCLAIMER = (
     "DRAFT prepared by Solutionist System, bookkeeping software — not a CPA, "
     "not tax advice, and not an official IRS form. Verify every figure with "

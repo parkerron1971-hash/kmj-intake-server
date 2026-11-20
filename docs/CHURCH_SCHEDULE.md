@@ -18,10 +18,11 @@ gave stays private. Step 2 adds the limit: only so many of a group, or of a depa
 one service date; days nobody takes off; two people who can't be away together; and the same
 path for volunteers when their date is full or they already said yes to serve it.
 
-**Where it stands (2026-11-18).** Nine PRs. Step 1's tables and step 2's are both in
+**Where it stands (2026-11-20).** Eleven PRs. Step 1's tables and step 2's are both in
 production. The limit on how many can be away at once is built for leaders and the office (S2-2
-and S2-3, below), and so are people who can't be away together (S2-4) and the volunteers' rules
-(S2-5); things that repeat (S1-7) are not.
+and S2-3, below), and so are people who can't be away together (S2-4), the volunteers' rules
+(S2-5) and things that repeat (S1-7). Only the optional S1-8 (the office front page's count) is
+not built.
 
 **Step 1's migration is applied.** `supabase/APPLY-2026-11-19-church-schedule.sql` was run by the
 owner on 2026-11-18 and checked by the lead session with the file's own Check block: the four
@@ -110,17 +111,35 @@ production that time has passed.
   migrations were applied before it merged, so it is live at the platform owner's church from its
   first deploy, and **real volunteers there meet it on deploy**. No migration of its own; on a
   database with step 1's file alone a volunteer's Away is exactly what it was.
+- **S1-7 (#1990)** holds things that repeat (`church_schedule_repeats.py`): a leader says once
+  "I work every other Saturday" (every week, every other week counted from its first day, or the
+  first to fourth or the last such day of each month; from when, and until when if it ends), ten
+  in force a person. No yes, never blocked, never counted toward a limit or a pair. It is on the
+  leaders calendar (`standing`: each day, the name, and what it is only for those who read an
+  ask's reason), and `church_schedule.holds` holds the person from the scheduler on those days
+  only. The one an ask of theirs would go to is told once, never what it is. Office routes `GET` /
+  `POST` / `DELETE /church/schedule/commitments`; on Dates a "Things that repeat" part after My
+  dates. The table was in step 1's file (applied 2026-11-18), so it is live at the platform
+  owner's church on deploy. No migration of its own.
+- **Step 4, The week (#1979)** holds `church_week.py`: the office's read-only page of every
+  department's volunteers for one week, with hours (Volunteers → The week; the pastor approved the
+  mock on 2026-11-19, "go"). `GET /church/week` and `GET /church/week/status`, for the owner, an
+  Admin and a Manager who keeps either door of Who serves when; hours and "Can't serve with kids
+  yet" by church_serving's own rule. Nothing on it writes. `CHURCH_WEEK`, owner when unset, so it
+  is live at the platform owner's church on deploy; the office page itself is the frontend's next
+  PR. No migration. Section 8 is its contract.
 
 The office app has no screen yet: a login's notice still points at the office app, where the
 ask isn't shown. A login whose person is on the schedule answers in the member app, as that
 person.
 
-In sections 3 to 6, what is marked **built** describes code that exists; the rest is still the
-plan for the PR ahead (S1-7). Section 7 is what was decided; 7.4 is
+In sections 3 to 6, what is marked **built** describes code that exists; only the optional S1-8
+is still a plan. Section 7 is what was decided; 7.4 is
 what the build of S1-2 and S1-3 decided, 7.5 what the build of S1-4 decided, 7.6 what the build
 of S1-5 decided, 7.7 what the build of S1-6 decided, 7.8 what the writing of S2-1 decided,
-7.9 what the build of S2-2 and S2-3 decided, 7.10 what the build of S2-4 decided, and 7.11 what
-the build of S2-5 decided, each with where it differs from the plan above it.
+7.9 what the build of S2-2 and S2-3 decided, 7.10 what the build of S2-4 decided, 7.11 what
+the build of S2-5 decided, and 7.12 what the build of S1-7 decided, each with where it differs
+from the plan above it.
 
 **Three tables share a word and nothing else.** `church_away_asks` (here: a leader asks to be
 away) is unrelated to `church_map_asks` (an office login's "Is this right?" about the work
@@ -677,7 +696,9 @@ shape(ch, me, row, names) -> dict            # the one place a reason can leave:
 mine(ch, me, now) -> List[dict]              # my asks, waiting first, 90 days back
 waiting(ch, me) -> List[dict]                # asks that went to me and still wait
 everything(ch, me, now) -> List[dict]        # every ask: over_all or 403
-calendar(ch, me, lo, hi) -> dict             # by group: away (from the facts), waiting (only what `me` may read)
+calendar(ch, me, lo, hi) -> dict             # by group: away (from the facts), waiting (only what `me` may read),
+                                             # standing (S1-7: each day a thing that repeats falls on; the label
+                                             # only for those who read a reason)
 status(ch, me) -> dict                       # GET status
 ```
 
@@ -691,7 +712,9 @@ _here(biz) -> bool                           # the cheap check all four below st
                                              # member_asks.platform_church keeps only what it could read, and asks the
                                              # sign-in service again each time it couldn't
 holds(biz_id, lo, hi) -> List[dict]          # the scheduler's hook: [{contact_id, starts_on, ends_on}] for every ask still
-                                             # `asked` that touches lo..hi (from S1-7, commitment days too). Selects
+                                             # `asked` that touches lo..hi, then (built, S1-7) one row a day for each day
+                                             # a thing that repeats falls on (church_schedule_repeats.held_days, its
+                                             # own read: when it fails the asks are still held). Selects
                                              # who and which days only. NEVER RAISES and FAILS OPEN: [] when the switch
                                              # is off, the tables aren't there, the church is closed, or the read failed.
                                              # Asked in that order (switch, tables kept, church kept), so no read is
@@ -719,12 +742,49 @@ _open_places(ch, row, now=None) -> int       # after a yes: sunday_serving.open_
 and one found already settled) call `_open_places` once the settle is back, before the notice
 is handed on.
 
-**Still ahead** (its own PR):
+**Built** (S1-7: things that repeat), in a module of its own, **`church_schedule_repeats.py`**
+(`APIRouter(prefix="/church")`, the same gate as the other schedule routes), so the engine,
+already near two thousand lines, gains only the two hooks below:
 
 ```
-add_commitment(ch, me, body) -> dict; drop_commitment(ch, me, id) -> None    # S1-7
-commitment_days(rows, lo, hi) -> Dict[str, List[date]]   # S1-7. pure; 366 days at most
+PATTERNS = ("weekly","every_other","month_nth"); WEEKDAYS (1 Monday … 7 Sunday); NTH (5 = "last")
+MAX_EACH = 10; LABEL_MAX = 80; SPAN_DAYS = 366; START_BACK = 366; TELL_DAYS = 7
+FIELDS (with the label, for those who shape it); DAYS_FIELDS (never the label: the scheduler's read)
+
+days_of(row, lo, hi) -> List[date]           # pure: the days one commitment falls on inside lo..hi; a row that
+                                             # can't be read falls on none, never an error
+commitment_days(rows, lo, hi) -> Dict[str, List[date]]   # pure: {commitment id: days}; SPAN_DAYS (366) days at most,
+                                             # counted from lo; days that aren't days fall on nothing
+first_day(weekday, pattern, nth, start) -> date   # the first day it falls on, on or after start: what is saved
+                                             # as starts_on (every other week's anchor is always one of its days)
+how(row) -> str; said(row, today, long=False) -> str   # "Every other Saturday, from Dec 5", "The last Sunday of
+                                             # each month", "Every Wednesday until Mar 31". Never the label
+sees_label(ch, me, cid) -> bool              # church_schedule.sees_reason on the row an ask of theirs would be
+                                             # (goes_to worked out now): the person, the one it would go to, and
+                                             # (a login) the owner and whoever oversees the office
+shape(ch, me, row, names, today) -> dict     # THE ONE PLACE A LABEL LEAVES ON A LIST: {id, contact_id, name,
+                                             # weekday, pattern, nth, starts_on, until_on, said, mine, can_remove,
+                                             # created_at} and `label` only when sees_label (absent otherwise)
+standing(ch, me, rows, names, lo, hi) -> List[dict]   # the calendar's: {contact_id, name, day} a day, `label` the same way
+of_people(ch, people, lo, hi) -> List[row]   # the calendar's read: a hundred people a read, each paged; 503 on failure
+held_days(biz_id, lo, hi) -> List[dict]      # the scheduler's: [{contact_id, starts_on, ends_on}] one a day; one read,
+                                             # HOLD_PAGE a page, HOLD_PAGES pages; NEVER THE LABEL; a page that fails
+                                             # is [] and a logged line; NEVER RAISES
+commitments(ch, me, box="mine") -> List[dict]    # mine: my own in force; all: every one in force (over_all, else 403)
+add_commitment(ch, me, body) -> dict         # reads everything first; `for` as an ask's; ten in force; the same one
+                                             # again is the one there; told_at set at once when there is nobody to tell
+drop_commitment(ch, me, id) -> dict          # their own, or over_all; read first (404 for another church's); the
+                                             # shape of what was taken off. Nobody is told
+_after(ch, row)                              # member_push._later -> church_schedule_tell.tell_repeat
 ```
+
+Where it is wired (built, S1-7): `church_schedule.holds` adds `held_days` after the asks, in a
+try of its own; `church_schedule.calendar` reads `of_people` for the people on the schedule and
+fills each group's `standing`; `church_schedule_tell` has `repeat_words`, `tell_repeat`,
+`_bare_repeat` / `REPEAT_FIELDS` and the sweep's fifth read (`_claim`, `_release` and
+`_claimed_send` take the table); `member_portal_dates` has the part of the page and its two
+routes; `kmj_intake_automation` includes the router beside the limits'; `church_schedule_fake`
+runs the table's checks and trigger on an insert.
 
 - **The gate** copies `church_assignments._church` / `_church_from_body`: a church (404), `office_open` (404), `ready()` (404), then `co.Church(biz)`.
 - **Who changes the structure** (section 7, item 7): `save_settings` and `set_listed` are for the owner and whoever oversees the office only. An Admin does not change the roster, the notice days or (step 2) the leaders and office numbers.
@@ -798,9 +858,11 @@ sweep_tick(now=None) -> Dict[str,int]   # hourly on the worker: {churches, moved
 HERE = "/my/lead/dates"; WINDOW_DAYS = 62; PICK_MAX = 200; DONE, DONE_ALONE, ERRORS, DATES_CSS
 _ch_me(biz, me) -> (Church, who)                # THE ONE PLACE that says who `me` is: always co.who(PERSON, …)
 view(biz, contact_id, now=None) -> dict         # {mine (each with on_calendar), waiting, away, people (to pick who
-                                                # covers), on_it, top, to, notice_days, near, today, tz}. Every ask
-                                                # through shape() as that person. `away` is name, days, who covers
-                                                # and "waiting for your yes" and nothing else
+                                                # covers), on_it, top, to, notice_days, near, today, tz, repeats}.
+                                                # Every ask through shape() as that person. `away` is name, days, who
+                                                # covers and "waiting for your yes" and nothing else (and, S1-7,
+                                                # someone's thing that repeats as name and `days`). `repeats`: their
+                                                # own, through church_schedule_repeats.shape() as that person
 chief_line(v) -> str; body(v) -> str
 render(biz, site, request, me, v, seg, *, err="") -> str; render_not_here(biz, site, me) -> str
 async serve(request, biz, site, me, *, err="")  # GET /my/lead/dates: (html, status), or None when it is not a page
@@ -811,7 +873,7 @@ _go(**q); _code(e) -> str; async _act(request, fn, ok)   # as member_portal_assi
 _cover(ch, me, form) -> Optional[str]           # who covers, from the list: on the schedule here, never the asker
 ```
 
-Page order: Waiting for your yes (if any); Ask for time off (first day, last day, kind, private reason, who covers); I can't make it; My dates with their state and Take it back; Who else is away (name, days, who covers; never a reason, a note or the kind). Things that repeat is S1-7 and has no place on the page yet. No ids on the page; ids ride in form addresses and option values.
+Page order: Waiting for your yes (if any); Ask for time off (first day, last day, kind, private reason, who covers); I can't make it; My dates with their state and Take it back; Things that repeat (S1-7, built: their own in plain words with what they typed and Remove, then the form: what it is, which day, how often, starting, until if it ends; the form only for someone on the schedule, and none past ten); Who else is away (name, days, who covers; never a reason, a note or the kind; someone's thing that repeats as their name and its days, never what it is). No ids on the page; ids ride in form addresses and option values.
 
 - **A member-app session is a person, never a login** (section 7, item 6). Every call into the engine is made as `co.who(PERSON, …)` through `_ch_me`, whoever is signed in: the owner's own person and the person of whoever oversees the office read a reason and answer only what went to them (or to the office login tied to exactly them), and their own.
 - **A refusal comes back as plain words.** `_code` turns the engine's 400, 403, 404, 409 and 503 into a short code; the page's own `ERRORS` says it. Nothing but the code rides in the address: the name ("waiting for …'s yes") and the number of days are filled in on the page.
@@ -1033,20 +1095,20 @@ Where it is wired (**built**, S2-5):
 - With step 2's tables there the shape also has `excepted: [..]`, the flags a yes was given over (empty until one is). On a database with step 1 alone the key is absent.
 - A plain away date (a `serve_away` row with no ask) is shown on the calendar with the same keys: `id` and `kind` null, `state` `yes`, never a reason, `can_withdraw` false.
 
-**Step 1** (built, all but the commitments row)
+**Step 1** (built, every row; the commitments row in S1-7)
 
 | Route | Body / query | Answers | Who |
 |---|---|---|---|
 | `GET /church/schedule/status?business_id=` | | `{open, me: {person: contact_id\|null, group: 'leaders'\|'office'\|null, goes_to: {kind,id,name}\|null, sees_all: bool, can_set: bool}, owner_how, notice_days}` | any seat |
 | `GET /church/schedule/people?business_id=` | | `{leaders: [{contact_id,name,what,department}], office: [...], added: [...], removed: [...], can_change}` | a seat whose person is on the schedule; the owner, an Admin, the office overseer. `can_change` is true for the owner and the office overseer only |
 | `PUT /church/schedule/people` | `{business_id, contact_id, listed: 'add'\|'remove'\|null, group?}` (`group` is `leaders` unless it says `office`; null puts them back to what the church's data says) | the same shape, as it stands after | the owner, the office overseer (not an Admin: section 7, item 7) |
-| `GET /church/schedule/leaders?business_id=&from=&to=` (93 days at most; from today for 62 days when unnamed; days that can't be a window, the very end of the calendar included, are a 400) | | `{from, to, groups: [{key, name, people, away: [ask or plain fact], waiting: [ask], standing: [{contact_id,name,day,label}]}]}`. `people` is how many are in the group. `away` is read from `serve_away`; everyone on the schedule gets name, dates and who covers, and a reason only as `shape()` allows. `waiting` holds only the asks the reader may read (their own, the ones that went to them, and for the owner and the office overseer every one). `standing` is empty until S1-7 | on the schedule, or the owner / office overseer. **The `serve_schedule` holder gets a 403 here unless they are on the schedule themselves** |
+| `GET /church/schedule/leaders?business_id=&from=&to=` (93 days at most; from today for 62 days when unnamed; days that can't be a window, the very end of the calendar included, are a 400) | | `{from, to, groups: [{key, name, people, away: [ask or plain fact], waiting: [ask], standing: [{contact_id,name,day,label}]}]}`. `people` is how many are in the group. `away` is read from `serve_away`; everyone on the schedule gets name, dates and who covers, and a reason only as `shape()` allows. `waiting` holds only the asks the reader may read (their own, the ones that went to them, and for the owner and the office overseer every one). `standing` (built, S1-7): one entry for each day in the window a thing that repeats of someone in the group falls on, `{contact_id, name, day}`, and `label` only for those who read an ask's reason (the person, whoever an ask of theirs would go to, the owner, the office overseer); for anyone else the key is absent | on the schedule, or the owner / office overseer. **The `serve_schedule` holder gets a 403 here unless they are on the schedule themselves** |
 | `GET /church/schedule/asks?business_id=&box=mine\|to_me\|all` | | `{asks: [ask]}`. `mine`: waiting first, then the last 90 days. `to_me`: the waiting ones that went to me (for the owner, also one nobody else can answer). `all`: every waiting ask and the last 90 days; the owner and the office overseer only (403) | as the box says |
 | `POST /church/schedule/asks` | `{business_id, starts_on, ends_on, kind, reason?, cover_contact_id?, cover_name?, for?: "person:<id>"}` | `{saved: ask}` | a seat for its own person (409 "This login isn't matched to a person here yet" when it has none; 403 when that person isn't on the schedule); `for` only by the owner / office overseer (403), and only for someone on the schedule (400). `kind: cant` only when the first day is inside the church's notice days, two days at least (400 otherwise, pointing to time off) |
 | `POST /church/schedule/asks/{id}/answer` | `{business_id, yes: bool, note?}` | `{saved: ask}`; 409 when it had already moved | `may_decide`: 403 for your own ask and (the owner aside) for one you entered; 409 for one that needs no yes |
 | `POST /church/schedule/asks/{id}/withdraw` | `{business_id}` | `{saved: ask}` | the asker's login; the owner and the office overseer (403 for anyone else, the login that entered it too) |
 | `GET /church/schedule/settings?business_id=` / `PUT` | `{business_id, notice_days}` (0 to 90) | `{notice_days}` | read: on the schedule, the owner, the office overseer; write: the owner, the office overseer |
-| `GET /church/schedule/commitments?business_id=` / `POST` / `DELETE …/{id}` (**S1-7, not built**) | `{business_id, label, weekday, pattern, nth?, starts_on, until_on?}` | `{commitments: [...]}` / `{saved}` | a seat for its own person |
+| `GET /church/schedule/commitments?business_id=&box=mine\|all` / `POST` / `DELETE …/{id}?business_id=` (**built**, S1-7) | `POST {business_id, label (80 at most), weekday (1 Monday to 7 Sunday), pattern: weekly\|every_other\|month_nth, nth? (1 to 5, 5 the last; month_nth only), starts_on? (today when unnamed; within a year either side), until_on? (today or later), for?: "person:<id>"}`. starts_on is saved as the first day it falls on, on or after the day named | `{commitments: [c]}` / `{saved: c}` / `{removed: c}`, each `c` `{id, contact_id, name, label?, weekday, pattern, nth, starts_on, until_on, said, mine, can_remove, created_at}` (`said`: "Every other Saturday, from Dec 5") | `GET mine` and `POST`: a seat for its own person (409 when it has none; `POST` 403 when that person isn't on the schedule, 400 past ten in force); `for` only by the owner / office overseer (403), and only for someone on the schedule (400), as an ask's. `GET all`: the owner and the office overseer (403). `DELETE`: their own, or the owner / office overseer (403); 404 for another church's |
 
 **Step 2** (every row is **built**: S2-2 and S2-3, and the pairs rows S2-4; every one answers 404 until step 2's own tables are there)
 
@@ -1073,7 +1135,7 @@ What changes on step 1's routes once step 2 is there (**built**, S2-3):
 
 All `include_in_schema=False`, `_signed_in`, never the preview, `rate_limit.allow_strict("member_action", …)`, a 303 back to `/my/lead/dates?done=…|err=…`.
 
-The first five rows are **built** (S1-5); the two commitments rows are S1-7.
+Every row is **built**: the first five in S1-5, the two commitments rows in S1-7.
 
 | Route | Form | Who |
 |---|---|---|
@@ -1082,8 +1144,8 @@ The first five rows are **built** (S1-5); the two commitments rows are S1-7.
 | `POST /my/lead/dates/cant` | `start (today on the church's clock by default), end, reason` | on the leaders schedule |
 | `POST /my/lead/dates/{id}/withdraw` | | the asker |
 | `POST /my/lead/dates/{id}/answer` | `ans (yes\|no), note` (the note is kept with a no only), `shown` (with a Yes: the flags its card showed, comma-separated) | it went to this person (or to the login this person is). A flagged ask: only the very person it went up to. Goes back with `done=dt_yes_x` for a yes over a flag, `err=dt_up` or `err=dt_yours` for a yes that didn't land (`err=dt_up_now` or `err=dt_yours_now` when what was new is a pair alone, S2-4) |
-| `POST /my/lead/dates/commitments` | `label, weekday, pattern, nth, start, until` | on the leaders schedule (S1-7) |
-| `POST /my/lead/dates/commitments/{id}/remove` | | theirs |
+| `POST /my/lead/dates/commitments` (**built**, S1-7) | `label, weekday (1 to 7), often (weekly\|every_other\|month_1 … month_4\|month_last: the one list "How often" stands for the engine's pattern and nth), start (today when empty), until` | on the leaders schedule. Goes back with `done=dt_repeat`; a refusal is `err=dt_repeat_label`, `dt_repeat_days`, `dt_repeat_none`, `dt_repeat_many`, `dt_said` or `dt_not_on` |
+| `POST /my/lead/dates/commitments/{id}/remove` (**built**, S1-7) | | theirs, as that person (the owner's own person and the office overseer's take off only their own here). `done=dt_repeat_off`, else `err=dt_gone` |
 
 Every POST answers 404 while the switch is closed for the church or its tables aren't there (`church_schedule.on`), refuses another site's POST (and lets `Origin: null` from this address through, by `Sec-Fetch-Site`), and never writes in the owner's preview.
 
@@ -1142,9 +1204,10 @@ Every POST answers 404 while the switch is closed for the church or its tables a
 - "Can't make it" whose first day is on or after today plus the church's notice days (two at least): 400, in words that point to asking for time off.
 - A login that has left the office (its seat is no longer Admin or Manager) answering what went to that login: 403; it is the owner's.
 
-**Standing commitments**
-- No yes is needed. `to` is told once when one is added (`told_at`; S1-7 builds this, S1-4 tells nobody of a commitment).
-- They show on the calendar; from S1-7 they hold the person from the scheduler.
+**Standing commitments** (built, S1-7; 7.12)
+- No yes is needed, and nothing blocks one: never a full day, never a pair, never counted toward a limit. Ten in force a person.
+- `to` (whoever an ask of theirs would go to, worked out when the notice goes: the table keeps no `to`) is told once when one is added (`told_at`, claimed before the send and let go when nothing went), outside quiet hours, in who and which days and never what it is. Nobody for the owner's own person, nor when it would go to the very login that added it (saved as told). Taking one off tells nobody.
+- They show on the calendar (`standing`, what it is only for those who read a reason) and hold the person from the scheduler on those days only (`holds`), in the board's words for an away date.
 
 ### Step 2
 
@@ -1211,7 +1274,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 | **S1-4 Notices** (built) | `church_schedule_tell.py`; the hooks in `church_schedule.ask / answer / withdraw` (`_after`); the sweep job (with the one nudge after 3 days, the re-address and the 90-day clearing of reasons: section 7, items 1, 14, 15); `TICKS`; `.env.example` "both services"; `sb_patch_as_service(redact=)` | `test_church_schedule_tell.py`, at New Hope through the real routes and senders: no reason and no note in any push, email, conversation line or log line, and the words the same with or without them; nothing told inside a write, and a failed notice never fails it; person vs login channels; email only when no phone rang; `cant` ignores quiet hours, a planned ask and an answer wait; claim before send, let go when nothing went; told once (two sweeps at once, the write's notice and the sweep); a yes nobody gave tells nobody; `_login_email` None is not claimed; one nudge, never a second; a waiting ask is sent on when who is over them changes, their login leaves the office or it names nobody, never one that needs no yes, and never round the same step; the reason (and, since S1-5, the note that came with the answer), and only those, are gone 90 days after the last day; every read names its state and is paged (1,003 rows); take-backs; where a notice points; a sample church is told nothing; before the migration and with the switch off the sweep reads nothing; on `owner` one church is swept. Each rule was broken once to see its test go red (the PR lists them) | no (silent until it was applied, 2026-11-18) |
 | **S1-5 Dates on the Lead tab** (built) | `member_portal_dates.py`; `church_schedule.section`, `waiting_kept`, `forget_waiting`; `member_portal_lead` (`DATES`, `_context`, `_seg`, `serve`); `member_portal._leads`; router include; `church_schedule_tell.MEMBER_PAGE` and the button's words; the sweep clears the answer's note with the reason | `test_member_portal_dates.py` (the `test_member_portal_assign` harness, at New Hope): the page and its order for a leader, for someone over people, for an office person with no role, for the owner's person, for someone taken off the schedule who is still over someone; no ids, no office words, no title words and no keys on screen; a reason and a note only where `shape()` allows, and never under Who else is away; every POST; preview never writes; cross-site refused, `Origin: null` allowed; closed or before the tables means no Dates entry and 404 writes; a member-app session never gets the owner's or the office overseer's across-the-board view, and every call into the engine is made as a person; every refusal comes back as plain words; who covers is the people on the schedule here, never the asker, 200 at most; days in the church's own clock; short notice said before and after and never blocked; real labels on every field; the switcher's count from what is kept a minute, with no read on a page view. `test_church_schedule_tell.py`: where a person's notice points, and the note cleared with the reason. Each rule was broken once to see its test go red (the PR lists them) | no (not there until it was applied, 2026-11-18) |
 | **S1-6 Serving Away form and the scheduler hold** (built) | `church_schedule.holds`, `on_schedule`, `takes`, `withdraw_fact`, `_serving`, `_open_places`; `sunday_planning._Board` `held`; `sunday_serving.add_away / drop_away`, `yes_places`, `open_places`; `member_portal_serving` flash and line; `member_portal_dates._serving_line` | `test_sunday_planning_holds.py`, at New Hope through the real scheduler, engine and member routes: off, before the migration or closed the board makes exactly today's reads (the church looked up once, then kept); open it makes one more, selecting who and which days only; a read that fails, or anything else going wrong, holds nobody and is never a 503; 1,003 waiting asks are read in two pages and the read is bounded; a waiting ask makes `candidates` say away, an ask a 409 and a fill skip, for the office, a team's own leader, a teammate finding a sub and an event date; the board's words are the same for a waiting ask as for an away date, and nothing of the ask is in anything the scheduler answers; it is absent from `/planning/schedule`'s `away`; a volunteer's Away makes the same calls and the same page, byte for byte, open or closed, and against the commit this was cut from (that one is skipped where the commit isn't in the clone, as in CI); a leader's Away is asked for through the engine with its rules and never saved at once; under `owner`, whose church it is is asked once a minute even when it can't be read; when the roster can't be read again the last one read answers, and on a replica that never read one an Away is saved at once, as it always was, with one line logged that names nobody; "Can't make it" on a place is unchanged; taking off a date that came from an ask takes the ask back in one transaction, and a failure leaves both as they were; a plain date comes off as it always did; a yes opens their places exactly as `cant_make_it` does, after the write, and a failure there never fails the yes; a year of services is read a page at a time; no title word or role key in the rule code. `test_sunday_serving.py` passes untouched. Each rule was broken once to see its test go red (the PR lists them) | no. The schedule's own was applied before this merged, so it is live at the platform owner's church from its first deploy |
-| **S1-7 Things that repeat** | commitments routes, the Dates section, `calendar` `standing`, `holds` adds `commitment_days` | weekly / every other / nth and "last"; `until`; the scheduler holds them on those days only; 10 a person | yes |
+| **S1-7 Things that repeat** (built, #1990) | `church_schedule_repeats.py` (the commitments routes, `commitment_days`, `add_commitment`, `drop_commitment`, `commitments`, `sees_label`, `held_days`); `calendar` `standing`; `holds` adds the days; `church_schedule_tell.tell_repeat` and the sweep's read; the Dates part and its two routes; `church_schedule_fake` taught the table | `test_church_schedule_repeats.py`, at New Hope through the real routes: every week, every other week from its first day (a window opening on the off week, a start long ago), the first to the fourth and the last (in months with four and with five of that weekday), from and until, 366 days at most and the very end of the calendar, a row that can't be read; no yes, never an ask or an away date; ten in force, an ended one not counted; the same one twice is one; every refusal in plain words with nothing written; who adds (`for` as an ask's), reads the list and takes one off; the label read exactly where an ask's reason is, absent for everyone else, following whoever an ask would go to now; someone off the schedule is off the calendar; never counted toward a limit or a pair with step 2's file; closed, off or before the tables a 404 with nothing read; another church's never read or held; 1,003 read whole; no title word or role key. `test_sunday_planning_holds.py`: held on those days only, in the board's words for an away date and with nothing of what it is; byte for byte what it was with nothing of this church's in the window; a failed read still holds the asks, and a failed asks read reads nothing more; paged and bounded. `test_church_schedule_tell.py`: told once, never what it is, the same words whatever it is, as a login for an office person, quiet hours, a claim let go and tried for a week, nobody to tell, taking one off tells nobody. `test_member_portal_dates.py`: the part after My dates in plain words, Who else is away by name and days only, remove their own only (a member-app session is a person), refusals as the page's words, ten and the form gone, someone off the schedule keeps theirs, the owner's own; the preview, cross-site and closed sweeps now cover the two routes. Each rule was broken once to see its test go red (the PR lists them) | no. The table is in step 1's file, applied 2026-11-18 |
 | S1-8 (optional) My week count | `church_my_week` `dates` | a login sees how many wait for their yes | yes |
 
 **Turning on:** the migration is applied (2026-11-18), so the switch alone decides. `CHURCH_SCHEDULE` is read on **both** `kmj-intake-server` (the routes, and the notice that follows each write) and `kmj-intake-worker` (the hourly sweep). Unset means `owner` on both, so nothing needs setting for the platform owner's own church; to open it wider, or to close it, set the same value on both. The sweep also works only the churches `CHURCH_ASSIGNMENTS` is open for (7.5). The scheduler hold (S1-6) is read wherever a board is built: on the web service for every Planning and My serving page, and on the worker for the "No answer yet" note, which names who could take a place. So it too follows the value set on both.
@@ -2286,3 +2349,429 @@ Seen and left as they are:
   later yes adds a second away row for the same days. That comes with the never-fail rule.
 - A leader's yes opens the volunteer's places (S1-6's `open_places`), which clears a cover
   request still waiting for an answer; a cover already accepted is safe (the place has moved).
+
+### 7.12 Decided while building S1-7 (#1990)
+
+All decided in the build; none is the owner's call, and any can be reopened with him. His calls
+that bind it are 7.1's item 11 as the plan wrote it (shown, they hold the person from the
+scheduler, never counted toward a limit, never blocked). Where the plan and the brief didn't
+settle something, the more private choice was taken, and the one that blocks nobody. No
+migration: `church_away_commitments` was in step 1's file, and no column was missing.
+
+**Where things live**
+
+- **A module of its own, `church_schedule_repeats.py`**, with its own router on `/church`
+  behind the engine's own gate (`church_schedule._church` / `_church_from_body`: not a church,
+  closed, or before the tables, a 404). The engine gains two hooks only: `holds` and `calendar`.
+- **`GET` takes `box=mine|all`**, as the asks' boxes do (no `to_me`: nothing waits on anyone).
+  **`DELETE` takes the id in the address** (`…/commitments/{id}?business_id=`), as protected days
+  and pairs do, and answers `{removed: c}`; `drop_commitment` returns that shape where the plan
+  had `None`.
+
+**What one is**
+
+- **Its start is saved as the first day it falls on**, on or after the day named, for every
+  pattern. So every other week always counts from one of its own days (the table's anchor check is
+  met, never tripped), and the "from" a page shows is a day it happens. A start that isn't that
+  weekday is moved forward, not refused.
+- **A start may be up to a year back or a year ahead** (a past Saturday sets which alternate
+  weekends are theirs); none named is today. **An end is today or later**, after the start, and a
+  start and end with none of those days between them are a 400 ("It doesn't fall on that day
+  between the start and the end you picked.").
+- **The fifth is the last**: nth 5 is the last such weekday of the month, the fourth in a month
+  that has four, as the table's comment says.
+- **Ten in force a person.** One whose end has passed is not counted, not listed and not read
+  again; it stays in the table (nothing cleans it up).
+- **The same one again is the one there**: what it is (spaces and capitals aside), the day, how
+  often, from and until. Two presses in the very same instant can still make two (the table has
+  no unique index, and none was added).
+- **366 days at most**: `commitment_days` counts from the window's first day for 366 days and no
+  further. Every window that asks is shorter (the calendar 93 days, Dates 62, a board 8 weeks).
+
+**Who**
+
+- **Adding**: someone on the leaders schedule, for their own person; `for` exactly as an ask's
+  (the owner and whoever oversees the office, for someone on the schedule; an Admin can't).
+- **The list**: their own; every one only for the owner and whoever oversees the office.
+- **Taking one off**: their own person's, and the owner's and the office overseer's anyone's.
+  The one over them can't (it isn't theirs), and in the member app nobody but the person.
+- **Someone taken off the schedule keeps theirs.** They still hold them from the scheduler, as an
+  ask of someone since taken off still does (7.7); they are off the calendar, which lists the
+  people on the schedule today; they can't add one; they see theirs on Dates, with Remove, if they
+  open it (the Lead tab gives them no Dates entry for that alone: `section` answers from what is
+  kept and reads nothing new); the office sees theirs in `all` and can take them off.
+
+**The label is the person's, the owner's and the office overseer's**
+
+- **Read by the person, and (an office login) the owner and whoever oversees the office**, and by
+  nobody else (`sees_label`). Changed in the review of #1990: as first built it was read like an
+  ask's reason, by whoever an ask of theirs would go to, worked out on every read. That cost about
+  four reads a person with one on every calendar and every leader's Dates page (20 people: 22 reads
+  became 99), each a new way for the page to fail, and it let who reads it move when the order at
+  the nearest step changed (a co-leader added who sorts first), which an ask's reason never does
+  (decision 1). A reason is read by whoever answers the ask; a thing that repeats needs no yes, so
+  nobody over them has a decision to make with what it is. Whoever it would go to is still told
+  that it's there, and on which days, never what it is.
+- **For anyone else the key is absent**, on the calendar and on a list; never an empty string.
+- **The day and the pattern are not private**: everyone on the schedule reads the name and the
+  days on the calendar, as they read an approved away date's.
+- **On Dates, Who else is away gives a name and the days only**: one row a person (their days
+  together), the first three and how many more. Never what it is, even for the one it would go to
+  (they read it in the office app).
+- **Nothing the scheduler or a notice reads selects it** (`held_days`, the sweep), and every
+  insert is sent redacted.
+
+**The scheduler**
+
+- **Everyone with one in the window is held**, on the schedule today or not, as for asks.
+- **Its own read, after the asks, in a try of its own**: when it fails the asks are still held;
+  when the asks' read fails nobody is held and nothing more is read, as before. One read more where
+  the schedule is open, a page at a time (the asks' `HOLD_PAGE`, `HOLD_PAGES`). With nothing of this
+  church's in the window the answer is byte for byte what it was.
+- **Never counted toward a limit or a pair**: those read the facts in `serve_away`, which a thing
+  that repeats never writes; `GET days` doesn't count it.
+
+**The notice**
+
+- **To whoever an ask of theirs would go to**, worked out when it goes (the table keeps no `to`):
+  "Elena has something that repeats", "Every other Saturday, from Dec 5. It's on the calendar.
+  Nothing for you to answer." The email says nobody asks them to serve on those days. Never what it
+  is: the words are the same whatever was typed (pinned).
+- **As a planned ask's**: outside quiet hours, `told_at` claimed before the send and let go when
+  nothing went; the sweep's fifth read finds those untold and added in the last week
+  (`TELL_DAYS`), never the label, and leaves them after that. One whose end has passed tells nobody.
+  The sweep counts them as `repeats`.
+- **Nobody to tell**: the one person the owner is, or one the office adds where it would go to the
+  very login that added it. It is saved as told and nothing is handed on.
+- **One the office adds for someone tells whoever it would go to, not the person**, as an ask
+  entered for someone tells nobody else. **Taking one off tells nobody.**
+
+**The Dates page**
+
+- **"How often" is one list** (`often`: every week, every other week, once a month the 1st to the
+  4th or the last) where the plan's form had `pattern` and `nth`: a page with no script can't show
+  the second list only for "once a month".
+- **"Starting" is today unless changed; "Until, if it ends" is empty; the day is picked from a
+  list** that starts at "Pick a day". The form is only for someone on the schedule, and past ten it
+  is one line instead ("That's ten, as many as you can have. Take one off to add another.").
+- **In plain words**: "from" only while it hasn't started, "until" only when it ends, the year only
+  when it isn't this one. The privacy line under "What it is" reads "between you and those who look
+  after the whole church" for everyone, and "We'll let Amara know." follows for whoever has someone
+  over them (and, from the same review, "I can't make it" says "We'll let Amara know." too, where it
+  said "Amara is let know.").
+
+**Open for the lead session or the owner**
+
+- Whether the person should hear when the office adds one for them.
+- Whether whoever it would go to should hear when one is taken off.
+- Whether someone taken off the schedule should keep a Dates entry for theirs, or theirs should
+  stop holding them from the scheduler. For now they hold them (it's still true that they work that
+  Saturday), and the office's Leaders' dates screen will list everyone's, theirs too, with Take it
+  off for the owner and the office overseer (the frontend follow-up), so none is out of sight.
+- From the review of #1990, also: `weekday` and `nth` are read as ASCII digits only, four at most
+  ("²" or a 5,000-digit string was a 500, now the plain refusal).
+- Two presses in the same instant can make two copies (no unique index).
+- The office app has no screen for them: the API only, until the office frontend exists
+  (decision 21).
+
+---
+
+## 8. Step 4: The week (#1979)
+
+The pastor approved the mock on 2026-11-19 ("go"). The office's menu: Volunteers → **The week**,
+first in that group. One week, Sunday to Saturday (Nov 22 to 28), with a way to the week before
+and the week after. In order: four counts, "Look at first", then one card per department. **Read
+only**: nothing on the page writes; changes stay where they are today, door by door, in Who serves
+when. **Built**: `church_week.py` (the module and both routes), `church_serving.minutes_of` and
+`checks_of` (its own rules, read for one week's people), and `__tests__/test_church_week.py`.
+No migration, no new table, no env var set anywhere: `CHURCH_WEEK` is unset, which means
+`owner`, so the routes are live at the platform owner's own church (and to the platform owner's
+own login) as soon as this deploys, and closed everywhere else. The office page is the
+frontend's next PR, built from this section. A department leader's own view in the member app
+comes later.
+
+### 8.1 Routes
+
+| Route | Answers |
+|---|---|
+| `GET /church/week/status?business_id=` | `{"enabled": bool, "hours": bool, "checks": bool}`: whether this login's menu shows The week, and what it will show. All three false (200) for a closed switch, a business that isn't a church (or a church on ChurchSavvy alone), a login that keeps neither door of Who serves when, or a read that failed. 404 for a login with no seat at that business; 400 for an id that isn't one. |
+| `GET /church/week?business_id=&start=YYYY-MM-DD` | The week `start` falls in (any day of it: Wednesday Nov 25 is the week of Sunday Nov 22). No `start`, or one that isn't a real date, is this week on the church's clock. A week more than 52 weeks back or 26 weeks ahead of this one is a 400 ("Pick a week from a year back to six months ahead."). 403 for a seat here that keeps neither door; 404 for no seat here, the switch closed for this church, Who serves when (`SUNDAY_PLANNING`) closed to them, or not a church; 503 when a read fails (never an empty or shorter week). |
+
+Both take the auth header like every office route (`require_user`). The frontend reads `status`
+once to decide whether Volunteers shows "The week", then `GET /church/week` with `start` set to
+`week.prev` or `week.next` for the arrows.
+
+### 8.2 Who reads it
+
+- **The owner, every Admin, and a Manager that keeps either door of Who serves when.** A Manager
+  keeps a door when it changes some team there (`sunday_planning._owners_for`: `serve_schedule`
+  for the Volunteers' door; `production_schedule`, `churchsavvy_team` or a ChurchSavvy part that
+  schedules for ChurchSavvy's), or holds a duty the office menu opens that door's Who serves when
+  for (`church_week.READS`: `serve_teams`, `new_volunteers`, `background_checks`,
+  `serving_thanks` for the Volunteers' door, the office menu's own rule from the frontend's
+  2026-11-02 Volunteers door; `production_schedule`, `churchsavvy_team` for ChurchSavvy's). Duties
+  are `church_duties.standing`'s (a lane's starting duties, a move, or a Manager's areas when it has
+  no lane).
+- **They read every department, both doors**, ChurchSavvy's worship and production teams too.
+  `can.change` says which doors' teams this login changes in Who serves when; the page itself
+  changes nothing.
+- **Anyone else with a seat is a 403** ("The week is for whoever keeps the volunteer teams or Who
+  serves when."): a Member or Viewer seat, and a Manager that keeps neither door (at the fixture
+  church, Office & Leadership and People & Care). A stranger, another church's owner included, is a
+  404 (`business_access.assert_access`). A ChurchSavvy team member without an office seat is not an
+  office login and reads nothing here.
+- **The church's own gate**: a church (`church_follow_up.is_church`), and not one on ChurchSavvy
+  alone (no office, no doors): otherwise 404.
+
+**At the platform owner's church, does the volunteers keeper see "Can't serve with kids yet"?**
+What decides it is `church_serving._access`'s `checks`. The owner and every Admin always have it.
+A Manager the page admits has it when **any one** of these holds:
+
+1. **Who sees what is not on** (`CHURCH_AREAS` anything but `on`): `_access` reads no areas then,
+   so every admitted Manager reads who's cleared.
+2. **Its areas are the whole church**: `church_areas.my_areas` gives none (no pick and nothing to
+   guess from), which `_access` reads as everything.
+3. **Its areas include Kids & youth or People & care** (the church's pick on the login, else
+   Chief's guess), whatever duties it holds.
+4. **It holds the `background_checks` duty** (`church_duties.holds`, `record`). The Sunday &
+   Serving lane starts with it (`church_duties.STARTER`; the owner's 2026-11-02 call made checks
+   Sunday & Serving's). A login on one of the church's own jobs holds it only when it is on that
+   login's sheet; a Manager with no lane, when its areas include Kids & youth. Once the duty is
+   moved to someone else, only the logins it moved to hold it.
+
+A Manager on the Sunday & Serving lane is written with the areas Worship & media alone, so with
+Who sees what on and the duty where the lane starts it, it **does** see it, by 4. If the duty was
+moved away it doesn't, unless 1 to 3 says otherwise (pinned:
+`test_the_volunteers_keeper_reads_checks_by_the_background_checks_duty`, and by areas without the
+duty, `test_a_reader_cleared_by_their_areas_sees_it_without_the_checks_duty`). Whether the duty
+sits with the volunteers keeper at the owner's church, and what that login's areas are, was not
+checked against production in this PR.
+
+### 8.3 The shape, field by field
+
+An example, trimmed (the fixture church's week of Nov 22, read by its volunteers keeper on Wednesday
+Nov 18):
+
+```json
+{
+  "week": {"from": "2026-11-22", "to": "2026-11-28", "words": "Nov 22 to 28", "this_week": false,
+           "prev": "2026-11-15", "next": "2026-11-29"},
+  "counts": {"on": 6, "open": 7, "away": 2, "hours": 9.5},
+  "look": [
+    {"kind": "short", "title": "Kids is short one on Sunday: Nursery.",
+     "details": ["Dara Quinn is away. Two people on the Kids Check-in team are free that morning."],
+     "service_id": "…", "day": "2026-11-22",
+     "find": {"group_id": "…", "service_id": "…", "day": "2026-11-22"}},
+    {"kind": "short", "title": "Worship is short one on Sunday: Vocals.",
+     "details": ["The worship team fills this in ChurchSavvy."], "service_id": "…", "day": "2026-11-22",
+     "find": null},
+    {"kind": "no_answer", "title": "Kids: Toby Wells hasn't answered for Sunday.",
+     "details": ["Toby was asked on Monday."], "service_id": "…", "day": "2026-11-22", "find": null},
+    {"kind": "cant_serve_kids", "title": "Kids: Lila Penn can't serve with kids yet.",
+     "details": ["Lila's background check isn't on record. Lila is on for Sunday."],
+     "service_id": "…", "day": "2026-11-22", "find": null}
+  ],
+  "departments": [
+    {"department_id": "…", "group_id": null, "name": "Kids", "led_by": "Kara Bell", "churchsavvy": false,
+     "open": 4, "label": "4 open",
+     "teams": [{"group_id": "…", "name": "Kids Check-in", "door": "volunteers", "churchsavvy": false}],
+     "services": [
+       {"service_id": "…", "day": "2026-11-22", "weekday": "Sunday", "time": "10:30",
+        "words": "Sunday 10:30 AM", "kind": "service", "title": "Sunday service", "past": false,
+        "rows": [
+          {"group_id": "…", "team": "Kids Check-in", "door": "volunteers", "place_id": "…",
+           "place": "Nursery", "slot": 2, "person": {"contact_id": "…", "name": "Dara Quinn"},
+           "who": "Dara Quinn", "state": "away", "state_words": "Away", "minutes": 90,
+           "hours_words": "1.5 hours", "find": {"group_id": "…", "service_id": "…", "day": "2026-11-22"},
+           "note": null}]},
+       {"service_id": "…", "day": "2026-11-26", "weekday": "Thursday", "time": "19:00",
+        "words": "Thursday 7 PM · Outreach night", "kind": "event", "title": "Outreach night",
+        "past": false, "rows": ["…"]}]}
+  ],
+  "can": {"hours": true, "checks": true, "change": ["volunteers"]}
+}
+```
+
+**`week`**
+
+| Field | What it is |
+|---|---|
+| `from`, `to` | The Sunday and the Saturday shown (`YYYY-MM-DD`, the church's clock). |
+| `words` | The heading: "Nov 22 to 28", or "Nov 29 to Dec 5" across a month. |
+| `this_week` | The week we're in, on the church's clock. |
+| `prev`, `next` | The Sundays of the weeks either side, to pass back as `start`; `null` past the bounds (52 weeks back, 26 ahead), so the arrow hides. |
+
+**`counts`** (the four at the top; the whole week, every service in it, past or to come)
+
+| Field | What it is | The mock's label |
+|---|---|---|
+| `on` | Places with someone on them who said yes or hasn't answered yet (and isn't away that day). Someone who can't serve with kids yet still counts here, for every reader, so the count never gives it away. | On the schedule |
+| `open` | Places nobody is on: never asked, a no, offered to the team and not taken, **or** someone on it who is away that day. | Open places |
+| `away` | People on the Sunday teams (every team shown) with an away date (`serve_away`, the facts) touching this week, each once. A waiting ask is never counted. | Away |
+| `hours` | Hours this calendar year (to today) of this week's people (everyone the rows name), one decimal. `null` when this login doesn't read hours: show nothing, not 0. | Hours this year |
+
+**`look`** ("Look at first"), most urgent first: by service time, then short, no answer, can't
+serve with kids yet; within those, the Volunteers' door before ChurchSavvy's, then the cards'
+order. Only services still to come make a line.
+
+| Field | What it is |
+|---|---|
+| `kind` | `short`, `no_answer`, `cant_serve_kids`, or `clear` (the one line when nothing needs a look). For the frontend's icon or colour only; never show it. |
+| `title` | The line, in full. `short`: "{department} is short {one, two…} on {day}: {places}." (a place needing two reads "Nursery (2)"). `no_answer`: "{department}: {name} hasn't answered for {day}." `cant_serve_kids`: "{department}: {name} can't serve with kids yet." `clear`: "Everything is filled for Sunday." (every day still to come at which some team has a place: "for Sunday and Thursday"; a service no team has a place at, such as an event date with only ChurchSavvy's teams, is never named), "This week's services have passed." (every service with places has started), "Nothing is on the schedule this week." (no service this week at which a team has a place) or "No teams are on Who serves when yet." `{day}` is the weekday, with the time when the week has two services that weekday ("Sunday at 9 AM"). A team on no department's card says its own name where a department's would be ("Parking Team: …"). |
+| `details` | The smaller lines under it, in full, each its own line (may be empty). `short`: one per person on a place who is away ("{name} is away. Two people on the {team} team are free that morning.", "One person…", "Nobody else…"; morning, afternoon or evening by the service's time), and "The worship team fills this in ChurchSavvy." for ChurchSavvy's door. `no_answer`: "{first name} was asked on Monday." (today, yesterday, a weekday within the week, else "on Nov 9"; no line when the ask has no time). `cant_serve_kids`: "{first name}'s background check isn't on record. {first name} is on for Sunday." (or "was asked for Sunday"). |
+| `service_id`, `day` | The service the line is about (`null` on `clear`). |
+| `find` | For a `short` line on the Volunteers' door: `{group_id, service_id, day}` of the first short team, for a "Find someone" button to Who serves when (see rows). `null` otherwise. |
+
+**`departments`**: the cards, in the church's own order (the leaders map's active departments, by
+their order), then one card for each Sunday team that hangs from no department (in Who serves
+when's team order). A department with no Sunday team has no card.
+
+| Field | What it is |
+|---|---|
+| `department_id` | The department's id; `null` on a team's own card. |
+| `group_id` | On a team's own card, the team's id; `null` on a department's. |
+| `name` | The department's name, or the team's on its own card. |
+| `led_by` | The department's leader's name; on a team's own card, the team's own leader (the first by name); `null` when there is none (show nothing). "led by {led_by}". |
+| `churchsavvy` | Every team on the card is ChurchSavvy's: show the "Scheduled in ChurchSavvy" chip on the card. (`teams[].churchsavvy` says it per team, for a card with both.) |
+| `open` | Open places on the card this week (as `counts.open`). |
+| `label` | "{n} open", "Filled", or "Nothing this week" (no places this week at all), in full. |
+| `teams` | `[{group_id, name, door, churchsavvy}]`: its Sunday teams. `door` is `volunteers` or `churchsavvy` (never shown). |
+| `services` | When it serves this week: the services and event dates at which any of its teams serve (ChurchSavvy's teams never serve an event date), soonest first. |
+
+**`departments[].services[]`**
+
+| Field | What it is |
+|---|---|
+| `service_id`, `day`, `weekday`, `time` | The service; `time` is 24-hour `HH:MM` on the church's clock. |
+| `words` | "Sunday 10:30 AM", or for an event date "Thursday 7 PM · Outreach night": the line to show. |
+| `kind`, `title` | `service` or `event`, and its own title. |
+| `past` | It has started. A past service keeps its rows, makes no "Look at first" line and offers no "Find someone". |
+| `rows` | One per place and spot (a place that needs two people has two rows, `slot` 1 and 2), team by team in Who serves when's order, each team's places in its order. |
+
+**`departments[].services[].rows[]`**
+
+| Field | What it is |
+|---|---|
+| `group_id`, `team`, `door` | The team the place is on (its name is shown when a card has more than one team). |
+| `place_id`, `place`, `slot` | The place and which of its spots. |
+| `person` | `{contact_id, name}` of whoever is on it, or `null` for an open place. |
+| `who` | The name to show, or "Open place". |
+| `state` | `on`, `no_answer`, `open`, `away`, `cant_serve_kids`; never shown. |
+| `state_words` | "On", "No answer yet", "Open", "Away", "Can't serve with kids yet": show this. |
+| `minutes`, `hours_words` | That person's serving this year (`0`, "No hours yet"; "45 minutes"; "1 hour"; "3 hours"; "1.5 hours"). Both `null` on an open place, and on every row for a login that doesn't read hours. |
+| `find` | `{group_id, service_id, day}` on an open or away place of a Volunteers' team at a service still to come: "Find someone", opening Who serves when's Volunteers door on that team and day. `null` otherwise. |
+| `note` | On an open or away place of a ChurchSavvy team: "The worship team fills this in ChurchSavvy." (show it where "Find someone" would be); `null` otherwise. |
+
+**`can`**: `hours` and `checks`, whether this login reads hours and who's cleared (as `status`
+says); `change`, the doors (`volunteers`, `churchsavvy`) whose teams it changes in Who serves when.
+The page needs none of them to draw itself; they say why a field is `null`.
+
+### 8.4 Hours and "Can't serve with kids yet"
+
+- **Who sees them is church_serving's rule, asked of `church_serving._access` itself.** A login it
+  turns away (its areas leave Serving out and it doesn't do the background checks, or
+  `CHURCH_SERVING` closed to it) gets no hours: every `minutes`, `hours_words` and `counts.hours`
+  is `null`. A login it lets in but doesn't let read who's cleared (`checks` false) never sees
+  "Can't serve with kids yet": that person is `on` (or `no_answer`), no line says it, and the page
+  is byte for byte the page it would be if their check were on record (pinned).
+- **The hours are church_serving's own arithmetic** (`minutes_of`): each yes this year by the team's
+  length or the plan's span, two places one day counted once, a sub's yes theirs, a group gathering
+  they led and were marked at, hours the office added; away days never. Read for the week's people
+  alone and bounded to the year: the year's services' ids first, then these people's yeses at those
+  services (both lists chunked, sixty ids each), then those services' plans, their away dates, their
+  leads and their records, chunked and paged. So they equal what the Serving page gives the same
+  people (pinned against `overview`, with a gathering, an away day, two places one Sunday and the
+  office's hours), and a long history costs nothing more. The Serving page's own reads (the whole
+  church, and one member's My serving) are unchanged.
+- **"Can't serve with kids yet" is church_serving's `blocked`** (`checks_of`, `check_state`): no
+  check on record (the latest of the leader approval's and one recorded on Serving) and on the
+  schedule with Kids & youth (a Sunday team `church_serving._kids_teams` places there), at a service
+  of this week still to come. Under 18 is never blocked. A check that ran out, or runs out within
+  the month, is not this state, and neither is any check on record (Serving's page shows those).
+  Only worked out for a login that may read it: anyone else's request makes no check read at all
+  (no leaders' dates, no Kids & youth teams; pinned on the reads).
+
+### 8.5 Decided in the build (beyond the brief; none is the pastor's call)
+
+1. **Who reads it**: the owner, an Admin, and a Manager that keeps either door, where keeping is
+   changing its teams (`_owners_for`) **or** holding a duty the office opens that door's Who serves
+   when for (`READS`). The second half is the frontend's own menu rule for the Volunteers' pages;
+   without it the background-checks holder (who sees the Volunteers group) would be refused.
+2. **Counts cover the whole week**, past days included, as Who serves when shows a week. An away
+   person's place is open; a "can't serve with kids yet" person's place is on the schedule, for
+   every reader.
+3. **Away is the facts only.** Someone who asked to be away and still waits is not away here, not
+   counted, and counts as free ("Two people… are free"); Who serves when, where they are picked,
+   already skips them. Nothing here reads `church_away_asks`.
+4. **"Free"** is the team's people who aren't away that day by the facts and aren't on another
+   place at that service. It ignores checks and how many Sundays a month they serve; Who serves
+   when's own list ranks them when someone is picked.
+5. **Short lines are one per department, service and door**, listing the places, not one per
+   place, so a new church with thirty open places reads a few lines. ChurchSavvy's teams get their
+   short lines too, under the Volunteers' door's, with the ChurchSavvy line and no "Find someone".
+6. **A department with no Sunday team has no card**; a team two departments name is on the first
+   department's card only (nothing counted twice); with the leaders map closed for a church every
+   team is its own card. A team's own card is led by its own leader.
+7. **Hours are this calendar year to today**, whatever week is shown, and are those of the people
+   the week's rows name (someone away included). A "no" never shows who said it.
+8. **Bounds**: 52 weeks back, 26 ahead (event dates are added up to 180 days out). A start that
+   isn't a date is this week, never a 400.
+9. **Only a service still to come** makes a "Look at first" line, offers "Find someone" or can show
+   "Can't serve with kids yet"; a past service is what happened.
+10. **A ChurchSavvy-alone church has no week** (404), as it has no office or doors. Who serves when
+    closed (`SUNDAY_PLANNING`) closes it too.
+11. **Status** is quiet (all false, 200) for everything but a login with no seat, as Serving's is.
+12. **"Filled" is said only of days a team has places** that week: with no places at all, or with
+    an event date only ChurchSavvy's teams have places around, the line is "Nothing is on the
+    schedule this week." or names the days that do have places (changed in review).
+
+Seen in review and left as they are:
+
+- **Further out than Serving looks.** The week marks "Can't serve with kids yet" at any service
+  still to come in the week shown, up to 26 weeks out, while Serving's checks call someone
+  `blocked` only when they are on with kids within `SOON_DAYS` (28) and `none` farther out. Both
+  pages are read by the same people (church_serving's rule), so this tells no one anything new; it
+  only means a week two months out can say it while Serving's list says "none on record".
+- **A Manager who loses its duties can still read for up to a minute on a replica.**
+  `church_duties.standing` is kept 60 seconds a replica, as it is for `sunday_planning._owners_for`
+  and every duty check. The same for a login's areas.
+- **The People & Care lane is refused while a no-lane Manager with like areas is let in.** The lane
+  starts with People & Care's duties, none of which opens Who serves when; a Manager with no lane
+  holds every duty in its areas, so one whose areas include Kids & youth holds `background_checks`
+  and keeps the Volunteers' door. That is how duties work today (`church_duties._area_duties`);
+  moving `background_checks` (or `serve_teams`) to a People & Care login lets it in.
+
+### 8.6 Left out
+
+- The department leader's own view in the member app (later, as the brief says).
+- A check that ran out, or runs out soon, is not a line here (Serving's page has it).
+- Who asked someone to cover their place (`swap_to`) is not shown; they read as On until the cover
+  says yes, as Who serves when has it.
+- The ask's state on the person's side (sent or still waiting for the sweep) is not shown; "was
+  asked on Monday" is when it was made.
+- A place's spots past its number (a place cut from three to two) and a retired place are not
+  rows, as Who serves when shows them.
+- No caching: each read is fresh (about fifty reads a week for the fixture church, most of them the
+  gate's duty, area and map reads).
+
+### 8.7 Tests
+
+`__tests__/test_church_week.py` at New Hope (church_three; every name made up), on
+church_schedule_fake's tables with the real gate, duties, areas, leaders map and church_serving:
+the page as the volunteers keeper reads it, word for word; who reads it (owner, Admin, the two
+doors' keepers, the Kids & youth Manager) and who is refused (403 for two office Managers, a Member
+and a Viewer; 404 for another church's owner and a stranger; 404 for a business that isn't a church
+and a ChurchSavvy-alone church); every read this church's and quoted, another church's rows that
+name its places changing nothing, and a typed start never reaching an address; a team of 1,150
+read whole; "Can't serve with kids yet" byte-for-byte hidden, a full Sunday reading full to whoever
+can't see checks, the background checks duty granting it and moving it away taking it; hours by
+church_serving's rule; `minutes_of` and `checks_of` equal to the Serving page's; no note, ask,
+reason, phone, email or stranger's name; plain words; the switch; the bounds; a failed read a 503.
+Each rule was broken once on purpose and its test went red, then green again (the PR lists them).
+From the review: for whoever may see checks, only none on record reads "Can't serve with kids yet"
+(a check that ran out, runs out soon, is recorded on Serving or on the Kids leaders page, and
+someone under 18 read On), the latest check date counts, a past service never says it, a login
+cleared by its areas without the checks duty sees it, and nobody else's request reads a check;
+the hours equal the Serving page's with a gathering, an away day, two places one Sunday and the
+office's hours, and read only this year's yeses; "Everything is filled" is said only of days with
+places.

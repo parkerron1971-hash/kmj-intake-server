@@ -165,6 +165,8 @@ def summary_email(biz_name: str, year: int, reports: Dict[str, Dict[str, Any]]) 
     ap = (bs.get("liabilities") or {}).get("accounts_payable", 0)
     tb = (reports.get("trial_balance") or {}).get("totals") or {}
     n1099 = (reports.get("summary_1099") or {}).get("threshold_count", 0)
+    import form_1099
+    line_1099 = form_1099.nec_threshold_words(year)       # $2,000 from 2026, $600 before
     subject = f"{biz_name} — {year} year-end financial package"
     body = (
         f"Hi,\n\n"
@@ -176,7 +178,7 @@ def summary_email(biz_name: str, year: int, reports: Dict[str, Dict[str, Any]]) 
         f"  - Net income: ${net:,.2f}\n"
         f"  - Cash at year end: ${cash:,.2f} · AR ${ar:,.2f} · AP ${ap:,.2f}\n"
         f"  - Trial balance: {'in balance' if tb.get('balanced', True) else 'OUT OF BALANCE — see note'}\n"
-        f"  - 1099 contractors at/above $600: {n1099}\n\n"
+        f"  - 1099 contractors at/above {line_1099}: {n1099}\n\n"
         f"The ZIP contains the P&L, Balance Sheet, Cash Flow, Trial Balance, "
         f"General Ledger (PDF + CSV), AR/AP aging, the 1099 summary, and a "
         f"QuickBooks-importable IIF of the full ledger.\n\n"

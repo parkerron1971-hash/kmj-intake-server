@@ -296,10 +296,16 @@ async def ask_transaction(business_id: str, business_type: Optional[str],
         return {"ok": True, "llm": "disabled",
                 "answer": "Chief's AI assist isn't enabled on this server yet."}
     if llm_capped(business_id):
+        # Inside the Android app, never "upgrade" (android_app; Google Play's
+        # payments policy).
+        import android_app
         return {"ok": True, "llm": "capped",
-                "answer": "You've used this month's included Chief messages on "
-                          "your plan. Upgrade for unlimited Chief — or I'll see "
-                          "you on the 1st."}
+                "answer": android_app.wording(
+                    "You've used this month's included Chief messages on "
+                    "your plan. Upgrade for unlimited Chief — or I'll see "
+                    "you on the 1st.",
+                    "You've used this month's included Chief messages on "
+                    "your plan. I'll see you on the 1st.")}
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}"
         f"&transaction_id=eq.{transaction_id}"

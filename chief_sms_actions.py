@@ -486,9 +486,12 @@ async def handle_provision_sms_number(client, biz, action) -> Dict[str, Any]:
             import feature_gates
             key = str(d.get("required_plan") or feature_gates.FEATURE_MIN_PLAN["dedicated_sms_number"])
             plan = billing_limits.PLAN_DISPLAY.get(key, key.title())
-            return _fail("provision_sms_number",
-                         f"A private texting number comes with the {plan} plan. "
-                         f"Upgrade and I'll set it up in a moment.")
+            # Inside the Android app, which plan has it, never "upgrade"
+            # (android_app; Google Play's payments policy).
+            import android_app
+            said = f"A private texting number comes with the {plan} plan."
+            return _fail("provision_sms_number", android_app.wording(
+                f"{said} Upgrade and I'll set it up in a moment.", said))
         if err == "area_code_required":
             return _fail("provision_sms_number",
                          "Which area code would you like the number in?")

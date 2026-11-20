@@ -356,7 +356,9 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
             key, why = entry.get("key"), entry.get("why")
         else:
             continue
-        if key in bta.PLUGIN_CATALOG and key not in chosen:
+        # A step taken off the list (`listed: False`) stays off it, even
+        # in a plan the coach wrote before it was taken off.
+        if key in bta.PLUGIN_CATALOG and bta.is_listed(bta.PLUGIN_CATALOG[key]) and key not in chosen:
             chosen.append(key)
             if why:
                 reasons[key] = str(why)[:400]

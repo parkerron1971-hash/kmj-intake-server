@@ -115,7 +115,7 @@ def mine(business_id: str, me_id: str) -> Optional[List[Dict[str, Any]]]:
     since = _q((_now() - timedelta(days=SAVED_DAYS)).isoformat())
     return sb_clients.sb_get_as_service(
         f"/church_posts?business_id=eq.{_q(business_id)}&posted_by=eq.{_q(me_id)}&source=eq.member"
-        f"&status=in.(waiting,declined)&removed_at=is.null&created_at=gte.{since}"
+        f"&status=in.(waiting,declined)&removed_at=is.null&group_id=is.null&created_at=gte.{since}"
         f"&select=id,title,body,attach,status,created_at&order=created_at.desc&limit=10")
 
 
@@ -145,7 +145,7 @@ async def share(business: Dict[str, Any], me: Dict[str, Any], kind: str, text: s
     waiting = await asyncio.to_thread(
         sb_clients.sb_get_as_service,
         f"/church_posts?business_id=eq.{_q(biz_id)}&posted_by=eq.{_q(me_id)}&source=eq.member&status=eq.waiting"
-        f"&removed_at=is.null&select=id&limit={WAITING_MAX}")
+        f"&removed_at=is.null&group_id=is.null&select=id&limit={WAITING_MAX}")
     if waiting is None:
         return False, "error", ""
     if len(waiting) >= WAITING_MAX:
@@ -271,8 +271,10 @@ def office_list(business_id: str) -> List[Dict[str, Any]]:
     import member_photos
     b = _q(business_id)
     since = _q((_now() - timedelta(days=SAVED_DAYS)).isoformat())
+    # Good news is for the whole church (group_id is null); a member's group
+    # post the check held waits for the safety officers instead (member_posts).
     rows = cn._get(f"/church_posts?business_id=eq.{b}&source=eq.member&status=in.(waiting,declined)"
-                   f"&removed_at=is.null&created_at=gte.{since}"
+                   f"&removed_at=is.null&group_id=is.null&created_at=gte.{since}"
                    f"&select=id,title,body,attach,status,posted_by,created_at&order=created_at.asc&limit=40")
     people = cn._people(business_id, [r.get("posted_by") for r in rows]) or {}
     gids = {str(g) for r in rows for g in ((r.get("attach") or {}).get("groups") or [])}

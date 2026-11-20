@@ -174,6 +174,9 @@ TICKS = {
     # Requests for giving access: off by default; switched on, it reminds a
     # church's owner once and skips a sample church (church_money_ticks._sample).
     "church_money_asks": "church_money_ticks:tick",
+    # Payroll reminders (Payroll, the free version): its businesses go through
+    # drop_samples before any is read, so a sample church is never claimed or told.
+    "payroll_reminders": "payroll_reminders:tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {

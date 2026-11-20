@@ -13093,6 +13093,27 @@ for what was actually delivered vs. what the draft claimed.
 """
 
 
+def _with_android_app_rules(system: Any, biz: Optional[Dict[str, Any]], user_id: str) -> Any:
+    """The turn's prompt with the Android app's rules at its end (android_app):
+    unchanged outside the app. Owner or not is the business row's owner_id
+    against the signed-in login, read with the turn's context; anyone else
+    is told the owner, by name when the business has one, manages the plan.
+    A failure leaves the prompt as it was, never the turn."""
+    try:
+        import android_app
+        if not android_app.in_android_app():
+            return system
+        import chief_areas
+        owner_id = str((biz or {}).get("owner_id") or "")
+        block = android_app.chief_block(
+            is_owner=bool(owner_id) and owner_id == str(user_id or ""),
+            owner_name=chief_areas.owner_name(biz))
+        return android_app.into_turn_tail(system, block)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[android-app] rules not added (non-fatal): {e}")
+        return system
+
+
 async def _compose_post_action_reply(
     client: httpx.AsyncClient,
     original_message: str,
@@ -13151,9 +13172,12 @@ async def _compose_post_action_reply(
         f"optimistic text; replace the optimism."
     )
 
+    import android_app
     raw = await _call_claude(
         client,
-        _POST_ACTION_REPLY_SYSTEM,
+        # Inside the Android app the rewrite keeps the turn's rule: no
+        # selling of our plans or add-ons ('' everywhere else).
+        _POST_ACTION_REPLY_SYSTEM + android_app.rewrite_rule(),
         [{"role": "user", "content": user_payload}],
         max_tokens=600,
         enable_web_search=False,        # no need; we're just composing prose
@@ -13686,10 +13710,12 @@ async def _execute_actions(client, biz, actions: List[Dict],
             import no_card_trial
             _nc_row = await no_card_trial.blocks_async(client, str(biz.get("id") or ""))
             if _nc_row is not None:
+                import android_app      # no "card" in the Android app (Google Play)
                 results.append({
                     "type": atype,
                     "result": "Failed: " + no_card_trial.card_message(_card_what, _nc_row),
-                    "label": f"Waits for a card: {_humanize_action_type(atype)}",
+                    "label": android_app.wording("Waits for a card", "Not on yet")
+                             + f": {_humanize_action_type(atype)}",
                     "nav": None, "failed": True,
                 })
                 continue
@@ -16224,6 +16250,12 @@ async def chief_chat(
                             system += _hl.continuation_block(_headline_said)
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] headline skipped: {e}")
+            # Inside the Android app, Chief never sells our plans or add-ons
+            # (android_app; Google Play's payments policy). Added LAST, after
+            # every other tail line, so it is the final thing the model reads;
+            # the end of the prompt is the uncached turn tail, never a cached
+            # segment.
+            system = _with_android_app_rules(system, biz, str(user_session.user.id))
             _lane_token = turn_context.set_lane(lane)
             try:
                 raw = await _call_claude(client, system, api_messages,

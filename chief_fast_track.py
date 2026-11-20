@@ -69,6 +69,7 @@ from fastapi import APIRouter, Depends
 
 from chief_conversation import conversation_style
 from chief_turn_direction import direction_for
+import android_app
 import chief_models
 import llm_call
 import model_router as mr
@@ -646,12 +647,18 @@ class TwoTrack:
         # The fast answer is conditioned on these inputs, not just its question.
         # Never replay a chat-formatted answer on a call, or an explanation
         # tailored to earlier history after the practitioner changes context.
-        cache_context = json.dumps({
+        cache_inputs = {
             "style": self.style, "voice": self.voice,
             "model": chief_models.model_for("fast"),
             "conversation": getattr(req, "conversation_id", None),
             "history": _history_tail(req),
-        }, sort_keys=True, ensure_ascii=False)
+        }
+        if android_app.in_android_app():
+            # An answer given in a browser is never replayed in the Android
+            # app, which has its own rules about plans (android_app). Added
+            # only in the app, so a browser's cache keys are unchanged.
+            cache_inputs["android_app"] = True
+        cache_context = json.dumps(cache_inputs, sort_keys=True, ensure_ascii=False)
         context_key = hashlib.sha256(cache_context.encode()).hexdigest()
         self.cache_scope = _pair(user_id, self.business_id) + ":" + context_key
         self.cache_hit: Optional[mr.CacheHit] = None
@@ -937,6 +944,7 @@ class TwoTrack:
         out: Dict[str, Any] = {}
         system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if fuller_voice else _OPENER_SYSTEM)
         system += direction.prompt()
+        system += android_app.opener_rule()     # '' outside the Android app
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
@@ -1051,6 +1059,9 @@ class TwoTrack:
         out: Dict[str, Any] = {}
         system = self.style + "\n\n" + _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
         system += direction_for(self.message).prompt()
+        # Inside the Android app, plans and buying go to the full turn,
+        # which carries the app's rules ('' everywhere else).
+        system += android_app.defer_rule(mr.NEED_RECORDS)
         if continuing and self.lead_text.strip():
             system += (f"\nYour reply has already begun with «{self.lead_text.strip()}»; continue "
                        "straight on from it without repeating it.")
