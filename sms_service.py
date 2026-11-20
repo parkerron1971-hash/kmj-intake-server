@@ -709,6 +709,22 @@ async def _find_contact_by_phone(
 # removed is worth hardening, and one that can is worth removing. The
 # whole surface goes rather than the risk being managed.
 
+async def new_texter_status(client: httpx.AsyncClient, business_id: str) -> str:
+    """The status a number nobody knows gets when it texts in and a contact
+    is made for it. A church files them as a guest ("lead"): on a church's
+    roll "active" reads as Member, and a stranger's first text never made
+    anyone a member (Kevin, 2026-11-20, on the Members page: phone numbers
+    sat at the top of the roll as Members). Every other business keeps
+    "active". When the business can't be read, "lead": a stranger is never
+    wrongly made a member or an active client, and either can be promoted."""
+    rows = await _sb_get(client, f"/businesses?id=eq.{business_id}&select=id,type&limit=1")
+    biz = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+    if biz is None:
+        return "lead"
+    import church_follow_up
+    return "lead" if church_follow_up.is_church(biz) else "active"
+
+
 async def record_inbound_sms(
     client: httpx.AsyncClient,
     *,
@@ -742,7 +758,7 @@ async def record_inbound_sms(
             "business_id": business_id,
             "name": from_number,      # practitioner renames later
             "phone": from_number,
-            "status": "active",
+            "status": await new_texter_status(client, business_id),
         })
         contact = (created or [None])[0] if isinstance(created, list) else created
     if contact:

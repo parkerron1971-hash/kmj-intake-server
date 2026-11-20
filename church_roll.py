@@ -188,11 +188,31 @@ def _meta(row: Dict[str, Any], key: str) -> str:
     return _plain(v) if isinstance(v, (str, int, float)) else ""
 
 
+def _still_in(given: str, name: str) -> bool:
+    """A stored first or last name still belongs to the full name: every
+    word of it is a word of the name, case aside. An import stores the
+    parts once; a rename anywhere else (the Members page, Chief) changes
+    only the name, and the stored part goes stale (2026-11-20: renamed
+    people stayed filed under their old last name)."""
+    words = {w.lower().strip(",.") for w in _plain(name).split(" ") if w}
+    parts = [w.lower().strip(",.") for w in _plain(given).split(" ") if w]
+    return bool(parts) and all(w in words for w in parts)
+
+
+def first_of(name: str, given: str = "") -> str:
+    """The first name a roll greets by: metadata's first_name while it is
+    still in the name, else the name's first word."""
+    if given and _still_in(given, name):
+        return _plain(given)
+    words = _plain(name).split(" ")
+    return words[0] if words else ""
+
+
 def last_name(name: str, given: str = "") -> str:
-    """The family name a roll sorts by: metadata's last_name, else the last
-    word past a suffix (Jr, Sr, II…)."""
-    if given:
-        return given
+    """The family name a roll sorts by: metadata's last_name while it is
+    still in the name, else the last word past a suffix (Jr, Sr, II…)."""
+    if given and _still_in(given, name):
+        return _plain(given)
     words = [w for w in _plain(name).split(" ") if w]
     while len(words) > 1 and words[-1].lower().rstrip(",.") in ("jr", "sr", "ii", "iii", "iv", "v"):
         words.pop()
@@ -507,7 +527,7 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
         name = _plain(c.get("name"))
         rows.append({
             "id": cid, "name": name,
-            "first": _meta(c, "first_name") or name.split(" ")[0],
+            "first": first_of(name, _meta(c, "first_name")),
             "last": last_name(name, _meta(c, "last_name")),
             "status": status,
             "family": {"id": hid, "name": _plain(homes[hid].get("name")) if hid else ""},
