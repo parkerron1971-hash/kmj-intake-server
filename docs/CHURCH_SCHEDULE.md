@@ -129,7 +129,7 @@ production that time has passed.
   yet" by church_serving's own rule. Nothing on it writes. `CHURCH_WEEK`, owner when unset, so it
   is live at the platform owner's church on deploy; the office page itself is the frontend's next
   PR. No migration. Section 8 is its contract.
-- **Step 5, Chief (this PR)** holds `chief_church_schedule.py`: nine Chief verbs over the engine
+- **Step 5, Chief (#1995)** holds `chief_church_schedule.py`: nine Chief verbs over the engine
   above, with no rule of their own. A leader says "I'm out December 20 to 27" and Chief files the
   ask, after the same look the Dates page makes; the pastor asks "Who's off on the 27th?"; "Find a
   Saturday for the leaders meeting" reads candidate days; "who's on in Kids this week?" reads The
@@ -1075,7 +1075,7 @@ Where it is wired (**built**, S2-5):
   the volunteer's own notices; the sweep reads `team_group_id` where step 2 is there and sends a
   volunteer's waiting ask on only along its team's chain (`stale`).
 
-### 3.4 Where step 5 (Chief verbs) hooks in (built, this PR; section 9)
+### 3.4 Where step 5 (Chief verbs) hooks in (built, #1995; section 9)
 
 - **Built:** a new `chief_church_schedule.py` in the shape of `chief_church_assignments.py`.
 - **Built:** its `HANDLERS` and `PROGRESS` merged into `chief_of_staff.ACTION_HANDLERS` and
@@ -1312,7 +1312,7 @@ Each was safe alone: `CHURCH_SCHEDULE` defaults to `owner`, `ready()` was False 
 
 | PR | Contains | Tests | Migration |
 |---|---|---|---|
-| **Step 5 Chief** (built, this PR) | `chief_church_schedule.py` (`who_is_away`, `time_off_asks`, `check_dates`, `serving_week`, `ask_time_off`, `answer_time_off`, `take_back_time_off`, `add_repeat`, `take_off_repeat`, `turn_line`); its wiring in `chief_of_staff`, `action_registry`, `chief_areas`, `chief_tool_loop` and `action_inverse`; section 9 of this doc | `test_chief_church_schedule.py` (32), at New Hope through Chief's real handlers and the real engine: each verb in the pastor's own sentences; a reason, the note with an answer and what a thing that repeats is only where the engine lets that login read them; the look before sending (nothing sent, the day, the nearest open days, who can make an exception; sent on "ask anyway" with the flag it showed, never in the turn the look spoke); a protected day and a pair (never named); an exception only by whoever may give it, nothing written the first time, only over the flags it said, never in the turn that said them, and the engine still refusing one unsaid; a yes whose days filled since goes up in the engine's words; a tainted turn holds every write, other people's words read in the turn hold the write after them, and a read of only one's own words doesn't; unattended, signed out, a viewer; off, closed or before the tables the not-on words and no read of the schedule (off: no read at all); a login tied to the owner's own person never gets the owner's power, and every call into the engine is made as a login; names that are nobody or several; no id, a result and a label on every path; no title word or role key; the week only for its page's readers, with hours only where church_serving allows; the reads run mid-turn. Each rule was broken once to see its test go red (24; the PR lists them). The registry, areas, inverse, verb-parity, ledger, lean-brief, prefix, mcp and `test_chief_church_assignments.py` suites pass unchanged | no |
+| **Step 5 Chief** (built, #1995) | `chief_church_schedule.py` (`who_is_away`, `time_off_asks`, `check_dates`, `serving_week`, `ask_time_off`, `answer_time_off`, `take_back_time_off`, `add_repeat`, `take_off_repeat`, `turn_line`); its wiring in `chief_of_staff`, `action_registry`, `chief_areas`, `chief_tool_loop` and `action_inverse`; section 9 of this doc | `test_chief_church_schedule.py` (32), at New Hope through Chief's real handlers and the real engine: each verb in the pastor's own sentences; a reason, the note with an answer and what a thing that repeats is only where the engine lets that login read them; the look before sending (nothing sent, the day, the nearest open days, who can make an exception; sent on "ask anyway" with the flag it showed, never in the turn the look spoke); a protected day and a pair (never named); an exception only by whoever may give it, nothing written the first time, only over the flags it said, never in the turn that said them, and the engine still refusing one unsaid; a yes whose days filled since goes up in the engine's words; a tainted turn holds every write, other people's words read in the turn hold the write after them, and a read of only one's own words doesn't; unattended, signed out, a viewer; off, closed or before the tables the not-on words and no read of the schedule (off: no read at all); a login tied to the owner's own person never gets the owner's power, and every call into the engine is made as a login; names that are nobody or several; no id, a result and a label on every path; no title word or role key; the week only for its page's readers, with hours only where church_serving allows; the reads run mid-turn. Each rule was broken once to see its test go red (24; the PR lists them). The registry, areas, inverse, verb-parity, ledger, lean-brief, prefix, mcp and `test_chief_church_assignments.py` suites pass unchanged | no |
 
 ---
 
@@ -2803,7 +2803,7 @@ places.
 
 ---
 
-## 9. Step 5: Chief (this PR)
+## 9. Step 5: Chief (#1995)
 
 The pastor approved this step on 2026-11-18: a leader says "I'm out December 20 to 27" and Chief
 files the ask; the pastor says "Who's off on the 27th?"; someone says "Find a Saturday for the
