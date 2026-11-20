@@ -313,9 +313,17 @@ def test_asking_refusals_in_their_words(church):
     # The note is plain text, its spaces kept to one.
     got = asked(c, note="  Ten  youth,\n two leaders  ")
     assert got["request"]["note"] == "Ten youth, two leaders"
-    # A second live ask, from anyone.
-    no(409, "This event already asked for volunteers. Change the numbers on it instead.")
-    no(409, "This event already asked for volunteers.", who="laquesha")
+    # A second live ask, from anyone: refused before anything is written
+    # (the database's one live ask an event is the second guard, below).
+    posts = []
+    real_post = sb_clients.sb_post_as_service
+    try:
+        sb_clients.sb_post_as_service = lambda path, *a, **k: posts.append(path) or real_post(path, *a, **k)
+        no(409, "This event already asked for volunteers. Change the numbers on it instead.")
+        no(409, "This event already asked for volunteers.", who="laquesha")
+    finally:
+        sb_clients.sb_post_as_service = real_post
+    assert posts == []
     # Two at once: both read no ask, and the database's one live ask an
     # event (23505) says no to the second, before any date is made.
     real = evv.live_request
@@ -347,6 +355,20 @@ def test_an_event_already_on_who_serves_when(church):
         DUTIES.update(DUTIES_)
 
 
+def test_straight_on_that_cant_make_the_date_leaves_no_ask(church):
+    c = church
+    # Thirty event dates still to come: the most a church has (make_date's rule holds here too).
+    for n in range(sp.MAX_EVENT_DATES):
+        c.db.t["worship_services"].append({"id": str(uuidlib.uuid4()), "business_id": BIZ, "title": f"Night {n}",
+                                           "starts_at": "2026-11-05T00:00:00+00:00", "kind": "event",
+                                           "archived_at": None, "is_template": False, "items": []})
+    r = ask(c, "laquesha")
+    assert r.status_code == 400 and "30 event dates still to come" in r.json()["detail"]
+    assert rows(c) == [] and event_dates(c, E_LOCK) == [], "never half of one"
+    # Waiting needs no date yet: it can still be asked.
+    assert asked(c, "shapretta")["request"]["status"] == "waiting"
+
+
 def test_changing_and_taking_back_an_ask(church):
     c = church
     got = asked(c, "shapretta")
@@ -368,9 +390,17 @@ def test_changing_and_taking_back_an_ask(church):
     assert c.as_("shapretta").delete(f"{path}?business_id={BIZ}").status_code == 404
     got = asked(c, "shapretta")
     assert answer(c, got["request"]["id"]).status_code == 200
-    # On: the organizer changes nothing here, and it comes off Who serves when instead.
-    r = c.as_("shapretta").patch(path, json={"business_id": BIZ, "needs": {c.greeter: 1}})
+    # On: the organizer changes nothing here (refused before any write), and
+    # it comes off Who serves when instead.
+    writes = []
+    real_patch = sb_clients.sb_patch_as_service
+    try:
+        sb_clients.sb_patch_as_service = lambda path, *a, **k: writes.append(path) or real_patch(path, *a, **k)
+        r = c.as_("shapretta").patch(path, json={"business_id": BIZ, "needs": {c.greeter: 1}})
+    finally:
+        sb_clients.sb_patch_as_service = real_patch
     assert r.status_code == 409 and r.json()["detail"] == "It's on the schedule now. Ask Laquesha to change the numbers."
+    assert not [w for w in writes if "event_volunteer_requests" in w]
     r = c.as_("laquesha").patch(path, json={"business_id": BIZ, "needs": {c.greeter: 1}})
     assert r.status_code == 409 and r.json()["detail"] == "It's on the schedule now. Change its numbers on Who serves when."
     r = c.as_("shapretta").delete(f"{path}?business_id={BIZ}")
@@ -810,6 +840,9 @@ def test_whoever_schedules_the_teams_is_told_of_an_ask_once(church):
     # Told once: a second try, and the sweep, send nothing.
     church_row = evv._business(BIZ)
     assert evv.tell_ask(church_row, rows(c)[0], now=NOW) == "none"
+    # Another replica holding the row as it was before it was told: its claim
+    # finds the ledger marked, and nothing goes.
+    assert evv.tell_ask(church_row, {**rows(c)[0], "told_at": None}, now=NOW) == "taken" and len(c.told) == 1
     later = NOW + timedelta(minutes=10)
     assert evv.sweep_tick(later)["told"] == 0 and len(c.told) == 1
     # Taken back by the one who asked: they hear that too, straight after.

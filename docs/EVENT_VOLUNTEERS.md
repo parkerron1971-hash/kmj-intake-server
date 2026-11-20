@@ -528,3 +528,89 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   server inserts and maps 23505 to a 409; it never upserts on it.
 - **`event_needs_ok` checks only the shape.** "Is this one of the church's
   Volunteers places" needs a read, so it's the server's check.
+
+### S2 (the engine)
+
+- **The switch opens only where event dates are open too.** `open_for` is
+  `EVENT_VOLUNTEERS` and `serve_dates.open_for` (`CHURCH_EVENT_VOLUNTEERS`),
+  since a yes makes an event date. Switching it on for every church means
+  both.
+- **What the switch gates:** asking, changing an ask, answering, the
+  scheduler's list (`GET /planning/requests` is a 404 and `requests_waiting`
+  reads 0 while it's closed), changing a date's numbers, Sunday-afternoon
+  dates and typed dates becoming entries. **Not gated** (only `ready()`): the
+  picture, and taking a waiting ask back (like taking an event date off).
+- **The status route never 404s for a seat here.** Before the migration, or
+  with the switch closed, it answers `{enabled: false, ready}`, so the New
+  event form can always ask it. Every other route is a 404 then.
+- **Straight on claims first.** The ask's row goes in as `on` (decided by the
+  asker), which takes the event's one live ask, and only then is the date made
+  and `service_id` set. If the date can't be made, the row comes back out. Two
+  asks at once can never make two dates.
+- **Straight on's notice is held like any other.** `told_at` is written empty
+  and claimed by the notice to the other holders, so quiet hours hold it and
+  the sweep retries it. With nobody else to tell, it's stamped at once.
+  `answer_told_at` is stamped at the write: the asker decided it.
+- **A yes claims, then makes the date, and lets go if the date can't be
+  made.** The claim sets `on` with the numbers while `status=eq.waiting`. If
+  `make_date` refuses (the event went on Who serves when another way, it lost
+  its time), the claim goes back to waiting and the refusal is said. An event
+  that went into the past, or was archived or deleted, is `cancelled` with a
+  409 in plain words. A yes with no numbers uses the ask's, without any place
+  retired since. A yes may carry a note (`decided_note`).
+- **Who is told of an ask (7.1):** the Managers holding `serve_schedule`
+  (`church_duties.manager_holders`), the owner when nobody does. The owner and
+  the Admins aren't told of every ask. Nobody is told of their own.
+- **How an office login is told:** `church_schedule_tell.to_login` (a push to
+  the office app and an email), the leaders schedule's path. The ledger counts
+  a notice told when either went. The office bell isn't rung: it can't say
+  whether it went, which the ledger needs.
+- **A yes's words:** at once, "with 3 on Usher instead of 4" when the numbers
+  changed. Told later by the sweep (which can't know what changed), it says
+  the numbers it went on with. Every list is "{n} on {place}", since a place's
+  name is the church's own.
+- **Taken back:** by the asker, the holders hear when they were told of the
+  ask. By a scheduler, the asker hears "{Name} took back your ask for the
+  {Title}". Once, straight after, never retried.
+- **The sweep** (`event_volunteers.sweep_tick`) is on the worker every 15
+  minutes now; S3 adds following the event to it. It reads asks and answers
+  untold for under a week and leaves anything under two minutes old to the
+  write's own send. It's quiet with the switch off (not one read) and before
+  the migration, and never for a sample church.
+- **Names:** the owner by the church's name for them (`practitioner_name`),
+  everyone else by first name, never an email address, "The office" when
+  there's none. A scheduler told "it's on" hears "Change its numbers on Who
+  serves when"; anyone else hears whom to ask.
+- **The picture:** the live ask, else the latest one, so a no and its note
+  still read. A special role's people carry no `checked` yet (S3's kids rule).
+  Names on team slots need Who serves when open to the login and a Planning
+  part there (`worship_team.roles_of`).
+- **Changing a date's numbers:** the refusal names the place and the spot
+  ("Usher 2"). An open spot past the new number (offered to the team, or a
+  no) goes with it. Back to the Sunday numbers (`needs: null`), the live ask
+  reads every Volunteers place at its Sunday number (its own can't be null).
+- **The schedule** gives each service `needed: {place_id: n}` for the places
+  that serve it (0 included), and each event date its `needs`.
+- **Sunday afternoons:** "within 2 hours" is less than two hours either side
+  of a Sunday service's start that day. A Sunday entry with no time is never
+  offered: it can't be told from the service.
+- **A typed date's entry** goes into the oldest active events room
+  (`created_by: who_serves_when`). The entry is written first, then the date.
+  If the date can't be written, the entry is deleted.
+- **The readers of the Sunday plans alone** (the leaders note, the weekly
+  letter, the monthly report) select `needs` through `fields()` and count
+  through `needed()`, but never see an event date (`plans_only`).
+  ChurchSavvy's Today (`sunday_order`) reads only Sunday plans and isn't
+  changed.
+- **A Sunday event date's member words** (the ask, My serving, the pack, the
+  `.ics`, the alerts' ask and nudge) carry its title and say "Starts at",
+  never the service. The week-before and day-of reminders are as on 11-17.
+- **My week** says nothing for an event date whose numbers come to no
+  Volunteers place (it said "0 of 0").
+- **A note** is plain text: its spaces kept to one, at most 300 letters.
+- **Fixed on the way: Fill the month asked one person for two spots of one
+  place.** `_Board.busy` leaves the place's own spots out (so a spot can be
+  asked again), so with more than one spot and nobody else rested, fill could
+  ask the same person for both. Event dates made it likely (many spots, no
+  Sundays-a-month cap), so `do_fill` now skips anyone already on that place at
+  that service. Asking by hand is as before.

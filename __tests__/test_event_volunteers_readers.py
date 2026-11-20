@@ -70,19 +70,19 @@ def test_who_serves_when_counts_the_event_dates_own_numbers(church):
     def cands(pid):
         return c.as_("laquesha").get(f"/planning/candidates?business_id={BIZ}&service_id={sid}&position_id={pid}").json()
     assert cands(c.usher)["candidates"] == [] and len(cands(c.greeter)["candidates"]) == 4, "the team's people"
-    # Asked, offered or filled: never the place it doesn't need.
+    # Filled: both Greeter spots (its Sunday number is one), and no Usher.
+    c.as_("laquesha").post("/planning/fill", json={"business_id": BIZ, "weeks": 2})
+    on_event = sorted((r["position_id"], r["slot"]) for r in c.db.t["serve_assignments"] if r["service_id"] == sid)
+    assert on_event == [(c.greeter, 1), (c.greeter, 2)], "two Greeter slots and no Usher"
+    assert {r["contact_id"] for r in c.db.t["serve_assignments"] if r["service_id"] == sid} == {JO, LEE}, "one person a spot"
+    # Asked or offered: never the place it doesn't need, nor past its number.
     def put(path, pid, **body):
         return c.as_("laquesha").post(path, json={"business_id": BIZ, "service_id": sid, "position_id": pid, **body})
     for path, body in (("/planning/ask", {"contact_id": ANA}), ("/planning/offer", {})):
         r = put(path, c.usher, **body)
         assert r.status_code == 409 and r.json()["detail"] == "Usher isn't needed for the Youth Lock-in.", path
-    assert put("/planning/ask", c.greeter, contact_id=JO, slot=2).status_code == 200
     r = put("/planning/ask", c.greeter, contact_id=LEE, slot=3)
     assert r.status_code == 400 and "that many spots" in r.json()["detail"]
-    filled = c.as_("laquesha").post("/planning/fill", json={"business_id": BIZ, "weeks": 2}).json()
-    on_event = sorted((r["position_id"], r["slot"]) for r in c.db.t["serve_assignments"] if r["service_id"] == sid)
-    assert on_event == [(c.greeter, 1), (c.greeter, 2)], "two Greeter slots and no Usher"
-    assert filled["asked"] >= 1
     # An event date with no numbers (the November 17 way): the Sunday numbers.
     old = c.as_("laquesha").post("/planning/dates", json={"business_id": BIZ, "entry_id": E_OUT}).json()["date"]
     j = c.as_("laquesha").get(f"/planning/schedule?business_id={BIZ}&weeks=2").json()

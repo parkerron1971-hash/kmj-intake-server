@@ -1684,8 +1684,13 @@ def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], ask
                 for slot in range(1, sd.needed(svc, place) + 1):
                     if board.holder(svc["id"], place["id"], slot):
                         continue
+                    # Never one person on two spots of one place (busy() leaves
+                    # the place's own spots out, so it can re-ask for a spot).
+                    holding = {str(r.get("contact_id")) for r in board.rows
+                               if str(r["service_id"]) == svc["id"] and str(r["position_id"]) == place["id"]
+                               and r["status"] in ("asked", "yes")}
                     pick = next((c for c in board.candidates(svc["id"], place["id"])
-                                 if c["ok"] and c["trained"] == "trained"), None)
+                                 if c["ok"] and c["trained"] == "trained" and c["contact_id"] not in holding), None)
                     if not pick:
                         left += 1
                         continue
