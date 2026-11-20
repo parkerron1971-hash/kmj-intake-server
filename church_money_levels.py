@@ -251,10 +251,15 @@ def pastors(me: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _open_boards(me: Dict[str, Any]) -> str:
-    """The church's boards that aren't archived, as an id list for in.()."""
+    """The church's boards that aren't archived, as an id list for in.().
+    Boards only (church_meetings.board_kind: kind=eq.board once step 3's
+    columns are there): a meeting group's people (the huddle, the leaders
+    meeting) never give the board's yes on money."""
     if "_boards" not in me:
+        import church_meetings as cmt
         me["_boards"] = _ids(x.get("id") for x in _need(
-            f"/church_boards?business_id=eq.{_q(me['biz']['id'])}&archived=eq.false&select=id&limit=100"))
+            f"/church_boards?business_id=eq.{_q(me['biz']['id'])}&archived=eq.false{cmt.board_kind()}"
+            "&select=id&limit=100"))
     return me["_boards"]
 
 
@@ -370,6 +375,13 @@ def steps_of(me: Dict[str, Any]) -> Set[str]:
     return out
 
 
+def _page_name(me: Dict[str, Any]) -> str:
+    """Board & minutes, or Meetings & minutes where step 3 is open for the
+    church (docs/CHURCH_SCHEDULE.md 10.4)."""
+    import church_meetings as cmt
+    return cmt.name_for(biz=me.get("biz"))
+
+
 def approver(me: Dict[str, Any]) -> bool:
     """A login that isn't the treasurer's but can say yes: the pastor or a
     board member. The page opens to them for that."""
@@ -395,7 +407,7 @@ def page_view(me: Dict[str, Any]) -> Dict[str, Any]:
     reachable = sorted({*bd.values(), *(x["name"] for x in bp.values() if "@" in x["email"])}, key=str.lower)
     if not reachable:
         gaps.append(f"No board member has an email on file, so over {usd(board_over)}, or past a ministry's "
-                    "budget, can't be approved. Add the board in Board & minutes, each with an email on their person.")
+                    f"budget, can't be approved. Add the board in {_page_name(me)}, each with an email on their person.")
     no_email = sorted(x["name"] for x in bp.values() if "@" not in x["email"])
     if no_email:
         gaps.append(f"{', '.join(no_email[:3])}{' and others' if len(no_email) > 3 else ''} "

@@ -155,7 +155,11 @@ def room_door(business: Dict[str, Any], door: Optional[Dict[str, Any]], memo: Di
     """A door as the app opens it: the events room's (ROSTER) by its module
     (`module:<id>`, the room's own name), read once a week's build (memo);
     the calendar when the church has no room or it can't be read. Any
-    other door as it is."""
+    other door as it is, but Board & minutes', which is Meetings & minutes
+    where step 3 is open for the church (docs/CHURCH_SCHEDULE.md 10.4)."""
+    if door and door.get("id") == "board":
+        import church_meetings as cmt
+        return {**door, "label": f"Open {cmt.name_for(biz=business)}"}
     if not door or door.get("id") != ROSTER:
         return door
     if "room" not in memo:

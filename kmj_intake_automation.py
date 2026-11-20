@@ -426,6 +426,13 @@ app.include_router(church_register_router)
 # decisions log (2026-10-27; CHURCH_BOARD off | owner | on).
 from church_board import router as church_board_router
 app.include_router(church_board_router)
+# Meetings & minutes (/church/meetings/*; church_meetings.py, docs/CHURCH_SCHEDULE.md
+# section 10): a meeting for every leader or the office, kept in step with the
+# leaders list, and "I'll be there" / "I can't" (2026-11-21; CHURCH_MEETINGS
+# off | owner | on, owner when unset; 404 until
+# supabase/APPLY-2026-11-21-church-meetings.sql is applied).
+from church_meetings import router as church_meetings_router
+app.include_router(church_meetings_router)
 # A minister's housing allowance: the designation, allowance paid, housing
 # costs and the year-end figures, the owner's alone (2026-10-30;
 # HOUSING_ALLOWANCE off | owner | on).

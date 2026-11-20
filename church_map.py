@@ -55,7 +55,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -554,6 +554,21 @@ _THINGS = {"group": ("groups", "name", "&active=eq.true"),
            "role": ("church_role_defs", "title", "&status=in.(active,draft)"),
            "board": ("church_boards", "name", "&archived=eq.false"),
            "worship_ministry": ("worship_ministries", "name", "&archived_at=is.null")}
+
+
+def thing(kind: str) -> Tuple[str, str, str]:
+    """A unit kind's thing: its table, its name and what still counts as
+    there (_THINGS). A board is a board: once step 3's columns are there, a
+    group that only meets (the huddle, the leaders meeting) is never one a
+    department hangs from (church_meetings.board_kind, docs/CHURCH_SCHEDULE.md
+    10.2)."""
+    table, col, live = _THINGS[kind]
+    if kind == "board":
+        import church_meetings as cmt
+        live += cmt.board_kind()
+    return table, col, live
+
+
 _WORD = {"group": "group", "role": "role", "board": "board", "worship_ministry": "worship ministry",
          "serve_option": "serve team", "space": "space", "check_line": "budget line"}
 UNREAD = "Your leaders map couldn’t be read just now. Try again in a moment."
@@ -650,7 +665,7 @@ def qualifies(m: Map, holders: List[Dict[str, Any]], contact_id: Any, switch: st
 
 def _things(bid: str, kind: str, ids: Iterable[str]) -> Dict[str, str]:
     """id -> name of each one still here; a deleted or archived one isn't."""
-    table, col, live = _THINGS[kind]
+    table, col, live = thing(kind)
     rows = _by_ids(lambda part: f"/{table}?business_id=eq.{_q(bid)}&id=in.({part}){live}&select=id,{col}&limit=500",
                    ids)
     return {str(r["id"]): _plain(r.get(col)) for r in rows}
@@ -1006,7 +1021,7 @@ def _choices(bid: str, m: Map) -> Dict[str, List[Dict[str, Any]]]:
     out: Dict[str, List[Dict[str, Any]]] = {}
     for kind in KINDS:
         if kind in UNIT_REF:
-            table, col, live = _THINGS[kind]
+            table, col, live = thing(kind)
             rows = _need(f"/{table}?business_id=eq.{_q(bid)}{live}&select=id,{col}&order={col}.asc&limit=500")
             got = sorted(((str(r["id"]), _plain(r.get(col))) for r in rows), key=lambda x: x[1].casefold())
         else:

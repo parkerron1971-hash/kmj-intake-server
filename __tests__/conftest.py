@@ -220,6 +220,24 @@ def _leaders_schedule_limits_tables_pinned():
     yield
 
 
+# church_meetings asks once whether step 3's tables (meetings, answers, the
+# columns on the board's tables) are there, and keeps the answer for minutes.
+# Every test starts with them "not there yet", so every board, money-levels,
+# map, housing and member-board suite reads exactly as before the migration
+# (no kind, audience or cancelled_at named, no read of its own, the old
+# names). The meetings' own tests set _FORCE = True
+# (church_schedule_fake.build(meetings=True)).
+@pytest.fixture(autouse=True)
+def _church_meetings_tables_pinned():
+    try:
+        import church_meetings as _cmt
+        _cmt._FORCE = False
+        _cmt._STATE.update(yes=None, at=0.0)
+    except Exception:  # pragma: no cover
+        pass
+    yield
+
+
 # member_cache keeps a church's site row a minute per address, a member's
 # record 30 s and their Lead and Board tabs a minute. Test files share hosts,
 # churches and members, so one file's fake church would answer the next's:
