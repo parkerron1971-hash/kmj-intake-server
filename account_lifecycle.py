@@ -295,6 +295,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # groups and contacts.
     "church_post_reports", "church_post_comment_loves", "church_post_comments", "church_post_reactions",
     "church_post_seen", "church_posts", "church_news_posters",
+    # Leaders' moments (member_moments): who saw or loved one before the
+    # moment, and the moments (which may be for one group) before groups and
+    # contacts.
+    "church_moment_marks", "church_moments",
     # Celebrations (celebrations.py): what each member said yes to, and a
     # couple's anniversary — both before contacts.
     "member_celebrations", "member_anniversaries",
@@ -946,6 +950,9 @@ _IMPORT_SKIP = {
     # same reason.
     "church_posts", "church_post_reactions", "church_post_seen", "church_post_comments",
     "church_post_comment_loves", "church_post_reports", "church_news_posters",
+    # A leader's moments cite people and groups by id, and who saw or loved
+    # one cites the moment; same reason.
+    "church_moments", "church_moment_marks",
     # Celebrations cite people by id; same reason.
     "member_celebrations", "member_anniversaries",
     # The week's email log cites people by id; same reason.
