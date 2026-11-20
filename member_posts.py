@@ -699,9 +699,17 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
 # ─── the routes ──────────────────────────────────────────────────────
 
 
+# A group's page shows member_portal_church.DONE, where "posted" is the Youth
+# space's words ("Posted to Youth."). A member's post landing on a group's
+# page carries its own code there, worded as DONE above.
+ON_GROUP_PAGE = {"posted": "group_posted", "post_held": "group_post_held", "removed": "group_post_removed"}
+
+
 def _go(path: str = "/my/post", **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     ok = path == "/my/post" or re.fullmatch(r"/my/groups/[0-9a-fA-F-]{36}(/prayer)?", path)
+    if ok and path != "/my/post" and q.get("done") in ON_GROUP_PAGE:
+        q = {**q, "done": ON_GROUP_PAGE[q["done"]]}
     qs = "&".join(f"{k}={v}" for k, v in q.items() if v)
     return RedirectResponse((path if ok else "/my/post") + (f"?{qs}" if qs else ""), status_code=303,
                             headers=_SECURE_HEADERS)

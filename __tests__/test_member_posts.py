@@ -80,7 +80,7 @@ def _posts(env):
 def test_a_member_posts_in_their_own_group(world):
     r = _post(world, tmm.ANA, {"type": "praise", "to": tmm.GRP, "body": "God provided the rent this month!",
                                "comments": "prayers"})
-    assert r.status_code == 303 and r.headers["location"] == f"/my/groups/{tmm.GRP}?done=posted"
+    assert r.status_code == 303 and r.headers["location"] == f"/my/groups/{tmm.GRP}?done=group_posted"
     (p,) = _posts(world)
     assert p["group_id"] == tmm.GRP and p["posted_by"] == tmm.ANA and p["status"] == "posted"
     assert p["kind"] == "praise" and p["comments"] == "prayers" and p["attach"] == {"member": "praise"}
@@ -115,7 +115,7 @@ def test_not_before_the_two_safety_officers(world, monkeypatch):
 def test_photos_up_to_four(world):
     pics = [("photos", (f"p{i}.jpg", b"x", "image/jpeg")) for i in range(2)]
     r = _post(world, tmm.ANA, {"type": "photo", "to": tmm.GRP, "body": "Game night"}, files=pics)
-    assert "done=posted" in r.headers["location"]
+    assert "done=group_posted" in r.headers["location"]
     (p,) = _posts(world)
     assert p["kind"] == "photos" and len(p["attach"]["pics"]) == 2
     many = [("photos", (f"p{i}.jpg", b"x", "image/jpeg")) for i in range(5)]
@@ -129,7 +129,7 @@ def test_photos_up_to_four(world):
 def test_a_held_post_shows_only_to_its_writer_and_the_officers(world):
     world.verdict = "harm"
     r = _post(world, tmm.ANA, {"type": "praise", "to": tmm.GRP, "body": "Something unkind"})
-    assert "done=post_held" in r.headers["location"]
+    assert "done=group_post_held" in r.headers["location"]
     (p,) = _posts(world)
     assert p["status"] == "waiting" and p["attach"]["held"] == "harm"
     assert not cn.is_live(p)                                # never in anyone's feed
@@ -169,7 +169,7 @@ def test_a_group_with_a_teen_needs_two_adult_leaders(world):
     assert "err=post_two_adults" in r.headers["location"]
     world.t["group_members"].append({"group_id": tmm.YOUTH, "contact_id": tmm.BEN, "business_id": tmm.BIZ, "role": "leader"})
     r = _post(world, tmm.TEEN, {"type": "praise", "to": tmm.YOUTH, "body": "Hi"})
-    assert "done=posted" in r.headers["location"]
+    assert "done=group_posted" in r.headers["location"]
 
 
 def test_a_teen_needs_messaging_on_and_no_photos_go_to_teens(world):
@@ -202,7 +202,7 @@ def test_its_writer_or_a_group_leader_takes_it_down(world):
     assert "err=post_gone" in r.headers["location"] and not one.get("removed_at")
     c = _client(world, tmm.BEN)                              # the group's leader
     r = c.post("/my/post/remove", data={"id": one["id"]}, headers=tmm.ORIGIN, follow_redirects=False)
-    assert r.headers["location"] == f"/my/groups/{tmm.GRP}?done=removed"
+    assert r.headers["location"] == f"/my/groups/{tmm.GRP}?done=group_post_removed"
     c = _client(world, tmm.ANA)                              # its writer
     c.post("/my/post/remove", data={"id": two["id"]}, headers=tmm.ORIGIN, follow_redirects=False)
     assert all(p["status"] == "removed" and p["removed_at"] for p in _posts(world))
@@ -307,3 +307,17 @@ def test_the_composer_is_the_new_looks_only(world, monkeypatch):
     monkeypatch.setenv("MEMBER_LUMEN", "off")
     r = _page(world, tmm.ANA, "/my/post")
     assert r.status_code == 303 and r.headers["location"] == "/my"
+
+
+def test_a_group_page_says_the_posts_own_words_never_the_youth_spaces():
+    # The group page shows member_portal_church.DONE; "posted" there is the
+    # Youth space's "Posted to Youth." A member's group post has its own codes.
+    import member_portal_church as mpc
+    for code, page_code in mpo.ON_GROUP_PAGE.items():
+        assert mpc.DONE[page_code] == mpo.DONE[code]
+    assert "Youth" not in mpc.flash_html(done="group_posted")
+    assert mpc.DONE["posted"] == "Posted to Youth."  # the Youth space keeps its own
+    r = mpo._go(f"/my/groups/{tmm.GRP}", done="posted")
+    assert r.headers["location"] == f"/my/groups/{tmm.GRP}?done=group_posted"
+    assert mpo._go("/my/post", done="posted").headers["location"] == "/my/post?done=posted"
+    assert mpo._go(f"/my/groups/{tmm.GRP}/prayer", done="prayer_up").headers["location"].endswith("?done=prayer_up")
