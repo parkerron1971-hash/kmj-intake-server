@@ -25,8 +25,8 @@ THE MOVES (all CSS, in /my/lumen.<hash>.css; reduced motion gets none):
 
 THE CINEMA. Every page under the Watch tab (Watch, a series, a message,
 the live room and Live between services: body.pg-watch) goes dark,
-whatever base the church picked, through the new look's one dark switch
-(body.lm-dark, the reader at night's, set by member_portal._shell), in the
+whatever base the church picked or look the member chose, through the new
+look's one dark switch (body.lm-dark, set by member_portal._shell), in the
 cinema's neutral black instead of the reader's warm night: the church's
 colour is its "lit" shade
 (member_app_ui.palette, readable on black), the family inks their dark
@@ -55,9 +55,10 @@ CINE_BG = "#050506"
 
 def cine(tab: Optional[str]) -> bool:
     """Whether a page sits under the Watch tab, the cinema's pages. They
-    take the new look's one dark switch (member_portal._shell's lumen_dark,
-    the reader at night's), and this sheet makes that dark the cinema's
-    neutral black rather than the reader's warm night."""
+    take the new look's one dark switch whatever the member's look
+    (member_lumen_look.page_look), and this sheet makes that dark the
+    cinema's neutral black rather than the look's near-black or the
+    reader's warm night."""
     import member_app_ui as ui
     return ui.TAB_OF.get(tab or "", "") == "watch"
 

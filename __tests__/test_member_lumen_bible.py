@@ -268,7 +268,9 @@ def test_the_ink_sweeps_and_rests_when_motion_is_reduced():
     assert "body.lm .lm-read .bb-v.hl-gold{--hlc:" in css
     motion = css[css.index("@media (prefers-reduced-motion:no-preference){\n  body.lm .lm-read .bb-v{"):]
     assert "transition:background-size .9s" in motion[:200]
-    assert "body.lm.lm-dark{" in css and "color-scheme:dark" in css
+    # the reader's warm night is the reader's (and a devotional's day's); the rest of a dark page is the look's
+    assert "body.lm.lm-dark:has(.lm-read),body.lm.lm-dark:has(.lm-dd){" in css and "color-scheme:dark" in css
+    assert "body.lm.lm-auto:has(.lm-read),body.lm.lm-auto:has(.lm-dd){" in css      # Same as my phone, at night
 
 
 # ─── plans, a reading plan, search, books, notes ─────────────────────

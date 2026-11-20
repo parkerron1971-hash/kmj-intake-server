@@ -51,11 +51,14 @@ LIVE = {"id": "00000000-0000-4000-8000-000000000901", "title": "Sunday Worship",
 
 @pytest.fixture
 def church(fake, monkeypatch):  # noqa: F811
-    """Ana at a made-up church, giving on, with a small library."""
+    """Ana at a made-up church, giving on, with a small library. She picked
+    Light for the new look (member_lumen_look; the church's base is today's
+    black)."""
     fake.person(tct.ANA, "Ana Rivera")
     for c in fake.t["contacts"]:
         if c["id"] == tct.ANA:
             c["email"] = "ana@example.test"
+            c["metadata"] = {"member_look": "light"}
     for t in ("live_chat", "live_presence", "live_mutes"):
         fake.t.setdefault(t, [])
     biz = fake.biz[tct.BIZ]

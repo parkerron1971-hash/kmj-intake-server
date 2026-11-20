@@ -308,7 +308,7 @@ body.lm{--lm-gold-9:var(--s1);}
 }
 body.lm .lm-night{margin-top:22px;padding:20px;border-radius:18px;background:var(--lm-gold-9);}
 body.lm .lm-nk{display:flex;align-items:center;gap:8px;color:var(--lm-gold);}
-body.lm .lm-nk.is-live{color:#c4162a;}
+body.lm .lm-nk.is-live{color:var(--lm-live);}
 body.lm .lm-night-t{margin:10px 0 4px;font:400 28px/1.05 var(--mb-serif);letter-spacing:-.02em;color:var(--fg);}
 body.lm .lm-night p{margin:0 0 16px;font:400 14px/1.45 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-secnote{font:500 12.5px/1.2 var(--mb-ui);color:var(--fg3);text-align:right;}

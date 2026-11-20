@@ -291,7 +291,8 @@ def _e(s: Any) -> str:
 
 def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, Any]]]:
     """Everyone at this church with exactly this address (a household can
-    share one). An exact, case-insensitive match — wildcards escaped.
+    share one), each with their photo record and their Look in the new look
+    (member_lumen_look: read here so a page needs no read for it). An exact, case-insensitive match — wildcards escaped.
     None when the read FAILED: that is "try again", never "not on the
     list". Reads one past MAX_HOUSEHOLD so an over-shared address shows."""
     em = norm_email(email)
@@ -301,7 +302,8 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
-        f"&select=id,name,email,birthdate,photo:metadata->member_photo&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
+        f"&select=id,name,email,birthdate,photo:metadata->member_photo,look:metadata->member_look"
+        f"&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and norm_email(r.get("email")) == em]
@@ -318,7 +320,8 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
-        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo&order=created_at.asc&limit=20")
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo,look:metadata->member_look"
+        f"&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and _last10(r.get("phone")) == digits]
@@ -651,7 +654,8 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
            wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
-           lumen_head: str = "", lumen_dark: bool = False, lumen_bar_colour: str = "") -> str:
+           lumen_head: str = "", lumen_dark: bool = False, lumen_bar_colour: str = "",
+           lumen_reader: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -672,10 +676,13 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     new look (the reader's chapter and Aa); today's look ignores it.
     `lumen_head` (a conversation in the new look: member_lumen_people.thead)
     is its face and name in the bar at the top; today's look ignores it.
-    `lumen_dark` (the Bible reader at night, member_lumen_bible) draws the
-    page dark under the new look, the phone's bar with it; today's look
-    ignores it. `lumen_bar_colour` is the phone's bar colour for a page
-    whose bar has its own colour under the new look (a devotional's day,
+    `lumen_dark` draws the page dark under the new look whatever the
+    member's look; today's look ignores it. Every new-look page wears the
+    member's look (member_lumen_look: Light, Dark or Same as my phone, the
+    phone's bar with it); `lumen_reader` (the Bible reader and a
+    devotional's day) lets the reader's moon on this phone turn it either
+    way. `lumen_bar_colour` is the phone's bar colour for a page whose bar
+    has its own colour under the new look (a devotional's day,
     member_lumen_devotional: its deep green, by day and at night); today's
     look ignores it."""
     import member_app_ui as ui
@@ -743,6 +750,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     # address, in place of today's Google Fonts link.
     fonts = ui.FONTS
     moves = ""
+    meta = f'<meta name="theme-color" content="{bar_colour}">'
     if signed_in and member_lumen.page():
         import member_lumen_fonts
         import member_lumen_motion
@@ -752,22 +760,34 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
             word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
-        # Every page under Watch is a cinema (member_lumen_motion): the same
-        # dark switch as the reader at night, in the cinema's black.
+        # The member's look (member_lumen_look): lm-dark (Dark), lm-auto (Same
+        # as my phone), nothing (Light), decided by the server so the page
+        # arrives in it. Every page under Watch is a cinema
+        # (member_lumen_motion): always dark, in the cinema's black; the
+        # reader follows its moon, in its warm night.
+        import member_lumen_bible
+        import member_lumen_look as mll
         cine = member_lumen_motion.cine(tab)
-        if lumen_dark or cine:
-            import member_lumen_bible
-            body_cls = body_cls[:-1] + ' lm-dark"'
-            bar_colour = member_lumen_motion.CINE_BG if cine else member_lumen_bible.NIGHT_BG
+        look = "dark" if lumen_dark else mll.page_look(reader=lumen_reader, cine=cine)
+        if mll.body_class(look):
+            body_cls = body_cls[:-1] + f' {mll.body_class(look)}"'
+        night = (member_lumen_motion.CINE_BG if cine else
+                 member_lumen_bible.NIGHT_BG if lumen_reader or lumen_dark else mll.DARK_BG)
+        day = bar_colour
         if lumen_bar_colour:
-            bar_colour = lumen_bar_colour
+            day = night = lumen_bar_colour
+        meta = mll.theme_meta(look, day, night)
+        # The church's button colour on near-black, where its own is too deep
+        # for it; Me carries it whatever the look (its control turns the page).
+        if mll.here() != "light" or tab == "me":
+            moves = mll.dark_tokens(biz, theme) + moves
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="{bar_colour}">
+{meta}
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
 {fonts}
@@ -832,10 +852,28 @@ def lumen_chrome(biz: Dict[str, Any], site, title: str, *, tab: str, who: Option
     top, cls, tabbar, scroll = _lumen_frame(
         biz, theme, title, tab=tab, who=who, back=None, bare=False, bar=True, ctx=ctx, name=name, logo=logo,
         word=word, avatar=avatar, side=side, body_cls=_body_class(False, space, tab, False))
+    # The member's look, as _shell wears it (member_lumen_look; the page's
+    # head carries the phone's bar: lumen_head_look).
+    import member_lumen_look as mll
+    if mll.body_class(mll.page_look()):
+        cls = cls[:-1] + f' {mll.body_class(mll.page_look())}"'
     # How the page moves (member_lumen_motion). _shell puts it in the <head>;
     # this page draws its own, so it rides at the foot.
     import member_lumen_motion
     return top, cls, tabbar + ui.early(), scroll + member_lumen_motion.JS
+
+
+def lumen_head_look(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
+    """What a page that draws its own document (lumen_chrome) adds to its
+    head for a member whose look isn't Light: the phone's bar in the look
+    and the church's lifted button colour (member_lumen_look). '' for Light,
+    so that page is what it was."""
+    import member_app_ui as ui
+    import member_lumen_look as mll
+    look = mll.page_look()
+    if look == "light":
+        return ""
+    return mll.theme_meta(look, ui.palette(biz, theme)["bg"], mll.DARK_BG) + mll.dark_tokens(biz, theme)
 
 
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
@@ -967,7 +1005,7 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
         return render_give_page(
             biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
             app={"head": (member_lumen_fonts.head(biz) + f"<style>{css_vars(theme)}</style>{ui.head(biz, theme, lumen=True)}"
-                          f"<style>{GIVE_CSS}</style>"),
+                          f"<style>{GIVE_CSS}</style>" + lumen_head_look(biz, theme)),
                  "top": mlg.give_top(name, funds, preview=preview), "name": me.get("name") or "",
                  "email": me.get("email") or "", "preview": preview, "form": mlg.give_form(biz, me),
                  "body": body, "bar": bar, "foot": nav + scroll + mlg.GIVE_JS})
@@ -1305,9 +1343,10 @@ def _lumen_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     """Me in the new look (member_lumen_people): your circle (tap it for a
     photo: the same form and script), your name in the serif, your giving
     on the church's soft band (the year's total and Give; the months, the
-    other years, each gift and the statement under it), then one plain list
-    of the same doors render_me shows, and sign out. Opened from the
-    picture at the top, it goes back to wherever it was opened."""
+    other years, each gift and the statement under it), your Look (Light,
+    Dark, Same as my phone: member_lumen_look), then one plain list of the
+    same doors render_me shows, and sign out. Opened from the picture at
+    the top, it goes back to wherever it was opened."""
     import member_asks
     import member_messaging_rules as rules
     import member_photos as ph
@@ -1387,7 +1426,9 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
     life = (f'<div class="lm-lst">{"".join(doors)}</div>'
             f'<div class="lm-out mp-noprint">{switch}<form method="post" action="/my/signout">'
             f'<button class="lm-txtbtn" type="submit">Sign out</button></form></div>')
-    return _shell(biz, site, "Me", you + giving + life, tab="me", who=me, script=script)
+    import member_lumen_look as mll
+    look = mll.control(mll.here(), palette_for(biz, site)["bg"])
+    return _shell(biz, site, "Me", you + giving + look + life, tab="me", who=me, script=script + mll.script())
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
@@ -1463,6 +1504,10 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     # The new look (member_lumen: MEMBER_LUMEN), decided once for this page.
     import member_lumen
     await member_lumen.decide(request, {"business": biz, "session": sess})
+    if member_lumen.here():
+        # ...and the member's look in it (member_lumen_look: no read).
+        import member_lumen_look
+        member_lumen_look.decide(request, sess, biz)
     if sess and sess.get("me") and not sess.get("unavailable"):
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.

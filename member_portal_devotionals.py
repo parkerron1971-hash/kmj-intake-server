@@ -801,7 +801,14 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     n = int(parts[1])
     import devotional_voice as dvv
     return render_day(biz, site, me, dev, n, st, None if days is None and not preview else (days or {}).get(n, {}),
-                      tr=tr, listen=dvv.can_speak(), night=request.cookies.get("lm_night") == "1"), 200
+                      tr=tr, listen=dvv.can_speak(), night=_reader_night()), 200
+
+
+def _reader_night():
+    """Whether the day arrives at night (member_lumen_look: the reader's
+    moon on this phone, else the member's look)."""
+    import member_lumen_look
+    return member_lumen_look.reader_night()
 
 
 def _or_empty(fn, preview: bool, *args):
