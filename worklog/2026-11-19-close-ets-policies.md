@@ -94,3 +94,7 @@ registration the site sends. The views that read the ten get
   production's columns, never `virtual_link`, `notes` or `*`, and that the
   phone field is required exactly when `require_phone` is set. It fails on
   4739bcc, and on each of five deliberate breaks.
+
+## Applied 2026-11-20
+
+Kevin: "Yes, both now". The site's new build went live first (Vercel production, bundle `index-55TKVZCp.js`; events list and event pages read fine before the change). The first run of the file stopped at its own safety check with nothing changed: production's `ets_inquiries.converted_to_engagement` is a uuid (the engagement an inquiry became), not a boolean. The check now expects no default for it, the public inquiry rule asks for it to be empty, and the PGlite table has it as a uuid (792 checks pass). The second run applied. Check after matched. From outside with the public key: registrations, inquiries, engagements, emails, `virtual_link`, `select=*` and the summary view answer 401; events (3), tiers (1) and files (2) read; the confirmation function answers. The event pages show the registration form with the tier's price and the phone field; no console errors. Not done: a real registration or inquiry (it would write a real row and start a payment).
