@@ -9,9 +9,8 @@ library today's Watch reads (member_portal_sermons.load_library: published
 messages and the series); the mock's church is made up, so nothing here is.
 
 WATCH (/my/sermons). The "Watch" title in the bar at the top, in place of the
-church's bar (as the mock; its search button isn't drawn, since the app has
-no message search), then Messages | Series (two links: /my/sermons and
-?view=series, so it works without a script).
+church's bar, with Search at its right (as the mock), then Messages | Series
+(two links: /my/sermons and ?view=series, so it works without a script).
   Messages: the latest message edge to edge on a rounded card (its art, the
   kicker "Latest · <series>, part n", the title in serif, speaker ·
   scripture · how long it runs when this member's phone has played it);
@@ -26,6 +25,14 @@ no message search), then Messages | Series (two links: /my/sermons and
   says it. While the church is live, Live now sits at the top instead.
   Series: the series two across as posters (the art the app already makes:
   member_portal_sermons._art), each with when it ran and how many messages.
+
+SEARCH (/my/sermons?q=<words>). The bar's search button and "Search" beside
+Every message open it: a plain GET form (no script), the field and Cancel
+(back to Watch), then the messages whose title, speaker, scripture or series
+has every word typed (any case, accents and apostrophes aside), newest
+first, as Every message's rows (the newest RESULTS, then a line saying to add
+a word), or "No messages match" with the way back. It filters the library
+Watch already reads (up to 500 messages): no read of its own.
 
 A MESSAGE (/my/sermons/<id>). The player edge to edge with a round Back on
 it: the video in its own player (YouTube, Vimeo, Loom, Facebook or our own
@@ -125,6 +132,9 @@ MAX_SAVED = 60
 STARTED = 20                         # seconds in before a message counts as started
 DONE_LEFT = 45                       # this close to the end it counts as watched
 ROWS = 12                            # Every message shows this many before "See all"
+RESULTS = 60                         # a search shows at most this many
+SEARCH_HREF = "/my/sermons?q="
+Q_MAX = 80
 RAIL = 10
 SLOT_SECONDS = 600.0
 GROUP_SECONDS = 60.0
@@ -573,9 +583,17 @@ def _mrow(pg: _Page, s: Dict[str, Any]) -> str:
             f'<small>{_meta(s.get("speaker"), s.get("scripture"), short_day(s.get("preached_on"), pg.today))}</small></span></a>')
 
 
-# Watch's own top bar (Look 5.1), in place of the church's: the large title.
-# The mock's search button isn't drawn: the app has no message search yet.
-TOP = '<h1 class="lw-t1">Watch</h1>'
+def top(searching: bool = False) -> str:
+    """Watch's own top bar (Look 5.1), in place of the church's: the large
+    title and, at the right, Search (a link to the search page, so no script
+    is needed), marked while the search is open."""
+    import member_lumen_ui as lm
+    cur = ' aria-current="page"' if searching else ""
+    return (f'<h1 class="lw-t1">Watch</h1><span class="mb-top-right"><a class="lm-icb mp-noprint lw-findb" '
+            f'href="{SEARCH_HREF}" aria-label="Search messages"{cur}>{lm.ic("search", 22)}</a></span>')
+
+
+TOP = top()
 
 
 def _head(view: str) -> str:
@@ -588,9 +606,12 @@ def _head(view: str) -> str:
 def watch_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Optional[Dict[str, Any]], *,
                live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None,
                bible: str = "kjv", view: str = "", show_all: bool = False,
-               service: Optional[Dict[str, Any]] = None) -> str:
-    """Watch (/my/sermons) in Look 5.1: Messages or Series."""
+               service: Optional[Dict[str, Any]] = None, q: Optional[str] = None) -> str:
+    """Watch (/my/sermons) in Look 5.1: Messages or Series; with `q` (the
+    query was asked for, even empty) the search."""
     from member_portal import _shell
+    if q is not None:
+        return search_page(biz, site, who_me, lib, q)
     view = "series" if view == "series" else ""
     top = _live_now(live) if live else ""
     if lib is None:
@@ -659,8 +680,78 @@ def _messages(pg: _Page, show_all: bool) -> str:
             f'<a class="lw-all" href="/my/sermons?all=1#lw-every">See all {len(lib["sermons"])} messages'
             f'{icon("chevron", 16)}</a>')
     every = (f'<section class="lw-sec" id="lw-every" aria-labelledby="lw-ev-h"><div class="lw-sh"><h2 id="lw-ev-h">Every message</h2>'
+             f'<a class="lw-shl" href="{SEARCH_HREF}">Search</a>'
              f'</div><div class="lw-rows">{"".join(_mrow(pg, x) for x in rows)}</div>{more}</section>')
     return hero + btns + pick + saved + every
+
+
+# ─── search ──────────────────────────────────────────────────────────
+
+
+def _plain(text: Any) -> str:
+    """Lower case, accents and apostrophes off, the rest kept: what a search
+    compares."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(text or ""))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"['\u2019]", "", t).casefold()
+
+
+def clean_query(q: Any) -> str:
+    """The words typed, trimmed to Q_MAX, spaces made single."""
+    return " ".join(str(q or "").split())[:Q_MAX].strip()
+
+
+def search(lib: Dict[str, Any], q: Any) -> List[Dict[str, Any]]:
+    """The messages (newest first, as the library is) whose title, speaker,
+    scripture or series name holds every word of `q`. Pure: no read."""
+    words = _plain(clean_query(q)).split()
+    if not words:
+        return []
+    titles = _titles(lib)
+    out = []
+    for s in lib.get("sermons") or []:
+        hay = _plain(" ".join((s.get("title") or "", s.get("speaker") or "", s.get("scripture") or "",
+                              titles.get(str(s.get("series_id") or ""), ""))))
+        if all(w in hay for w in words):
+            out.append(s)
+    return out
+
+
+def search_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Optional[Dict[str, Any]], q: Any) -> str:
+    """The search (/my/sermons?q=): the field, then the messages that match
+    as Every message's rows, or "No messages match" with the way back."""
+    from member_portal import _shell
+    import member_lumen_ui as lm
+    q = clean_query(q)
+    field = (f'<form class="lw-find" method="get" action="/my/sermons" role="search">'
+             f'<label class="lw-fbox">{lm.ic("search", 18)}<span class="mp-sr">Search messages</span>'
+             f'<input type="search" name="q" value="{_e(q)}" placeholder="Search messages" '
+             f'maxlength="{Q_MAX}" enterkeyhint="search" autocomplete="off"{"" if q else " autofocus"}></label>'
+             f'<a class="lw-fx" href="/my/sermons">Cancel</a></form>')
+    if lib is None:
+        body = (f'<div class="lw lw-watch lw-search">{field}<p class="mp-err lw-pad" role="alert" style="margin-top:20px">'
+                f'Messages couldn\'t load just now. Please try again in a moment.</p></div>')
+        return _shell(biz, site, "Search", body, tab="watch", who=who_me, lumen_top=top(True))
+    if not q:
+        body = (f'<div class="lw lw-watch lw-search">{field}<p class="lw-pad lw-quiet">Find a message by its title, '
+                f'who preached it, its scripture or its series.</p></div>')
+        return _shell(biz, site, "Search", body, tab="watch", who=who_me, lumen_top=top(True))
+    pg = _Page(biz, site, who_me, lib)
+    found = search(lib, q)
+    if not found:
+        res = (f'<div class="lw-nf lw-pad" role="status"><h2>No messages match \u201c{_e(q)}\u201d</h2>'
+               f'<p class="lw-quiet">Try one word, the speaker\'s name or a book of the Bible.</p>'
+               f'<a class="lw-pill" href="/my/sermons">{icon("chevL", 16)}Back to Watch</a></div>')
+    else:
+        n = len(found)
+        more = (f'<p class="lw-pad lw-quiet">These are the newest {RESULTS}. Add a word to narrow it down.</p>'
+                if n > RESULTS else "")
+        res = (f'<section class="lw-sec" aria-labelledby="lw-fr-h"><div class="lw-sh"><h2 id="lw-fr-h" role="status">'
+               f'{n} message{"" if n == 1 else "s"}</h2></div>'
+               f'<div class="lw-rows">{"".join(_mrow(pg, x) for x in found[:RESULTS])}</div>{more}</section>')
+    body = f'<div class="lw lw-watch lw-search" data-lw-who="{pg.who}">{field}{res}</div>'
+    return _shell(biz, site, f"Search: {q}", body, tab="watch", who=who_me, script=pg.json(), lumen_top=top(True))
 
 
 def _series_grid(pg: _Page) -> str:
@@ -1490,6 +1581,21 @@ CSS = Template("""
 .lm .lw-mt small{display:block;margin-top:2px;font:400 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
 .lm .lw-all{display:flex;align-items:center;justify-content:center;gap:4px;margin:10px var(--lw-x) 0;height:44px;border-radius:14px;background:var(--s1);
   color:var(--fg);font:650 14px/1 var(--mb-ui);text-decoration:none;}
+.lm .lw-shl{font:650 14.5px/1.2 var(--mb-ui);color:var(--acc);text-decoration:none;}
+/* search: the field, Cancel, nothing found */
+.lm .lw-find{display:flex;align-items:center;gap:14px;margin:4px var(--lw-x) 0;}
+.lm .lw-fbox{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:42px;padding:0 12px;border-radius:14px;background:var(--s1);
+  color:var(--fg2);}
+.lm .lw-fbox .lm-ic{flex:none;}
+.lm .lw-fbox input{flex:1;min-width:0;height:100%;border:0;background:none;padding:0;color:var(--fg);font:500 16px/1 var(--mb-ui);outline:none;
+  -webkit-appearance:none;appearance:none;}
+.lm .lw-fbox input::placeholder{color:var(--fg3);}
+.lm .lw-fbox:focus-within{box-shadow:0 0 0 2px var(--acc);}
+.lm .lw-fx{flex:none;font:600 15px/1 var(--mb-ui);color:var(--acc);text-decoration:none;}
+.lm .lw-nf{margin-top:34px;text-align:center;}
+.lm .lw-nf h2{margin:0;font:400 24px/1.2 var(--mb-serif);font-weight:var(--lm-dw,400);letter-spacing:-.015em;color:var(--fg);overflow-wrap:anywhere;}
+.lm .lw-nf .lw-quiet{margin:8px 0 18px;}
+.lm .lw-nf .lw-pill{display:inline-flex;}
 /* nothing posted yet */
 .lm .lw-soon{margin:20px var(--lw-x) 0;padding:22px 20px;border-radius:20px;background:var(--lm-tint);}
 .lm .lw-soon h2{margin:10px 0 0;font:400 28px/1.1 var(--mb-serif);font-weight:var(--lm-dw,400);letter-spacing:-.02em;color:var(--fg);}
@@ -1614,7 +1720,7 @@ CSS = Template("""
   .lm .lw-pill:active,.lm .lw-pa:active,.lm .lw-big:active{transform:scale(.94);}
   .lm .lw-cw:active,.lm .lw-mrow:active,.lm .lw-prow:active,.lm .lw-ser:active,.lm .lw-hero:active,.lm .lw-scrip:active{transform:scale(.985);}
 }
-.lm .lw-seg a:focus-visible,.lm .lw-pill:focus-visible,.lm .lw-cw:focus-visible,.lm .lw-mrow:focus-visible,.lm .lw-prow:focus-visible,
+.lm .lw-shl:focus-visible,.lm .lw-fx:focus-visible,.lm .lw-seg a:focus-visible,.lm .lw-pill:focus-visible,.lm .lw-cw:focus-visible,.lm .lw-mrow:focus-visible,.lm .lw-prow:focus-visible,
 .lm .lw-ser:focus-visible,.lm .lw-hero:focus-visible,.lm .lw-pa:focus-visible,.lm .lw-scrip:focus-visible,.lm .lw-fab:focus-visible,
 .lm .lw-big:focus-visible,.lm .lw-sk:focus-visible,.lm .lw-all:focus-visible,.lm .lw-cardl:focus-visible,.lm .lw-live:focus-visible
 {outline:2px solid var(--acc);outline-offset:2px;}

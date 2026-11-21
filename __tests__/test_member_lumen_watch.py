@@ -142,9 +142,10 @@ def test_watch_messages(watch, fake, monkeypatch):  # noqa: F811
     _service(fake)
     html = _get(fake, monkeypatch, "/my/sermons")
     assert _body_class(html).split()[:3] == ["lm", "lm-tab", "pg-watch"] and "lm-dark" not in _body_class(html)
-    # The title is the bar at the top (Look 5.1: no church bar over Watch, and no search button: the app has
-    # no message search); Messages | Series opens the page.
-    assert '<header class="mb-top lm-own lm-own-watch"><h1 class="lw-t1">Watch</h1></header>' in html
+    # The title is the bar at the top (Look 5.1: no church bar over Watch), with Search at its right
+    # (test_member_lumen_watch_search); Messages | Series opens the page.
+    assert '<header class="mb-top lm-own lm-own-watch"><h1 class="lw-t1">Watch</h1><span class="mb-top-right">' in html
+    assert 'class="lm-icb mp-noprint lw-findb" href="/my/sermons?q=" aria-label="Search messages"' in html
     assert html.count('<header class="mb-top') == 1 and "lm-brand" not in html and 'href="/my/notifications"' not in html
     assert '<div class="lw lw-watch" data-lw-who="' in html and '"><nav class="lw-seg"' in html
     seg = _cut(html, '<nav class="lw-seg"', "</nav>")
