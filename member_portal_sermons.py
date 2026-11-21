@@ -122,19 +122,21 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
 
 def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str = "", bible: str = "kjv",
                    live: Optional[Dict[str, Any]] = None, next_occ: Optional[Dict[str, Any]] = None,
-                   view: str = "", show_all: bool = False, service: Optional[Dict[str, Any]] = None) -> str:
+                   view: str = "", show_all: bool = False, service: Optional[Dict[str, Any]] = None,
+                   q: Optional[str] = None) -> str:
     """Watch (the Subsplash app's Messages and On Demand, together): live
     or the next gathering, the latest message, the series, every message.
     In the new look (member_lumen) Watch, its Series and a series are
     member_lumen_watch's (Look 5.1): `view` "series" shows the series,
-    `show_all` every message, `service` the church's weekly service time."""
+    `show_all` every message, `service` the church's weekly service time,
+    `q` (asked for, even empty) the search over this same library."""
     import member_lumen
     if member_lumen.page():
         import member_lumen_watch as mlw
         if series_id and lib and series_id in _titles(lib):
             return mlw.series_page(biz, site, who, lib, series_id)
         return mlw.watch_page(biz, site, who, lib, live=live, next_occ=next_occ, bible=bible, view=view,
-                              show_all=show_all, service=service)
+                              show_all=show_all, service=service, q=q)
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e, _shell, palette_for

@@ -1976,14 +1976,17 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             # (member_lumen_watch.service_slot: kept ten minutes).
             import live_router as lr
             import member_lumen_watch as mlw
+            # The new look's search (?q=, member_lumen_watch.search_page) filters
+            # this same library: no read of its own, and no service time.
+            q = request.query_params.get("q") if lumen else None
             lib, live, occ, service = await asyncio.gather(
                 asyncio.to_thread(mps.load_library, biz["id"]), asyncio.to_thread(lr.current, biz["id"]),
                 asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
                 asyncio.to_thread(mlw.service_slot, biz)
-                if lumen and not series and request.query_params.get("view") != "series" else _nothing())
+                if lumen and not series and request.query_params.get("view") != "series" and q is None else _nothing())
             lib, occ = fill(lib, "library"), fill(occ, "occasions")
             extra = ({"view": str(request.query_params.get("view") or ""), "service": service,
-                      "show_all": request.query_params.get("all") == "1"} if lumen else {})
+                      "show_all": request.query_params.get("all") == "1", "q": q} if lumen else {})
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
                                             bible=mpb.prefs(request)[0], live=live or None,
                                             next_occ=(occ or [None])[0], **extra),
