@@ -291,8 +291,9 @@ def my_class(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]
     Classes row picks it (academy_member_classes' "mine", not completed):
     {course_id, title, program, total, done, lesson}; {} when there's none (or the
     church has no class anyone can see: member_portal_classes.classes_on,
-    kept a minute, so a church without classes asks nothing more); None when
-    a read failed (the moment is left out, nothing is kept). Kept
+    kept a minute, so a church without classes asks nothing more; that no is
+    not kept here, as classes_on says no for a failed read too); None when a
+    read failed (the moment is left out, nothing is kept). Kept
     CLASS_SECONDS per (church, member)."""
     global _CLASS
     import member_cache
@@ -305,7 +306,11 @@ def my_class(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]
         return got
     out: Dict[str, Any] = {}
     try:
-        raw = mcl.member_classes(key[0], me) if mcl.classes_on(key[0]) else {}
+        # classes_on is False for "no class anyone can see" and for a failed
+        # read alike, so its no is never kept here (it keeps its own yes or no
+        # a minute when its read worked: no read again either way).
+        on = mcl.classes_on(key[0])
+        raw = mcl.member_classes(key[0], me) if on else {}
     except Exception:  # noqa: BLE001 — the moment is left out
         logger.warning("home: the class skipped", exc_info=True)
         raw = None
@@ -321,7 +326,8 @@ def my_class(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]
                    "program": str(c.get("program") or "").strip(), "total": total, "done": done,
                    "lesson": str(n.get("lesson") or n.get("title") or "").strip()}
             break
-    _CLASS.put(key, out, tag=key[0])
+    if on:
+        _CLASS.put(key, out, tag=key[0])
     return out
 
 

@@ -162,6 +162,21 @@ def test_a_failed_class_read_leaves_it_out_and_isnt_kept(church, fake, monkeypat
     assert "cl:c-making:0" in ids and len(klass["calls"]) == 2
 
 
+def test_a_failed_classes_on_read_isnt_kept_as_no_class(church, fake, monkeypatch, klass):  # noqa: F811
+    # classes_on answers False for a failed read as for no classes: Home's
+    # class keeps nothing then, so the next Home asks again.
+    import member_portal_classes as mcl
+    _group(fake)
+    on = {"v": False}
+    monkeypatch.setattr(mcl, "classes_on", lambda b: on["v"])
+    c = _client(fake, monkeypatch)
+    ids, _ = _moments(c.get("/my").text)
+    assert not any(i.startswith("cl:") for i in ids) and klass["calls"] == []
+    on["v"] = True
+    ids, _ = _moments(c.get("/my").text)
+    assert "cl:c-making:0" in ids and len(klass["calls"]) == 1
+
+
 def test_no_class_read_at_a_church_without_classes(church, fake, monkeypatch, klass):  # noqa: F811
     import member_portal_classes as mcl
     monkeypatch.setattr(mcl, "classes_on", lambda b: False)
