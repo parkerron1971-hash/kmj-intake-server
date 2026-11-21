@@ -2,9 +2,9 @@
 title: Sunday's tells - the sermon draft, the missing count, the flyer
 date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
-asked: "yes go with the plan and make those small fixes as well" (the missing tells on Love City's connection map)
+asked: "yes go with the plan and make those small fixes as well (the missing tells on Love City's connection map)"
 status: in progress
-prs: [kmj-intake-server (this PR; merges after #2038)]
+prs: [kmj-intake-server#2040]
 migrations: []
 left_undone:
   - "CHURCH_TELLS is owner (Love City only) by default; switch on for every church after Love City has a Sunday of these"
