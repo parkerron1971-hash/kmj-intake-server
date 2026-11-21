@@ -707,6 +707,11 @@ def test_the_events_volunteer_picture(church, monkeypatch):
     asked(c, needs={c.greeter: 2})
     pic = c.as_("shapretta").get(path).json()
     assert pic["request"]["status"] == "waiting" and pic["date"] is None
+    # Change and take back are offered to whoever the server lets do them: the
+    # one who asked and whoever schedules the teams, never another login or a Viewer.
+    assert {who: c.as_(who).get(path).json()["request"]["can_change"]
+            for who in ("shapretta", "laquesha", "owner", "tiara", "viewer")} == {
+        "shapretta": True, "laquesha": True, "owner": True, "tiara": False, "viewer": False}
     assert pic["teams"] == [{"place_id": c.greeter, "name": "Greeter", "team": "Welcome", "needed": 2, "pending": True,
                              "slots": [{"slot": 1, "state": "open"}, {"slot": 2, "state": "open"}]}]
     assert pic["counts"]["teams_needed"] == 2 and pic["counts"]["all"] == 6

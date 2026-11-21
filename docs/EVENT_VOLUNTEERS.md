@@ -368,7 +368,7 @@ These are the existing `_roles` and signups, with three rules added:
 `GET /church/event-volunteers/{entry_id}?business_id=` (any office login):
 
 ```
-{ request: {id, status, needs, note, asked_by_name, decided_by_name, decided_note} | null,
+{ request: {id, status, needs, note, asked_by_name, decided_by_name, decided_note, can_change} | null,
   date:    {service_id, starts_at, needs} | null,
   teams:   [{place_id, name, team, needed, slots: [{slot, state: open|asked|yes, name?}]}],
   special: [{role_id, label, needed, kids, open, people: [{name, contact_id?, checked?}]}],
