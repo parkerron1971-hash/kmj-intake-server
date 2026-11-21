@@ -64,7 +64,8 @@ FOUND = {"friend": "Friend or family", "online": "Online", "drove_by": "Drove by
 ADD_STATUS = {"first_time": "lead", "coming_back": "lead", "member": "active"}
 MOST_PEOPLE = 12              # one Add people sheet
 MOST_HISTORY = 50
-PARTICLES = {"de", "la", "del", "della", "der", "van", "von", "da", "di", "du", "le", "dos", "das", "y", "bin", "ibn", "al"}
+PARTICLES = {"de", "la", "del", "della", "der", "van", "von", "da", "di", "du", "le", "dos", "das", "y", "bin", "ibn", "al",
+             "of", "the", "and", "for", "in"}       # "Elevation of Grace": a ministry's small words stay small
 SUFFIX_UP = {"ii", "iii", "iv", "vi"}
 SUFFIX_CAP = {"jr": "Jr", "sr": "Sr", "jr.": "Jr.", "sr.": "Sr."}
 # The tables whose rows point at a person and move on a merge. Anything
@@ -365,37 +366,48 @@ def edit_block(ctx: Dict[str, Any], cid: str) -> Dict[str, Any]:
 
 # ─── Editing a person ─────────────────────────────────────────────────
 
-def _leave_family(b: str, cid: str) -> None:
-    if _child_row(b, cid):
-        raise HTTPException(400, "A child stays in a family. Move them to another family instead.")
-    sb_clients.sb_delete_as_service(f"/household_adults?business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}")
+def _leave_family(b: str, cid: str, *, keep: str = "") -> None:
+    """Take an adult out of their family (every family but `keep`, the one
+    they just joined). A delete that fails is a 503, never "saved"."""
+    path = f"/household_adults?business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}"
+    if keep:
+        path += f"&household_id=neq.{_q(keep)}"
+    if not sb_clients.sb_delete_as_service(path):
+        raise HTTPException(503, "They’re still in their old family. Try again in a moment."
+                            if keep else "They’re still in that family. Try again in a moment.")
 
 
 def _family(b: str, c: Dict[str, Any], ask: Dict[str, Any]) -> str:
+    """Join, start or leave a family. A move writes the new family first and
+    takes the old row out after, so a failure never leaves someone in no
+    family at all."""
     cid = str(c["id"])
+    kid = _child_row(b, cid)
     if ask.get("leave"):
+        if kid:
+            raise HTTPException(400, "A child stays in a family. Move them to another family instead.")
         _leave_family(b, cid)
         return "family"
-    kid = _child_row(b, cid)
     if ask.get("join"):
         hid = str(_household(b, ask["join"])["id"])
         if kid:
             saved = sb_clients.sb_patch_as_service(f"/children?id=eq.{_q(kid['id'])}&business_id=eq.{_q(b)}",
                                                    {"household_id": hid})
-            if not isinstance(saved, list):
+            if not isinstance(saved, list) or not saved:
                 raise HTTPException(503, "They didn’t move. Try again in a moment.")
             return "family"
-        _leave_family(b, cid)
-        if not church_families.join_family(b, hid, [c], []):
-            raise HTTPException(503, "They didn’t join that family. Try again in a moment.")
+        if _household_of(b, cid) != hid and not church_families.join_family(b, hid, [c], []):
+            raise HTTPException(503, "They didn’t join that family. Nothing changed. Try again in a moment.")
+        _leave_family(b, cid, keep=hid)
         return "family"
     if ask.get("start") is not None:
         if kid:
             raise HTTPException(400, "A child joins a family that has an adult in it.")
         name = _text(ask.get("start"), 120) or f"The {_parts(c)[1] or _plain(c.get('name'))} family"
-        _leave_family(b, cid)
-        if not church_families.make_family(b, name, [c], []):
-            raise HTTPException(503, "That family didn’t save. Try again in a moment.")
+        hid = church_families.make_family(b, name, [c], [])
+        if not hid:
+            raise HTTPException(503, "That family didn’t save. Nothing changed. Try again in a moment.")
+        _leave_family(b, cid, keep=str(hid))
         return "family"
     raise HTTPException(400, "Say which family: join one, start one, or leave.")
 
@@ -485,8 +497,10 @@ def apply_edit(b: str, c: Dict[str, Any], body: Dict[str, Any], user: Any) -> Li
         if not kid:
             raise HTTPException(400, "Grade and allergies are kept for a child in a family.")
         if "grade" in body:
-            sb_clients.sb_patch_as_service(f"/children?id=eq.{_q(kid['id'])}&business_id=eq.{_q(b)}",
-                                           {"grade": _text(body.get("grade"), 20)})
+            done = sb_clients.sb_patch_as_service(f"/children?id=eq.{_q(kid['id'])}&business_id=eq.{_q(b)}",
+                                                  {"grade": _text(body.get("grade"), 20)})
+            if not isinstance(done, list) or not done:
+                raise HTTPException(503, "The grade didn’t save. Try again in a moment.")
             saved.append("grade")
         if "allergies" in body:
             words = _text(body.get("allergies"), 200)
@@ -604,12 +618,18 @@ def add_people(b: str, body: Dict[str, Any], user: Any) -> Dict[str, Any]:
             hid = church_families.make_family(b, name, adults, kids)
             warning = "" if hid else "They’re on the roll, but the family didn’t save. Add them to a family from their page."
     if hid:
+        missed = []
         for x in made:
             if x["kind"] == "child" and x["allergies"]:
                 kid = _child_row(b, str(x["row"]["id"]))
-                if kid:
-                    sb_clients.sb_post_as_service("/child_care_notes", {"child_id": str(kid["id"]), "business_id": b,
-                                                                        "allergies": x["allergies"]})
+                ok = kid and sb_clients.sb_post_as_service("/child_care_notes", {
+                    "child_id": str(kid["id"]), "business_id": b, "allergies": x["allergies"]})
+                if not (isinstance(ok, list) and ok):
+                    missed.append(x["first"] or "a child")
+        if missed:
+            # An allergy that didn't save is never silent.
+            warning = (f"{' and '.join(missed)}’s allergies didn’t save. Add them on "
+                       f"{'their pages' if len(missed) > 1 else 'their page'} before Sunday.")
     return {"ids": [str(x["row"]["id"]) for x in made], "household_id": hid, **({"warning": warning} if warning else {})}
 
 
@@ -667,14 +687,16 @@ def merge(b: str, keep_id: str, drop_id: str, *, use_number: bool = False) -> Di
     fields["metadata"] = km
     _save(b, keep_id, fields)
 
+    # Hidden and marked first: a failure after this leaves rows still to
+    # move, never a visible half-merged record that a retry merges again.
+    dm.update({"merged_into": keep_id, "merged_at": _now().isoformat(), "inactive_reason": "merged"})
+    _save(b, drop_id, {"status": "inactive", "metadata": dm})
+
     moved, left = [], []
     for table, col in MOVE:
         done = sb_clients.sb_patch_as_service(f"/{table}?business_id=eq.{_q(b)}&{col}=eq.{_q(drop_id)}", {col: keep_id})
         (moved if isinstance(done, list) else left).append(table)
     (moved if _move_register(b, drop_id, keep_id) else left).append("church_register_entries")
-
-    dm.update({"merged_into": keep_id, "merged_at": _now().isoformat(), "inactive_reason": "merged"})
-    _save(b, drop_id, {"status": "inactive", "metadata": dm})
     _event(b, keep_id, "contact_merged", {"from": drop_id, "from_name": _plain(drop.get("name")), "moved": moved, "left": left})
     return {"ok": True, "kept": keep_id, "left": left}
 
