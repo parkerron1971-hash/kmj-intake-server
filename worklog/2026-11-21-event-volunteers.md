@@ -4,13 +4,13 @@ date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20: "when a event is made there should be questions asked normal service volunteers or special volunteers… request for an amount of volunteers for their event… a way to inser flyer for like a thumbnail… connect the volunteers to events", then "go" on the proposal https://claude.ai/artifact/98Z9QFcaZ6ZNQhLdarKHQB'
 status: in progress
-prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine)]
+prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine, merged), kmj-intake-server#2026 (S3 around the event)]
 migrations: [supabase/APPLY-2026-11-21-event-volunteers.sql (NOT APPLIED)]
 left_undone:
   - "Kevin applies supabase/APPLY-2026-11-21-event-volunteers.sql; until then every S2 route answers 404 (the status says ready: false) and no read selects worship_services.needs"
-  - "S3 server around the event: sync (POST /church/event-volunteers/{entry_id}/changed) and adding it to event_volunteers.sweep_tick (already on the worker every 15 minutes), the flyer upload/attach and flyer_of on every reader, special-role rules and I'll help, hours for special helpers"
-  - "S4 office frontend: the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
-  - "S5 Chief: teams and flyer on create/update_module_entry, how full is my event"
+  - "S4 office frontend: call POST /church/event-volunteers/{entry_id}/changed after every event save; the flyer step (PUT/DELETE .../flyer, multipart or {artwork_id}); show event_moved on Who serves when; hold data._flyer to flyer_of's rule before showing it; keep `via` on signups it saves; RolesEditor's two ticks (kids, open); the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
+  - "S5 Chief: teams and flyer on create/update_module_entry, how full is my event; roles it makes write `open` explicitly"
+  - "For Kevin (raised separately): teens and kids roles, and The week's overdue-check flag"
   - "Switch-on PR on a Thursday: EVENT_VOLUNTEERS=on AND CHURCH_EVENT_VOLUNTEERS=on (the first opens only where the second is), What's New, Help Center re-export"
 decisions:
   - "Kevin's five calls as recommended: one-tap yes from whoever schedules the teams (straight on when that's the asker); teams start unticked at their Sunday number; special roles sign up in the app, public only when opened, kids roles check-only; special helpers earn hours; office logins only for now"
@@ -22,6 +22,11 @@ decisions:
   - "S2: fixed a bug on the way: Fill the month could ask one person for two spots of one place at one service (busy() leaves the place's own spots out); do_fill now skips them"
   - "S2 after review: taking a date off cancels its ask; an ask left on with no date is never told and the sweep mends it (linked, cancelled, or waiting again); an unplanned Sunday keeps the church's usual Sunday times; a date's numbers are checked again after the write; an event with an ask can't go on another way"
   - "S2: the rest of the S2 calls are in docs/EVENT_VOLUNTEERS.md section 11"
+  - "S3: the event's date follows it (follow on /changed and in the 15-minute sweep, a handful of reads a church): told through member_push_sends as event-moved-{assignment}-{time}-{n} so a person's latest move notice always names the date's time (a lost move put back is corrected), event-cancelled-{assignment} once; tell first then change; quiet hours hold the whole change and the serving sweep says nothing for that date meanwhile (unsettled); a rain date within 48 hours follows, older is flagged; a cancel takes every ask back by Take back's path, the date off, the ask closed last; changes only where the tell can go (_follows)"
+  - "S3: the flyer goes through image_studio as the owner (normalize_image, the gallery row) with two EXIF-free JPEG copies in business-assets; limits read from the header before decoding; a gallery pick only for who may read the gallery (church_reader); every reader goes through flyer_of, which pins the event's folder and the copies' names; taking a flyer off isn't switch-gated; /events?event=<id> is one event's share preview"
+  - "S3: a kids role needs church_serving.cleared (checks_of ok or due, never under 18: deliberately stricter than The week's flag, decided in review); the member app refuses by redirect notice (err=kids; err=filled names the role from the church's data, never the link); the office's picture says why (Check overdue, No check on file, Under 18); the public page shows only open roles, never kids"
+  - "S3: special helpers' hours are church_serving.event_credits (the year's events only, the keys it needs; once per event, the longer of a team place and a role; archived after it started keeps its hours; a public sign-up never counts, via public or a public registration key), in the Serving page, My serving, The week and Reports; a read blip counts no events; nothing changes with the switch closed"
+  - "S3: the rest of the S3 calls are in docs/EVENT_VOLUNTEERS.md section 11"
 related: [2026-11-17-event-volunteer-dates.md, 2026-11-17-events-volunteer-list.md, 2026-11-11-light-table-step2.md, 2026-11-18-church-schedule.md]
 ---
 Before building I read both repos' work logs. The 11-17 event-dates log (backend and
@@ -47,3 +52,35 @@ entry when the switch is open. `serve_dates.needed()` counts every slot: Who ser
 the member's ask page, a leader's Sundays, The week (and My department through it), My
 week, and the Sunday-plan readers. Tests: `__tests__/test_event_volunteers.py` and
 `__tests__/test_event_volunteers_readers.py`; the sabotages are in the PR.
+
+S3 is the server around the event, on main after #2023. `event_volunteers.py` adds
+`sync` (and `POST /{entry_id}/changed`, and `follow_tick` in the existing 15-minute
+sweep), the flyer routes (`PUT`/`DELETE /{entry_id}/flyer`) and `date_extras` for Who
+serves when and The week. The readers: `events_rsvp_router.build_occasions` (the
+public page's card and its `?event=` share preview, the member app's Coming up in
+both looks and the new Home's This week), `sunday_serving` (My serving's rows and ask
+page), `/planning/requests`, the schedule and The week. `church_serving` gains
+`cleared` (the kids rule, shared with The week's) and `event_credits` (hours), read by
+the Serving page, My serving, `minutes_of` and Reports. `chief_roster.clean_roles`
+keeps `kids` and `open`. No migration: told-once is `member_push_sends`. Tests:
+`__tests__/test_event_volunteers_follow.py`, `test_event_volunteers_flyer.py`,
+`test_event_volunteers_roles_hours.py`; the sabotages are in the PR.
+
+After review (same PR): a person's latest move notice now always names the date's
+time (the key counts their notices; a lost move put back is corrected), the serving
+sweep says nothing for a date whose change waits (no 7 AM reminder for a cancelled
+event), reminders re-arm only for moments still to come, a rain date follows within
+48 hours, nothing changes where nobody would be told, the sweep reads each church once,
+the hours read is bounded and degrades, archived-after keeps hours, public sign-ups
+earn none, the flyer's limits are read before decoding and its gallery pick follows
+the gallery's own rule, and flyer_of pins the event. Found on the way, not ours:
+`test_member_portal_department_week.py` (2) and `test_member_lumen_home5.py` (2) fail
+on plain main in the evening (quiet hours, the time of day), as they do on this branch.
+
+Second review (same PR): the batched reads now page past PostgREST's 1,000-row cap
+(the rows on the dates followed, the sweep's two finding reads), the move ledger is
+read only for the people on those dates, newest first and paged, with a tie on n going
+to the later-written notice; the hours read fails like the rest of church_serving
+(never fewer hours, Reports never short); a reminder hold for a change over a day old is
+said in the logs; spec section 9 S4 asks the office app to round-trip `via` and to hold
+`_flyer` to the whole-match rule.

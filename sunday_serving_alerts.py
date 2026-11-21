@@ -100,6 +100,17 @@ def _first(name: Optional[str]) -> str:
 # ─── what's due ──────────────────────────────────────────────────────
 
 
+def moments(at: datetime, zone) -> Dict[str, datetime]:
+    """When each reminder of a yes opens for a service at `at`, by its mark:
+    a week before, 6 PM the day before, 7 AM that day. due() reads these,
+    and so does a moved event date (event_volunteers), so a reminder whose
+    window already opened for the new time is never sent twice."""
+    local = at.astimezone(zone)
+    return {"week_sent_at": at - timedelta(days=WEEK_DAYS),
+            "day_sent_at": datetime.combine(local.date() - timedelta(days=1), time(DAY_BEFORE_HOUR), tzinfo=zone),
+            "morning_sent_at": datetime.combine(local.date(), time(MORNING_HOUR), tzinfo=zone)}
+
+
 def due(row: Dict[str, Any], at: datetime, now: datetime, zone, call: Optional[datetime]) -> List[str]:
     """The steps this row is due for right now, latest first; a reminder
     whose moment has passed comes back as "skip:<step>" so it's marked and
@@ -122,9 +133,8 @@ def due(row: Dict[str, Any], at: datetime, now: datetime, zone, call: Optional[d
     if row["status"] == "yes":
         if row.get("swap_to") and row.get("swap_asked_at") and not row.get("swap_told_at"):
             out.append("cover")
-        morning = datetime.combine(sunday.date(), time(MORNING_HOUR), tzinfo=zone)
-        eve = datetime.combine(sunday.date() - timedelta(days=1), time(DAY_BEFORE_HOUR), tzinfo=zone)
-        week = at - timedelta(days=WEEK_DAYS)
+        when = moments(at, zone)
+        morning, eve, week = when["morning_sent_at"], when["day_sent_at"], when["week_sent_at"]
         said = _at(row.get("answered_at")) or _at(row.get("asked_at")) or now
         if not row.get("morning_sent_at") and now >= morning:
             ok = call is None or call - now >= timedelta(hours=1)
@@ -326,6 +336,12 @@ def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str
     biz_id = str(biz["id"])
     zone = sp._zone(biz_id)
     services = sv._services(biz_id, zone, now, now + timedelta(days=ASK_AHEAD_DAYS + 1))
+    # An event date whose event went away or moved, and the date hasn't
+    # followed yet (a change held through quiet hours): nothing goes out for
+    # it meanwhile, not an ask and not a reminder (event_volunteers.unsettled).
+    import event_volunteers
+    hold = event_volunteers.unsettled(biz, services.values(), now)
+    services = {k: v for k, v in services.items() if k not in hold}
     if not services:
         return out
     rows = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&service_id=in.({_ids(services)})"

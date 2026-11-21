@@ -121,9 +121,9 @@ def _mine(fake):
 
 def test_coming_then_cant_replaces_rather_than_duplicates(fake):
     assert mpc.member_rsvp(BIZ, ME, "e1", "coming") == (True, "coming")
-    assert _mine(fake) == [{"name": "Ana Rivers", "status": "yes", "contact_id": "c1"}]
+    assert _mine(fake) == [{"name": "Ana Rivers", "status": "yes", "contact_id": "c1", "via": "member"}]
     assert mpc.member_rsvp(BIZ, ME, "e1", "cant") == (True, "cant")
-    assert _mine(fake) == [{"name": "Ana Rivers", "status": "no", "contact_id": "c1"}]
+    assert _mine(fake) == [{"name": "Ana Rivers", "status": "no", "contact_id": "c1", "via": "member"}]
     # Someone else's signup is untouched.
     assert {"name": "Ben", "status": "yes", "contact_id": "c2"} in fake.entries["e1"]["data"]["signups"]
 
@@ -141,7 +141,9 @@ def test_serving_follows_the_occasions_own_roles(fake):
     assert mpc.member_rsvp(BIZ, ME, "e1", "serve", "greeter") == (True, "serving")
     assert _mine(fake)[0]["role"] == "greeter"
     other = dict(ME, id="c9")
-    assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter") == (False, "role")   # filled
+    # Filled: "Greeters just filled up." (docs/EVENT_VOLUNTEERS.md 6.10), its own code since S3.
+    said = {}
+    assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter", said) == (False, "filled") and said["role"]
     fake.entries["e1"]["data"]["_roles"] = [{"id": "ushers", "label": "Ushers", "needed": 2}]
     assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter") == (False, "role")   # not on this one
     assert mpc.member_rsvp(BIZ, other, "e1", "serve", "ushers") == (True, "serving")
@@ -269,7 +271,7 @@ def test_office_typed_name_is_hers_and_keeps_its_note(fake):
     assert "You said maybe" in html and "I'm coming" in html
     assert mpc.member_rsvp(BIZ, ME, "e1", "coming") == (True, "coming")
     (mine,) = _mine(fake)
-    assert mine == {"name": "Ana Rivers", "status": "yes", "note": "needs a ride", "contact_id": "c1"}
+    assert mine == {"name": "Ana Rivers", "status": "yes", "note": "needs a ride", "contact_id": "c1", "via": "member"}
     assert len(fake.entries["e1"]["data"]["signups"]) == 2      # Ben + Ana, no duplicate
 
 

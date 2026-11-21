@@ -737,9 +737,11 @@ def serving(ctx: Dict[str, Any]) -> Dict[str, Any]:
         settings = cs._settings(ctx["biz"])
         lo, hi = cs._year_window(zone, y, ctx["now"])
         sundays, _ = cs._sunday_spans(biz_id, zone, lo, hi, settings)
+        # Special helpers at events, each event once (church_serving.event_credits).
+        sundays, events = cs.event_credits(biz_id, zone, lo, hi, sundays)
         gathered, _ = cs._group_credits(biz_id, lo.date(), hi.date(), settings)
         extra = cs._extra_credits(cs._extra_rows(biz_id), y)
-        credits = [c for c in sundays + gathered + extra if c.get("minutes", 0) > 0]
+        credits = [c for c in sundays + gathered + extra + events if c.get("minutes", 0) > 0]
         per: Dict[str, int] = {}
         for c in credits:
             per[str(c["contact_id"])] = per.get(str(c["contact_id"]), 0) + int(c["minutes"])

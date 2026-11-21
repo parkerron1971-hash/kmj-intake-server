@@ -195,7 +195,9 @@ def test_signup_appends_the_internal_tsx_shape(fake_sb):
     assert new["role"] == "greeter"
     assert new["contact_id"]           # linked to the created contact
     # Nothing outside the Signup shape leaks into the roster row.
-    assert set(new.keys()) <= {"contact_id", "name", "status", "role", "note"}
+    assert set(new.keys()) <= {"contact_id", "name", "status", "role", "note", "via"}
+    # via: a public sign-up, matched only by a typed email, earns no serving hours (EVENT_VOLUNTEERS 6.6).
+    assert new["via"] == "public"
 
 
 def test_signup_without_role_omits_the_key(fake_sb):

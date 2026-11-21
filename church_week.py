@@ -395,7 +395,8 @@ def _services(b: str, zone, first: date) -> List[Dict[str, Any]]:
                     "time": at.strftime("%H:%M"), "kind": sd.EVENT if event else sd.SERVICE,
                     "title": _plain(r.get("title")) or ("An event" if event else "Sunday service"),
                     # An event date's own numbers for the Volunteers' places (serve_dates.needed).
-                    "needs": r["needs"] if event and isinstance(r.get("needs"), dict) else None})
+                    "needs": r["needs"] if event and isinstance(r.get("needs"), dict) else None,
+                    "event_entry_id": str(r["event_entry_id"]) if event and r.get("event_entry_id") else None})
     out.sort(key=lambda s: (s["at"], s["id"]))
     return out
 
@@ -539,6 +540,8 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
     first = _week(start, today)
     last = first + timedelta(days=6)
     services = _services(b, zone, first)
+    import event_volunteers
+    event_volunteers.date_extras(biz_id, services, flags=False)
     teams = _teams(b)
     cards = _cards(biz, teams, person, ch)
     if person is not None:
@@ -689,7 +692,9 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
             card_services.append({"service_id": svc["id"], "day": svc["day"], "weekday": svc["weekday"],
                                   "time": svc["time"], "words": svc_words(svc), "kind": svc["kind"],
                                   "title": svc["title"], "past": svc["at"] <= now,
-                                  "rows": [row_out(s) for s in here]})
+                                  "rows": [row_out(s) for s in here],
+                                  # An event date's flyer {thumb, url} (event_volunteers.date_extras).
+                                  **({"flyer": svc.get("flyer")} if svc["kind"] == sd.EVENT else {})})
             if svc["at"] <= now:
                 continue
             # Look at first: short, by door; who hasn't answered; who can't serve with kids yet.

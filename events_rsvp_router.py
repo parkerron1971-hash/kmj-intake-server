@@ -211,6 +211,30 @@ def role_fill(role: Dict[str, Any], signups: List[Dict[str, Any]]) -> Dict[str, 
             "needed": needed, "filled": filled, "full": filled >= needed}
 
 
+def kids_role(role: Dict[str, Any]) -> bool:
+    """A role that works with kids (docs/EVENT_VOLUNTEERS.md 3.3): only
+    for people with a current background check, never on the public page."""
+    return isinstance(role, dict) and role.get("kids") is True
+
+
+def public_role(role: Dict[str, Any]) -> bool:
+    """Whether the public events page may show (and sign people up for) a
+    role: never a kids role; one marked open: false stays in the church; a
+    role that never said (no `open` key) shows, as every role did before."""
+    return isinstance(role, dict) and not kids_role(role) and role.get("open") is not False
+
+
+def role_out(role: Dict[str, Any], signups: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """role_fill, plus `kids: true` for a kids role and `open` when the role
+    said (a role that says neither reads exactly as before)."""
+    out = role_fill(role, signups)
+    if kids_role(role):
+        out["kids"] = True
+    if isinstance(role.get("open"), bool):
+        out["open"] = role["open"]
+    return out
+
+
 def _parse_day(v: Any) -> Optional[date]:
     """A date out of whatever the entry holds — '2026-08-04', an ISO
     datetime, or junk (None). Same tolerance as briefing_verticals."""
@@ -239,12 +263,22 @@ def build_occasions(
     entries_by_module: Dict[str, List[Dict[str, Any]]],
     today: Optional[date] = None,
     include=None,
+    business_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """The page's data: dated, upcoming occasions across every roster
     module, soonest first. Undated entries are skipped — internally an
     undated occasion is "being planned" (types.ts isUpcoming), but a
-    public RSVP needs a date a member can commit to."""
+    public RSVP needs a date a member can commit to.
+
+    With `business_id`, each occasion carries its `flyer` ({url, thumb, w,
+    h}, or None), read only through event_volunteers.flyer_of: only the
+    occasions the caller's rule lets in are here, so a flyer shows only
+    where its event already shows. Each role carries `kids` and, when it
+    said, `open` (role_out)."""
     today = today or date.today()
+    flyer_of = None
+    if business_id:
+        from event_volunteers import flyer_of
     out: List[Dict[str, Any]] = []
     for mod in modules or []:
         f = resolve_fields(mod.get("archetype_params"))
@@ -274,8 +308,9 @@ def build_occasions(
                                if capacity is not None else None),
                 "full": full,
                 "occasion_noun": f["occasion_noun"],
-                "roles": [role_fill(r, signups)
+                "roles": [role_out(r, signups)
                           for r in occasion_roles(data, f["roles"])],
+                **({"flyer": flyer_of(data, business_id, e.get("id"))} if flyer_of else {}),
             })
     out.sort(key=lambda o: o["date"])
     return out[:MAX_OCCASIONS]
@@ -465,10 +500,17 @@ async def public_event_rsvp(
                          if r.get('id') == role_id), None)
             if not role:
                 raise HTTPException(400, 'unknown role')
+            # A role the page doesn't show (a kids role, or one kept in the
+            # church) can't be signed up for here either: the same answer
+            # as a role that isn't there.
+            if not public_role(role):
+                raise HTTPException(400, 'unknown role')
             fill = role_fill(role, signups)
             if fill['full']:
                 raise HTTPException(409, f"the {fill['label']} role is already filled")
-        new_signup = {'name': name, 'status': 'yes'}
+        # via: a public sign-up, matched to a contact only by the email someone
+        # typed, so it never earns that member serving hours (church_serving).
+        new_signup = {'name': name, 'status': 'yes', 'via': 'public'}
         if contact_id:
             new_signup['contact_id'] = contact_id
         if role_id:
@@ -589,16 +631,40 @@ def _brand_font_links(business: Dict[str, Any]) -> str:
     return _font_links(_brand_kit(business))
 
 
+def _flyer_html(o: Dict[str, Any]) -> str:
+    """The event's flyer at the top of its card: the thumb, opening the full
+    picture. `flyer` was read through event_volunteers.flyer_of (only this
+    church's own folder of the public bucket, the size whole numbers)."""
+    f = o.get("flyer")
+    if not isinstance(f, dict) or not f.get("thumb") or not f.get("url"):
+        return ""
+    try:
+        h = max(1, round(480 * int(f["h"]) / int(f["w"])))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return ""
+    return (f'<a class="ev-flyer" href="{_esc(f["url"])}" target="_blank" rel="noopener">'
+            f'<img src="{_esc(f["thumb"])}" alt="Flyer for {_esc(o.get("title") or "this event")}" '
+            f'width="480" height="{h}" loading="lazy" decoding="async"></a>')
+
+
 def _occasion_card(o: Dict[str, Any]) -> str:
     """One occasion card: facts, open roles, and the signup form (or the
     Full state). An event that takes sign-ups draws its own card
     (church_event_signups.public_card: price, places, deadline, tickets,
     the questions, the waitlist)."""
+    flyer = _flyer_html(o)
     if o.get("signup"):
         import church_event_signups
-        return church_event_signups.public_card(o, _esc)
+        card = church_event_signups.public_card(o, _esc)
+        if flyer and card.startswith("<article"):
+            head, rest = card.split(">", 1)
+            card = f"{head}>{flyer}{rest}"
+        return card
     loc = (f'<div class="ev-loc">{_esc(o["location"])}</div>'
            if o.get("location") else "")
+    # Only the roles open to everyone: never a kids role, never one the
+    # church kept to itself (public_role).
+    roles = [r for r in o.get("roles") or [] if public_role(r)]
 
     spots = ""
     if o.get("capacity") is not None:
@@ -610,12 +676,12 @@ def _occasion_card(o: Dict[str, Any]) -> str:
                      f'spot{"s" if n != 1 else ""} left</span>')
 
     roles_html = ""
-    open_roles = [r for r in o.get("roles") or [] if not r["full"]]
-    if o.get("roles"):
+    open_roles = [r for r in roles if not r["full"]]
+    if roles:
         pills = "".join(
             f'<span class="ev-role{" done" if r["full"] else ""}">'
             f'{_esc(r["label"])} · {r["filled"]}/{r["needed"]}</span>'
-            for r in o["roles"])
+            for r in roles)
         roles_html = f'<div class="ev-roles">{pills}</div>'
 
     if o["full"]:
@@ -642,7 +708,7 @@ def _occasion_card(o: Dict[str, Any]) -> str:
       <div class="ev-msg" role="status"></div>
     </form>"""
 
-    return f"""<article class="ev-card">
+    return f"""<article class="ev-card" id="ev-{_esc(str(o.get("entry_id") or ""))}">{flyer}
     <div class="ev-when">{_esc(o["date_label"])}</div>
     <h2 class="ev-title">{_esc(o["title"])} {spots}</h2>
     {loc}
@@ -659,6 +725,7 @@ def render_events_page(
     *,
     api_origin: str,
     site=None,
+    focus: Optional[str] = None,
 ) -> str:
     """The public events page. Mobile-first by design — members RSVP
     from phones: single column, ≤480px shell (the /give shell), 44px+
@@ -682,6 +749,20 @@ def render_events_page(
     if logo_url:
         og_image_html = (f'<meta property="og:image" content="{_esc(logo_url)}">'
                          f'<link rel="icon" href="{_esc(logo_url)}">')
+    # One event's own page (/events?event=<id>, the link the member app
+    # shares): its share preview is that event, with its flyer's full copy.
+    og_title, og_description, og_url = title, description, canonical_url
+    one = next((o for o in occasions or [] if focus and str(o.get("entry_id")) == str(focus)), None)
+    if one:
+        og_title = str(one.get("title") or "") or title
+        og_description = " · ".join(x for x in (one.get("date_label") or "", one.get("location") or "", name) if x)
+        og_url = f"{canonical_url}?event={urllib.parse.quote(str(one['entry_id']), safe='')}"
+        f = one.get("flyer")
+        if isinstance(f, dict) and f.get("url"):
+            og_image_html = (f'<meta property="og:image" content="{_esc(f["url"])}">'
+                             f'<meta property="og:image:width" content="{_esc(str(f.get("w")))}">'
+                             f'<meta property="og:image:height" content="{_esc(str(f.get("h")))}">'
+                             + (f'<link rel="icon" href="{_esc(logo_url)}">' if logo_url else ""))
 
     import church_event_signups
     signup_css = church_event_signups.PUBLIC_CSS
@@ -700,9 +781,9 @@ def render_events_page(
 <title>{_esc(title)}</title>
 <meta name="description" content="{_esc(description)}">
 <link rel="canonical" href="{_esc(canonical_url)}">
-<meta property="og:title" content="{_esc(title)}">
-<meta property="og:description" content="{_esc(description)}">
-<meta property="og:url" content="{_esc(canonical_url)}">
+<meta property="og:title" content="{_esc(og_title)}">
+<meta property="og:description" content="{_esc(og_description)}">
+<meta property="og:url" content="{_esc(og_url)}">
 <meta property="og:type" content="website">
 {og_image_html}
 {font_links(theme)}
@@ -719,6 +800,8 @@ background:var(--surface);min-height:100vh;}}
 color:var(--text-secondary);margin:6px 0 0;letter-spacing:.06em;text-transform:uppercase;}}
 .ev-card{{border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;
 margin-bottom:16px;}}
+.ev-flyer{{display:block;margin:-6px -4px 14px;}}
+.ev-flyer img{{display:block;width:100%;height:auto;border-radius:calc(var(--radius) - 4px);}}
 .ev-when{{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
 color:var(--accent);}}
 .ev-title{{font-family:var(--font-heading);font-size:19px;font-weight:700;

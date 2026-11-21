@@ -417,7 +417,8 @@ def test_whoever_schedules_the_teams_sees_the_asks(church, monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://sb.test")
     folder = f"https://sb.test/storage/v1/object/public/business-assets/{BIZ}/event-flyers/{E_LOCK}/"
     entry = next(e for e in c.db.t["module_entries"] if e["id"] == E_LOCK)
-    entry["data"]["_flyer"] = {"url": folder + "a.jpg", "thumb": folder + "a-thumb.jpg", "w": 1600, "h": 900}
+    # S3: the copies are named for their artwork (flyer_of pins the event's folder and the names).
+    entry["data"]["_flyer"] = {"url": folder + "a7700000-0000-4000-8000-0000000000aa.jpg", "thumb": folder + "a7700000-0000-4000-8000-0000000000aa-thumb.jpg", "w": 1600, "h": 900}
     asked(c, "shapretta", needs={c.usher: 3, c.greeter: 2}, note="Ten youth")
     asked(c, "member", entry=E_OUT, needs={c.greeter: 1})
     got = c.as_("laquesha").get(f"/planning/requests?business_id={BIZ}").json()["requests"]
@@ -428,7 +429,7 @@ def test_whoever_schedules_the_teams_sees_the_asks(church, monkeypatch):
     assert lock["places"] == [
         {"place_id": c.greeter, "name": "Greeter", "team": "Welcome", "n": 2, "sunday": 1},
         {"place_id": c.usher, "name": "Usher", "team": "Welcome", "n": 3, "sunday": 2}]
-    assert lock["flyer_thumb"] == folder + "a-thumb.jpg" and lock["entry_id"] == E_LOCK
+    assert lock["flyer_thumb"] == folder + "a7700000-0000-4000-8000-0000000000aa-thumb.jpg" and lock["entry_id"] == E_LOCK
     assert lock["special"] == [{"label": "Chaperones", "needed": 3, "filled": 1},
                                {"label": "Grill", "needed": 1, "filled": 1}], "labels and numbers, no names"
     assert "Ana" not in str(lock["special"])
@@ -694,7 +695,9 @@ def test_the_events_volunteer_picture(church, monkeypatch):
     assert pic["request"] is None and pic["date"] is None and pic["teams"] == []
     assert pic["special"] == [
         {"role_id": "chap", "label": "Chaperones", "needed": 3, "kids": True, "open": False,
-         "people": [{"name": "Ana Cruz", "contact_id": ANA}]},
+         # S3: a kids role's people say whether their check is current
+         # (church_serving.cleared), for a login that reads who's cleared.
+         "people": [{"name": "Ana Cruz", "contact_id": ANA, "checked": False, "check": "No check on file"}]},
         {"role_id": "grill", "label": "Grill", "needed": 1, "kids": False, "open": True,
          "people": [{"name": "Lee Ford"}]}]
     assert pic["counts"] == {"all": 4, "yes": 2, "teams_needed": 0, "teams_yes": 0, "special_needed": 4,
@@ -732,19 +735,22 @@ def test_the_events_volunteer_picture(church, monkeypatch):
 def test_the_flyer_is_checked_on_every_read(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://sb.test/")
     base = f"https://sb.test/storage/v1/object/public/business-assets/{BIZ}/event-flyers/{E_LOCK}/"
-    good = {"url": base + "f.jpg", "thumb": base + "f-thumb.jpg", "w": 1600, "h": 900, "artwork_id": "x", "at": "now"}
-    assert evv.flyer_of({"_flyer": good}, BIZ) == {"url": base + "f.jpg", "thumb": base + "f-thumb.jpg", "w": 1600,
-                                                   "h": 900}
-    assert evv.flyer_of({"_flyer": good}, BIZ.upper()) is not None
+    # S3: the event's own folder and the copies' names, pinned (flyer_of takes the entry too).
+    f = "a7700000-0000-4000-8000-0000000000aa"
+    good = {"url": base + f + ".jpg", "thumb": base + f + "-thumb.jpg", "w": 1600, "h": 900, "artwork_id": f, "at": "now"}
+    assert evv.flyer_of({"_flyer": good}, BIZ, E_LOCK) == {"url": base + f + ".jpg", "thumb": base + f + "-thumb.jpg",
+                                                           "w": 1600, "h": 900}
+    assert evv.flyer_of({"_flyer": good}, BIZ.upper(), E_LOCK) is not None
     for bad in ({"url": "https://evil.test/f.jpg"}, {"thumb": base.replace(BIZ, OTHER) + "t.jpg"},
                 {"url": base + "../../x.jpg"}, {"url": base + 'f.jpg" onerror="x'}, {"url": base},
                 {"w": 0}, {"h": 8001}, {"w": True}, {"w": "1600"}, {"thumb": None}):
-        assert evv.flyer_of({"_flyer": {**good, **bad}}, BIZ) is None, bad
+        assert evv.flyer_of({"_flyer": {**good, **bad}}, BIZ, E_LOCK) is None, bad
     for data in (None, {}, {"_flyer": "x"}, {"_flyer": []}, "nope"):
-        assert evv.flyer_of(data, BIZ) is None
-    assert evv.flyer_of({"_flyer": good}, OTHER) is None and evv.flyer_of({"_flyer": good}, "nope") is None
+        assert evv.flyer_of(data, BIZ, E_LOCK) is None
+    assert evv.flyer_of({"_flyer": good}, OTHER, E_LOCK) is None and evv.flyer_of({"_flyer": good}, "nope", E_LOCK) is None
+    assert evv.flyer_of({"_flyer": good}, BIZ, E_OUT) is None, "another event's flyer"
     monkeypatch.delenv("SUPABASE_URL")
-    assert evv.flyer_of({"_flyer": good}, BIZ) is None
+    assert evv.flyer_of({"_flyer": good}, BIZ, E_LOCK) is None
 
 
 # ─── Sunday afternoons (6.9) and typed dates (6.8) ───────────────────

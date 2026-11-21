@@ -1170,6 +1170,7 @@ background:var(--s2);color:var(--fg2);position:relative;z-index:1;}
 .mb-find-b .mp-go{width:auto;min-height:36px;padding:0 16px;font-size:14px;border-radius:999px;}
 .mp-occ h2,.mp-occ h3{font-size:19px;font-weight:700;letter-spacing:-.025em;line-height:1.15;margin:0 0 4px;}
 .mp-when{font-size:12.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--acc);margin:0 0 4px;}
+.mp-flyer{display:block;width:100%;max-width:480px;height:auto;margin:0 0 12px;border-radius:12px;}
 .mp-mine{font-size:13.5px;font-weight:600;margin:8px 0 0;color:var(--acc);}
 .mp-serve{display:flex!important;gap:8px;flex-wrap:wrap;flex:1 1 100%;}
 .mp-serve select{flex:1 1 160px;min-width:0;min-height:40px;}

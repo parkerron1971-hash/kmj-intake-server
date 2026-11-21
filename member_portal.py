@@ -2184,12 +2184,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     bible, where = mpb.prefs(request)
     if space == "kids":
         import member_spaces_kids as mk
-        return await mk.home(request, church, me, occ, mpc._flash(request) or mpr._flash(request))
+        return await mk.home(request, church, me, occ, mpc._flash(request, occ) or mpr._flash(request))
     if space == "youth":
         return _page(msp.render_youth_home(
             biz, site, me=me, occasions=occ, groups=groups, youth_posts=posts,
             reading=mpr.home_card(today, done), bible=bible, leader=(ctx.get("leader") or {}).get("youth"),
-            flash=mpc._flash(request) or mpr._flash(request)))
+            flash=mpc._flash(request, occ) or mpr._flash(request)))
     checkin = checkin or ""
     import member_portal_news as mpn
     news_posts, news_n = news if news else (None, 0)
@@ -2223,7 +2223,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mlp.render_home(
             biz, site, me=me, occasions=occ, groups=groups, library=lib, live=live, bible=bible, where=where,
             plan_today=today, plan_done=done, devotional=devotional, checkin=checkin, serving=serving,
-            celebrate=celebrate, flash=mpc._flash(request) or mpr._flash(request) or mmo.flash(request),
+            celebrate=celebrate, flash=mpc._flash(request, occ) or mpr._flash(request) or mmo.flash(request),
             news=news_html,
             news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
             cards=(mai.install_card(church_name), member_push.home_card(biz),
@@ -2233,7 +2233,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             write=write, leaders=leaders,
             leaders_owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:"))))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
-                             give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
+                             give_url=give_url, flash=mpc._flash(request, occ) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
                              checkin=checkin, serving=serving, devotional=devotional,
                              edit=can_picture and request.query_params.get("edit") == "pictures",

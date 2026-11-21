@@ -341,6 +341,7 @@ body.lm .lm-evc{display:grid;grid-template-columns:62px minmax(0,1fr);gap:14px;p
 body.lm .lm-evd small{display:block;font:700 10.5px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--lm-coral);}
 body.lm .lm-evd b{display:block;margin-top:4px;font:400 40px/.9 var(--mb-serif);letter-spacing:-.04em;color:var(--fg);}
 body.lm .lm-evt{min-width:0;}
+body.lm .lm-evflyer{display:block;width:100%;max-width:420px;height:auto;margin:2px 0 12px;border-radius:14px;}
 body.lm .lm-evt h2{margin:2px 0 4px;font:700 18px/1.25 var(--mb-ui);letter-spacing:-.015em;color:var(--fg);}
 body.lm .lm-evp{margin:0;font:400 14px/1.4 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-evst{margin:8px 0 0;font:500 13.5px/1.35 var(--mb-ui);color:var(--fg2);}
