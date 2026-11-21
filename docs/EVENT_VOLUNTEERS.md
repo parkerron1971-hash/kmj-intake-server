@@ -106,9 +106,20 @@ The table is server-only (RLS on, no policies, browser roles revoked).
 
 ## 4. The switch
 
-`EVENT_VOLUNTEERS = off | owner | on`, default **owner** (the platform
-owner's own church, through `member_asks.platform_church`, as in
-`serve_dates.open_for`). It switches on for every church on a Thursday.
+`EVENT_VOLUNTEERS = off | owner | on`, default **on**: on for every church
+since 2026-11-21. Kevin said "switch on today", ahead of the usual Thursday,
+as he did for ChurchSavvy's Sunday tools (#1866). It opens only where
+`CHURCH_EVENT_VOLUNTEERS` (`serve_dates.open_for`, the 11-17 event dates) is
+open too, and that one's default is **on** from the same day. Neither variable
+is set on Railway, so the code's default decides on the web service and on the
+worker alike (#1882's pattern: a live church feature is on in the code too).
+`owner` is the platform owner's own church (`member_asks.platform_church`).
+
+- **Rollback:** `EVENT_VOLUNTEERS=off` on Railway, on **both**
+  kmj-intake-server and kmj-intake-worker (the worker runs the 15-minute
+  sweep that tells missed notices and follows moved events). `owner` returns
+  it to the platform owner's church. `CHURCH_EVENT_VOLUNTEERS=off` closes it
+  too, and hides Add an event date as well.
 
 - **The switch gates:**
   - the request routes;
@@ -496,6 +507,13 @@ quoted.
 
 ## 9. Build order
 
+**Status, 2026-11-21: every step is built and merged, and the switch is on.**
+S1 #2019 (the migration applied 2026-11-21, ledger #2030), S2 #2023, S3 #2026,
+the picture's `can_change` for S4b #2028, S4 solutionist-studio #1668, #1669
+and #1670, S5 #2029, Kevin's two calls #2031, and the switch-on (step 6:
+this repo's switch-on PR, and solutionist-studio #1674 for What's New and the
+Help Center).
+
 1. **S1 · this file + the migration** (`APPLY-2026-11-21-event-volunteers.sql`,
    PGlite `__tests__/event_volunteers_db.mjs`). Kevin runs it.
 2. **S2 · server, the engine**:
@@ -534,8 +552,9 @@ quoted.
    event". Show before saving, as Chief does now. A role Chief makes writes
    `open` (and `kids`) explicitly, since a role with no `open` keeps today's
    public behavior and shows on the public page.
-6. **Switch-on PR** (a Thursday): `EVENT_VOLUNTEERS=on`, What's New, Help
-   Center answers re-exported (`church_findway.json`).
+6. **Switch-on PR** (done 2026-11-21, a Saturday, on Kevin's "switch on
+   today"): `EVENT_VOLUNTEERS` and `CHURCH_EVENT_VOLUNTEERS` on in the code,
+   What's New, Help Center answers re-exported (`church_findway.json`).
 
 Each step is its own PR, branched fresh from main. Never stack PRs.
 
@@ -1054,6 +1073,42 @@ comes off Who serves when, and a flyer comes off on the event's page. Each is
 shown first, needs the person's yes, and never runs unattended or from an
 outside agent. The Chief-only reads' review list (`test_tool_loop.py`)
 gained `event_volunteers`.
+
+### The switch-on (2026-11-21)
+
+- **Both defaults are `on` in the code**, not on Railway (neither variable
+  was ever set there), so the web service and the worker can't disagree.
+  Rollback is `EVENT_VOLUNTEERS=off` on both (section 4).
+- **What every church sees change once it deploys:**
+  - Add an event date on Who serves when (the 11-17 feature), for whoever
+    schedules the Volunteers' teams. Its What's New went out on 11-17 to every
+    church, while the feature was still open only at the platform owner's church.
+  - New event's three questions, Volunteers and flyer on each event's card,
+    Event requests on Who serves when and The week's line, the two role ticks,
+    Sunday-afternoon event dates, and typed dates becoming Services & Events
+    entries.
+  - Moved and cancelled events followed by the sweep, and their volunteers
+    told.
+  - Chief's teams and flyer on an event, and "how full is my event".
+  - **Hours:** special helpers' event minutes count in the Serving page, My
+    serving, The week (`minutes_of`) and Reports. That is every past event of
+    this year with a role signed up by a member in the app or put on by the
+    office or Chief, events made before today included, at `_serve_minutes`
+    or 120 minutes. A church whose events have role sign-ups sees its year's
+    hours go up on deploy. `event_credits` is the one reader gated by the switch
+    alone, not by `ready()`.
+- **Not changed by the switch-on:** the flyer reader, `needs` readers and the
+  picture already answered whatever the switch said. The Studio's Light Table
+  (Ask Chief to make a flyer) is its own switch, `STUDIO_LIGHT_TABLE`, owner
+  when unset.
+- **The office's Serving page** shows those hours in each person's total, but
+  has no Events line yet: the person line lists Sundays, gatherings and hours
+  added only (a frontend follow-up).
+- **The Help Center's export** (`church_findway.json`, from
+  solutionist-studio #1674 on 07f13b37) also brought what module-system had and
+  this copy didn't: Visitor flow taking the Guests room's words (#1660, #1673)
+  and the giving-access answers (#1654). `system_destinations.json` is the
+  frontend's copy again (`guests` and its alias).
 
 ### Kevin's two calls (2026-11-21)
 

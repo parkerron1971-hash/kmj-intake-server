@@ -2,16 +2,17 @@
 title: An event's volunteers and its flyer, one structure (Services & Events, Who serves when, the flyer)
 date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
-asked: 'Kevin, 2026-11-20: "when a event is made there should be questions asked normal service volunteers or special volunteers… request for an amount of volunteers for their event… a way to inser flyer for like a thumbnail… connect the volunteers to events", then "go" on the proposal https://claude.ai/artifact/98Z9QFcaZ6ZNQhLdarKHQB'
-status: in progress
-prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine, merged), kmj-intake-server#2026 (S3 around the event)]
-migrations: [supabase/APPLY-2026-11-21-event-volunteers.sql (NOT APPLIED)]
+asked: 'Kevin, 2026-11-20: "when a event is made there should be questions asked normal service volunteers or special volunteers… request for an amount of volunteers for their event… a way to inser flyer for like a thumbnail… connect the volunteers to events", then "go" on the proposal https://claude.ai/artifact/98Z9QFcaZ6ZNQhLdarKHQB; 2026-11-21: "switch on today"'
+status: shipped
+prs: [kmj-intake-server#2019 (S1), kmj-intake-server#2023 (S2 the engine), kmj-intake-server#2026 (S3 around the event), kmj-intake-server#2028 (the picture's can_change for S4b), solutionist-studio#1668 (S4a New event), solutionist-studio#1669 (S4b the event's page and flyer thumbs), solutionist-studio#1670 (S4c Event requests and The week), kmj-intake-server#2029 (S5 Chief), kmj-intake-server#2030 (the migration applied), kmj-intake-server#2031 (teens and the overdue flag), solutionist-studio#1674 (What's New and the Help Center), "kmj-intake-server (this PR, the switch-on)"]
+migrations: ["supabase/APPLY-2026-11-21-event-volunteers.sql (APPLIED 2026-11-21: ledger kmj-intake-server#2030)"]
 left_undone:
-  - "Kevin applies supabase/APPLY-2026-11-21-event-volunteers.sql; until then every S2 route answers 404 (the status says ready: false) and no read selects worship_services.needs"
-  - "S4 office frontend: call POST /church/event-volunteers/{entry_id}/changed after every event save; the flyer step (PUT/DELETE .../flyer, multipart or {artwork_id}); show event_moved on Who serves when; hold data._flyer to flyer_of's rule before showing it; keep `via` on signups it saves; RolesEditor's two ticks (kids, open); the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
-  - "S5 Chief: teams and flyer on create/update_module_entry, how full is my event; roles it makes write `open` explicitly"
-  - "For Kevin (raised separately): teens and kids roles, and The week's overdue-check flag (he said \"yes and yes\" 2026-11-21: built in 2026-11-21-kids-roles-teens-overdue.md)"
-  - "Switch-on PR on a Thursday: EVENT_VOLUNTEERS=on AND CHURCH_EVENT_VOLUNTEERS=on (the first opens only where the second is), What's New, Help Center re-export"
+  - "Spec section 10, not in this build: department leaders planning an event from the member app (call 5); the organizer changing numbers after the ask is on; a recurring event's volunteers; texts for event asks; two same-title event dates on one day after a move or rename"
+  - "Frontend: the office's Serving page counts special helpers' event minutes in each person's hours and the year's total, but has no Events line (servingCore.personLine, By team)"
+  - "Frontend: the event page's kids note still says \"offered only to people with a current background check\"; since #2031 a teen of 13 to 17 may take it too"
+  - "Frontend: the office's picture shows a junior helper with no chip, and the member app's refusal for a child under 13 still reads \"Needs a background check. Ask the office.\" (2026-11-21-kids-roles-teens-overdue.md)"
+  - "Ask Chief to make a flyer shows only where the Studio's Light Table is open (STUDIO_LIGHT_TABLE, owner when unset): its own switch-on"
+  - "Office: the app has no field for an event's helper minutes (_serve_minutes), so events count the default 120"
 decisions:
   - "Kevin's five calls as recommended: one-tap yes from whoever schedules the teams (straight on when that's the asker); teams start unticked at their Sunday number; special roles sign up in the app, public only when opened, kids roles check-only; special helpers earn hours; office logins only for now"
   - "Numbers live on the event date (worship_services.needs), null = the Sunday numbers, so the 11-17 dates are unchanged"
@@ -27,6 +28,9 @@ decisions:
   - "S3: a kids role needs church_serving.cleared (checks_of ok or due, never under 18: deliberately stricter than The week's flag, decided in review); the member app refuses by redirect notice (err=kids; err=filled names the role from the church's data, never the link); the office's picture says why (Check overdue, No check on file, Under 18); the public page shows only open roles, never kids"
   - "S3: special helpers' hours are church_serving.event_credits (the year's events only, the keys it needs; once per event, the longer of a team place and a role; archived after it started keeps its hours; a public sign-up never counts, via public or a public registration key), in the Serving page, My serving, The week and Reports; a read blip counts no events; nothing changes with the switch closed"
   - "S3: the rest of the S3 calls are in docs/EVENT_VOLUNTEERS.md section 11"
+  - "Switch-on 2026-11-21 (Kevin: \"switch on today\", a Saturday, as #1866): EVENT_VOLUNTEERS and CHURCH_EVENT_VOLUNTEERS default on in the code (neither was ever set on Railway, so the web service and the worker read the same); rollback EVENT_VOLUNTEERS=off on both services; tests that leaned on the owner default now set owner, and a test each pins unset as on for any church and off as the rollback"
+  - "Switch-on: special helpers' hours count every past event of this year with a role signed up by a member in the app or put on by the office or Chief, events made before today included (church_serving.event_credits is gated by the switch alone), so a church's year of hours goes up on deploy"
+  - "Switch-on: church_findway.json re-exported from solutionist-studio #1674 on 07f13b37 (seven event answers, plus Visitor flow taking the Guests room's words and the giving-access answers the copy lacked); system_destinations.json is the frontend's again"
 related: [2026-11-17-event-volunteer-dates.md, 2026-11-17-events-volunteer-list.md, 2026-11-11-light-table-step2.md, 2026-11-18-church-schedule.md]
 ---
 Before building I read both repos' work logs. The 11-17 event-dates log (backend and

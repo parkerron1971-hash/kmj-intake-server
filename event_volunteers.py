@@ -32,9 +32,10 @@ and a Member or Viewer login that works the office by church_spaces._office's
 rule). A Viewer reads only: asking is the part's refusal (403). Every route
 checks the church itself (business_access.assert_access), independent of RLS.
 
-THE SWITCH. EVENT_VOLUNTEERS = off | owner | on, owner when unset (the platform
-owner's own church, member_asks.platform_church), and only where event dates
-are open too (serve_dates.open_for: an ask's yes makes one). It gates asking,
+THE SWITCH. EVENT_VOLUNTEERS = off | owner | on, on when unset (every church
+since 2026-11-21, Kevin: "switch on today"; owner is the platform owner's own
+church, member_asks.platform_church), and only where event dates are open too
+(serve_dates.open_for: an ask's yes makes one). It gates asking,
 changing an ask, answering, changing a date's numbers, Sunday-afternoon event
 dates and typed dates becoming Services & Events entries. It never hides what
 is already there: the picture, a date's numbers (serve_dates.needed applies
@@ -197,7 +198,7 @@ def _join(words: List[str]) -> str:
 # ─── the switch ──────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get(SWITCH) or "owner").strip().lower()
+    m = (os.environ.get(SWITCH) or "on").strip().lower()   # every church since 2026-11-21
     return m if m in ("off", "owner", "on") else "off"
 
 
