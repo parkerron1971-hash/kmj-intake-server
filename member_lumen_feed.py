@@ -290,15 +290,11 @@ def _share(kind: str, href: str, title: Any, *, sub: Any = "", img: Any = "", si
 
 def _thumb(lib: Dict[str, Any], s: Dict[str, Any], site, pool: Optional[List[str]]) -> str:
     """The picture's address for the share sheet: the
-    series' own art, else a photo named for it (member_portal_sermons._art's
-    order); '' when the art is the church's generated poster."""
-    import member_app_photos as photos
-    import member_portal_sermons as mps
-    series = mps._titles(lib).get(str(s.get("series_id") or ""), "")
-    own = photos.series_art(site, series) if series else ""
-    if own:
-        return own
-    return photos.by_name(pool or [], series or s.get("title") or "") if pool else ""
+    series' own art, else a photo named for it, else its own video picture
+    (member_portal_sermons._art's order: member_lumen_share.message_art);
+    '' when the art is the church's generated poster."""
+    import member_lumen_share as msl
+    return msl.message_art(lib, s, site, pool)
 
 
 def _message_body(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site, pool: List[str], used: set) -> str:
@@ -315,7 +311,7 @@ def _message_body(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], s
     sub = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x)
     thumb = _thumb(lib, s, site, pool)
     video, audio = (s.get("video_url") or "").strip(), (s.get("audio_url") or "").strip()
-    pic = (f'<a class="lf-vid" href="{href}" aria-label="Play {_e(title)}">{mps._art(lib, s, pal, site, pool, used)}'
+    pic = (f'<a class="lf-vid" href="{href}" aria-label="Play {_e(title)}">{mps._art(lib, s, pal, site, pool, used, yt="wide")}'
            f'<span class="lf-play" aria-hidden="true">{_i("play")}</span></a>')
     if video:
         main = f'<a class="lf-pill pri" href="{href}">{_i("play", "xs")}Watch</a>'

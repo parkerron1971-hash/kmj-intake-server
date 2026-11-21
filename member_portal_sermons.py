@@ -296,11 +296,13 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
 
 
 def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
-         pool: Optional[List[str]] = None, used: Optional[set] = None) -> str:
+         pool: Optional[List[str]] = None, used: Optional[set] = None, *, yt: str = "") -> str:
     """A message's picture: its series' own art from the church's site
     (in colour), else a photo named for the series with the series name on
     it, else a generated poster in the church's colour. Never a photo picked
-    by chance (Kevin, 2026-10-19)."""
+    by chance (Kevin, 2026-10-19). The new look passes `yt` ("small" or
+    "wide"): before the poster, the message's own YouTube picture
+    (member_yt_pictures), laid over the poster's colours."""
     import member_app_ui as ui
     import member_app_photos as photos
     series = _titles(lib).get(str(s.get("series_id") or ""), "")
@@ -313,6 +315,11 @@ def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
         if used is not None:
             used.add(pic)
         return ui.titled_photo(pic, name)
+    if yt:
+        import member_yt_pictures as myp
+        url = myp.picture_url(s.get("video_url"), wide=yt == "wide")
+        if url:
+            return myp.art(url, ui.poster_style(_key(lib, s), pal))
     return ui.poster(_key(lib, s), pal, name)
 
 

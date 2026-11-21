@@ -170,7 +170,7 @@ def message_tile(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, site=Non
     sample = samples.is_sample(s)
     hint = ui.sample_hint(samples.WHERE["sermons"]) if sample else ""
     return (f'<section aria-labelledby="lm-msg-h">{lm.section("Last Sunday" if recent else "Latest message", "/my/sermons", "All messages")}'
-            f'{hint}<a class="lm-tile" href="/my/sermons/{_e(s["id"])}"><span class="img">{mps._art(lib, s, pal, site, pool, used)}'
+            f'{hint}<a class="lm-tile" href="/my/sermons/{_e(s["id"])}"><span class="img">{mps._art(lib, s, pal, site, pool, used, yt="wide")}'
             f'<span class="lm-playdot">{lm.ic("playfill", 18)}</span>{ui.sample_tag() if sample else ""}</span>'
             f'<span class="tt" id="lm-msg-h">{_e(s.get("title"))}</span><span class="tm">{_e(sub)}</span></a></section>')
 
@@ -630,6 +630,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                     and not samples.is_sample(s)), None)
         series = mps._titles(library).get(str((msg or {}).get("series_id") or ""), "") if msg else ""
         pic, lk = photos.choose(biz, "home", pool, fallback=photos.hero(pool), look="colour")
+        if not pic and msg:
+            # No photo of the church's own: the day's message's video picture
+            # (member_yt_pictures) in place of the default picture.
+            import member_yt_pictures as myp
+            pic, lk = myp.picture_url(msg.get("video_url"), wide=True), "colour"
         main, _cnt, _note = service_act("lm-mvb")
         firsts = new and first and first["day"] == d
         kicker = ("Your first Sunday" + (f" · {lh.clock(t)}" if t else "")) if firsts else lh.when(d, t, now)[0]
@@ -734,7 +739,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                  "Last Sunday" if d and 0 <= (day0 - d).days <= 7 and d.weekday() == 6 else "Latest message")
         meta = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x) or day_label(s.get("preached_on"))
         shown.append("message")
-        return lh.tile(f"/my/sermons/{_e(s['id'])}", mps._art(library, s, pal, site, pool, used), "playfill", label,
+        return lh.tile(f"/my/sermons/{_e(s['id'])}", mps._art(library, s, pal, site, pool, used, yt="wide"), "playfill",
+                       label,
                        s.get("title") or "", meta, tag=ui.sample_tag() if samples.is_sample(s) else "")
 
     def t_pastor() -> str:

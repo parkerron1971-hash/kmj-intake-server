@@ -57,7 +57,7 @@ church's own address, so each is relative and opens on it.
 STORY PICTURES. GET /my/story/<kind>/<id>.png (t=<translation> for a verse):
 a PNG drawn here with Pillow and the self-hosted faces (member_lumen_fonts,
 the church's pairing): the content's picture (series art, the church's photo
-named for it, an event's picture spot) under a calm scrim of the church's
+named for it, a message's own video picture, an event's picture spot) under a calm scrim of the church's
 deep colour, the church's mark and name, a small capital line, the title in
 the serif, its line, a short rule and the public link as words. A verse is
 the church's deep colour, the verse in the reading face, its reference and
@@ -67,8 +67,9 @@ event (public, the public events page on), verse, moment (<kind>:<id> of one
 of the three it shows). Looked up by id AND the church whose address it is,
 so another church's id is a 404. Only for a signed-in member (or the owner's
 preview) who sees the new look; rate-limited per member; pictures are read
-only from the church's own site files or its public storage folder, at most
-12 MB and 40 megapixels each; the drawn picture is kept in memory (by what
+only from the church's own site files or its public storage folder (or, for
+a message's own video picture, from YouTube's picture host through
+member_yt_pictures), at most 12 MB and 40 megapixels each; the drawn picture is kept in memory (by what
 it shows) and by the phone (Cache-Control, ETag).
 
 COST. A page reads nothing more: the share control is built from what its
@@ -205,15 +206,18 @@ def event_shareable(biz: Mapping[str, Any], o: Mapping[str, Any]) -> bool:
 
 def message_art(lib: Mapping[str, Any], s: Mapping[str, Any], site, pool) -> str:
     """The picture a message already shows (member_portal_sermons._art):
-    its series' own art, else the church's photo named for it; '' for the
-    generated poster."""
+    its series' own art, else the church's photo named for it, else its own
+    video picture (member_yt_pictures, the small one); '' for the generated
+    poster."""
     import member_app_photos as photos
     import member_portal_sermons as mps
+    import member_yt_pictures as myp
     series = mps._titles(dict(lib)).get(str(s.get("series_id") or ""), "")
     own = photos.series_art(site, series) if series else ""
     if own:
         return own
-    return photos.by_name(pool or [], series or s.get("title") or "") if pool else ""
+    named = photos.by_name(pool or [], series or s.get("title") or "") if pool else ""
+    return named or myp.picture_url(s.get("video_url"))
 
 
 def message_link(lib: Mapping[str, Any], s: Mapping[str, Any], site, pool, inner: str, *, cls: str = "",
@@ -525,7 +529,7 @@ def _message(biz: Mapping[str, Any], site, sid: str) -> Optional[Dict[str, Any]]
     import member_app_photos as photos
     b = _q(biz["id"])
     rows = _rows(f"/sermons?id=eq.{_q(sid)}&business_id=eq.{b}&published=eq.true"
-                 f"&select=id,series_id,title,speaker,scripture,published&limit=1")
+                 f"&select=id,series_id,title,speaker,scripture,video_url,published&limit=1")
     if not rows or rows[0].get("published") is not True:
         return None
     s = rows[0]
@@ -536,6 +540,10 @@ def _message(biz: Mapping[str, Any], site, sid: str) -> Optional[Dict[str, Any]]
     pic, look = (photos.series_art(site, series) if series else ""), "colour"
     if not pic:
         pic, look = photos.by_name(photos.photos(dict(biz), site), series or s.get("title") or ""), "bw"
+    if not pic:
+        # Its own video picture, the wide one (member_yt_pictures), in colour.
+        import member_yt_pictures as myp
+        pic, look = myp.picture_url(s.get("video_url"), wide=True), "colour"
     return {"kind": "message", "kicker": series or "A message", "title": (s.get("title") or "").strip() or "Message",
             "sub": " · ".join(x for x in ((s.get("speaker") or "").strip(), (s.get("scripture") or "").strip()) if x),
             "href": message_href(s["id"]), "pic": pic, "look": look if pic else ""}
@@ -749,10 +757,14 @@ def _fetch(url: str) -> Optional[bytes]:
 
 def picture_bytes(url: str, business_id: str) -> Optional[bytes]:
     """A picture's bytes when it is the church's own (its site's files, its
-    storage folder); None for anything else."""
+    storage folder) or a message's own video picture (member_yt_pictures:
+    read from YouTube's picture host only, kept); None for anything else."""
     if not url:
         return None
     try:
+        import member_yt_pictures as myp
+        if url.startswith(myp.PREFIX):
+            return myp.bytes_for(url)
         local = _site_file(url)
         if local is not None:
             return local.read_bytes() if local.stat().st_size <= IMAGE_BYTES_MAX else None
@@ -1106,7 +1118,10 @@ def tag_of(spec: Mapping[str, Any], marks: Mapping[str, Any]) -> str:
 
 def picture(spec: Mapping[str, Any], marks: Mapping[str, Any], business_id: str) -> Tuple[str, bytes]:
     """(tag, PNG) for what it shows, drawn once per server copy and kept
-    within PNG_BUDGET."""
+    within PNG_BUDGET. A message's video picture comes over the network
+    (member_yt_pictures): drawn without it when YouTube didn't answer, that
+    PNG is neither kept nor tagged (tag ''), so the next ask tries again."""
+    import member_yt_pictures as myp
     tag = tag_of(spec, marks)
     with _PNG_LOCK:
         got = _PNG.get(tag)
@@ -1117,6 +1132,8 @@ def picture(spec: Mapping[str, Any], marks: Mapping[str, Any], business_id: str)
     logo = open_picture(picture_bytes(marks.get("logo") or "", business_id), longest=400) if marks.get("logo") else None
     with _DRAW:
         png = render(spec, marks, photo, logo)
+    if photo is None and str(spec.get("pic") or "").startswith(myp.PREFIX):
+        return "", png
     with _PNG_LOCK:
         _PNG[tag] = png
         while sum(len(v) for v in _PNG.values()) > PNG_BUDGET and len(_PNG) > 1:
@@ -1165,4 +1182,7 @@ async def story(request: Request, kind: str, name: str):
     if request.headers.get("if-none-match") == f'"{tag}"':
         return Response(status_code=304, headers=keep)
     tag, png = await asyncio.to_thread(picture, spec, marks, str(biz["id"]))
+    if not tag:
+        # drawn without its video picture (YouTube didn't answer): not kept by the phone either
+        return Response(content=png, media_type="image/png", headers=_NO)
     return Response(content=png, media_type="image/png", headers=keep)

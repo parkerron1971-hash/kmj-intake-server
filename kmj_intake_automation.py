@@ -686,6 +686,11 @@ app.include_router(member_lumen_look_router)
 # BEFORE public_site_router.
 from member_lumen_watch import router as member_lumen_watch_router
 app.include_router(member_lumen_watch_router)
+# A message's own video picture in the new look (member_yt_pictures.py):
+# GET /my/yt/<id>.jpg, fetched by the server from YouTube's picture host,
+# signed, kept. Before the site catch-all.
+from member_yt_pictures import router as member_yt_pictures_router
+app.include_router(member_yt_pictures_router)
 # The app's own pictures (member_app_pictures.py): POST /my/pictures, for
 # the owner (from a preview) and the people the owner named. BEFORE
 # public_site_router.
