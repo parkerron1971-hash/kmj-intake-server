@@ -19,9 +19,12 @@ from __future__ import annotations
 import copy
 import os
 import sys
+import types
 from datetime import date, timedelta
 
 import pytest
+from urllib.parse import parse_qsl, quote
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -32,6 +35,7 @@ for p in (ROOT, HERE):
         sys.path.insert(0, p)
 
 import church_reports  # noqa: E402
+import sb_clients  # noqa: E402
 import church_serving as cs  # noqa: E402
 import events_rsvp_router as er  # noqa: E402
 import member_portal_church as mpc  # noqa: E402
@@ -96,7 +100,8 @@ def test_a_kids_role_is_offered_only_with_a_current_check(roles):
     assert next(r for r in o["roles"] if r["id"] == "chap")["offer"] is True
     assert 'value="chap"' in mpc.occasion_card(o, "/my/events") and "Needs a background check" not in mpc._lumen_occasion(o)
     assert mpc.member_rsvp(BIZ, ME, E_KIDS, "serve", "chap") == (True, "serving")
-    assert kids_entry(c)["data"]["signups"][0] == {"name": "Jo Park", "status": "yes", "contact_id": JO, "role": "chap"}
+    assert kids_entry(c)["data"]["signups"][0] == {"name": "Jo Park", "status": "yes", "contact_id": JO, "via": "member",
+                                                   "role": "chap"}
 
 
 @pytest.mark.parametrize("how", ["ran out", "under 18", "none"])
@@ -144,12 +149,22 @@ def test_the_member_app_refuses_an_unoffered_signup_and_names_a_full_role(roles,
     kids_entry(c)["data"]["signups"] = [{"name": "Ana Cruz", "contact_id": ANA, "role": "chap", "status": "yes"},
                                         {"name": "Lee Ford", "contact_id": LEE, "role": "chap"}]
     r = client.post("/my/rsvp", data=form, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/my/events?err=filled&what=Chaperones"
-    assert "Chaperones just filled up." in mpc.flash_html(err="filled", what="Chaperones")
+    assert r.status_code == 303 and r.headers["location"] == f"/my/events?err=filled&entry={E_KIDS}&role=chap"
     assert len(kids_entry(c)["data"]["signups"]) == 2
-    # A label that isn't plain text is shown as text, and never past 60 letters.
-    shown = mpc.flash_html(err="filled", what="<b>Kids</b> " + "x" * 80)
-    assert "<b>" not in shown and "&lt;b&gt;" in shown and "x" * 61 not in shown
+    # The page names the role from the church's own data, never from the link.
+    occ = mpc.upcoming_for(BIZ, ME)
+
+    def asked(**q):
+        return types.SimpleNamespace(query_params=q)
+    assert "Chaperones just filled up." in mpc._flash(asked(err="filled", entry=E_KIDS, role="chap"), occ)
+    for q in ({"err": "filled", "entry": E_KIDS, "role": "made-up"}, {"err": "filled", "entry": E_KIDS, "role": "<b>x</b>"},
+              {"err": "filled", "entry": E_KIDS, "role": "made-up", "what": "Your account is locked"},
+              {"err": "filled", "entry": "not-an-event", "role": "chap"}):
+        shown = mpc._flash(asked(**q), occ)
+        assert shown == mpc.flash_html(err="filled") and "locked" not in shown and "<b>" not in shown, q
+    assert "That role just filled up." in mpc._flash(asked(err="filled", entry=E_KIDS, role="chap"))
+    crafted = mpc._flash(asked(err="filled", entry=E_KIDS, role="chap", what="Your account is locked"), occ)
+    assert "Chaperones just filled up." in crafted and "locked" not in crafted, "words in the link are never shown"
 
 
 # ─── the public page ─────────────────────────────────────────────────
@@ -223,9 +238,49 @@ def hours(church, monkeypatch):
                                         "status": "yes", "notified_at": NOW.isoformat(), "note": "", "swap_to": None})
     for t in ("group_meetings", "group_meeting_attendance", "space_leaders"):
         c.db.t.setdefault(t, [])
+    for e in c.db.t["module_entries"]:
+        e.setdefault("updated_at", "2026-09-01T00:00:00+00:00")
+    c.reads = []
+    plain = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: json_paths(plain, path, c.reads))
     c.walk = walk
     c.biz = c.db.t["businesses"][0]
     return c
+
+
+def json_paths(plain, path, seen):
+    """PostgREST's data->>key filters and alias:data->key picks, on
+    module_entries (the fake database reads neither)."""
+    seen.append(path)
+    table, _, q = path.lstrip("/").partition("?")
+    if table != "module_entries" or "data-" not in q:
+        return plain(path)
+    pairs = parse_qsl(q, keep_blank_values=True)
+    picks = next((v for k, v in pairs if k == "select"), "")
+    keep = [(k, v) for k, v in pairs if not k.startswith("data->>") and k != "select"]
+    rows = plain(f"/{table}?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in keep))
+    out = []
+    for r in rows:
+        data = r.get("data") or {}
+        ok = True
+        for k, v in pairs:
+            if k.startswith("data->>"):
+                val, (op, _, want) = data.get(k[7:]), v.partition(".")
+                ok = ok and val is not None and {"gte": str(val) >= want, "lt": str(val) < want}[op]
+        if not ok:
+            continue
+        row = {}
+        for part in picks.split(","):
+            alias, _, expr = part.partition(":") if ":" in part else (part, "", part)
+            if expr.startswith("data->>"):
+                v = data.get(expr[7:])
+                row[alias] = None if v is None else str(v)
+            elif expr.startswith("data->"):
+                row[alias] = data.get(expr[6:])
+            else:
+                row[alias] = r.get(expr)
+        out.append(row)
+    return out
 
 
 def mine(c, cid):
@@ -305,3 +360,93 @@ def test_my_serving_says_events(hours):
     c = hours
     html = mps._hours_html(mine(c, ANA), {"name": "Ana Cruz"})
     assert "an event you helped at." in html
+
+
+def test_the_hours_read_is_bounded_to_the_year_and_the_keys_it_needs(hours):
+    c = hours
+    mine(c, ANA)
+    reads = [r for r in c.reads if r.startswith("/module_entries")]
+    assert reads and all("data->>date=gte.2026-01-01" in r and "data->>date=lt." in r for r in reads), reads
+    assert all("select=id,module_id,status,updated_at,day:data->>date,signups:data->signups," in r for r in reads)
+    assert not any(",data&" in r or "select=id,module_id,status,updated_at,data" in r for r in reads), "never the whole data"
+
+
+def test_a_read_that_fails_counts_no_events_and_the_page_still_shows(hours, monkeypatch, capsys):
+    c = hours
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if path.startswith("/module_entries") else real(path, **k))
+    got = mine(c, JO)
+    assert (got["minutes"], got["events"]) == (90, 0), "the team place still counts; the events say nothing"
+    assert "helper hours couldn't be read" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("touched, counts", [("2026-10-21T09:00:00+00:00", 120), ("2026-10-19T09:00:00+00:00", 0),
+                                             (None, 0)])
+def test_an_event_archived_after_it_started_keeps_its_hours(hours, touched, counts):
+    """Tidying up after the walk keeps its helpers' hours; archiving it
+    before it started was calling it off."""
+    c = hours
+    c.walk["status"] = "archived"
+    c.walk["updated_at"] = touched
+    assert mine(c, ANA)["minutes"] == counts
+
+
+def test_a_public_sign_up_never_earns_a_member_hours(hours):
+    """The public page matches a contact by the email someone typed: that
+    is not the member's own word, so it earns nothing."""
+    import hashlib
+    c = hours
+    ana = next(s for s in c.walk["data"]["signups"] if s.get("contact_id") == ANA and s["role"] == "walk")
+    ana["via"] = "public"
+    c.walk["data"]["signups"] = [s for s in c.walk["data"]["signups"] if not (s.get("contact_id") == ANA and s is not ana)]
+    assert mine(c, ANA)["minutes"] == 0
+    ana["via"] = "member"
+    assert mine(c, ANA)["minutes"] == 120, "the member app's own"
+    # Before `via` was written: a signup matching one of the event's public
+    # registrations (the key the public page keeps for an email) earns nothing.
+    del ana["via"]
+    next(p for p in c.db.t["contacts"] if p["id"] == ANA)["email"] = "ana@example.org"
+    c.walk["data"]["_registration_keys"] = {
+        hashlib.sha256(f"{BIZ}:{E_PAST}:ana@example.org".encode()).hexdigest(): True}
+    assert mine(c, ANA)["minutes"] == 0
+    assert mine(c, JO)["minutes"] == 120, "someone the office put on, not a public registration, still counts"
+    c.walk["data"]["_registration_keys"] = {"someone-else": True}
+    assert mine(c, ANA)["minutes"] == 120
+
+
+def test_the_public_page_marks_its_sign_ups(roles, monkeypatch):
+    c = roles
+    import sample_church
+
+    async def no(biz):
+        return False
+    monkeypatch.setattr(sample_church, "is_sample_async", no)
+    c.db.t["business_sites"] = [{"business_id": BIZ, "slug": "lovecity", "updated_at": NOW.isoformat()}]
+    monkeypatch.setattr(er, "_rsvp_rate", {})
+    app = FastAPI()
+    app.include_router(er.router)
+    r = TestClient(app).post("/public/events/lovecity/rsvp", json={"entry_id": E_KIDS, "name": "Pat Doe",
+                                                                   "email": "pat@example.org", "role": "grill"})
+    assert r.status_code == 200, r.text
+    assert kids_entry(c)["data"]["signups"][-1]["via"] == "public"
+
+
+# ─── the office's picture says why ───────────────────────────────────
+
+
+@pytest.mark.parametrize("how, words", [("ok", None), ("overdue", "Check overdue"), ("none", "No check on file"),
+                                        ("teen", "Under 18")])
+def test_the_event_page_says_why_a_kids_helper_isnt_cleared(church, how, words):
+    c = church
+    from test_event_volunteers import E_LOCK as LOCK
+    c.db.t["space_leaders"] = []
+    if how in ("ok", "overdue", "teen"):
+        on = date.today() - timedelta(days=60 if how != "overdue" else 3 * 366)
+        c.db.t["space_leaders"].append({"business_id": BIZ, "contact_id": ANA, "space": "kids",
+                                        "background_check_on": on.isoformat()})
+    if how == "teen":
+        next(p for p in c.db.t["contacts"] if p["id"] == ANA)["birthdate"] = (date.today() - timedelta(days=16 * 365)).isoformat()
+    pic = c.as_("owner").get(f"/church/event-volunteers/{LOCK}?business_id={BIZ}").json()
+    ana = next(p for s in pic["special"] if s["role_id"] == "chap" for p in s["people"])
+    assert (ana["checked"], ana["check"]) == (how == "ok", words)

@@ -105,7 +105,6 @@ NO_ASK = "This event hasn't asked for volunteers yet. Ask for them first."
 SUNDAY_CLASH = "That's during Sunday's service. Sunday services are already on Who serves when."
 UNREAD = "The event's volunteers couldn't be read just now. Try again."
 UNSAVED = "That didn't save. Try again."
-_SAFE_PATH = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
 
 def _q(v: Any) -> str:
@@ -247,30 +246,37 @@ def ready() -> bool:
 
 # ─── the flyer: the one reader (spec 6.12) ───────────────────────────
 
-def flyer_of(data: Any, business_id: Any) -> Optional[Dict[str, Any]]:
+_COPY = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(-thumb)?\.jpg")
+
+
+def flyer_of(data: Any, business_id: Any, entry_id: Any) -> Optional[Dict[str, Any]]:
     """The event's flyer, {url, thumb, w, h}, or None. `_flyer` sits in JSON
-    the browser writes, so it is checked on every read: both addresses in
-    this church's own event-flyers folder of the public business-assets
-    bucket, nothing in them but a path's plain characters, and the size whole
-    numbers from 1 to 8000. Anything else is no flyer, never an error."""
+    the browser writes, so it is checked on every read: the full copy exactly
+    {base}/storage/v1/object/public/business-assets/{business}/event-flyers/
+    {entry}/{artwork}.jpg and the thumb the same with -thumb.jpg (one
+    artwork, this church, this event; nothing before, between or after), and
+    the size whole numbers from 1 to 8000. Anything else is no flyer, never
+    an error. The office app reading data._flyer itself holds it to the same
+    rule (spec 6.12)."""
     f = data.get("_flyer") if isinstance(data, dict) else None
     base = sb_clients.sb_url()
     if not isinstance(f, dict) or not base:
         return None
     try:
-        b = str(uuid.UUID(str(business_id)))
+        b, e = str(uuid.UUID(str(business_id))), str(uuid.UUID(str(entry_id)))
     except (ValueError, TypeError):
         return None
-    folder = f"{base}/storage/v1/object/public/business-assets/{b}/event-flyers/"
+    folder = f"{base}/storage/v1/object/public/business-assets/{b}/event-flyers/{e}/"
     out: Dict[str, Any] = {}
-    for key in ("url", "thumb"):
+    art = None
+    for key, thumb in (("url", False), ("thumb", True)):
         v = f.get(key)
         if not isinstance(v, str) or not v.startswith(folder):
             return None
-        rest = v[len(folder):]
-        if (not rest or ".." in rest or rest.startswith("/") or rest.endswith("/") or "//" in rest
-                or not _SAFE_PATH.match(rest)):
+        m = _COPY.fullmatch(v[len(folder):])
+        if not m or bool(m.group(2)) != thumb or (art is not None and m.group(1) != art):
             return None
+        art = m.group(1)
         out[key] = v
     for key in ("w", "h"):
         v = f.get(key)
@@ -626,12 +632,18 @@ def serve_minutes(data: Any) -> int:
     return _minutes(data if isinstance(data, dict) else {})
 
 
-def _kids_checked(biz: str, user: AuthedUser, roles: List[Dict[str, Any]],
-                  signups: List[Dict[str, Any]]) -> Optional[set]:
-    """Who on this event's kids roles has a current background check
-    (church_serving.cleared, the one rule), or None when this login may not
-    read who's cleared (church_serving._access's `checks`) or there is no
-    kids role with a person on it."""
+# What the event page says of someone on a kids role without a current
+# check, by their check's own state (church_serving.checks_of).
+CHECK_WORDS = {"overdue": "Check overdue", "none": "No check on file", "blocked": "No check on file",
+               "teen": "Under 18"}
+
+
+def _kids_checks(biz: str, user: AuthedUser, roles: List[Dict[str, Any]],
+                 signups: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """Each person on this event's kids roles and their check's state
+    (church_serving.checks_of: ok, due, overdue, none, blocked, teen), or
+    None when this login may not read who's cleared (church_serving._access's
+    `checks`) or there is no kids role with a person on it."""
     kids = {str(r.get("id")) for r in roles if r.get("kids") is True}
     cids = {str(s["contact_id"]) for s in signups if s.get("contact_id") and s.get("role") in kids}
     if not cids:
@@ -644,9 +656,19 @@ def _kids_checked(biz: str, user: AuthedUser, roles: List[Dict[str, Any]],
     if not access.get("checks"):
         return None
     try:
-        return cs.cleared(access["biz"], cids)
+        today = _now().astimezone(cs._zone(biz)).date()
+        got = cs.checks_of(access["biz"], cids, today)
     except HTTPException:
         return None
+    return {cid: (got.get(cid) or {}).get("status") or "none" for cid in cids}
+
+
+def _check_marks(status: Optional[str]) -> Dict[str, Any]:
+    """{checked, check}: whether the check is current (church_serving.CLEARED)
+    and, when it isn't, why ("Check overdue", "No check on file", "Under 18")."""
+    import church_serving as cs
+    ok = status in cs.CLEARED
+    return {"checked": ok, "check": None if ok else CHECK_WORDS.get(status or "none", "No check on file")}
 
 
 @router.get("/{entry_id}")
@@ -694,17 +716,18 @@ def picture(entry_id: str, business_id: str, user: AuthedUser = Depends(require_
                               "slots": [{"slot": k, "state": "open"} for k in range(1, n + 1)]})
     import events_rsvp_router as ev
     signups = ev.read_signups(ent["data"], ent["signups_field"])
-    # A kids role's people carry `checked` (spec 6.10: "No background check
-    # on file") for a login that may read who's cleared, by church_serving's
-    # own rule, and for nobody else.
-    checked = _kids_checked(biz, me["user"], ent["roles"], signups)
+    # A kids role's people carry `checked` and, when it isn't current, `check`
+    # ("Check overdue", "No check on file", "Under 18"; spec 6.10) for a login
+    # that may read who's cleared, by church_serving's own rule, and nobody else.
+    checks = _kids_checks(biz, me["user"], ent["roles"], signups)
     special = []
     for role in ent["roles"]:
         fill = ev.role_fill(role, signups)
         kids = role.get("kids") is True
         people = [{"name": _plain(s.get("name")) or "Someone",
                    **({"contact_id": str(s["contact_id"])} if s.get("contact_id") else {}),
-                   **({"checked": str(s.get("contact_id") or "") in checked} if kids and checked is not None else {})}
+                   **(_check_marks(checks.get(str(s["contact_id"]))) if kids and checks is not None
+                      and s.get("contact_id") else {})}
                   for s in signups if s.get("role") == role.get("id") and (s.get("status") or "yes") == "yes"]
         special.append({"role_id": str(role.get("id")), "label": fill["label"], "needed": fill["needed"],
                         "kids": kids, "open": role.get("open") is True, "people": people})
@@ -723,7 +746,7 @@ def picture(entry_id: str, business_id: str, user: AuthedUser = Depends(require_
         "special": special,
         "counts": {"all": t_need + s_need, "yes": t_yes + s_yes, "teams_needed": t_need, "teams_yes": t_yes,
                    "special_needed": s_need, "special_yes": s_yes},
-        "flyer": flyer_of(ent["data"], biz),
+        "flyer": flyer_of(ent["data"], biz, eid),
         "serve_minutes": _minutes(ent["data"]),
     }
 
@@ -939,7 +962,7 @@ def requests_list(biz: str) -> List[Dict[str, Any]]:
             signups = ev.read_signups(data, f["signups_field"])
             roles = [{"label": x["label"], "needed": x["needed"], "filled": x["filled"]}
                      for x in (ev.role_fill(role, signups) for role in ev.occasion_roles(data, f["roles"]))]
-        flyer = flyer_of(data, biz)
+        flyer = flyer_of(data, biz, r.get("entry_id"))
         needs = r.get("needs") or {}
         out.append({
             "id": str(r["id"]), "status": r.get("status"), "entry_id": str(r["entry_id"]) if r.get("entry_id") else None,
@@ -1401,62 +1424,49 @@ def _tell_tick(now: datetime, stats: Dict[str, int], churches: Dict[str, Dict[st
 
 def follow_tick(now: datetime, stats: Dict[str, int], churches: Dict[str, Dict[str, Any]]) -> None:
     """The safety net for edits made anywhere but the office's event form
-    (Chief, another tab): every event with a date still to come on Who
-    serves when, or a live ask, follows its entry (sync), and an ask whose
-    event was deleted closes (orphans). Only churches the switch is open
-    for, never a sample church."""
-    since = _q(_iso(now - timedelta(days=FOLLOW_DAYS)))
+    (Chief, another tab). Two reads find the churches with something to
+    follow: event dates from an entry still to come or started in the last
+    RAIN_HOURS, and live asks (waiting, or on for a date not long past).
+    Each church is then followed with its own handful of reads (follow),
+    however many events it has. Only churches the follow is open for
+    (_follows), never a sample church."""
+    recent = _q(_iso(now - timedelta(hours=RAIN_HOURS)))
     dates = sb_clients.sb_get_as_service(
         f"/worship_services?kind=eq.{sd.EVENT}&archived_at=is.null&is_template=eq.false&event_entry_id=not.is.null"
-        f"&starts_at=gt.{_q(_iso(now))}&select=business_id,event_entry_id&order=starts_at.asc&limit=2000")
+        f"&starts_at=gt.{recent}&select=business_id&limit=5000")
     asks = sb_clients.sb_get_as_service(
-        f"/{TABLE}?status=in.({WAITING},{ON})&created_at=gte.{since}&select=business_id,entry_id"
-        f"&order=created_at.asc&limit=2000")
+        f"/{TABLE}?status=in.({WAITING},{ON})&or=(status.eq.{WAITING},starts_at.gt.{recent})"
+        "&select=business_id&limit=5000")
     if not isinstance(dates, list) or not isinstance(asks, list):
         print("[event-volunteers] the sweep couldn't read the events to follow; next time", flush=True)
         return
-    work: Dict[str, Dict[str, Any]] = {}
-    for r in dates:
-        if r.get("event_entry_id"):
-            work.setdefault(str(r.get("business_id")), {"entries": set(), "orphans": False})["entries"].add(
-                str(r["event_entry_id"]))
-    for r in asks:
-        todo = work.setdefault(str(r.get("business_id")), {"entries": set(), "orphans": False})
-        if r.get("entry_id"):
-            todo["entries"].add(str(r["entry_id"]))
-        else:
-            todo["orphans"] = True
-    if not work:
+    ids = {str(r["business_id"]) for r in dates + asks if r.get("business_id")}
+    if not ids:
         return
-    _read_churches(work, churches)
-    for b, todo in work.items():
+    _read_churches(ids, churches)
+    for b in sorted(ids):
         church = churches.get(b)
-        if not church or not _open_church(church) or not sd.open_for(b):
+        if not church or not _follows(church):
             continue
-        for eid in sorted(todo["entries"]):
-            try:
-                got = sync(b, eid, now=now, church=church)
-            except Exception:  # noqa: BLE001 — one event never stops the next
-                print(f"[event-volunteers] {b[:8]}: an event couldn't be followed; next time", flush=True)
-                continue
-            stats["followed"] += 1
-            stats["moved"] += got["date"] == "moved"
-            stats["cancelled"] += got["date"] == "cancelled"
-            stats["people_told"] += got["told"]
-        if todo["orphans"]:
-            try:
-                stats["people_told"] += orphans(church, now)["told"]
-            except Exception:  # noqa: BLE001
-                print(f"[event-volunteers] {b[:8]}: a deleted event's ask couldn't be closed; next time", flush=True)
+        try:
+            got = follow(church, now)
+        except Exception:  # noqa: BLE001 — one church never stops the next
+            print(f"[event-volunteers] {b[:8]}: its events couldn't be followed; next time", flush=True)
+            continue
+        stats["followed"] += got["events"]
+        stats["moved"] += got["moved"]
+        stats["cancelled"] += got["cancelled"]
+        stats["people_told"] += got["told"]
+
 
 # ─── following the event (spec 6.7) ──────────────────────────────────
 # An event's date on Who serves when follows the event in Services &
-# Events. sync() is called after the office saves an event
-# (POST /{entry_id}/changed) and by the 15-minute sweep, for edits made
+# Events. follow() runs after the office saves an event (POST
+# /{entry_id}/changed, sync) and in the 15-minute sweep, for edits made
 # anywhere else. It is idempotent: a second call finds nothing to do.
 #
 #   day or time changed ..... the date follows; whoever was asked (and told)
-#                             or said yes hears once
+#                             or said yes hears
 #   title or place changed .. the date follows; nobody is told
 #   moved past, more than 180 days out, into a Sunday service, or no time
 #                             ........ the date stays; Who serves when flags it
@@ -1464,21 +1474,31 @@ def follow_tick(now: datetime, stats: Dict[str, int], churches: Dict[str, Dict[s
 #   archived, not active, deleted ... every ask on the date is taken back
 #                             (Take back's own path), the date comes off, each
 #                             person hears once, and the ask is cancelled
+#   a rain date ............. a date whose start passed less than RAIN_HOURS
+#                             ago follows a new time still ahead; one further
+#                             back stays, flagged
 #
-# TOLD ONCE. Each notice is claimed first in member_push_sends, the ledger
-# every member note uses (unique on business, kind and ref_id; every replica
-# and the worker share it): "event-moved-{assignment}-{starts_at}" or
-# "event-cancelled-{assignment}". A claim that lands is the one send. A claim
-# that can't be read (a database blip) stops the change for now, so the next
-# sync does it with nobody told twice. Quiet hours hold the whole change
-# while anyone would hear of it: the event's date follows with the first
-# sweep after 7 AM, and the notices with it.
+# A PERSON'S LATEST MOVE NOTICE ALWAYS NAMES THE DATE'S TIME. Each notice is
+# claimed first in member_push_sends, the ledger every member note uses
+# (unique on business, kind and ref_id; every replica and the worker share
+# it), as "event-moved-{assignment}-{time}-{n}": n counts that person's move
+# notices for the date, so two replicas reach for the same key and one wins,
+# and an event that goes back to a time it had before is told again. The
+# ledger is read once a church: a person whose latest notice names another
+# time than the date's (a sync that told and then lost the move, and the
+# office put it back) hears it is back. A cancel is "event-cancelled-
+# {assignment}". People are told first, then the date changes. A claim that
+# can't be read (a database blip) stops the change for now; the next sync
+# does it, and nobody hears twice. Quiet hours hold the whole change while
+# anyone would hear of it, and the serving sweep says nothing for such a date
+# meanwhile (unsettled), so no reminder goes out for what isn't true.
 
 LEDGER = "/member_push_sends?on_conflict=business_id,kind,ref_id"
 SERVING = "serving"
 FOLLOW_DAYS = 200           # an ask is made at most 180 days ahead: older ones are long past
-FOLLOW_ROWS = "id,position_id,slot,contact_id,status,notified_at"
-REMINDERS = {"week_sent_at": None, "day_sent_at": None, "morning_sent_at": None}
+RAIN_HOURS = 48             # a date whose start passed this recently still follows its event to a new time
+FOLLOW_ROWS = "id,service_id,position_id,slot,contact_id,status,notified_at"
+MOVE_REF = re.compile(r"event-moved-([0-9a-f-]{36})-(\d{8}T\d{4}Z)-(\d{1,6})")
 
 
 def short_day(at: datetime) -> str:
@@ -1631,26 +1651,110 @@ class _Tell:
             idempotency_key=ref[:120], unsubscribe_url=serve_links.one_click_url(stop)))
 
 
-def _date_rows(biz: str, sid: str) -> List[Dict[str, Any]]:
-    return _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&select={FOLLOW_ROWS}")
+def back_words(title: Any, at: datetime, place: str, status: str) -> Dict[str, str]:
+    """A correction: the person was told another time than the date's."""
+    head = f"{The(title)} is back to {short_when(at)}"
+    return {"title": head, "body": moved_words(title, at, place, status)["body"]}
 
 
-def cancel_date(church: Dict[str, Any], svc: Dict[str, Any], title: Any, now: datetime) -> Tuple[str, int]:
+def stamp(at: datetime) -> str:
+    """A time as a notice's key says it: "20261101T0000Z"."""
+    return at.astimezone(timezone.utc).strftime("%Y%m%dT%H%MZ")
+
+
+def move_ref(aid: Any, at: datetime, n: int) -> str:
+    return f"event-moved-{aid}-{stamp(at)}-{n}"
+
+
+def _told(biz: str, now: datetime) -> Dict[str, Tuple[int, str]]:
+    """Each assignment's latest move notice, from the ledger (one read for
+    the church): {assignment: (n, the time it named)}."""
+    since = _q(_iso(now - timedelta(days=FOLLOW_DAYS)))
+    rows = _read(f"/member_push_sends?business_id=eq.{_q(biz)}&kind=eq.{SERVING}&ref_id=like.{_q('event-moved-*')}"
+                 f"&created_at=gte.{since}&select=ref_id&limit=5000")
+    out: Dict[str, Tuple[int, str]] = {}
+    for r in rows:
+        m = MOVE_REF.fullmatch(str(r.get("ref_id") or ""))
+        if m:
+            aid, at, n = m.group(1), m.group(2), int(m.group(3))
+            if aid not in out or n > out[aid][0]:
+                out[aid] = (n, at)
+    return out
+
+
+def _church_zone(church: Dict[str, Any]):
+    try:
+        import business_marketing
+        return business_marketing.business_tz(church)
+    except Exception:  # noqa: BLE001 — the church's own clock, read the long way
+        return sp._zone(str(church["id"]))
+
+
+def _entries(biz: str, eids: Iterable[Any], zone) -> Dict[str, Dict[str, Any]]:
+    """These events of this church as entry_view gives them, two reads for
+    them all. One that isn't there, or isn't in an events room, is left
+    out: for following, it went away."""
+    ids = sorted({str(e) for e in eids if e})
+    rows: List[Dict[str, Any]] = []
+    for i in range(0, len(ids), 100):
+        rows += _read(f"/module_entries?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 100])})"
+                      "&select=id,module_id,status,data")
+    mids = sorted({str(r.get("module_id")) for r in rows if r.get("module_id")})
+    mods = {str(m["id"]): m for m in (_read(f"/custom_modules?business_id=eq.{_q(biz)}&id=in.({_ids(mids)})"
+                                            "&archetype=eq.event_roster&select=id,archetype_params,is_active")
+                                      if mids else [])}
+    return {str(r["id"]): entry_view(r, mods[str(r["module_id"])], zone) for r in rows
+            if str(r.get("module_id")) in mods}
+
+
+def _follows(church: Dict[str, Any]) -> bool:
+    """Where an event's date follows it: the switch open for the church
+    itself (not only for the platform owner's login), event dates open
+    there, never a sample church. The notices go exactly where the changes
+    do, so a date never moves or comes off in silence."""
+    return _open_church(church) and sd.open_for(str(church["id"]))
+
+
+def _ledger(cx: Dict[str, Any]) -> Dict[str, Tuple[int, str]]:
+    if cx["told"] is None:
+        cx["told"] = _told(cx["biz"], cx["now"])
+    return cx["told"]
+
+
+def _teller(cx: Dict[str, Any]) -> "_Tell":
+    if cx["tell"] is None:
+        cx["tell"] = _Tell(cx["church"], [r for rs in cx["rows"].values() for r in rs])
+    return cx["tell"]
+
+
+def _rearm(biz: str, sid: str, to: datetime, zone, now: datetime) -> None:
+    """A moved date's reminders follow the new time: a yes's mark is
+    cleared only for a reminder whose moment for the new time is still to
+    come (sunday_serving_alerts.moments, its own rule). One whose window
+    already opened keeps its mark, so it never goes twice or late."""
+    import sunday_serving_alerts as ssa
+    clear = {col: None for col, at in ssa.moments(to, zone).items() if at > now}
+    if clear and not isinstance(sb_clients.sb_patch_as_service(
+            f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&status=eq.yes&select=id", clear), list):
+        print(f"[event-volunteers] {biz[:8]}: a moved date's reminders weren't reset", flush=True)
+
+
+def _cancel_one(cx: Dict[str, Any], s: Dict[str, Any], title: Any, at: datetime) -> Tuple[str, int]:
     """The event went away: tell each person on the date once, take every
-    ask back by Take back's own path (sunday_planning.do_take_back, so
-    reminders stop and swaps close) and take the date off. cancelled |
-    held | unsent (try again next time), and how many heard."""
-    biz, sid = str(church["id"]), str(svc["id"])
-    rows = _date_rows(biz, sid)
+    row back by Take back's own path (sunday_planning.do_take_back, so
+    reminders stop and swaps close) and take the date off. The ask that made
+    it is closed after (_follow_ask): until then it points the next sync at
+    a deleted event's date. cancelled | held | unsent."""
+    church, biz, now = cx["church"], cx["biz"], cx["now"]
+    sid = str(s["id"])
+    rows = cx["rows"].get(sid, [])
     hear = [r for r in rows if _hears(r)]
-    if hear and _open_church(church) and _quiet(church, now):
+    if hear and cx["on"] and _quiet(church, now):
         return "held", 0
-    at = _at(svc.get("starts_at"))
-    zone = sp._zone(biz)
-    local = at.astimezone(zone) if at else now.astimezone(zone)
-    tell = _Tell(church, rows)
+    local = at.astimezone(cx["zone"])
     told = 0
     for r in hear:
+        tell = _teller(cx)
         got = tell.send(r, cancelled_words(title, local, tell.place(r)), f"event-cancelled-{r['id']}", "/my/serving")
         if got == "unsent":
             return "unsent", told
@@ -1664,60 +1768,75 @@ def cancel_date(church: Dict[str, Any], svc: Dict[str, Any], title: Any, now: da
     off = sb_clients.sb_patch_as_service(
         f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&archived_at=is.null&select=id",
         {"archived_at": _iso(now)})
-    if not isinstance(off, list):
-        return "unsent", told
-    # The ask that made it is closed by the caller, last: until then it is
-    # what points the next sync at this date (a deleted event leaves no other).
-    return "cancelled", told
+    return ("cancelled" if isinstance(off, list) else "unsent"), told
 
 
-def follow_date(church: Dict[str, Any], svc: Dict[str, Any], ent: Dict[str, Any], now: datetime,
-                zone) -> Tuple[str, int]:
-    """The event changed: its date follows. A new title or place follows
-    with nobody told. A new day or time follows when it can (_wont_follow),
-    each person on the date told once first. moved | renamed | same |
-    flagged (it moved and the date didn't follow) | held | unsent."""
-    biz, sid = str(church["id"]), str(svc["id"])
+def _follow_one(cx: Dict[str, Any], s: Dict[str, Any], ent: Optional[Dict[str, Any]], title: Any) -> Tuple[str, int]:
+    """One live date and its event. moved | renamed | same | corrected |
+    flagged | held | cancelled | past | unsent, and how many heard."""
+    church, biz, zone, now = cx["church"], cx["biz"], cx["zone"], cx["now"]
+    sid = str(s["id"])
+    at = _at(s.get("starts_at"))
+    if at is None:
+        return "same", 0
+    if ent is None or not ent["active"]:
+        if at <= now:
+            return "past", 0        # it happened (or is under way): leave it
+        return _cancel_one(cx, s, title, at)
     fields: Dict[str, Any] = {}
-    if ent["title"] != _plain(svc.get("title")):
+    if ent["title"] != _plain(s.get("title")):
         fields["title"] = ent["title"]
-    if ent["place"] != _plain(svc.get("place")):
+    if ent["place"] != _plain(s.get("place")):
         fields["place"] = ent["place"]
-    state, told = "same", 0
-    if not _same_time(ent.get("at"), _at(svc.get("starts_at"))):
-        if _wont_follow(biz, ent, now, zone):
-            state = "flagged"
-        else:
-            rows = _date_rows(biz, sid)
-            hear = [r for r in rows if _hears(r)]
-            if hear and _open_church(church) and _quiet(church, now):
-                state = "held"
-            else:
-                tell = _Tell(church, rows)
-                stamp = _iso(ent["at"])
-                for r in hear:
-                    got = tell.send(r, moved_words(ent["title"], ent["at"], tell.place(r), r["status"]),
-                                    f"event-moved-{r['id']}-{stamp}", f"/my/serving/{r['id']}")
-                    if got == "unsent":
-                        return "unsent", told
-                    told += got == "told"
-                fields["starts_at"] = stamp
-                state = "moved"
+    moved = not _same_time(ent.get("at"), at)
+    # A rain date: a date that started a little while ago follows a new time still ahead.
+    ahead = at > now or (ent.get("at") is not None and ent["at"] > now)
+    follow = moved and ahead and not _wont_follow(biz, ent, now, zone)
+    state = "moved" if follow else ("flagged" if moved else "same")
+    to = ent["at"] if follow else at.astimezone(zone)
+    need: List[Tuple[Dict[str, Any], Optional[Tuple[int, str]]]] = []
+    hear = [r for r in cx["rows"].get(sid, []) if _hears(r)]
+    if hear and (follow or at > now):
+        told = _ledger(cx)
+        for r in hear:
+            last = told.get(str(r["id"]))
+            if follow and (last is None or last[1] != stamp(to)):
+                need.append((r, last))
+            elif not follow and last is not None and last[1] != stamp(at):
+                need.append((r, last))      # told a time the date doesn't have: it's back
+    n_told = 0
+    if need and cx["on"] and _quiet(church, now):
+        state, follow = "held", False       # the date waits for its notices
+    else:
+        for r, last in need:
+            tell = _teller(cx)
+            n = last[0] + 1 if last else 0
+            words = (moved_words if follow else back_words)(ent["title"], to, tell.place(r), r["status"])
+            got = tell.send(r, words, move_ref(r["id"], to, n), f"/my/serving/{r['id']}")
+            if got == "unsent":
+                return "unsent", n_told
+            if got in ("told", "taken"):
+                cx["told"][str(r["id"])] = (n, stamp(to))
+            n_told += got == "told"
+        if need and not follow:
+            state = "corrected"
+        if follow:
+            fields["starts_at"] = _iso(to)
     if not fields:
-        return state, told
+        return state, n_told
     got = sb_clients.sb_patch_as_service(
         f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&archived_at=is.null&select=id",
         fields)
     if not isinstance(got, list):
-        return "unsent", told
+        return "unsent", n_told
     if "starts_at" in fields:
-        # The reminders follow the new time: a reminder whose moment has
-        # passed is skipped by the serving sweep, never sent late.
-        if not isinstance(sb_clients.sb_patch_as_service(
-                f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&status=eq.yes&select=id",
-                dict(REMINDERS)), list):
-            print(f"[event-volunteers] {biz[:8]}: a moved date's reminders weren't reset", flush=True)
-    return (state if state != "same" else "renamed"), told
+        _rearm(biz, sid, to, zone, now)
+    # The ask that made the date says what it says (its card, and the sweep's reach).
+    copy = {k: v for k, v in fields.items() if k in ("title", "place", "starts_at")}
+    if not isinstance(sb_clients.sb_patch_as_service(
+            f"/{TABLE}?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&status=eq.{ON}&select=id", copy), list):
+        print(f"[event-volunteers] {biz[:8]}: an ask's copy of its date didn't follow; next time", flush=True)
+    return (state if state != "same" else "renamed"), n_told
 
 
 def _refresh(biz: str, req: Dict[str, Any], ent: Dict[str, Any], now: datetime) -> Optional[str]:
@@ -1750,105 +1869,146 @@ def _close(biz: str, req: Dict[str, Any], status: str) -> bool:
     return isinstance(got, list) and bool(got)
 
 
-def _service(biz: str, sid: Any) -> Optional[Dict[str, Any]]:
-    rows = _read(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}"
-                 f"&select=id,title,starts_at,archived_at{sd.fields()}&limit=1")
-    return rows[0] if rows else None
+def _follow_ask(cx: Dict[str, Any], r: Dict[str, Any], ents: Dict[str, Dict[str, Any]],
+                live: Dict[str, Dict[str, Any]], states: Dict[str, str]) -> int:
+    """One live ask: a waiting one keeps its copies (or closes with its
+    event); one that is on closes when its event went away and its date came
+    off, now or before. A date that already happened keeps its ask: it was
+    served. 1 when it was written."""
+    biz, now = cx["biz"], cx["now"]
+    eid = str(r.get("entry_id") or "")
+    ent = ents.get(eid) if eid else None
+    alive = ent is not None and ent["active"]
+    if r.get("status") == WAITING:
+        if not alive:
+            return int(_close(biz, r, WAITING))
+        return int(bool(_refresh(biz, r, ent, now)))
+    sid = str(r.get("service_id") or "")
+    if alive or not sid:
+        return 0                    # on and well, or on with no date (repair's)
+    if states.get(sid) == "cancelled" or sid not in live:
+        return int(_close(biz, r, ON))
+    return 0
 
 
-def _settle_on(church: Dict[str, Any], req: Dict[str, Any], title: Any, now: datetime,
-               out: Dict[str, Any]) -> None:
-    """An ask that is on, for an event that went away: its date comes off
-    (cancel_date) when it is still to come, then the ask is cancelled. A
-    date that already happened keeps its ask: it was served."""
+def follow(church: Dict[str, Any], now: Optional[datetime] = None, *, only: Optional[str] = None) -> Dict[str, Any]:
+    """Follow one church's events (spec 6.7): every live date from an entry,
+    still to come or started in the last RAIN_HOURS, and every live ask; or,
+    with `only` (the office's /changed), that event's and the asks whose
+    event was deleted. A handful of reads for the church however many events
+    it has: its dates, its asks, their events (two), the rows on those dates
+    and, when anyone would hear, the move ledger. Safe to call any number of
+    times. {date: `only`'s date's state or None, told, requests, events,
+    moved, cancelled}."""
+    now = now or _now()
     biz = str(church["id"])
-    if not req.get("service_id"):
-        return              # on with no date: the sweep's repair, not this
-    svc = _service(biz, req["service_id"])
-    if svc and not svc.get("archived_at"):
-        at = _at(svc.get("starts_at"))
-        if at is not None and at <= now:
-            return
-        state, told = cancel_date(church, svc, title, now)
-        out["date"], out["told"] = state, out["told"] + told
-        if state != "cancelled":
-            return
-    if _close(biz, req, ON):
-        out["requests"] += 1
+    recent = _q(_iso(now - timedelta(hours=RAIN_HOURS)))
+    out: Dict[str, Any] = {"date": None, "told": 0, "requests": 0, "events": 0, "moved": 0, "cancelled": 0}
+    dates = _read(f"/worship_services?business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&archived_at=is.null"
+                  f"&is_template=eq.false&starts_at=gt.{recent}&select=id,title,starts_at{sd.fields()}"
+                  "&order=starts_at.asc&limit=200")
+    asks = _read(f"/{TABLE}?business_id=eq.{_q(biz)}&status=in.({WAITING},{ON})"
+                 f"&or=(status.eq.{WAITING},starts_at.gt.{recent})&select={FIELDS}&order=created_at.asc&limit=500")
+    if only:
+        asks = [r for r in asks if str(r.get("entry_id") or "") in (str(only), "")]
+    live = {str(s["id"]): s for s in dates}
+    orphans = {str(r["service_id"]) for r in asks
+               if not r.get("entry_id") and r.get("status") == ON and r.get("service_id")}
+    work = [s for s in dates if s.get("event_entry_id") and (not only or str(s["event_entry_id"]) == str(only))]
+    work += [live[sid] for sid in sorted(orphans) if sid in live and not live[sid].get("event_entry_id")]
+    if not work and not asks:
+        return out
+    zone = _church_zone(church)
+    ents = _entries(biz, {s.get("event_entry_id") for s in work} | {r.get("entry_id") for r in asks}, zone)
+    rows: Dict[str, List[Dict[str, Any]]] = {}
+    if work:
+        for row in _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=in.({_ids(s['id'] for s in work)})"
+                         f"&select={FOLLOW_ROWS}"):
+            rows.setdefault(str(row["service_id"]), []).append(row)
+    cx = {"church": church, "biz": biz, "zone": zone, "now": now, "rows": rows, "told": None, "tell": None,
+          "on": _open_church(church)}
+    states: Dict[str, str] = {}
+    for s in work:
+        eid = str(s.get("event_entry_id") or "")
+        ent = ents.get(eid) if eid else None
+        title = ((ent or {}).get("title") or next((r.get("title") for r in asks if str(r.get("service_id") or "")
+                                                   == str(s["id"]) and r.get("title")), None) or s.get("title"))
+        state, told = _follow_one(cx, s, ent, title)
+        states[str(s["id"])] = state
+        out["told"] += told
+        out["events"] += 1
+        out["moved"] += state == "moved"
+        out["cancelled"] += state == "cancelled"
+        if only and eid == str(only):
+            out["date"] = state
+    for r in asks:
+        out["requests"] += _follow_ask(cx, r, ents, live, states)
+    return out
 
 
 def sync(biz: str, entry_id: str, *, now: Optional[datetime] = None,
          church: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Follow one event (spec 6.7): its live date on Who serves when, and its
-    live ask. Safe to call any number of times. {date: moved | renamed |
-    same | flagged | held | cancelled | unsent | None, told, requests}."""
-    now = now or _now()
-    church = church or _business(biz)
-    zone = sp._zone(biz)
-    try:
-        ent: Optional[Dict[str, Any]] = event_entry(biz, entry_id, zone)
-    except HTTPException as e:
-        if e.status_code != 404:
-            raise
-        ent = None
-    out: Dict[str, Any] = {"date": None, "told": 0, "requests": 0}
-    gone = ent is None or not ent["active"]
-    svc = live_date(biz, entry_id)
-    reqs = _requests_of(biz, entry_id)
-    title = (ent or {}).get("title") or next((r.get("title") for r in reqs if r.get("title")), None) or \
-        (svc or {}).get("title")
-    if svc:
-        at = _at(svc.get("starts_at"))
-        if at is not None and at > now:
-            state, told = (cancel_date(church, svc, title, now) if gone else follow_date(church, svc, ent, now, zone))
-            out["date"], out["told"] = state, told
-    for r in reqs:
-        if r.get("status") == WAITING:
-            if gone:
-                out["requests"] += _close(biz, r, WAITING)
-            elif _refresh(biz, r, ent, now):
-                out["requests"] += 1
-        elif gone and out["date"] not in ("held", "unsent"):
-            if svc and str(r.get("service_id")) == str(svc["id"]) and out["date"] == "cancelled":
-                out["requests"] += _close(biz, r, ON)
-            elif not svc or str(r.get("service_id")) != str(svc["id"]):
-                _settle_on(church, r, title, now, out)
-    return out
+    """Follow one event (spec 6.7): follow(), kept to it and to the asks
+    whose event was deleted."""
+    return follow(church or _business(biz), now, only=str(entry_id))
 
 
-def orphans(church: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, int]:
-    """Asks whose event was deleted (entry_id went null): a waiting one is
-    cancelled; one that is on takes its date off (cancel_date) first, unless
-    that date already happened."""
+def unsettled(church: Dict[str, Any], services: Iterable[Dict[str, Any]],
+              now: Optional[datetime] = None) -> set:
+    """The event dates (sunday_serving's shape: id, at, event, entry_id)
+    whose event went away, or moved to a time the date will follow, and the
+    date hasn't yet: the serving sweep says nothing for them meanwhile, so a
+    cancel or a move held through quiet hours never has a reminder or an ask
+    go out for what isn't true. Empty where the follow isn't open, before
+    the migration, and when a read fails (the reminders go as before)."""
+    evs = [s for s in services if s.get("event")]
+    if not evs or not ready() or not _follows(church):
+        return set()
     now = now or _now()
     biz = str(church["id"])
-    since = _q(_iso(now - timedelta(days=FOLLOW_DAYS)))
-    rows = _read(f"/{TABLE}?business_id=eq.{_q(biz)}&entry_id=is.null&status=in.({WAITING},{ON})"
-                 f"&created_at=gte.{since}&select={FIELDS}&order=created_at.asc&limit=200")
-    out: Dict[str, Any] = {"date": None, "told": 0, "requests": 0}
-    for r in rows:
-        if r.get("status") == WAITING:
-            out["requests"] += _close(biz, r, WAITING)
-        else:
-            _settle_on(church, r, r.get("title"), now, out)
-    return {"told": out["told"], "requests": out["requests"]}
+    try:
+        zone = _church_zone(church)
+        ents = _entries(biz, {s.get("entry_id") for s in evs}, zone)
+        out = set()
+        for s in evs:
+            eid = str(s.get("entry_id") or "")
+            if not eid:
+                continue
+            ent = ents.get(eid)
+            if ent is None or not ent["active"]:
+                out.add(str(s["id"]))
+            elif not _same_time(ent.get("at"), s.get("at")) and not _wont_follow(biz, ent, now, zone):
+                out.add(str(s["id"]))
+        loose = [str(s["id"]) for s in evs if not s.get("entry_id")]
+        if loose:
+            out |= {str(r["service_id"]) for r in _read(
+                f"/{TABLE}?business_id=eq.{_q(biz)}&status=eq.{ON}&entry_id=is.null&service_id=in.({_ids(loose)})"
+                "&select=service_id")}
+        return out
+    except Exception:  # noqa: BLE001 — a read that fails keeps the reminders as they were
+        print(f"[event-volunteers] {biz[:8]}: the serving sweep couldn't check its event dates", flush=True)
+        return set()
 
 
 @router.post("/{entry_id}/changed")
 def changed(entry_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """The office saved an event (the app calls this after every save): its
-    date on Who serves when and its ask follow it now (sync), with the same
-    gate as asking. Cheap, and safe to call twice."""
+    date on Who serves when and its ask follow it now (follow), with the
+    same gate as asking. Where the follow isn't open for the church itself
+    (the platform owner's login at another church, a sample church) it is a
+    404: nothing changes without its notices. Cheap, and safe to call
+    twice."""
     body = body or {}
     me = _login(body.get("business_id"), user)
     _ask_gate(me)
     _switch_gate(me)
-    biz = me["biz"]
     eid = sp._uuid(entry_id, "event")
-    church = _business(biz)
-    got = sync(biz, eid, church=church)
-    gone = orphans(church)
-    return {"date": got["date"], "told": got["told"] + gone["told"], "requests": got["requests"] + gone["requests"]}
+    church = _business(me["biz"])
+    if not _follows(church):
+        raise HTTPException(404, "Not Found")
+    got = follow(church, only=eid)
+    return {"date": got["date"], "told": got["told"], "requests": got["requests"]}
+
 
 # ─── the flyer (spec 6.12) ───────────────────────────────────────────
 # PUT /{entry_id}/flyer takes an upload (multipart: business_id, file) or a
@@ -1870,16 +2030,27 @@ FLYER_SIDE = 8000
 FULL_SIDE, FULL_QUALITY = 1600, 88
 THUMB_WIDE, THUMB_QUALITY = 480, 82
 FLYER_KINDS = ("JPEG", "PNG", "WEBP")
+FLYER_PIXELS = 25_000_000   # image_studio.normalize_image's own cap, checked here before anything is decoded
 NOT_A_FLYER = "Choose a JPG, PNG or WebP picture under 10 MB."
+TOO_HEAVY = "That picture is over 10 MB. Choose a smaller one, or save it smaller first."
+NOT_A_KIND = "That isn't a JPG, PNG or WebP picture. Choose one of those."
+TOO_BIG = "That picture is too big: at most 8000 pixels a side and 25 megapixels in all. Choose a smaller one."
+UNREADABLE = "That picture couldn't be read. Choose another JPG, PNG or WebP."
+NOT_YOURS = ("Pictures from the gallery are for the owner, an admin, and whoever does the posts or the clips. "
+             "Upload the flyer instead.")
 NO_PICTURE = "That picture isn't in this church's gallery. Pick another, or upload one."
 
 
-def _flyer_gate(business_id: Any, entry_id: str, user: AuthedUser) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _flyer_gate(business_id: Any, entry_id: str, user: AuthedUser,
+                switch: bool = True) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Any office login that could edit the event, with the switch open: a
-    Viewer is the part's refusal (403), another church's event a 404."""
+    Viewer is the part's refusal (403), another church's event a 404.
+    Taking a flyer off (`switch` False) doesn't need the switch: after a
+    rollback the office can still take one down."""
     me = _login(business_id, user)
     _ask_gate(me)
-    _switch_gate(me)
+    if switch:
+        _switch_gate(me)
     eid = sp._uuid(entry_id, "event")
     ent = event_entry(me["biz"], eid, sp._zone(me["biz"]))
     return me, ent
@@ -1896,13 +2067,15 @@ def check_upload(raw: Any) -> bytes:
     if not isinstance(raw, (bytes, bytearray)) or not raw:
         raise HTTPException(400, "Choose a picture to upload.")
     if len(raw) > FLYER_BYTES:
-        raise HTTPException(400, NOT_A_FLYER)
+        raise HTTPException(400, TOO_HEAVY)
     try:
+        # Image.open reads the header only: the kind and the size are known
+        # before a single pixel is decoded (load, exif_transpose).
         with Image.open(io.BytesIO(raw)) as im:
             if im.format not in FLYER_KINDS:
-                raise HTTPException(400, NOT_A_FLYER)
-            if im.width > FLYER_SIDE or im.height > FLYER_SIDE:
-                raise HTTPException(400, f"Choose a picture at most {FLYER_SIDE} pixels on a side.")
+                raise HTTPException(400, NOT_A_KIND)
+            if im.width > FLYER_SIDE or im.height > FLYER_SIDE or im.width * im.height > FLYER_PIXELS:
+                raise HTTPException(400, TOO_BIG)
             turn = im.getexif().get(0x0112) if hasattr(im, "getexif") else None
             if turn and turn != 1:
                 im.load()
@@ -1912,12 +2085,16 @@ def check_upload(raw: Any) -> bytes:
                 raw = buf.getvalue()
     except HTTPException:
         raise
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
-        raise HTTPException(400, NOT_A_FLYER)
+    except Image.DecompressionBombError:
+        raise HTTPException(400, TOO_BIG)
+    except UnidentifiedImageError:
+        raise HTTPException(400, NOT_A_KIND)
+    except (OSError, ValueError):
+        raise HTTPException(400, UNREADABLE)
     try:
         return image_studio.normalize_image(bytes(raw))
     except HTTPException:
-        raise HTTPException(400, NOT_A_FLYER)
+        raise HTTPException(400, UNREADABLE)
 
 
 def flyer_copies(png: bytes) -> Dict[str, Any]:
@@ -1950,6 +2127,19 @@ def flyer_copies(png: bytes) -> Dict[str, Any]:
 def flyer_paths(biz: str, eid: str, artwork_id: str) -> Tuple[str, str]:
     base = f"{biz}/event-flyers/{eid}/{artwork_id}"
     return f"{base}.jpg", f"{base}-thumb.jpg"
+
+
+def gallery_reader(church: Dict[str, Any], user: AuthedUser) -> None:
+    """Whether this login may take a picture from the church's gallery and
+    put it on the public page: the owner, or a login image_studio's own
+    church_reader lets read the gallery (an Admin, whoever does the posts or
+    the clips). Anyone else is a 403: the picture is read as the owner and
+    published, so the gallery's own rule decides."""
+    if str(user.id) == str(church.get("owner_id") or ""):
+        return
+    import image_studio
+    if not image_studio.church_reader(str(church["id"]), user):
+        raise HTTPException(403, NOT_YOURS)
 
 
 def _artwork(biz: str, artwork_id: Any) -> Dict[str, Any]:
@@ -2026,6 +2216,8 @@ async def put_flyer(entry_id: str, request: Request, user: AuthedUser = Depends(
     church = await asyncio.to_thread(_business, biz)
     owner = str(church.get("owner_id") or "")
     png = await asyncio.to_thread(check_upload, raw) if raw is not None else None
+    if artwork_id:
+        await asyncio.to_thread(gallery_reader, church, user)
     row = await asyncio.to_thread(_artwork, biz, artwork_id) if artwork_id else None
     async with httpx.AsyncClient(timeout=60) as client:
         # As the church's owner, like every server-made picture
@@ -2055,20 +2247,22 @@ async def put_flyer(entry_id: str, request: Request, user: AuthedUser = Depends(
              "thumb": image_studio.storage_url(f"object/public/business-assets/{thumb_path}"),
              "w": copies["w"], "h": copies["h"], "at": _iso(_now())}
     data = await asyncio.to_thread(write_flyer, biz, eid, flyer)
-    return {"data": data, "flyer": flyer_of(data, biz)}
+    return {"data": data, "flyer": flyer_of(data, biz, eid)}
 
 
 @router.delete("/{entry_id}/flyer")
 def drop_flyer(entry_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
-    """Take the flyer off the event (the picture stays in the gallery)."""
-    me, ent = _flyer_gate(business_id, entry_id, user)
+    """Take the flyer off the event (the picture stays in the gallery). The
+    switch doesn't stop it: a flyer put up while it was open can always come
+    down."""
+    me, ent = _flyer_gate(business_id, entry_id, user, switch=False)
     data = write_flyer(me["biz"], ent["entry_id"], None)
     return {"data": data, "flyer": None}
 
 
-def flyer_card(data: Any, business_id: Any) -> Optional[Dict[str, str]]:
+def flyer_card(data: Any, business_id: Any, entry_id: Any) -> Optional[Dict[str, str]]:
     """{thumb, url} for an office list (Who serves when, The week)."""
-    f = flyer_of(data, business_id)
+    f = flyer_of(data, business_id, entry_id)
     return {"thumb": f["thumb"], "url": f["url"]} if f else None
 
 
@@ -2084,7 +2278,7 @@ def flyers_for(biz: str, entry_ids: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
         if not isinstance(rows, list):
             return out
         for r in rows:
-            f = flyer_of(r.get("data"), biz)
+            f = flyer_of(r.get("data"), biz, r.get("id"))
             if f:
                 out[str(r["id"])] = f
     return out
@@ -2095,9 +2289,11 @@ def date_extras(biz: str, services: List[Dict[str, Any]], user: Any = None, *, f
     """Event dates on Who serves when and The week (each a service dict with
     kind 'event' and its event_entry_id): `flyer` {thumb, url} or None, and,
     with `flags` and the switch open, `event_moved` (moved_flag) when its
-    event moved and the date didn't follow. In place; one read of the
-    events. A read that fails leaves no flyer and no flag: the page never
-    fails over a picture."""
+    event moved and the date won't follow: the new time can't be followed
+    (past, far, a Sunday service, no time), or the date started more than
+    RAIN_HOURS ago. In place; one read of the events. A read that fails,
+    here or in the Sunday check, leaves no flyer or no flag: the page never
+    fails over a picture or a flag."""
     evs = [s for s in services if s.get("kind") == sd.EVENT]
     for s in evs:
         s["flyer"] = None
@@ -2112,7 +2308,10 @@ def date_extras(biz: str, services: List[Dict[str, Any]], user: Any = None, *, f
         if not isinstance(got, list):
             return
         rows.update({str(r["id"]): r for r in got})
-    flag = flags and ready() and open_for(biz, user)
+    try:
+        flag = flags and ready() and open_for(biz, user)
+    except Exception:  # noqa: BLE001
+        flag = False
     mods: Dict[str, Dict[str, Any]] = {}
     if flag:
         mids = sorted({str(r.get("module_id")) for r in rows.values() if r.get("module_id")})
@@ -2125,18 +2324,27 @@ def date_extras(biz: str, services: List[Dict[str, Any]], user: Any = None, *, f
         e = rows.get(str(s["event_entry_id"]))
         if not e:
             continue
-        s["flyer"] = flyer_card(e.get("data"), biz)
+        s["flyer"] = flyer_card(e.get("data"), biz, e.get("id"))
         if not flag:
             continue
         s["event_moved"] = None
         mod = mods.get(str(e.get("module_id")))
         at = _at(s.get("starts_at"))
-        if not mod or at is None or at <= now:
+        if not mod or at is None:
             continue
-        zone = zone or sp._zone(biz)
-        ent = entry_view(e, mod, zone)
-        if not ent["active"] or _same_time(ent.get("at"), at):
+        try:
+            zone = zone or sp._zone(biz)
+            ent = entry_view(e, mod, zone)
+            if not ent["active"] or _same_time(ent.get("at"), at):
+                continue
+            if at <= now - timedelta(hours=RAIN_HOURS):
+                why: Optional[str] = "started"
+            elif at <= now and (ent.get("at") is None or ent["at"] <= now):
+                why = "past"
+            else:
+                why = _wont_follow(biz, ent, now, zone)
+        except Exception:  # noqa: BLE001 — no flag rather than no page
+            print(f"[event-volunteers] {biz[:8]}: an event date's flag couldn't be worked out", flush=True)
             continue
-        why = _wont_follow(biz, ent, now, zone)
         if why:
             s["event_moved"] = moved_flag(ent, why)

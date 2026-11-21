@@ -943,12 +943,20 @@ def cleared(biz: Any, people: Iterable[str], today: Optional[date] = None) -> Se
 # ─── Special helpers at an event (docs/EVENT_VOLUNTEERS.md 6.6) ────────
 # A signup on one of an event's own roles (_roles), on an event this year
 # that has happened, counts the event's helper minutes (_serve_minutes, 120 by
-# default, 15 to 720) as one event served: with a contact (a person, not a
-# name typed in), a yes (or no status, which reads as yes), and the role one
-# of the event's role ids (never "Attending"). Someone on a team place at the
+# default, 15 to 720) as one event served: with a contact, a yes (or no
+# status, which reads as yes), and the role one of the event's role ids (never
+# "Attending"). The contact must be one the church knows: the member app's own
+# signup (from the person's session) or someone the office or Chief put on,
+# never a public sign-up matched by the email someone typed (via "public", or
+# one of the event's public registrations). Someone on a team place at the
 # event's date AND a special role counts once, the longer of the two. An away
-# day earns nothing, as on a Sunday. Only where EVENT_VOLUNTEERS is open: with
-# it closed every number here is what it was.
+# day earns nothing, as on a Sunday. An event archived after it started (the
+# office tidying up) keeps its hours; one archived before is a cancel. Only
+# where EVENT_VOLUNTEERS is open: with it closed every number here is what it
+# was, and nothing is read.
+
+_FIELD = re.compile(r"[A-Za-z0-9_]{1,60}")
+
 
 def _events_open(biz_id: str) -> bool:
     try:
@@ -964,9 +972,46 @@ def event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[D
     """(the Sunday credits kept, the event credits) for the window. Each
     event credit is {contact_id, event, minutes, day}. A team place at the
     event's own date and a special role there count once, the longer: the
-    other one's credits are left out. `only`/`people` as _sunday_spans."""
+    other one's credits are left out. `only`/`people` as _sunday_spans. A
+    read that fails counts no events (said in the logs), never a 503: the
+    rest of the hours still show."""
     if not _events_open(biz_id):
         return sundays, []
+    try:
+        return _event_credits(biz_id, zone, lo, hi, sundays, only, people)
+    except HTTPException:
+        print(f"[event-volunteers] {biz_id[:8]}: the events' helper hours couldn't be read; counted without them",
+              flush=True)
+        return sundays, []
+
+
+def _event_rows(biz_id: str, mods: Dict[str, Dict[str, Any]], first: date, last: date) -> List[Dict[str, Any]]:
+    """The year's events, active or archived, with only what hours need:
+    the day, the signups, the roles, the helper minutes and the public
+    registrations. Read by the module's own date field, bounded to the year."""
+    b = _q(biz_id)
+    out: List[Dict[str, Any]] = []
+    for mid, f in mods.items():
+        d, s = f["date_field"], f["signups_field"]
+        base = f"/module_entries?business_id=eq.{b}&module_id=eq.{_q(mid)}&status=in.(active,archived)"
+        if _FIELD.fullmatch(d) and _FIELD.fullmatch(s):
+            rows = _need_all(f"{base}&data->>{d}=gte.{_q(first.isoformat())}&data->>{d}=lt.{_q(last.isoformat())}"
+                             f"&select=id,module_id,status,updated_at,day:data->>{d},signups:data->{s},"
+                             "roles:data->_roles,minutes:data->_serve_minutes,keys:data->_registration_keys", "id")
+        else:   # a field name a path can't hold: the whole data, bounded here
+            rows = [{"id": r["id"], "module_id": r.get("module_id"), "status": r.get("status"),
+                     "updated_at": r.get("updated_at"), "day": (r.get("data") or {}).get(d),
+                     "signups": (r.get("data") or {}).get(s), "roles": (r.get("data") or {}).get("_roles"),
+                     "minutes": (r.get("data") or {}).get("_serve_minutes"),
+                     "keys": (r.get("data") or {}).get("_registration_keys")}
+                    for r in _need_all(f"{base}&select=id,module_id,status,updated_at,data", "id")]
+        out += rows
+    return out
+
+
+def _event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[Dict[str, Any]],
+                   only: Optional[str], people: Optional[Sequence[str]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    import hashlib
     import church_leaders_note as cln
     import event_volunteers as evv
     import events_rsvp_router as er
@@ -975,34 +1020,63 @@ def event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[D
         f"/custom_modules?business_id=eq.{b}&archetype=eq.event_roster&select=id,archetype_params&limit=100")}
     if not mods:
         return sundays, []
-    entries = _need_in(f"/module_entries?business_id=eq.{b}&status=eq.active&select=id,module_id,data",
-                       "module_id", mods, "id")
+    first = lo.astimezone(zone).date()
+    rows = _event_rows(biz_id, mods, first, hi.astimezone(zone).date() + timedelta(days=1))
     want = ({str(only)} if only else {str(p) for p in people}) if (only or people is not None) else None
-    first, today = lo.astimezone(zone).date(), hi.astimezone(zone)
+    today = hi.astimezone(zone)
     found: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for e in entries:
+    typed: Dict[Tuple[str, str], Dict[str, Any]] = {}      # signups to check against the public registrations
+    for e in rows:
         f = mods.get(str(e.get("module_id")))
-        data = e.get("data") if isinstance(e.get("data"), dict) else {}
         if not f:
             continue
-        day, at = cln._when_of(data.get(f["date_field"]), zone)
+        day, at = cln._when_of(e.get("day"), zone)
         if day is None or day < first:
             continue
+        start = at if at is not None else datetime.combine(day, time(0), tzinfo=zone)
         # It has happened: its start passed; a day with no time, once it's over.
         if at is not None and not lo <= at < hi:
             continue
         if at is None and datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone) > today:
             continue
+        if e.get("status") == "archived":
+            # Archived after it started (tidying up) keeps its hours; before, it was called off.
+            # module_entries keeps no archived_at: its updated_at (moved by every save, the
+            # archive's included) stands in.
+            touched = _at(e.get("updated_at"))
+            if touched is None or touched < start:
+                continue
+        data = {"_roles": e.get("roles"), "_serve_minutes": e.get("minutes")}
         roles = {str(r["id"]) for r in er.occasion_roles(data, f["roles"]) if r.get("id")}
         minutes = evv.serve_minutes(data)
-        for s in er.read_signups(data, f["signups_field"]):
+        keys = e.get("keys") if isinstance(e.get("keys"), dict) else {}
+        for s in (e.get("signups") if isinstance(e.get("signups"), list) else []):
+            if not isinstance(s, dict):
+                continue
             cid = str(s.get("contact_id") or "")
             if not cid or (s.get("status") or "yes") != "yes" or str(s.get("role") or "") not in roles:
                 continue
             if want is not None and cid not in want:
                 continue
-            found.setdefault((cid, str(e["id"])), {"contact_id": cid, "event": str(e["id"]), "minutes": minutes,
-                                                   "day": day.isoformat()})
+            if s.get("via") == "public":
+                continue            # matched by a typed email: not the member's own word
+            credit = {"contact_id": cid, "event": str(e["id"]), "minutes": minutes, "day": day.isoformat()}
+            if s.get("via") != "member" and keys:
+                typed.setdefault((cid, str(e["id"])), credit)
+            else:
+                found.setdefault((cid, str(e["id"])), credit)
+    if typed:
+        # A signup from before `via` was written, on an event people sign up
+        # for publicly: it counts only when it isn't one of those (the key the
+        # public page keeps for that person's email on that event).
+        mails = {str(c["id"]): str(c.get("email") or "").strip().lower() for c in _need_in(
+            f"/contacts?business_id=eq.{b}&select=id,email", "id", {c for c, _ in typed}, "id")}
+        regs = {str(e["id"]): (e.get("keys") if isinstance(e.get("keys"), dict) else {}) for e in rows}
+        for (cid, eid), credit in typed.items():
+            mail = mails.get(cid)
+            key = hashlib.sha256(f"{biz_id}:{eid}:{mail}".encode()).hexdigest() if mail else ""
+            if not key or key not in regs.get(eid, {}):
+                found.setdefault((cid, eid), credit)
     if not found:
         return sundays, []
     cids = sorted({c for c, _ in found})

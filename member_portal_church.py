@@ -409,7 +409,9 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
             cap = er._capacity_of(data, f["capacity_field"])
             if cap is not None and er.attending_count(others) >= cap:
                 return False, "full"
-            new: Dict[str, Any] = {**base, "name": name, "status": "yes", "contact_id": cid}
+            # via: the person's own word, from their signed-in session (their serving
+            # hours count it; a public sign-up's typed email never does).
+            new: Dict[str, Any] = {**base, "name": name, "status": "yes", "contact_id": cid, "via": "member"}
             if action == "serve":
                 role = next((r for r in er.occasion_roles(data, f["roles"]) if r.get("id") == role_id), None)
                 if not role:
@@ -426,7 +428,7 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
             others.append(new)
             done = "serving" if action == "serve" else "coming"
         else:
-            others.append({**base, "name": name, "status": "no", "contact_id": cid})
+            others.append({**base, "name": name, "status": "no", "contact_id": cid, "via": "member"})
             keys = data.get("_registration_keys")
             if isinstance(keys, dict):
                 data["_registration_keys"] = {
@@ -810,16 +812,33 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
 {body}""", tab="connect", who=who, wide=True)
 
 
-def _flash(request: Request) -> str:
+_ROLE_ID = re.compile(r"[A-Za-z0-9_.-]{1,80}")
+_ENTRY_ID = re.compile(r"[0-9a-fA-F-]{36}")
+
+
+def filled_role(request: Request, occasions: Optional[List[Dict[str, Any]]]) -> str:
+    """The name of the role that just filled (err=filled&entry=&role=),
+    looked up in the occasions this page already read for this person: the
+    words are the church's own, never the link's. '' when it isn't there."""
+    q = request.query_params
+    eid, rid = str(q.get("entry") or ""), str(q.get("role") or "")
+    if q.get("err") != "filled" or not _ENTRY_ID.fullmatch(eid) or not _ROLE_ID.fullmatch(rid):
+        return ""
+    o = next((x for x in occasions or [] if str(x.get("entry_id")) == eid), None)
+    return next((str(r.get("label") or "") for r in (o or {}).get("roles") or [] if str(r.get("id")) == rid), "")
+
+
+def _flash(request: Request, occasions: Optional[List[Dict[str, Any]]] = None) -> str:
     return flash_html(done=request.query_params.get("done") or "", err=request.query_params.get("err") or "",
-                      what=request.query_params.get("what") or "")
+                      what=filled_role(request, occasions))
 
 
 def flash_html(done: str = "", err: str = "", what: str = "") -> str:
     """The notice a page shows after ?done= or ?err= (member_instant_send
     hands the same markup to a page that sent without reloading). `what`
     names the role that just filled (err=filled): "Chaperones just filled
-    up." It is only ever a role's name, shown as plain text."""
+    up." It is a role's own name from the church's data (filled_role), never
+    words from the link, shown as plain text."""
     from member_portal import _e
     done_words = DONE.get(done or "")
     err_words = ERRORS.get(err or "")
@@ -961,7 +980,7 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     return _shell(biz, site, "Coming up", f"""
 <div class="mb-lt"><h1>Coming up</h1></div>
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
-{_flash(request)}
+{_flash(request, occasions)}
 {body}""", tab="events", who=who, back=("/my", "Home"), wide=True)
 
 
@@ -988,7 +1007,7 @@ def _lumen_events(biz, site, request: Request, occasions: Optional[List[Dict[str
             import church_event_signups
             body = church_event_signups.MEMBER_CSS + body
     head = lm.mast(f"At {church}", "Coming <em>up</em>", "Let the church know you're coming, or sign up to serve.")
-    return _shell(biz, site, "Coming up", f"{head}{_flash(request)}{body}", tab="events", who=who)
+    return _shell(biz, site, "Coming up", f"{head}{_flash(request, occasions)}{body}", tab="events", who=who)
 
 
 def _lumen_share(biz: Dict[str, Any], site, o: Dict[str, Any]) -> str:
@@ -1506,7 +1525,8 @@ async def rsvp(request: Request):
         member_rsvp, church["business"]["id"], me, str(form.get("entry_id") or ""),
         str(form.get("action") or ""), str(form.get("role") or ""), said)
     # A role that just filled says which ("Chaperones just filled up.").
-    extra = {"what": said["role"]} if not ok and code == "filled" and said.get("role") else {}
+    extra = ({"entry": str(form.get("entry_id") or ""), "role": str(form.get("role") or "")}
+             if not ok and code == "filled" else {})
     return _back(back, **({"done": code} if ok else {"err": code, **extra}))
 
 

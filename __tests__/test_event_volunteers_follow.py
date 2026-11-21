@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -33,7 +33,7 @@ import member_push  # noqa: E402
 import sb_clients  # noqa: E402
 import sunday_planning as sp  # noqa: E402
 from test_event_volunteers import (BIZ, E_LOCK, E_OUT, NOW, ask, church, rows)  # noqa: E402,F401
-from test_sunday_planning import JO, LEE, MARCUS  # noqa: E402
+from test_sunday_planning import JO, LEE, MARCUS, ZONE  # noqa: E402
 
 A_YES, A_ASKED, A_FRESH = (f"a5500000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3))
 FIRST = "2026-10-30T23:00:00+00:00"       # Fri Oct 30, 6:00 PM in Chicago
@@ -127,7 +127,7 @@ def test_a_new_day_or_time_moves_the_date_and_each_person_hears_once(ev):
     assert a[A_YES]["status"] == "yes" and a[A_ASKED]["status"] == "asked", "their yes stays"
     assert a[A_YES]["day_sent_at"] is None and a[A_YES]["week_sent_at"] is None, "the reminders follow the new time"
     refs = sorted(x["ref_id"] for x in c.db.t["member_push_sends"])
-    assert refs == sorted(f"event-moved-{x}-2026-11-01T00:00:00+00:00" for x in (A_YES, A_ASKED))
+    assert refs == sorted(f"event-moved-{x}-20261101T0000Z-0" for x in (A_YES, A_ASKED))
     # A second sync tells nobody.
     assert changed(c).json() == {"date": "same", "told": 0, "requests": 0} and len(c.pushes) == 2
     # A replica that told them and died before the date moved: the next sync
@@ -250,7 +250,7 @@ def test_a_date_that_already_happened_is_left_alone(ev):
     sid = on_with_people(c)
     entry(c)["status"] = "archived"
     later = NOW + timedelta(days=10)
-    assert evv.sync(BIZ, E_LOCK, now=later)["date"] is None
+    assert evv.sync(BIZ, E_LOCK, now=later)["date"] == "past"
     assert len(held(c, sid)) == 3 and svc(c, sid)["archived_at"] is None and rows(c)[0]["status"] == "on"
 
 
@@ -286,15 +286,32 @@ def test_a_ledger_that_cant_be_read_moves_nothing_yet(ev, monkeypatch):
     assert changed(c).json() == {"date": "moved", "told": 2, "requests": 0}
 
 
-def test_a_sample_church_follows_and_tells_nobody(ev, monkeypatch):
+def test_a_sample_church_doesnt_follow_so_nothing_changes_in_silence(ev, monkeypatch):
     c = ev
     sid = on_with_people(c)
     import sample_church
     monkeypatch.setattr(sample_church, "skip", lambda row: True)
     entry(c)["data"]["date"] = "2026-10-31T19:00"
-    assert changed(c).json() == {"date": "moved", "told": 0, "requests": 0}
-    assert c.pushes == [] and c.db.t["member_push_sends"] == []
-    assert svc(c, sid)["starts_at"] == "2026-11-01T00:00:00+00:00"
+    assert changed(c).status_code == 404
+    assert evv.sweep_tick(NOW + timedelta(minutes=30)).get("moved", 0) == 0
+    assert c.pushes == [] and svc(c, sid)["starts_at"] == FIRST
+
+
+def test_the_platform_owners_login_moves_nothing_where_nobody_would_be_told(ev, monkeypatch):
+    """Owner mode: the platform owner's own login opens the switch for them
+    anywhere, but a church the switch isn't open for gets no silent change."""
+    c = ev
+    sid = on_with_people(c)
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "owner")
+    entry(c)["data"]["date"] = "2026-10-31T19:00"
+    assert changed(c).status_code == 404
+    entry(c)["status"] = "archived"
+    assert changed(c).status_code == 404
+    assert c.pushes == [] and svc(c, sid)["starts_at"] == FIRST and svc(c, sid)["archived_at"] is None
+    assert len(held(c, sid)) == 3
+    import member_asks
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: True)
+    assert changed(c).json()["date"] == "cancelled" and len(c.pushes) == 2, "its own church: changed and told"
 
 
 def test_the_gate_and_the_switch(ev, monkeypatch):
@@ -340,7 +357,7 @@ def test_a_volunteer_with_no_phone_hears_by_email_unless_they_stopped_them(ev, m
     assert [m["to_email"] for m in mailed] == ["jo@example.org"], "Lee pressed Stop these emails"
     m = mailed[0]
     assert m["subject"] == "The Youth Lock-in moved to Sat, Oct 31, 7:00 PM"
-    assert m["idempotency_key"] == f"event-moved-{A_YES}-2026-11-01T00:00:00+00:00"
+    assert m["idempotency_key"] == f"event-moved-{A_YES}-20261101T0000Z-0"
     assert "Change my answer" in m["body"] and "Stop these emails" in m["body"]
     assert svc(c, sid)["starts_at"] == "2026-11-01T00:00:00+00:00"
 
@@ -352,3 +369,168 @@ def test_the_words_are_plain(ev):
         for v in w.values():
             if isinstance(v, str):
                 assert "—" not in v and "event_volunteer" not in v and "sync" not in v.lower()
+
+
+# ─── the latest notice always names the date's time ──────────────────
+
+
+def last_said(c, cid):
+    return [p["title"] for p in c.pushes if p["to"] == [cid]][-1]
+
+
+def test_going_back_to_a_time_it_had_before_is_told_again(ev):
+    c = ev
+    on_with_people(c)
+    for when, said_ in (("2026-10-30T19:00", "The Youth Lock-in moved to Fri, Oct 30, 7:00 PM"),
+                        ("2026-10-30T18:00", "The Youth Lock-in moved to Fri, Oct 30, 6:00 PM"),
+                        ("2026-10-30T19:00", "The Youth Lock-in moved to Fri, Oct 30, 7:00 PM")):
+        entry(c)["data"]["date"] = when
+        assert changed(c).json()["told"] == 2, when
+        assert last_said(c, JO) == said_ and last_said(c, LEE) == said_
+    refs = sorted(x["ref_id"] for x in c.db.t["member_push_sends"] if A_YES in x["ref_id"])
+    assert refs == sorted([f"event-moved-{A_YES}-20261031T0000Z-0", f"event-moved-{A_YES}-20261030T2300Z-1",
+                           f"event-moved-{A_YES}-20261031T0000Z-2"])
+    assert all(len(r) <= 200 for r in refs)
+
+
+def test_told_then_the_move_lost_then_put_back_is_corrected(ev, monkeypatch):
+    """Told 7 PM, the date's write lost (a blip, a crash), and the office
+    puts it back to 6: everyone told 7 hears it's back to 6."""
+    c = ev
+    sid = on_with_people(c)
+    entry(c)["data"]["date"] = "2026-10-30T19:00"
+    real = sb_clients.sb_patch_as_service
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **k: None if path.startswith("/worship_services") else real(path, body, **k))
+    assert changed(c).json() == {"date": "unsent", "told": 2, "requests": 0}
+    assert svc(c, sid)["starts_at"] == FIRST
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    entry(c)["data"]["date"] = "2026-10-30T18:00"
+    assert changed(c).json() == {"date": "corrected", "told": 2, "requests": 0}
+    assert last_said(c, JO) == "The Youth Lock-in is back to Fri, Oct 30, 6:00 PM"
+    assert changed(c).json() == {"date": "same", "told": 0, "requests": 0} and len(c.pushes) == 4
+    # And the sweep's own pass finds nothing more to say.
+    assert evv.sweep_tick(NOW + timedelta(minutes=15))["people_told"] == 0
+
+
+# ─── a rain date ─────────────────────────────────────────────────────
+
+
+def _started(c, sid, hours):
+    """The date (and its event) started `hours` ago."""
+    at = NOW - timedelta(hours=hours)
+    svc(c, sid)["starts_at"] = at.isoformat()
+    entry(c)["data"]["date"] = at.astimezone(ZONE).strftime("%Y-%m-%dT%H:%M")
+    return at
+
+
+def test_a_rain_date_follows_a_new_time_when_the_old_start_is_recent(ev):
+    c = ev
+    sid = on_with_people(c)
+    _started(c, sid, 2)
+    entry(c)["data"]["date"] = "2026-10-24T18:00"       # postponed after it should have started
+    assert changed(c).json() == {"date": "moved", "told": 2, "requests": 0}
+    assert svc(c, sid)["starts_at"] == "2026-10-24T23:00:00+00:00"
+    assert last_said(c, JO) == "The Youth Lock-in moved to Sat, Oct 24, 6:00 PM"
+
+
+def test_a_date_that_started_longer_ago_is_flagged_not_followed(ev):
+    c = ev
+    sid = on_with_people(c)
+    at = _started(c, sid, 60)
+    entry(c)["data"]["date"] = "2026-10-24T18:00"
+    assert changed(c).json()["date"] is None, "past the rain-date window: not followed"
+    assert svc(c, sid)["starts_at"] == at.isoformat() and c.pushes == []
+    s = {"id": sid, "kind": "event", "event_entry_id": E_LOCK, "starts_at": at.isoformat()}
+    evv.date_extras(BIZ, [s], c_user(c), now=NOW)
+    assert s["event_moved"]["why"] == "started" and "didn't follow" in s["event_moved"]["words"]
+
+
+def c_user(c):
+    from test_event_volunteers import PEOPLE
+    return PEOPLE["owner"]
+
+
+def test_the_flag_never_fails_the_page(ev, monkeypatch):
+    c = ev
+    sid = on_with_people(c)
+    entry(c)["data"]["date"] = "2026-10-25T11:00"        # a Sunday: the service check reads
+
+    def blip(*a, **k):
+        from fastapi import HTTPException
+        raise HTTPException(503, "Who serves when couldn't be read just now.")
+    monkeypatch.setattr(sp, "during_sunday_service", blip)
+    r = c.as_("owner").get(f"/planning/schedule?business_id={BIZ}&weeks=6")
+    assert r.status_code == 200
+    assert next(s for s in r.json()["services"] if s["id"] == sid).get("event_moved") is None
+
+
+# ─── the reminders ───────────────────────────────────────────────────
+
+
+def test_a_move_re_arms_only_the_reminders_still_to_come(ev):
+    c = ev
+    sid = on_with_people(c)
+    morning = datetime(2026, 10, 30, 8, 0, tzinfo=ZONE)       # the day itself, after 7 AM
+    entry(c)["data"]["date"] = "2026-10-30T20:00"
+    assert evv.sync(BIZ, E_LOCK, now=morning)["date"] == "moved"
+    a = held(c, sid)[A_YES]
+    assert a["day_sent_at"] and a["week_sent_at"], "the day-before and the week-before had opened: kept, never twice"
+    a["morning_sent_at"] = morning.isoformat()
+    entry(c)["data"]["date"] = "2026-11-06T20:00"
+    assert evv.sync(BIZ, E_LOCK, now=morning)["date"] == "moved"
+    a = held(c, sid)[A_YES]
+    assert (a["day_sent_at"], a["morning_sent_at"], a["week_sent_at"]) == (None, None, None),         "a week out (its week-before opens Oct 30 at 8 PM): all still to come"
+
+
+def test_nothing_goes_out_for_a_date_whose_change_is_held(ev, monkeypatch):
+    """A cancel held through quiet hours: the serving sweep says nothing for
+    the date meanwhile, even at 7 AM when its morning reminder is due."""
+    import sunday_serving_alerts as ssa
+    c = ev
+    sid = on_with_people(c)
+    seven = datetime(2026, 10, 30, 7, 5, tzinfo=ZONE)
+    biz = c.db.t["businesses"][0]
+    assert evv.unsettled(biz, [{"id": sid, "event": True, "entry_id": E_LOCK,
+                                "at": datetime(2026, 10, 30, 18, 0, tzinfo=ZONE)}], seven) == set(), "as it was"
+    entry(c)["status"] = "archived"
+    c.quiet["on"] = True
+    assert changed(c).json()["date"] == "held"
+    c.quiet["on"] = False
+    for r in held(c, sid).values():
+        r.update(day_sent_at=None, morning_sent_at=None, week_sent_at=seven.isoformat())
+    monkeypatch.setattr(sp, "_now", lambda: seven)
+    import sunday_serving as sv
+    services = sv._services(BIZ, ZONE, seven, seven + timedelta(days=22))
+    assert evv.unsettled(biz, services.values(), seven) == {sid}
+    got = ssa.church_tick(biz, now=seven)
+    assert got["reminders"] == 0 and got["asks"] == 0 and c.pushes == [], "no reminder for a cancelled event"
+    entry(c)["status"] = "active"
+    assert evv.unsettled(biz, sv._services(BIZ, ZONE, seven, seven + timedelta(days=22)).values(), seven) == set()
+    assert ssa.church_tick(biz, now=seven)["reminders"] >= 1, "back: its reminders go as before"
+
+
+# ─── the sweep's reads ───────────────────────────────────────────────
+
+
+def test_the_sweep_reads_a_church_once_however_many_events(ev, monkeypatch):
+    c = ev
+    on_with_people(c)
+    assert ask(c, "owner", E_OUT, {c.greeter: 1}).status_code == 200
+    entry(c)["data"]["date"] = "2026-10-31T19:00"
+    entry(c, E_OUT)["data"]["date"] = "2026-10-23T19:00"
+    # An ask on for a date long gone, its event deleted: never taken up.
+    c.db.t["event_volunteer_requests"].append({
+        "id": "7e700000-0000-4000-8000-000000000009", "business_id": BIZ, "entry_id": None, "status": "on",
+        "service_id": "5e900000-0000-4000-8000-000000000009", "starts_at": (NOW - timedelta(days=30)).isoformat(),
+        "title": "Old picnic", "created_at": (NOW - timedelta(days=40)).isoformat()})
+    seen = []
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: seen.append(path) or real(path))
+    got = evv.sweep_tick(NOW + timedelta(minutes=30))
+    assert got["moved"] == 2
+    church = [x for x in seen if f"business_id=eq.{BIZ}" in x]
+    for table, most in (("/module_entries", 1), ("/custom_modules", 1), ("/serve_assignments", 1),
+                        ("/member_push_sends", 1), ("/event_volunteer_requests", 2)):
+        assert sum(x.startswith(table) for x in church) <= most, (table, [x for x in church if x.startswith(table)])
+    assert next(r for r in rows(c) if r["id"].endswith("9"))["status"] == "on", "a long-past ask is left alone"

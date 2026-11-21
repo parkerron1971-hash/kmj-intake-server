@@ -297,8 +297,21 @@ For each live event date linked to the entry, and each waiting request:
 - An event date made the November 17 way, with no request, whose entry is
   deleted keeps today's behavior: it stays as a typed date. Documented, not
   fixed.
-- Tell each person at most once per change: key the notice on
-  (assignment, `starts_at`) or (assignment, cancelled).
+- **A person's latest move notice always names the date's time.** Each
+  notice is claimed in the member notes' ledger (`member_push_sends`) under
+  `event-moved-{assignment}-{time}-{n}`, where `n` counts that person's move
+  notices for the date. Two replicas reach for the same key and one wins; an
+  event that goes back to a time it had before is told again. Someone whose
+  latest notice names another time than the date's (told, then the move was
+  lost, then the office put it back) hears "The Youth Lock-in is back to Fri,
+  Dec 11, 6:00 PM." A cancel is `event-cancelled-{assignment}`, once.
+- **A rain date:** a date whose start passed less than 48 hours ago follows
+  its event to a new time still ahead, and its people are told. One that
+  started longer ago stays where it was, flagged `event_moved` (why
+  `started`), so a change is never silently ignored.
+- While a change waits for quiet hours to end, the serving sweep says
+  nothing for that date: no ask, no reminder (a cancelled event's morning
+  reminder never goes at 7 AM).
 
 ### 6.8 Typed dates become events
 
@@ -327,22 +340,28 @@ These are the existing `_roles` and signups, with three rules added:
 
 - **Kids roles** (`kids: true`):
   - In the member app, I'll help shows only when the person has a current
-    background check. Read it through the rule that The week uses for "Can't
-    serve with kids yet", as one shared helper in `church_serving`; don't
-    write a second one.
+    background check: ok or due in `church_serving.checks_of`, through one
+    helper (`church_serving.cleared`). This is deliberately stricter than The
+    week's "Can't serve with kids yet", which flags only someone with no check
+    on file who is on the schedule soon: an overdue check, or anyone under 18,
+    is never offered a kids role. Both read the same `checks_of`; The week's
+    own flag is unchanged.
   - Without a check, the role reads "Needs a background check. Ask the
     office." with no button. The server refuses a signup the page didn't
     offer (a 403 in those words).
   - The public page never shows a kids role.
   - The office may still put anyone on one by name. The event page then
-    marks that person "No background check on file".
+    says why that person isn't cleared: "Check overdue", "No check on file"
+    or "Under 18" (only to a login that may read who's cleared).
 - **Open roles** (`open: true`): the public events page shows only these on
   a public event. A role with no `open` key keeps today's behavior (3.3).
 - **The member app's I'll help** works on any non-kids role, and on kids
   roles for checked people, on any event the person can see
   (`member_portal_church.can_see`). It writes the same signup the public page
-  writes, with `contact_id` set. If the role is full, the answer is a 409:
-  "Chaperones just filled up."
+  writes, with `contact_id` set and `via: "member"`. If the role is full,
+  the answer is "Chaperones just filled up.", the role's name read from the
+  church's own data on the server (the link carries only the event and the
+  role's ids).
 
 ### 6.11 The event's volunteer picture
 
@@ -390,10 +409,13 @@ stays in the gallery).
 - **Then**: `_flyer = {artwork_id, url, thumb, w, h, at}`, written with the
   service role by a read-modify-write of `data`. The response returns the
   whole new `data` so the FE form saves on top of it, not over it.
-- **Validation on every read**: `url` and `thumb` must start with
-  `{SUPABASE_URL}/storage/v1/object/public/business-assets/{business_id}/event-flyers/`,
+- **Validation on every read**: `url` must be exactly
+  `{SUPABASE_URL}/storage/v1/object/public/business-assets/{business_id}/event-flyers/{entry_id}/{artwork_id}.jpg`
+  and `thumb` the same with `-thumb.jpg` (one artwork id, a whole match),
   and `w`/`h` must be ints 1-8000. Otherwise there is no flyer. One helper
-  (`event_volunteers.flyer_of(data, business_id)`) is the only reader.
+  (`event_volunteers.flyer_of(data, business_id, entry_id)`) is the only
+  server reader. **The office app (S4) reading `data._flyer` itself must hold
+  it to the same rule** before it shows the picture.
 - **Who sees it**: wherever the event shows, and nowhere else.
   - Public event: the public events page card, its share preview
     (`og:image` = the full copy), and the member app.
@@ -401,6 +423,9 @@ stays in the gallery).
   - Invite-only event: only the people `can_see` lets in, and the office.
   - The URL is unguessable but public once known. This is said in the
     office's help text, and is the same as every flyer the church posts.
+  - My serving shows an event date's flyer to the people asked or offered a
+    place there, whatever the event's visibility: they already see its title
+    and time, so the picture tells them nothing more.
 - **Where it shows**:
   - office: the event list and card, the church calendar entry, Who serves
     when's date header and request card, The week's event card;
@@ -495,7 +520,9 @@ quoted.
 5. **S5 · Chief**: `create_module_entry` / `update_module_entry` for an
    event take `teams: [{place, n}]` and `flyer: "make"|artwork id`, and file
    the request through the same code. Plus a read verb, "how full is my
-   event". Show before saving, as Chief does now.
+   event". Show before saving, as Chief does now. A role Chief makes writes
+   `open` (and `kids`) explicitly, since a role with no `open` keeps today's
+   public behavior and shows on the public page.
 6. **Switch-on PR** (a Thursday): `EVENT_VOLUNTEERS=on`, What's New, Help
    Center answers re-exported (`church_findway.json`).
 
@@ -509,6 +536,8 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   the scheduler.
 - A recurring event's volunteers (each date asks on its own).
 - Texts for event asks (app and email only, as Sundays).
+- Two event dates with the same title on one day, after a move or a rename
+  (the one-title-a-day rule holds only when a date is made). Left as it is.
 
 ## 11. Decisions made while building
 
@@ -651,112 +680,157 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
 
 **Following the event (6.7)**
 
-- **Told once is the member notes' own ledger.** Each notice is claimed in
+- **The ledger is the member notes' own.** Each notice is claimed in
   `member_push_sends` (unique on business, kind and `ref_id`, shared by every
   replica and the worker) before anything goes: kind `serving`, `ref_id`
-  `event-moved-{assignment}-{starts_at}` or `event-cancelled-{assignment}`.
-  The push then goes through `member_push.send` with no `ref_id` of its own,
-  so the one claim covers the email too. No migration.
-- **Tell first, then change.** The people are told, then the date moves (or
-  the asks are taken back and the date comes off). A crash in between leaves
-  the next sync to finish it, and the ledger keeps anyone from hearing twice.
-  A claim that can't be read (a database blip) stops the change for now. A
-  claim that landed keeps it, even when no phone or email was reached, as the
-  serving reminders do.
+  `event-moved-{assignment}-{time}-{n}` (about 85 letters) or
+  `event-cancelled-{assignment}`. The push goes through `member_push.send`
+  with no `ref_id` of its own, so the one claim covers the email too. No
+  migration.
+- **A person's latest move notice names the date's time** (after review). A
+  key on (assignment, time) alone said nothing when an event went 6, 7, 6, 7:
+  the last 7 was already "told". `n` counts the person's move notices, read
+  from the ledger once per church, so every real move is a new key and two
+  replicas still meet on the same one. Someone whose latest notice names
+  another time than the date's hears it's back ("is back to Fri, Oct 30,
+  6:00 PM"); that covers a sync that told people, lost the date's write, and
+  then the office put the event back.
+- **Tell first, then change.** A crash in between leaves the next sync to
+  finish, and the ledger keeps anyone from hearing twice. A claim that can't
+  be read stops the change for now. A claim that landed keeps it, even when no
+  phone or email was reached, as the serving reminders do.
 - **Quiet hours hold the whole change** while anyone would hear of it: the
-  date follows with the first sweep after 7 AM, and its notices with it. With
-  nobody to tell it follows at once.
+  date follows with the first sweep after 7 AM. Meanwhile the serving sweep
+  says nothing for that date (`event_volunteers.unsettled`, read by
+  `sunday_serving_alerts.church_tick`): no ask, no reminder, for an event that
+  went away or moved and hasn't been followed yet. That ends the race between
+  quiet hours ending and the 7 AM morning reminder. A change that is undone
+  in the night lets the reminders go as before.
 - **Who hears:** a yes, and an ask that already went out. An ask still
   waiting to go out says the new time when it goes. Offered spots, no's and
   someone asked to cover hear nothing.
-- **The words** use the short day, "Sat, Oct 31, 7:00 PM". A yes reads
-  "If you can't make it, tap Change my answer." (the ask page's own button).
-  An ask not answered yet reads "You were asked for Greeter. Tap Yes or Can't
+- **The words** use the short day, "Sat, Oct 31, 7:00 PM". A yes reads "If
+  you can't make it, tap Change my answer." (the ask page's own button). An
+  ask not answered yet reads "You were asked for Greeter. Tap Yes or Can't
   that day."
-- **The reminders follow a move:** a yes's week-before, day-before and
-  morning marks are cleared, and the serving sweep skips any whose moment has
-  passed, as always.
-- **"Doesn't follow"** also covers a move into a Sunday service (the 2-hour
-  rule) and an event that lost its start time. `event_moved` is worked out
-  when Who serves when is read (`{to, why, words}`, why past, far, sunday or
-  no_time), only with the switch open. Nothing is stored. Put back, the flag
-  goes.
+- **The reminders follow a move**, by `sunday_serving_alerts.moments` (due()'s
+  own rule, factored out): a yes's mark is cleared only for a reminder whose
+  moment for the new time is still to come. One whose window already opened
+  (the day-before evening, the morning of) keeps its mark and never goes
+  twice.
+- **"Doesn't follow"** covers a move into the past, past 180 days, into a
+  Sunday service (the 2-hour rule), an event that lost its start time, and
+  (after review) a date that started more than 48 hours ago (`started`).
+  `event_moved` is worked out when Who serves when is read (`{to, why,
+  words}`), only with the switch open; nothing is stored. A read that fails
+  there (the Sunday check) leaves no flag; the page never fails over it.
+- **A rain date** (after review): a date whose start passed less than 48 hours
+  ago follows a new time still ahead, told as any move. 48 hours covers a
+  weekend postponement decided the morning after.
 - **A cancel takes back every row on the date** (offered spots and no's
   included) through `sunday_planning.do_take_back`, takes the date off, and
-  closes the ask last: until then the ask is what points the next sync at a
-  deleted event's date.
-- **A date that already happened is never touched**, and an ask that is on
-  for one stays on.
-- **A new title or place** follows on the date. Only waiting asks' copies
-  are refreshed (3.2).
-- **`/changed` also closes the church's asks whose event was deleted**, so
-  the office's call after a delete does it at once. The sweep does the rest:
-  dates still to come that came from an entry, and live asks made in the last
-  200 days, at churches the switch and event dates are open for, never a
-  sample church (a sample's dates follow and nobody is told). The sweep's
-  answer gains `followed`, `moved`, `cancelled` and `people_told` only with
-  the switch on.
+  closes the ask last: until then the ask points the next sync at a deleted
+  event's date.
+- **A date that already happened is never cancelled**, and its ask stays on.
+- **A new title or place** follows on the date. A waiting ask's copies follow
+  its event; an on ask's copies (title, place, starts_at) now follow its date
+  too, so its card reads right and the sweep can tell a recent ask from a
+  long-past one.
+- **The change gate is the tell gate** (after review): `_follows` is the
+  switch open for the church itself, event dates open there, never a sample
+  church. `/changed` is a 404 elsewhere, so the platform owner's own login at
+  a church the switch isn't open for never moves or cancels a date that
+  nobody would be told about. A sample church doesn't follow at all.
+- **One church, a handful of reads** (after review). The sweep finds the
+  churches with something to follow in two reads (dates from an entry still
+  to come or started in the last 48 hours; asks waiting, or on for a date not
+  long past), then reads each church once: its dates, its asks, their events
+  (two reads), the rows on those dates and, when anyone would hear, the move
+  ledger. `/changed` reads the same set and acts on its own event and on the
+  asks whose event was deleted. The sweep's answer gains `followed`, `moved`,
+  `cancelled` and `people_told` only with the switch on.
 
 **The flyer (6.12)**
 
 - **Made as the church's owner** (`image_studio.build_actor`, set after the
-  gate and reset after), like every server-made picture: the gallery and its
-  originals are the owner's. Prompt "Flyer: {title}".
-- **A phone photo is turned upright** from its EXIF before
-  `normalize_image`, so the gallery and both copies stand the right way up.
-  Anything `normalize_image` refuses is the same plain 400 ("Choose a JPG, PNG
-  or WebP picture under 10 MB.").
-- **The thumb is never made bigger** than the picture: 480 px wide, or the
-  picture's own width when it is narrower. `w` and `h` are the full copy's.
-- **A gallery picture** must be ready, with its original in the church's own
-  folder (409 "That picture isn't ready yet."); another church's is a 404
-  ("That picture isn't in this church's gallery."). No file and no picture
-  is a 400.
-- **The write** is guarded by the event's `updated_at` when it has one,
-  tried four times, then a 409. `DELETE` takes the switch too.
+  gate and reset after), like every server-made picture. Prompt "Flyer:
+  {title}".
+- **A gallery picture only for who may read the gallery** (after review): the
+  owner, or a login `image_studio.church_reader` lets in (an Admin, whoever
+  does the posts or the clips). Anyone else is a 403 "Pictures from the gallery
+  are for the owner, an admin, and whoever does the posts or the clips. Upload
+  the flyer instead." It must be ready, with its original in the church's own
+  folder; another church's is a 404.
+- **The limits are read from the header** (after review): the kind, 8000 px a
+  side and 25 megapixels (`normalize_image`'s own cap) before a pixel is
+  decoded or turned. Each refusal says what is wrong: over 10 MB, not a JPG,
+  PNG or WebP, too big in pixels, or couldn't be read.
+- **A phone photo is turned upright** from its EXIF before `normalize_image`.
+  The thumb is never made bigger than the picture; `w` and `h` are the full
+  copy's.
+- **The write** is guarded by the event's `updated_at` when it has one, tried
+  four times, then a 409. Taking a flyer off doesn't need the switch (after
+  review): after a rollback the office can still take one down.
+- **`flyer_of` pins the event** (after review): a whole match of the event's
+  own folder and the artwork's two names, not a prefix.
 - **The readers.** `build_occasions` adds `flyer` only when it is handed the
-  church's id (the public page and the member app). The public card shows the
-  thumb, opening the full copy. `/events?event=<id>` is one event's own page
-  for its share preview (`og:image` the full copy, `og:title` its title), for
-  an event on that page only. The member app's Share link still opens
-  `/events` (its tests pin it); the share sheet's card shows the flyer.
-- **The member app:** Coming up and its cards in both looks (today's Home
-  "Coming up" is those cards), the new look's This week card (in place of the
-  church's photo, outside edit-pictures), and My serving's ask row, coming
-  row and ask page. Home's lead card keeps the church's photo: its words sit
-  on the picture, and a flyer under words doesn't read. My serving's flyer is
-  styled inline, so a page with no flyer is byte for byte what it was.
-- **The office:** `/planning/requests` keeps `flyer_thumb` and adds `flyer`,
-  the schedule's event dates carry `flyer` (and `event_moved`), The week's
-  event-date cards carry `flyer`. A Sunday's card is unchanged.
+  church's id. The public card shows the thumb, opening the full copy.
+  `/events?event=<id>` is one event's own page for its share preview. The
+  member app's Share link still opens `/events` (its tests pin it). The member
+  app shows it on Coming up and its cards in both looks, the new Home's This
+  week card, and My serving's ask row, coming row and ask page (styled inline,
+  so a page with no flyer is byte for byte what it was). Home's lead card keeps
+  the church's photo. The office: `/planning/requests` (`flyer` beside
+  `flyer_thumb`), the schedule's event dates, The week's event-date cards.
 
 **Special roles (6.10)**
 
-- **Current means ok or due** in `checks_of` (`church_serving.cleared`, the
-  one rule). Under 18 is never cleared: checks are for adults.
-- **The member app is form posts with redirects**, so a refusal comes back
-  the way every member-app refusal does, as the page's notice: `err=kids`
-  "Needs a background check. Ask the office." and `err=filled&what=Chaperones`
-  "Chaperones just filled up." (the role's name, plain text, 60 letters at
-  most). A full role's code is now `filled`, not `role`. The redirect's values
-  are URL-encoded.
-- **The office's picture** marks a kids role's people `checked` only for a
-  login `church_serving` lets read who's cleared.
+- **Kids roles stay on the stricter rule** (decided in review, from
+  Kevin's "current background check"): ok or due in `checks_of`, never under
+  18. The week keeps its own flag (blocked only) for now; both read
+  `checks_of`. Teens and The week's overdue flag go to Kevin separately.
+- **The member app is form posts with redirects**, so a refusal comes back as
+  the page's notice: `err=kids` "Needs a background check. Ask the office."
+  and, for a full role, `err=filled&entry={id}&role={id}`: the page looks the
+  role's name up in the occasions it already read for that person (after
+  review), so a crafted link can't put words on the church's app. A full
+  role's code is now `filled`, not `role`. The redirect's values are
+  URL-encoded.
+- **The office's picture says why** (after review): a kids role's people carry
+  `checked` and `check` ("Check overdue", "No check on file", "Under 18"),
+  only for a login `church_serving` lets read who's cleared.
 - **The public page:** a role that says neither `kids` nor `open` reads
   exactly as before. A hidden role's public signup is the same 400 as a role
-  that isn't there, so the page never says one exists.
+  that isn't there.
 
 **Hours (6.6)**
 
-- **`church_serving.event_credits`** counts active entries in any events
-  room. An event with a time counts once it has started; a bare date once its
-  day is over. One credit per person per event, however many roles. A team
-  place at the event's own date (`worship_services.event_entry_id`) and a
-  role there count once, the longer; a tie goes to the team place.
+- **`church_serving.event_credits`** reads only the year asked, by each
+  room's own date field, and only the keys hours need (the day, signups,
+  `_roles`, `_serve_minutes`, the public registrations), never every event's
+  whole data (after review). A read that fails counts no events and says so in
+  the logs; the rest of the hours still show.
+- **An event archived after it started keeps its hours; archived before, it
+  was called off** (after review). `module_entries` keeps no `archived_at`, so
+  its `updated_at` (moved by every save, the archive's included) stands in:
+  an archived event edited again after its day would read as archived after.
+- **Only a member's own word earns hours** (after review): the member app's
+  signup (from the person's session, `via: "member"`) and people the office or
+  Chief put on. A public sign-up, matched to a contact only by the email
+  someone typed, never does: new ones carry `via: "public"`, and one from
+  before `via` was written is known by the event's own registration key for
+  that person's email. The office app (S4) keeps `via` on signups it saves.
+- An event with a time counts once it has started; a bare date once its day
+  is over. One credit per person per event, however many roles. A team place
+  at the event's own date and a role there count once, the longer; a tie goes
+  to the team place.
 - **Its readers:** the Serving page (each person's `events` and
   `event_minutes`, the totals' too), My serving ("an event you helped at"),
   `minutes_of` (The week, and through it My department and Chief's schedule
   reads) and Reports' Serving numbers. With the switch closed it answers
-  before reading a single event, so every number is what it was.
+  before reading a single event.
 - **Chief:** `chief_roster.clean_roles` keeps `kids` and `open` when they are
-  true or false, so an edit never strips them.
+  true or false. A role Chief makes writes `open` explicitly (S5).
+- **Left as they are** (decided in review): a private or invite-only
+  event's flyer on My serving for the people asked (6.12), and two same-title
+  dates on one day after a move (section 10).

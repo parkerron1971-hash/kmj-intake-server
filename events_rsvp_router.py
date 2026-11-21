@@ -310,7 +310,7 @@ def build_occasions(
                 "occasion_noun": f["occasion_noun"],
                 "roles": [role_out(r, signups)
                           for r in occasion_roles(data, f["roles"])],
-                **({"flyer": flyer_of(data, business_id)} if flyer_of else {}),
+                **({"flyer": flyer_of(data, business_id, e.get("id"))} if flyer_of else {}),
             })
     out.sort(key=lambda o: o["date"])
     return out[:MAX_OCCASIONS]
@@ -508,7 +508,9 @@ async def public_event_rsvp(
             fill = role_fill(role, signups)
             if fill['full']:
                 raise HTTPException(409, f"the {fill['label']} role is already filled")
-        new_signup = {'name': name, 'status': 'yes'}
+        # via: a public sign-up, matched to a contact only by the email someone
+        # typed, so it never earns that member serving hours (church_serving).
+        new_signup = {'name': name, 'status': 'yes', 'via': 'public'}
         if contact_id:
             new_signup['contact_id'] = contact_id
         if role_id:

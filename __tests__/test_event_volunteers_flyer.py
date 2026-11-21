@@ -78,6 +78,12 @@ BAD = {
     "a size that isn't a whole number": flyer(w="1600"),
     "a size past 8000": flyer(h=8001),
     "a way out of the folder": flyer(url=f"{PUBLIC}/{BIZ}/event-flyers/../../{OTHER}/x.jpg"),
+    "another event's folder": flyer(eid="e9000000-0000-4000-8000-000000000009"),
+    "a copy not named for its artwork": flyer(url=f"{PUBLIC}/{BIZ}/event-flyers/{E_LOCK}/flyer.jpg"),
+    "the thumb as the full copy": flyer(url=flyer()["thumb"]),
+    "two artworks": flyer(thumb=flyer(art=THEIR_ART)["thumb"]),
+    "a png": flyer(url=flyer()["url"][:-4] + ".png"),
+    "a folder deeper": flyer(url=f"{PUBLIC}/{BIZ}/event-flyers/{E_LOCK}/x/{ART}.jpg"),
 }
 
 
@@ -211,30 +217,75 @@ def test_the_gate(fly, monkeypatch):
     assert put(c, art="not-a-uuid").status_code == 404
     assert put(c, art=LATE_ART).status_code == 409
     assert put(c, art=ART, eid=E_THEIRS).status_code == 404, "another church's event"
-    assert put(c, art=ART, who="shapretta").status_code == 200, "any office login that may ask"
+    assert put(c, picture(400, 300), who="shapretta").status_code == 200, "any office login that may ask uploads"
     monkeypatch.setenv("EVENT_VOLUNTEERS", "off")
     assert put(c, art=ART).status_code == 404
-    assert c.as_("owner").delete(f"/church/event-volunteers/{E_LOCK}/flyer?business_id={BIZ}").status_code == 404
-    assert copies(c) and len(copies(c)) == 2
+    r = c.as_("owner").delete(f"/church/event-volunteers/{E_LOCK}/flyer?business_id={BIZ}")
+    assert r.status_code == 200 and "_flyer" not in entry(c)["data"], "after a rollback a flyer still comes down"
+    assert c.as_("viewer").delete(f"/church/event-volunteers/{E_LOCK}/flyer?business_id={BIZ}").status_code == 403
+    assert len(copies(c)) == 2
 
 
+def test_a_gallery_picture_is_only_for_who_may_read_the_gallery(fly, monkeypatch):
+    """The picture is read as the owner and published: only the owner, or a
+    login image_studio.church_reader lets read the gallery, may pick one."""
+    c = fly
+    seen = []
+    real = image_studio.church_reader
+
+    def reader(biz, user):
+        seen.append(str(user.id))
+        return str(user.id) == "u-admin"
+    monkeypatch.setattr(image_studio, "church_reader", reader)
+    for who in ("laquesha", "shapretta", "member"):
+        r = put(c, art=ART, who=who)
+        assert r.status_code == 403 and "Upload the flyer instead" in r.json()["detail"], who
+    assert copies(c) == {} and "_flyer" not in entry(c)["data"]
+    assert put(c, art=ART, who="admin").status_code == 200
+    assert put(c, art=ART, who="owner").status_code == 200
+    assert "u-owner" not in seen, "the owner's own path"
+    assert real
+
+
+TOO_BIG = "That picture is too big: at most 8000 pixels a side and 25 megapixels in all. Choose a smaller one."
+NOT_A_KIND = "That isn't a JPG, PNG or WebP picture. Choose one of those."
 LIMITS = {
-    "more than 10 MB": lambda: picture(100, 100, kind="PNG") + bytes(10 * 1024 * 1024),   # a real PNG, padded
-    "more than 8000 px a side": lambda: picture(8001, 10, kind="PNG"),
-    "a GIF": lambda: picture(40, 40, kind="GIF"),
-    "not a picture": lambda: b"this is not a picture at all",
-    "nothing": lambda: b"",
+    "more than 10 MB": (lambda: picture(100, 100, kind="PNG") + bytes(10 * 1024 * 1024),
+                        "That picture is over 10 MB. Choose a smaller one, or save it smaller first."),
+    "more than 8000 px a side": (lambda: picture(8001, 10, kind="PNG"), TOO_BIG),
+    "more than 25 megapixels": (lambda: big_png(6000, 5000), TOO_BIG),
+    "a GIF": (lambda: picture(40, 40, kind="GIF"), NOT_A_KIND),
+    "not a picture": (lambda: b"this is not a picture at all", NOT_A_KIND),
+    "nothing": (lambda: b"", "Choose a picture to upload."),
 }
 
 
+def big_png(w, h):
+    """A picture with many pixels and few bytes (one bit each)."""
+    buf = io.BytesIO()
+    Image.new("1", (w, h), 0).save(buf, "PNG")
+    return buf.getvalue()
+
+
 @pytest.mark.parametrize("what", list(LIMITS))
-def test_each_limit_is_a_plain_400(fly, what):
+def test_each_limit_is_a_plain_400_that_says_what_is_wrong(fly, what):
     c = fly
-    r = put(c, LIMITS[what]())
+    make, words = LIMITS[what]
+    r = put(c, make())
     assert r.status_code == 400, what
-    assert r.json()["detail"] in (evv.NOT_A_FLYER, "Choose a picture at most 8000 pixels on a side.",
-                                  "Choose a picture to upload.")
+    assert r.json()["detail"] == words
     assert c.made == [] and copies(c) == {} and "_flyer" not in entry(c)["data"]
+
+
+def test_the_pixel_cap_is_read_before_a_pixel_is_decoded(fly, monkeypatch):
+    c = fly
+    decoded = []
+    from PIL import ImageFile
+    real = ImageFile.ImageFile.load
+    monkeypatch.setattr(ImageFile.ImageFile, "load", lambda self, *a, **k: decoded.append(self.size) or real(self))
+    r = put(c, big_png(6000, 5000))
+    assert r.status_code == 400 and r.json()["detail"] == TOO_BIG
+    assert decoded == [], "refused from the header alone"
 
 
 def test_a_picture_normalize_image_refuses_is_a_plain_400(fly, monkeypatch):
@@ -244,7 +295,7 @@ def test_a_picture_normalize_image_refuses_is_a_plain_400(fly, monkeypatch):
         raise HTTPException(422, "That file is not a supported image.")
     monkeypatch.setattr(image_studio, "normalize_image", refuse)
     r = put(c, picture(100, 100))
-    assert r.status_code == 400 and r.json()["detail"] == evv.NOT_A_FLYER
+    assert r.status_code == 400 and r.json()["detail"] == "That picture couldn't be read. Choose another JPG, PNG or WebP."
 
 
 def test_no_file_and_no_artwork_is_a_400(fly):
@@ -256,11 +307,12 @@ def test_no_file_and_no_artwork_is_a_400(fly):
 # ─── the one validator ───────────────────────────────────────────────
 
 
-def test_flyer_of_takes_only_this_churchs_own_folder(fly):
-    assert evv.flyer_of({"_flyer": flyer()}, BIZ) == {k: flyer()[k] for k in ("url", "thumb", "w", "h")}
+def test_flyer_of_takes_only_this_events_own_two_copies(fly):
+    assert evv.flyer_of({"_flyer": flyer()}, BIZ, E_LOCK) == {k: flyer()[k] for k in ("url", "thumb", "w", "h")}
     for why, bad in BAD.items():
-        assert evv.flyer_of({"_flyer": bad}, BIZ) is None, why
-    assert evv.flyer_of({"_flyer": "x"}, BIZ) is None and evv.flyer_of({}, BIZ) is None
+        assert evv.flyer_of({"_flyer": bad}, BIZ, E_LOCK) is None, why
+    assert evv.flyer_of({"_flyer": flyer()}, BIZ, "e9000000-0000-4000-8000-000000000009") is None, "another event"
+    assert evv.flyer_of({"_flyer": "x"}, BIZ, E_LOCK) is None and evv.flyer_of({}, BIZ, E_LOCK) is None
 
 
 # ─── every reader ────────────────────────────────────────────────────
