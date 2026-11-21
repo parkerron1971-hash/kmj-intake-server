@@ -175,7 +175,7 @@ def test_the_reader_is_the_read_tab(bible, fake, monkeypatch):  # noqa: F811
     assert 'id="bb-aa"' in bar and 'aria-label="Text size and font"' in bar
     assert re.search(r'id="lm-say" aria-pressed="false" aria-label="Listen to this chapter" hidden>', bar)
     assert 'id="lm-moon"' in bar
-    assert '<b aria-hidden="true">1</b><span aria-hidden="true">John</span>' in on
+    assert '<b aria-hidden="true">1</b><span aria-hidden="true">The Gospel of John</span>' in on   # bible_text.TITLES
     # Today's reader: tap a verse, the bar, its marks.
     assert mpb.READER_JS in on and mlb.READ_JS in on and mlb.SEG_JS in on
     for act in ("note", "copy", "bookmark", "clear", "close", "save-note", "card"):
@@ -214,7 +214,7 @@ def test_the_reader_sets_a_verse_to_a_line(bible, fake, monkeypatch):  # noqa: F
     paras = re.findall(r"<p>(.*?)</p>", text)
     assert all(len(re.findall(r'<span class="bb-v[^"]*" data-v="', p)) == 1 for p in paras)
     assert [re.search(r'data-v="(\d+)"', p).group(1) for p in paras] == [str(v) for v in range(1, n + 1)]
-    assert '<span aria-hidden="true">John</span>' in on and "Gospel" not in on
+    assert '<span aria-hidden="true">The Gospel of John</span>' in on   # the book in full (test_member_lumen_bible_titles)
     assert "body.lm .lm-read .bb-text p{margin:0;}" in mlb.CSS
     # the owner's preview (no marks to tap) and a passage with verses marked: still a verse to a line
     import member_portal_bible as mpb

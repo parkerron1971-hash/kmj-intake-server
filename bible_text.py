@@ -140,6 +140,35 @@ BOOKS: List[Tuple[str, str, Tuple[str, ...]]] = [
     ("JUD", "Jude", ("jud", "jd")), ("REV", "Revelation", ("rev", "re", "rv", "revelations", "apocalypse")),
 ]
 NAME = {code: name for code, name, _ in BOOKS}
+# Each book's conventional title, short and plain, for the new look's reader
+# (the line under the chapter's big number: "THE GOSPEL OF JOHN", as the
+# Look 5.1 mock reads). Everything else names a book by NAME.
+TITLES: Dict[str, str] = {
+    "GEN": "The Book of Genesis", "EXO": "The Book of Exodus", "LEV": "The Book of Leviticus",
+    "NUM": "The Book of Numbers", "DEU": "The Book of Deuteronomy", "JOS": "The Book of Joshua",
+    "JDG": "The Book of Judges", "RUT": "The Book of Ruth", "1SA": "The First Book of Samuel",
+    "2SA": "The Second Book of Samuel", "1KI": "The First Book of Kings", "2KI": "The Second Book of Kings",
+    "1CH": "The First Book of Chronicles", "2CH": "The Second Book of Chronicles", "EZR": "The Book of Ezra",
+    "NEH": "The Book of Nehemiah", "EST": "The Book of Esther", "JOB": "The Book of Job",
+    "PSA": "The Book of Psalms", "PRO": "The Book of Proverbs", "ECC": "The Book of Ecclesiastes",
+    "SOL": "The Song of Solomon", "ISA": "The Book of Isaiah", "JER": "The Book of Jeremiah",
+    "LAM": "The Book of Lamentations", "EZE": "The Book of Ezekiel", "DAN": "The Book of Daniel",
+    "HOS": "The Book of Hosea", "JOE": "The Book of Joel", "AMO": "The Book of Amos", "OBA": "The Book of Obadiah",
+    "JON": "The Book of Jonah", "MIC": "The Book of Micah", "NAH": "The Book of Nahum",
+    "HAB": "The Book of Habakkuk", "ZEP": "The Book of Zephaniah", "HAG": "The Book of Haggai",
+    "ZEC": "The Book of Zechariah", "MAL": "The Book of Malachi", "MAT": "The Gospel of Matthew",
+    "MAR": "The Gospel of Mark", "LUK": "The Gospel of Luke", "JOH": "The Gospel of John",
+    "ACT": "The Acts of the Apostles", "ROM": "The Letter to the Romans",
+    "1CO": "The First Letter to the Corinthians", "2CO": "The Second Letter to the Corinthians",
+    "GAL": "The Letter to the Galatians", "EPH": "The Letter to the Ephesians",
+    "PHI": "The Letter to the Philippians", "COL": "The Letter to the Colossians",
+    "1TH": "The First Letter to the Thessalonians", "2TH": "The Second Letter to the Thessalonians",
+    "1TI": "The First Letter to Timothy", "2TI": "The Second Letter to Timothy", "TIT": "The Letter to Titus",
+    "PHM": "The Letter to Philemon", "HEB": "The Letter to the Hebrews", "JAM": "The Letter of James",
+    "1PE": "The First Letter of Peter", "2PE": "The Second Letter of Peter", "1JO": "The First Letter of John",
+    "2JO": "The Second Letter of John", "3JO": "The Third Letter of John", "JUD": "The Letter of Jude",
+    "REV": "The Revelation to John",
+}
 ORDER = {code: i for i, (code, _, _) in enumerate(BOOKS)}
 OLD_TESTAMENT = {code for code, _, _ in BOOKS[:39]}
 
