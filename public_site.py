@@ -6179,7 +6179,7 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
-async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
+async def _serve_events_page(client, biz_id: Optional[str], slug: str, *, query: str = "") -> HTMLResponse:
     """Public event RSVP — render the events page at
     https://<slug>.mysolutionist.app/events (mirrors _serve_give_page).
 
@@ -6231,7 +6231,9 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
         ) or []
         entries_by_module[str(mod["id"])] = rows
 
-    occasions = build_occasions(modules, entries_by_module)
+    # Each public event carries its flyer (event_volunteers.flyer_of, the one
+    # reader): only public events are here, so no other flyer can be.
+    occasions = build_occasions(modules, entries_by_module, business_id=str(biz_id))
     # Events that take sign-ups (church_event_signups): price, places,
     # deadline, questions. Fail-soft: a read that fails leaves the page as
     # it was.
@@ -6239,8 +6241,12 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
     occasions = await asyncio.to_thread(church_event_signups.annotate, str(biz_id), occasions)
     from public_form_theme import SITE_SELECT
     site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    # /events?event=<id>: one event's own page, for its share preview.
+    from urllib.parse import parse_qs
+    focus = (parse_qs(query or "").get("event") or [""])[0][:64] or None
     html = render_events_page(business, occasions, canonical, slug,
-                              api_origin=_EMBED_ORIGIN, site=site_rows[0] if site_rows else None)
+                              api_origin=_EMBED_ORIGIN, site=site_rows[0] if site_rows else None,
+                              focus=focus)
     return HTMLResponse(
         content=html, media_type="text/html",
         headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
@@ -7152,7 +7158,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
         # Public event RSVP — /events serves the hosted events page
         # (same always-wins sub-path contract as /book and /give).
         if normalized_path == "/events":
-            return await _serve_events_page(client, biz_id, slug)
+            return await _serve_events_page(client, biz_id, slug, query=query)
         # The sermon library — /sermons and /sermons/<id> (same always-wins
         # sub-path contract).
         if normalized_path == "/sermons" or normalized_path.startswith("/sermons/"):
@@ -7366,7 +7372,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
         # Public event RSVP works on custom domains too — same parity
         # reasoning as /give.
         if _norm == "/events":
-            return await _serve_events_page(client, biz_id, slug)
+            return await _serve_events_page(client, biz_id, slug, query=query)
         # The sermon library works on custom domains too.
         if _norm == "/sermons" or _norm.startswith("/sermons/"):
             return await _serve_sermons_page(client, biz_id, slug, _norm)

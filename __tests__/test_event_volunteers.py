@@ -694,7 +694,9 @@ def test_the_events_volunteer_picture(church, monkeypatch):
     assert pic["request"] is None and pic["date"] is None and pic["teams"] == []
     assert pic["special"] == [
         {"role_id": "chap", "label": "Chaperones", "needed": 3, "kids": True, "open": False,
-         "people": [{"name": "Ana Cruz", "contact_id": ANA}]},
+         # S3: a kids role's people say whether their check is current
+         # (church_serving.cleared), for a login that reads who's cleared.
+         "people": [{"name": "Ana Cruz", "contact_id": ANA, "checked": False}]},
         {"role_id": "grill", "label": "Grill", "needed": 1, "kids": False, "open": True,
          "people": [{"name": "Lee Ford"}]}]
     assert pic["counts"] == {"all": 4, "yes": 2, "teams_needed": 0, "teams_yes": 0, "special_needed": 4,

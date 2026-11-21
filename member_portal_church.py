@@ -140,6 +140,12 @@ DONE = {
 ERRORS = {
     "full": "That one is full now.",
     "role": "That role was just filled, or isn't on this event any more.",
+    # A role that works with kids, for someone without a current background
+    # check (docs/EVENT_VOLUNTEERS.md 6.10): the page never offered it.
+    "kids": "Needs a background check. Ask the office.",
+    # A role that filled up while the page was open: "{label} just filled
+    # up." when the label came with it (flash_html), else these words.
+    "filled": "That role just filled up. Pick another, or just come.",
     "gone": "That event isn't available any more.",
     "past": "That event has already happened.",
     "busy": "Someone else was updating that event at the same moment. Please try again.",
@@ -309,7 +315,18 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         by_mod[str(m["id"])] = rows
         entries.update({str(r.get("id")): r for r in rows})
     fields = {str(m["id"]): er.resolve_fields(m.get("archetype_params")) for m in mods}
-    out = er.build_occasions(mods, by_mod, include=lambda data, f: can_see(data, f, me))
+    # Each occasion's flyer (event_volunteers.flyer_of) rides along: only the
+    # occasions can_see lets this person see are here.
+    out = er.build_occasions(mods, by_mod, include=lambda data, f: can_see(data, f, me), business_id=str(business_id))
+    # A role that works with kids is offered only to someone with a current
+    # background check (church_serving.cleared, the rule The week reads for
+    # "Can't serve with kids yet"); asked once, and only when there is one.
+    if any(r.get("kids") for o in out for r in o.get("roles") or []):
+        checked = kids_cleared(business_id, me)
+        for o in out:
+            for r in o.get("roles") or []:
+                if r.get("kids"):
+                    r["offer"] = checked
     for o in out:
         entry = entries.get(str(o.get("entry_id"))) or {}
         f = fields.get(str(o.get("module_id")))
@@ -326,6 +343,17 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
     return church_event_signups.annotate(str(business_id), out, contact_id=str(me["id"]))
 
 
+def kids_cleared(business_id: str, me: Dict[str, Any]) -> bool:
+    """Whether this person may take a role that works with kids: a current
+    background check by church_serving's one rule. A check that can't be
+    read is a no (the role says to ask the office), never a yes."""
+    try:
+        import church_serving
+        return str(me["id"]) in church_serving.cleared(business_id, [str(me["id"])])
+    except Exception:  # noqa: BLE001 — a read that fails offers nothing it can't stand behind
+        return False
+
+
 def _registration_key(business_id: str, entry_id: str, email: str) -> str:
     """The key the public events page stores when someone RSVPs there
     (events_rsvp_router.public_event_rsvp) — so an answer given here can
@@ -335,7 +363,7 @@ def _registration_key(business_id: str, entry_id: str, email: str) -> str:
 
 
 def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str,
-                role_id: str = "") -> Tuple[bool, str]:
+                role_id: str = "", said: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
     """Record this person's answer for one occasion. Returns (ok, code):
     a DONE code on success, an ERRORS code otherwise. Their earlier answer
     for the occasion is replaced, never duplicated, and keeps whatever the
@@ -384,8 +412,16 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
             new: Dict[str, Any] = {**base, "name": name, "status": "yes", "contact_id": cid}
             if action == "serve":
                 role = next((r for r in er.occasion_roles(data, f["roles"]) if r.get("id") == role_id), None)
-                if not role or er.role_fill(role, others)["full"]:
+                if not role:
                     return False, "role"
+                # A kids role the page didn't offer: refused, whatever was posted.
+                if er.kids_role(role) and not kids_cleared(business_id, me):
+                    return False, "kids"
+                fill = er.role_fill(role, others)
+                if fill["full"]:
+                    if said is not None:
+                        said["role"] = fill["label"]
+                    return False, "filled"
                 new["role"] = role_id
             others.append(new)
             done = "serving" if action == "serve" else "coming"
@@ -775,15 +811,21 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
 
 
 def _flash(request: Request) -> str:
-    return flash_html(done=request.query_params.get("done") or "", err=request.query_params.get("err") or "")
+    return flash_html(done=request.query_params.get("done") or "", err=request.query_params.get("err") or "",
+                      what=request.query_params.get("what") or "")
 
 
-def flash_html(done: str = "", err: str = "") -> str:
+def flash_html(done: str = "", err: str = "", what: str = "") -> str:
     """The notice a page shows after ?done= or ?err= (member_instant_send
-    hands the same markup to a page that sent without reloading)."""
+    hands the same markup to a page that sent without reloading). `what`
+    names the role that just filled (err=filled): "Chaperones just filled
+    up." It is only ever a role's name, shown as plain text."""
     from member_portal import _e
     done_words = DONE.get(done or "")
     err_words = ERRORS.get(err or "")
+    name = " ".join(str(what or "").split())[:60]
+    if err == "filled" and name:
+        err_words = f"{name} just filled up."
     if err_words:
         return f'<p class="mp-err mp-flash" role="alert">{_e(err_words)}</p>'
     if done_words:
@@ -804,6 +846,37 @@ def _status_line(o: Dict[str, Any]) -> str:
         label = next((r["label"] for r in o.get("roles") or [] if r.get("id") == mine["role"]), "serving")
         return f'<p class="mp-mine">You\'re serving: <strong>{_e(label)}</strong></p>'
     return '<p class="mp-mine">You\'re coming.</p>'
+
+
+def offered_roles(o: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The roles this person may sign up for: every role, but a kids role
+    only when upcoming_for found them cleared (`offer`)."""
+    return [r for r in o.get("roles") or [] if not r.get("kids") or r.get("offer") is True]
+
+
+def kids_note(o: Dict[str, Any], serving_role: Any = None, cls: str = "mp-muted mp-kids") -> str:
+    """A kids role still open that this person can't take yet, in place of
+    a button: "Chaperones: Needs a background check. Ask the office."."""
+    from member_portal import _e
+    held = [r for r in o.get("roles") or [] if r.get("kids") and r.get("offer") is not True and not r.get("full")
+            and r.get("id") != serving_role]
+    return "".join(f'<p class="{cls}">{_e(r.get("label") or "This role")}: {_e(ERRORS["kids"])}</p>' for r in held)
+
+
+def flyer_img(o: Dict[str, Any], cls: str) -> str:
+    """The event's flyer on its card: the thumb. `flyer` came through
+    event_volunteers.flyer_of (build_occasions), only for an event this
+    person may see."""
+    from member_portal import _e
+    f = o.get("flyer")
+    if not isinstance(f, dict) or not f.get("thumb"):
+        return ""
+    try:
+        h = max(1, round(480 * int(f["h"]) / int(f["w"])))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return ""
+    return (f'<img class="{cls}" src="{_e(f["thumb"])}" alt="Flyer for {_e(o.get("title") or "this event")}" '
+            f'width="480" height="{h}" loading="lazy" decoding="async">')
 
 
 def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
@@ -836,7 +909,7 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
         label = "Just attend instead" if serving_role else "I'm coming"
         actions.append(f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="coming">'
                        f'<button class="{"mp-link" if serving_role else "mp-go mb-soft"}" type="submit" {about}>{label}</button></form>')
-    open_roles = [r for r in o.get("roles") or [] if not r.get("full") and r.get("id") != serving_role]
+    open_roles = [r for r in offered_roles(o) if not r.get("full") and r.get("id") != serving_role]
     if open_roles and can_join:
         opts = "".join(f'<option value="{_e(r["id"])}">{_e(r["label"])} — {r["needed"] - r["filled"]} needed</option>'
                        for r in open_roles)
@@ -852,12 +925,14 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
     import member_app_ui as ui
     sample = ui.sample_tag() if samples.is_sample(o) else ""
     return f"""<article class="mp-card mp-occ" aria-labelledby="{title_id}">
+  {flyer_img(o, "mp-flyer")}
   <p class="mp-when">{_e(o.get('date_label') or '')}{sample}</p>
   <{h} id="{title_id}">{_e(o.get('title') or '')}</{h}>
   {f'<p class="mp-muted">{facts_html}</p>' if facts_html else ''}
   {_status_line(o) if not signup or serving_role else ''}
   {signup}
   <div class="mp-actions">{''.join(actions)}</div>
+  {kids_note(o, serving_role) if can_join else ''}
 </article>"""
 
 
@@ -926,6 +1001,8 @@ def _lumen_share(biz: Dict[str, Any], site, o: Dict[str, Any]) -> str:
         return ""
     title = o.get("title") or "Event"
     pic = mls.event_picture(biz, site, title)
+    if isinstance(o.get("flyer"), dict) and o["flyer"].get("thumb"):
+        pic = o["flyer"]["thumb"]   # the flyer the church gave it (a public event: shareable)
     when = " · ".join(x for x in (o.get("date_label") or "", o.get("location") or "") if x)
     return mls.link("event", mls.EVENTS_HREF, title, mls.icon("share", 19), sub=when, img=pic,
                     sid=o.get("entry_id") or "", cls="lm-evshare", label=f"Share {title}")
@@ -986,7 +1063,7 @@ def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events", share: str = ""
         row.append(act("cant", "Can&#x27;t make it", "lm-txtbtn"))
     said = {"no": "You said you can&#x27;t make it.", "maybe": "You said maybe."}.get(mine.get("status") or "", "")
     serve = ""
-    open_roles = [r for r in o.get("roles") or [] if not r.get("full") and r.get("id") != serving_role]
+    open_roles = [r for r in offered_roles(o) if not r.get("full") and r.get("id") != serving_role]
     if open_roles and can_join:
         opts = "".join(f'<option value="{_e(r["id"])}">{_e(r["label"])} — {r["needed"] - r["filled"]} needed</option>'
                        for r in open_roles)
@@ -999,8 +1076,9 @@ def _lumen_occasion(o: Dict[str, Any], back: str = "/my/events", share: str = ""
     said_html = f'<p class="lm-evst">{said}</p>' if said else ""
     row_html = f'<div class="lm-evrow">{"".join(row)}</div>' if row else ""
     return (f'<article class="lm-evc" aria-labelledby="{title_id}">{when}<div class="lm-evt{" has-share" if share else ""}">'
-            f'{share}<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>{line}{said_html}{signup}'
-            f'{row_html}{serve}</div></article>')
+            f'{share}{flyer_img(o, "lm-evflyer")}<h2 id="{title_id}">{_e(o.get("title") or "")}{sample}</h2>'
+            f'{line}{said_html}{signup}{row_html}{serve}{kids_note(o, serving_role, "lm-evst") if can_join else ""}'
+            '</div></article>')
 
 
 def _agenda_row(o: Dict[str, Any]) -> str:
@@ -1402,7 +1480,7 @@ def _back(target: str, **q: str) -> RedirectResponse:
             and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)
             and not re.fullmatch(r"/my/lead/groups/[0-9a-fA-F-]{36}", target)):
         target = "/my"
-    qs = "&".join(f"{k}={v}" for k, v in q.items())
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
 
 
@@ -1423,10 +1501,13 @@ async def rsvp(request: Request):
         return _back("/my")
     if not _allowed(church, me):
         return _back(back, err="slow")
+    said: Dict[str, str] = {}
     ok, code = await asyncio.to_thread(
         member_rsvp, church["business"]["id"], me, str(form.get("entry_id") or ""),
-        str(form.get("action") or ""), str(form.get("role") or ""))
-    return _back(back, **({"done": code} if ok else {"err": code}))
+        str(form.get("action") or ""), str(form.get("role") or ""), said)
+    # A role that just filled says which ("Chaperones just filled up.").
+    extra = {"what": said["role"]} if not ok and code == "filled" and said.get("role") else {}
+    return _back(back, **({"done": code} if ok else {"err": code, **extra}))
 
 
 @router.post("/my/prayer", include_in_schema=False)

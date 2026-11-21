@@ -451,7 +451,24 @@ def _ask_row(a: Dict[str, Any]) -> str:
     who = (f'{_e(_first(a["from"]))} asked you to cover · tap to answer' if a.get("from")
            else f'{_e(a["asked_by"] or a["team"])} asked{" " + when if when else ""} · tap to answer')
     return (f'<a class="sv-ask" href="/my/serving/{_e(a["id"])}">{_date(at)}'
-            f'<span class="t"><b>{what}</b><small>{who}</small></span>{ui.icon("chevron", 18)}</a>')
+            f'<span class="t"><b>{what}</b><small>{who}</small></span>{_flyer(a["service"].get("flyer"))}'
+            f'{ui.icon("chevron", 18)}</a>')
+
+
+def _flyer(f: Any, cls: str = "sv-fly", wide: int = 56) -> str:
+    """An event date's flyer on its serving card: the thumb, small
+    (`wide` px). `f` came through event_volunteers.flyer_of."""
+    if not isinstance(f, dict) or not f.get("thumb"):
+        return ""
+    try:
+        h = max(1, round(wide * int(f["h"]) / int(f["w"])))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return ""
+    # Styled inline: a page with no flyer is byte for byte what it was.
+    style = ("display:block;width:100%;max-width:480px;height:auto;margin:0 0 14px;border-radius:14px" if wide > 100
+             else "flex:none;width:56px;height:auto;max-height:72px;object-fit:cover;border-radius:8px")
+    return (f'<img class="{cls}" src="{_e(f["thumb"])}" alt="" width="{wide}" height="{h}" '
+            f'style="{style}" loading="lazy" decoding="async">')
 
 
 def _weekday(iso: Any, zone) -> str:
@@ -487,7 +504,7 @@ def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str, soo
                else '<span class="sv-st">You\'re on</span>' if subs_html
                else f'<a class="sv-btn" href="/my/serving?sub={_e(c["id"])}#sv-{_e(c["id"])}">Can\'t make it</a>')
     return (f'<div class="sv-row" id="sv-{_e(c["id"])}">{_date(at, soft=True)}<span class="t"><span class="ti">{_e(c["place"])} · {_e(label)}</span>'
-            f'<span class="su">{sub}</span></span>{act}</div>{subs_html}')
+            f'<span class="su">{sub}</span></span>{_flyer(c["service"].get("flyer"))}{act}</div>{subs_html}')
 
 
 def _subs_panel(c: Dict[str, Any], cands: List[Dict[str, Any]], leader: Optional[str]) -> str:
@@ -545,6 +562,9 @@ def _hours_html(h: Optional[Dict[str, Any]], me: Dict[str, Any]) -> str:
         parts.append("a group night" if h["gatherings"] == 1 else f'{h["gatherings"]} group nights')
     if h.get("extra"):
         parts.append("a day the office added" if h["extra"] == 1 else f'{h["extra"]} days the office added')
+    if h.get("events"):
+        # A role on an event (docs/EVENT_VOLUNTEERS.md 6.6): its helper hours.
+        parts.append("an event you helped at" if h["events"] == 1 else f'{h["events"]} events you helped at')
     how = f"{_and(parts)}." if parts else ""
     return ('<section class="sv-sec" style="margin-top:18px" aria-label="Hours this year"><div class="sv-hrs h-gold">'
             f'<p class="sv-eb">{h["year"]} so far</p>'
@@ -719,7 +739,8 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
           else _starts(at, True, ev_))
     if v.get("where"):
         su += f' · {v["where"]}'
-    top = (f'<div class="sv-top">{_date(at)}<span class="t"><span class="ti">{_e(title)}'
+    top = (_flyer(v.get("flyer"), "sv-flyer", 480)
+           + f'<div class="sv-top">{_date(at)}<span class="t"><span class="ti">{_e(title)}'
            f'{" · " + _e(v["title"]) if v["title"] not in ("Sunday service", "An event") else ""}</span><span class="su">{_e(su)}</span></span></div>')
     vid = v["id"]
     if v["past"]:

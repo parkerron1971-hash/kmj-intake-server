@@ -500,11 +500,14 @@ def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[
         gid = str(place.get("group_id") or "")
         span = place_span(start, s.get("items"), _hhmm((turns.get(gid) or {}).get("call_time")),
                           settings["team_minutes"].get(gid))
-        by_day.setdefault((cid, day), []).append((span[0], span[1], gid))
+        by_day.setdefault((cid, day), []).append((span[0], span[1], gid, str(r["service_id"])))
     out = []
     for (cid, day), spans in by_day.items():
-        for gid, mins in credit_day(spans):
-            out.append({"contact_id": cid, "team": gid, "minutes": mins, "day": day})
+        # credit_day sorts the same way, so each credit lines up with its
+        # place's service (event_credits counts an event once by it).
+        spans = sorted(spans, key=lambda s: (s[0], s[1]))
+        for (_b, _e, _g, sid), (gid, mins) in zip(spans, credit_day([s[:3] for s in spans])):
+            out.append({"contact_id": cid, "team": gid, "minutes": mins, "day": day, "service": sid})
     return out, names
 
 
@@ -702,6 +705,7 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
     settings = _settings(biz)
     lo, hi = _year_window(zone, year, now)
     sundays, team_names = _sunday_spans(biz_id, zone, lo, hi, settings)
+    sundays, events = event_credits(biz_id, zone, lo, hi, sundays)
     groups, group_names = _group_credits(biz_id, lo.date(), hi.date(), settings)
     extra_rows = _extra_rows(biz_id)
     extra = _extra_credits(extra_rows, year)
@@ -710,7 +714,8 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
 
     def person(cid: str) -> Dict[str, Any]:
         return per.setdefault(cid, {"contact_id": cid, "minutes": 0, "sundays": 0, "sunday_minutes": 0, "gatherings": 0,
-                                    "group_minutes": 0, "extra_minutes": 0, "teams": {}, "days": set()})
+                                    "group_minutes": 0, "extra_minutes": 0, "events": 0, "event_minutes": 0,
+                                    "teams": {}, "days": set()})
     team_tot: Dict[str, Dict[str, Any]] = {}
     for c in sundays:
         p = person(c["contact_id"])
@@ -731,6 +736,11 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
         p = person(c["contact_id"])
         p["minutes"] += c["minutes"]
         p["extra_minutes"] += c["minutes"]
+    for c in events:
+        p = person(c["contact_id"])
+        p["minutes"] += c["minutes"]
+        p["event_minutes"] += c["minutes"]
+        p["events"] += 1
 
     for p in per.values():
         p["sundays"] = len(p.pop("days"))
@@ -778,7 +788,9 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
         "totals": {"minutes": sum(p["minutes"] for p in rows), "people": len(rows),
                    "sunday_minutes": sum(c["minutes"] for c in sundays), "places": len(sundays),
                    "group_minutes": group_minutes, "gatherings": len(groups),
-                   "extra_minutes": sum(e["minutes"] for e in extra)},
+                   "extra_minutes": sum(e["minutes"] for e in extra),
+                   # Special helpers at events (event_credits): 0 with EVENT_VOLUNTEERS closed.
+                   "event_minutes": sum(e["minutes"] for e in events), "events": len(events)},
         "people": rows[:500],
         "teams": teams,
         "groups": {"minutes": group_minutes, "gatherings": len(groups),
@@ -818,6 +830,7 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
     settings = _settings(biz)
     lo, hi = _year_window(zone, year, now)
     sundays, team_names = _sunday_spans(biz_id, zone, lo, hi, settings, only=cid)
+    sundays, events = event_credits(biz_id, zone, lo, hi, sundays, only=cid)
     groups, _ = _group_credits(biz_id, lo.date(), hi.date(), settings, only=cid)
     mine = _extra_rows(biz_id, only=cid)
     extra = _extra_credits(mine, year)
@@ -828,7 +841,8 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
     c = next((x for x in check if x["contact_id"] == cid), None)
     return {
         "year": year,
-        "minutes": sum(x["minutes"] for x in sundays) + sum(x["minutes"] for x in groups) + sum(x["minutes"] for x in extra),
+        "minutes": (sum(x["minutes"] for x in sundays) + sum(x["minutes"] for x in groups)
+                    + sum(x["minutes"] for x in extra) + sum(x["minutes"] for x in events)),
         "sundays": len({x["day"] for x in sundays}),
         # Days served that weren't a Sunday (an outreach night: serve_dates), so
         # My serving never calls them Sundays.
@@ -836,6 +850,8 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
         "teams": [team_names.get(g, "your team") for g, _ in sorted(by_team.items(), key=lambda kv: -kv[1])],
         "gatherings": len(groups),
         "extra": len(extra),
+        # Events served as a special helper (event_credits): 0 with EVENT_VOLUNTEERS closed.
+        "events": len(events),
         "check": ({"status": c["status"], "on": c["on"], "due": c["due"], "next": c["next"]} if c else None),
         "check_link": settings["check_link"] or None,
     }
@@ -862,10 +878,11 @@ def minutes_of(biz: Dict[str, Any], people: Iterable[str], zone=None) -> Dict[st
     settings = _settings(biz)
     lo, hi = _year_window(zone, year, now)
     sundays, _ = _sunday_spans(biz_id, zone, lo, hi, settings, people=ids)
+    sundays, events = event_credits(biz_id, zone, lo, hi, sundays, people=ids)
     groups, _ = _group_credits(biz_id, lo.date(), hi.date(), settings, people=ids)
     extra = _extra_credits(_extra_rows(biz_id, people=ids), year)
     out = {cid: 0 for cid in ids}
-    for c in (*sundays, *groups, *extra):
+    for c in (*sundays, *groups, *extra, *events):
         if c["contact_id"] in out:
             out[c["contact_id"]] += c["minutes"]
     return out
@@ -903,6 +920,121 @@ def checks_of(biz: Dict[str, Any], people: Iterable[str], today: date,
         state = check_state(on, settings["check_years"], today, age is not None and age < 18, (nexts or {}).get(cid))
         out[cid] = {"on": on.isoformat() if on else None, **state}
     return out
+
+
+CLEARED = ("ok", "due")     # a check still good today (due: it runs out within DUE_DAYS)
+
+
+def cleared(biz: Any, people: Iterable[str], today: Optional[date] = None) -> Set[str]:
+    """Which of these people may serve with kids now: a current background
+    check, by checks_of's own rule (the rule The week reads for "Can't serve
+    with kids yet"). An event's kids role (docs/EVENT_VOLUNTEERS.md 6.10) is
+    offered only to them. Under 18 is never cleared: checks are for adults.
+    `biz` is the church's row, or its id."""
+    if not isinstance(biz, dict):
+        biz = _business(_uuid(biz, "church"))
+    ids = sorted({str(p) for p in people if p})
+    if not ids:
+        return set()
+    today = today or _now().astimezone(_zone(str(biz["id"]))).date()
+    return {cid for cid, c in checks_of(biz, ids, today).items() if c["status"] in CLEARED}
+
+
+# ─── Special helpers at an event (docs/EVENT_VOLUNTEERS.md 6.6) ────────
+# A signup on one of an event's own roles (_roles), on an event this year
+# that has happened, counts the event's helper minutes (_serve_minutes, 120 by
+# default, 15 to 720) as one event served: with a contact (a person, not a
+# name typed in), a yes (or no status, which reads as yes), and the role one
+# of the event's role ids (never "Attending"). Someone on a team place at the
+# event's date AND a special role counts once, the longer of the two. An away
+# day earns nothing, as on a Sunday. Only where EVENT_VOLUNTEERS is open: with
+# it closed every number here is what it was.
+
+def _events_open(biz_id: str) -> bool:
+    try:
+        import event_volunteers
+        return event_volunteers.open_for(biz_id)
+    except Exception:  # noqa: BLE001 — a switch nobody could read counts nothing new
+        return False
+
+
+def event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[Dict[str, Any]],
+                  only: Optional[str] = None,
+                  people: Optional[Sequence[str]] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(the Sunday credits kept, the event credits) for the window. Each
+    event credit is {contact_id, event, minutes, day}. A team place at the
+    event's own date and a special role there count once, the longer: the
+    other one's credits are left out. `only`/`people` as _sunday_spans."""
+    if not _events_open(biz_id):
+        return sundays, []
+    import church_leaders_note as cln
+    import event_volunteers as evv
+    import events_rsvp_router as er
+    b = _q(biz_id)
+    mods = {str(m["id"]): er.resolve_fields(m.get("archetype_params")) for m in _need(
+        f"/custom_modules?business_id=eq.{b}&archetype=eq.event_roster&select=id,archetype_params&limit=100")}
+    if not mods:
+        return sundays, []
+    entries = _need_in(f"/module_entries?business_id=eq.{b}&status=eq.active&select=id,module_id,data",
+                       "module_id", mods, "id")
+    want = ({str(only)} if only else {str(p) for p in people}) if (only or people is not None) else None
+    first, today = lo.astimezone(zone).date(), hi.astimezone(zone)
+    found: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for e in entries:
+        f = mods.get(str(e.get("module_id")))
+        data = e.get("data") if isinstance(e.get("data"), dict) else {}
+        if not f:
+            continue
+        day, at = cln._when_of(data.get(f["date_field"]), zone)
+        if day is None or day < first:
+            continue
+        # It has happened: its start passed; a day with no time, once it's over.
+        if at is not None and not lo <= at < hi:
+            continue
+        if at is None and datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone) > today:
+            continue
+        roles = {str(r["id"]) for r in er.occasion_roles(data, f["roles"]) if r.get("id")}
+        minutes = evv.serve_minutes(data)
+        for s in er.read_signups(data, f["signups_field"]):
+            cid = str(s.get("contact_id") or "")
+            if not cid or (s.get("status") or "yes") != "yes" or str(s.get("role") or "") not in roles:
+                continue
+            if want is not None and cid not in want:
+                continue
+            found.setdefault((cid, str(e["id"])), {"contact_id": cid, "event": str(e["id"]), "minutes": minutes,
+                                                   "day": day.isoformat()})
+    if not found:
+        return sundays, []
+    cids = sorted({c for c, _ in found})
+    span = f"&starts_on=lte.{hi.date().isoformat()}&ends_on=gte.{lo.date().isoformat()}"
+    gone: Dict[str, List[Tuple[str, str]]] = {}
+    for a in _need_in(f"/serve_away?business_id=eq.{b}{span}&select=id,contact_id,starts_on,ends_on", "contact_id",
+                      cids, "id"):
+        gone.setdefault(str(a["contact_id"]), []).append((str(a["starts_on"])[:10], str(a["ends_on"])[:10]))
+    events = [c for c in found.values() if not any(x <= c["day"] <= z for x, z in gone.get(c["contact_id"], []))]
+    if not events:
+        return sundays, []
+    # The event's own date on Who serves when: its team places' credits.
+    import serve_dates as sd
+    links = {str(s["id"]): str(s["event_entry_id"]) for s in _need_in(
+        f"/worship_services?business_id=eq.{b}&kind=eq.{sd.EVENT}&archived_at=is.null&select=id,event_entry_id",
+        "event_entry_id", {c["event"] for c in events}, "id")} if sd.ready() else {}
+    team: Dict[Tuple[str, str], int] = {}
+    for c in sundays:
+        eid = links.get(str(c.get("service") or ""))
+        if eid:
+            team[(c["contact_id"], eid)] = team.get((c["contact_id"], eid), 0) + int(c["minutes"])
+    drop, kept = set(), []
+    for c in events:
+        key = (c["contact_id"], c["event"])
+        if key in team and team[key] >= c["minutes"]:
+            continue                    # the team place was the longer: it stands
+        if key in team:
+            drop.add(key)               # the special role was the longer: it stands
+        kept.append(c)
+    if drop:
+        sundays = [c for c in sundays if (c["contact_id"], links.get(str(c.get("service") or ""))) not in drop]
+    return sundays, kept
 
 
 # ─── Writes ───────────────────────────────────────────────────────────

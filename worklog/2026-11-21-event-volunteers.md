@@ -4,12 +4,11 @@ date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20: "when a event is made there should be questions asked normal service volunteers or special volunteers… request for an amount of volunteers for their event… a way to inser flyer for like a thumbnail… connect the volunteers to events", then "go" on the proposal https://claude.ai/artifact/98Z9QFcaZ6ZNQhLdarKHQB'
 status: in progress
-prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine)]
+prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine, merged), kmj-intake-server S3 around the event (this PR)]
 migrations: [supabase/APPLY-2026-11-21-event-volunteers.sql (NOT APPLIED)]
 left_undone:
   - "Kevin applies supabase/APPLY-2026-11-21-event-volunteers.sql; until then every S2 route answers 404 (the status says ready: false) and no read selects worship_services.needs"
-  - "S3 server around the event: sync (POST /church/event-volunteers/{entry_id}/changed) and adding it to event_volunteers.sweep_tick (already on the worker every 15 minutes), the flyer upload/attach and flyer_of on every reader, special-role rules and I'll help, hours for special helpers"
-  - "S4 office frontend: the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
+  - "S4 office frontend: call POST /church/event-volunteers/{entry_id}/changed after every event save; the flyer step (PUT/DELETE .../flyer, multipart or {artwork_id}); show event_moved on Who serves when; RolesEditor's two ticks (kids, open); the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
   - "S5 Chief: teams and flyer on create/update_module_entry, how full is my event"
   - "Switch-on PR on a Thursday: EVENT_VOLUNTEERS=on AND CHURCH_EVENT_VOLUNTEERS=on (the first opens only where the second is), What's New, Help Center re-export"
 decisions:
@@ -22,6 +21,11 @@ decisions:
   - "S2: fixed a bug on the way: Fill the month could ask one person for two spots of one place at one service (busy() leaves the place's own spots out); do_fill now skips them"
   - "S2 after review: taking a date off cancels its ask; an ask left on with no date is never told and the sweep mends it (linked, cancelled, or waiting again); an unplanned Sunday keeps the church's usual Sunday times; a date's numbers are checked again after the write; an event with an ask can't go on another way"
   - "S2: the rest of the S2 calls are in docs/EVENT_VOLUNTEERS.md section 11"
+  - "S3: the event's date follows it (sync on /changed and in the 15-minute sweep): told once through member_push_sends (event-moved-{assignment}-{starts_at}, event-cancelled-{assignment}), tell first then change, quiet hours hold the whole change; a cancel takes every ask back by Take back's path, the date off, the ask closed last"
+  - "S3: the flyer goes through image_studio as the owner (normalize_image, the gallery row) with two EXIF-free JPEG copies in business-assets; every reader goes through flyer_of; /events?event=<id> is one event's share preview"
+  - "S3: a kids role needs church_serving.cleared (checks_of ok or due); the member app refuses by redirect notice (err=kids, err=filled&what=…); the public page shows only open roles, never kids"
+  - "S3: special helpers' hours are church_serving.event_credits (once per event, the longer of a team place and a role), in the Serving page, My serving, The week and Reports; nothing changes with the switch closed"
+  - "S3: the rest of the S3 calls are in docs/EVENT_VOLUNTEERS.md section 11"
 related: [2026-11-17-event-volunteer-dates.md, 2026-11-17-events-volunteer-list.md, 2026-11-11-light-table-step2.md, 2026-11-18-church-schedule.md]
 ---
 Before building I read both repos' work logs. The 11-17 event-dates log (backend and
@@ -47,3 +51,16 @@ entry when the switch is open. `serve_dates.needed()` counts every slot: Who ser
 the member's ask page, a leader's Sundays, The week (and My department through it), My
 week, and the Sunday-plan readers. Tests: `__tests__/test_event_volunteers.py` and
 `__tests__/test_event_volunteers_readers.py`; the sabotages are in the PR.
+
+S3 is the server around the event, on main after #2023. `event_volunteers.py` adds
+`sync` (and `POST /{entry_id}/changed`, and `follow_tick` in the existing 15-minute
+sweep), the flyer routes (`PUT`/`DELETE /{entry_id}/flyer`) and `date_extras` for Who
+serves when and The week. The readers: `events_rsvp_router.build_occasions` (the
+public page's card and its `?event=` share preview, the member app's Coming up in
+both looks and the new Home's This week), `sunday_serving` (My serving's rows and ask
+page), `/planning/requests`, the schedule and The week. `church_serving` gains
+`cleared` (the kids rule, shared with The week's) and `event_credits` (hours), read by
+the Serving page, My serving, `minutes_of` and Reports. `chief_roster.clean_roles`
+keeps `kids` and `open`. No migration: told-once is `member_push_sends`. Tests:
+`__tests__/test_event_volunteers_follow.py`, `test_event_volunteers_flyer.py`,
+`test_event_volunteers_roles_hours.py`; the sabotages are in the PR.

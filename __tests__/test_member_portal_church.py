@@ -141,7 +141,9 @@ def test_serving_follows_the_occasions_own_roles(fake):
     assert mpc.member_rsvp(BIZ, ME, "e1", "serve", "greeter") == (True, "serving")
     assert _mine(fake)[0]["role"] == "greeter"
     other = dict(ME, id="c9")
-    assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter") == (False, "role")   # filled
+    # Filled: "Greeters just filled up." (docs/EVENT_VOLUNTEERS.md 6.10), its own code since S3.
+    said = {}
+    assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter", said) == (False, "filled") and said["role"]
     fake.entries["e1"]["data"]["_roles"] = [{"id": "ushers", "label": "Ushers", "needed": 2}]
     assert mpc.member_rsvp(BIZ, other, "e1", "serve", "greeter") == (False, "role")   # not on this one
     assert mpc.member_rsvp(BIZ, other, "e1", "serve", "ushers") == (True, "serving")

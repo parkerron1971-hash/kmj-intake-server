@@ -52,7 +52,8 @@ def on() -> bool:
 # ─── reading what's mine ─────────────────────────────────────────────
 
 
-def _services(biz: str, zone, lo: datetime, hi: datetime, ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+def _services(biz: str, zone, lo: datetime, hi: datetime, ids: Optional[List[str]] = None,
+              flyers: bool = False) -> Dict[str, Dict[str, Any]]:
     """The services (a Sunday, or an event date: serve_dates) by id, each
     with its day on the church's clock and the day's own name."""
     path = (f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
@@ -67,7 +68,26 @@ def _services(biz: str, zone, lo: datetime, hi: datetime, ids: Optional[List[str
             out[str(r["id"])] = {"id": str(r["id"]), "title": r.get("title") or ("An event" if event else "Sunday service"),
                                  "at": at, "day": at.date().isoformat(), "weekday": sd.weekday(at),
                                  "event": event, "where": (r.get("place") or "") if event else ""}
+            if event:
+                out[str(r["id"])]["entry_id"] = str(r["event_entry_id"]) if r.get("event_entry_id") else None
+    if flyers:
+        _flyers(biz, out.values())
     return out
+
+
+def _flyers(biz: str, services) -> None:
+    """An event date's flyer {url, thumb, w, h} (event_volunteers.flyer_of,
+    through flyers_for): the event this person was asked to serve. One read
+    for them all, and none when no event date is there."""
+    evs = [s for s in services if s.get("event")]
+    for s in evs:
+        s["flyer"] = None
+    ids = [s["entry_id"] for s in evs if s.get("entry_id")]
+    if ids:
+        import event_volunteers
+        got = event_volunteers.flyers_for(biz, ids)
+        for s in evs:
+            s["flyer"] = got.get(str(s.get("entry_id") or ""))
 
 
 def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
@@ -81,7 +101,7 @@ def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
     member_of = [str(m["group_id"]) for m in (_read(
         f"/group_members?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&group_id=in.({_ids(gids)})&select=group_id")
         if gids else [])]
-    soon = _services(biz_id, zone, now - timedelta(hours=3), now + timedelta(days=AHEAD_DAYS))
+    soon = _services(biz_id, zone, now - timedelta(hours=3), now + timedelta(days=AHEAD_DAYS), flyers=True)
     sids = list(soon)
     rows = (_read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&service_id=in.({_ids(sids)})"
                   f"&or=(contact_id.eq.{_q(cid)},swap_to.eq.{_q(cid)},status.eq.offered)"
@@ -248,6 +268,13 @@ def _future_service(biz_id: str, row: Dict[str, Any]) -> Tuple[Any, Dict[str, An
     return zone, s
 
 
+def _flyer_of_entry(biz_id: str, entry_id: Any) -> Optional[Dict[str, Any]]:
+    if not entry_id:
+        return None
+    import event_volunteers
+    return event_volunteers.flyers_for(biz_id, [entry_id]).get(str(entry_id))
+
+
 def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
     """The ask (board 7): the place, the Sunday, who's on with them, and the
     next Sunday they're free, for "I can't, but I can do …"."""
@@ -294,6 +321,8 @@ def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
         "call_time": team.get("call_time"), "at": at, "title": svc["title"], "asked_by": asker,
         "leader": leaders[0] if leaders else None, "note": row.get("note") or "", "past": at <= sp._now().astimezone(board.zone),
         "weekday": sd.weekday(at), "event": event, "where": svc.get("place") or "",
+        # An event date's flyer (event_volunteers.flyer_of), for the ask's card.
+        "flyer": (_flyer_of_entry(biz_id, svc.get("event_entry_id")) if event else None),
         # "I can't, but I can do (another Sunday)": an event date has no other one.
         "with": with_, "can_do": (_next_free(biz_id, cid, board.zone, at)
                                   if mine_ and row["status"] in ("asked", "no") and not event else None),

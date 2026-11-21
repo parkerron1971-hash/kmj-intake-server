@@ -508,6 +508,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         week_occ.append(o)
         t = lh.parse_hm(o.get("time"))
         art, pin = spot(mpc.event_key(o.get("title")), "events", title=o.get("title") or "")
+        if not edit and isinstance(o.get("flyer"), dict) and o["flyer"].get("thumb"):
+            # The flyer the church gave the event (event_volunteers.flyer_of), in its colour.
+            art = ui.art(o["flyer"]["thumb"])
         main, cnt = event_act(o, "lm-wkb")
         tag = ui.sample_tag() if samples.is_sample(o) else ""
         items.append(((d, t or _time(23, 59), 2), lh.week_card(

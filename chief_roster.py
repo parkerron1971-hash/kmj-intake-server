@@ -65,12 +65,19 @@ def _needed(v: Any) -> int:
     return min(MAX_NEEDED, max(1, n))
 
 
+KEPT_FLAGS = ("kids", "open")     # a role's own ticks, kept through every edit
+
+
 def clean_roles(raw: Any) -> List[Dict[str, Any]]:
     """Roles already saved (an occasion's own, or the room's default), kept
-    as both readers keep them: a string id and a label; needed 1-50."""
+    as both readers keep them: a string id and a label; needed 1-50. A
+    role's `kids` and `open` (docs/EVENT_VOLUNTEERS.md 3.3: works with kids;
+    anyone can sign up) are kept when they are true or false, so an edit
+    by Chief never strips them."""
     if not isinstance(raw, list):
         return []
-    return [{"id": r["id"], "label": _plain(r["label"]), "needed": _needed(r.get("needed", 1))}
+    return [{"id": r["id"], "label": _plain(r["label"]), "needed": _needed(r.get("needed", 1)),
+             **{k: r[k] for k in KEPT_FLAGS if isinstance(r.get(k), bool)}}
             for r in raw
             if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]
             and isinstance(r.get("label"), str) and _plain(r["label"])]

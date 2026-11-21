@@ -1056,6 +1056,10 @@ def schedule(business_id: str, user: AuthedUser = Depends(require_user), weeks: 
     # Sunday number, or an event date's own (0: not needed that night).
     services = [{**s, "needed": {p["id"]: sd.needed(s, p) for t in teams if serves(s, t) for p in t["places"]}}
                 for s in services]
+    # An event date's flyer {thumb, url}, and `event_moved` when its event
+    # moved and the date didn't follow (event_volunteers, spec 6.7, 6.12).
+    import event_volunteers
+    event_volunteers.date_extras(biz, services, user)
     return {
         "from": board.first.isoformat(), "weeks": weeks,
         "services": services,
