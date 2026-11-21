@@ -757,7 +757,11 @@ def picture(entry_id: str, business_id: str, user: AuthedUser = Depends(require_
         "request": None if not req else {
             "id": str(req["id"]), "status": req.get("status"), "needs": req.get("needs") or {},
             "note": req.get("note") or "", "asked_by_name": req.get("asked_by_name") or "",
-            "decided_by_name": req.get("decided_by_name") or "", "decided_note": req.get("decided_note") or ""},
+            "decided_by_name": req.get("decided_by_name") or "", "decided_note": req.get("decided_note") or "",
+            # Whether this login may change or take back the ask (the PATCH and
+            # DELETE rule: the one who asked, or whoever schedules the teams;
+            # never a Viewer), so the page offers only what the server allows.
+            "can_change": me["role"] != "viewer" and _mine_or_scheduler(me, req)},
         "date": None if not svc else {"service_id": str(svc["id"]), "starts_at": svc.get("starts_at"),
                                       "needs": svc.get("needs") if isinstance(svc.get("needs"), dict) else None},
         "teams": teams,
