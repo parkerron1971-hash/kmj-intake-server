@@ -142,6 +142,24 @@ def _read(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
+PAGE = 1000          # the most rows one read returns (PostgREST's cap), whatever its limit says
+MAX_ROWS = 100_000   # past this a read is refused, never cut short
+
+
+def _read_all(path: str, order: str) -> List[Dict[str, Any]]:
+    """Every row, a page at a time in a stable order (church_serving's own
+    rule): a read the server caps is never taken for the whole, so a short
+    read never reads as "nobody's on this date". A page that fails is a 503."""
+    out: List[Dict[str, Any]] = []
+    while True:
+        rows = _read(f"{path}&order={order}&limit={PAGE}&offset={len(out)}")
+        out += rows
+        if len(rows) < PAGE:
+            return out
+        if len(out) >= MAX_ROWS:
+            raise HTTPException(503, UNREAD)
+
+
 def _first(name: Any) -> str:
     return _plain(name).split(" ")[0] if _plain(name) else ""
 
@@ -1431,13 +1449,15 @@ def follow_tick(now: datetime, stats: Dict[str, int], churches: Dict[str, Dict[s
     however many events it has. Only churches the follow is open for
     (_follows), never a sample church."""
     recent = _q(_iso(now - timedelta(hours=RAIN_HOURS)))
-    dates = sb_clients.sb_get_as_service(
-        f"/worship_services?kind=eq.{sd.EVENT}&archived_at=is.null&is_template=eq.false&event_entry_id=not.is.null"
-        f"&starts_at=gt.{recent}&select=business_id&limit=5000")
-    asks = sb_clients.sb_get_as_service(
-        f"/{TABLE}?status=in.({WAITING},{ON})&or=(status.eq.{WAITING},starts_at.gt.{recent})"
-        "&select=business_id&limit=5000")
-    if not isinstance(dates, list) or not isinstance(asks, list):
+    try:
+        # Paged in a stable order: past the server's cap a church is never left out.
+        dates = _read_all(
+            f"/worship_services?kind=eq.{sd.EVENT}&archived_at=is.null&is_template=eq.false&event_entry_id=not.is.null"
+            f"&starts_at=gt.{recent}&select=id,business_id", "business_id.asc,id.asc")
+        asks = _read_all(
+            f"/{TABLE}?status=in.({WAITING},{ON})&or=(status.eq.{WAITING},starts_at.gt.{recent})"
+            "&select=id,business_id", "business_id.asc,id.asc")
+    except HTTPException:
         print("[event-volunteers] the sweep couldn't read the events to follow; next time", flush=True)
         return
     ids = {str(r["business_id"]) for r in dates + asks if r.get("business_id")}
@@ -1666,20 +1686,31 @@ def move_ref(aid: Any, at: datetime, n: int) -> str:
     return f"event-moved-{aid}-{stamp(at)}-{n}"
 
 
-def _told(biz: str, now: datetime) -> Dict[str, Tuple[int, str]]:
-    """Each assignment's latest move notice, from the ledger (one read for
-    the church): {assignment: (n, the time it named)}."""
+LEDGER_IDS = 40             # people a ledger read names at once (keeps its address short)
+
+
+def _told(biz: str, now: datetime, aids: Iterable[Any]) -> Dict[str, Tuple[int, str]]:
+    """Each of these assignments' latest move notice, from the ledger:
+    {assignment: (n, the time it named)}. Only these people's notices, newest
+    first, read whole however many there are. The latest is the highest n,
+    and between two of the same n (two replicas that raced to two new times)
+    the later written: so the next notice is always n + 1, and the time
+    compared is the one the person heard last."""
     since = _q(_iso(now - timedelta(days=FOLLOW_DAYS)))
-    rows = _read(f"/member_push_sends?business_id=eq.{_q(biz)}&kind=eq.{SERVING}&ref_id=like.{_q('event-moved-*')}"
-                 f"&created_at=gte.{since}&select=ref_id&limit=5000")
-    out: Dict[str, Tuple[int, str]] = {}
-    for r in rows:
-        m = MOVE_REF.fullmatch(str(r.get("ref_id") or ""))
-        if m:
-            aid, at, n = m.group(1), m.group(2), int(m.group(3))
-            if aid not in out or n > out[aid][0]:
-                out[aid] = (n, at)
-    return out
+    ids = sorted({str(a) for a in aids if a})
+    best: Dict[str, Tuple[int, str, str]] = {}
+    for i in range(0, len(ids), LEDGER_IDS):
+        names = ",".join(f"ref_id.like.{_q(f'event-moved-{a}-*')}" for a in ids[i:i + LEDGER_IDS])
+        rows = _read_all(f"/member_push_sends?business_id=eq.{_q(biz)}&kind=eq.{SERVING}&or=({names})"
+                         f"&created_at=gte.{since}&select=id,ref_id,created_at", "created_at.desc,id.desc")
+        for r in rows:
+            m = MOVE_REF.fullmatch(str(r.get("ref_id") or ""))
+            if not m or m.group(1) not in ids:
+                continue
+            aid, at, n, made = m.group(1), m.group(2), int(m.group(3)), str(r.get("created_at") or "")
+            if aid not in best or (n, made) > (best[aid][0], best[aid][2]):
+                best[aid] = (n, at, made)
+    return {aid: (n, at) for aid, (n, at, _made) in best.items()}
 
 
 def _church_zone(church: Dict[str, Any]):
@@ -1698,13 +1729,13 @@ def _entries(biz: str, eids: Iterable[Any], zone) -> Dict[str, Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for i in range(0, len(ids), 100):
         rows += _read(f"/module_entries?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 100])})"
-                      "&select=id,module_id,status,data")
+                      "&select=id,module_id,status,updated_at,data")
     mids = sorted({str(r.get("module_id")) for r in rows if r.get("module_id")})
     mods = {str(m["id"]): m for m in (_read(f"/custom_modules?business_id=eq.{_q(biz)}&id=in.({_ids(mids)})"
                                             "&archetype=eq.event_roster&select=id,archetype_params,is_active")
                                       if mids else [])}
-    return {str(r["id"]): entry_view(r, mods[str(r["module_id"])], zone) for r in rows
-            if str(r.get("module_id")) in mods}
+    return {str(r["id"]): {**entry_view(r, mods[str(r["module_id"])], zone), "updated_at": r.get("updated_at")}
+            for r in rows if str(r.get("module_id")) in mods}
 
 
 def _follows(church: Dict[str, Any]) -> bool:
@@ -1716,8 +1747,10 @@ def _follows(church: Dict[str, Any]) -> bool:
 
 
 def _ledger(cx: Dict[str, Any]) -> Dict[str, Tuple[int, str]]:
+    """The latest move notice of everyone who hears on the dates followed
+    (one ledger read for them all, made only when someone would hear)."""
     if cx["told"] is None:
-        cx["told"] = _told(cx["biz"], cx["now"])
+        cx["told"] = _told(cx["biz"], cx["now"], [r["id"] for rs in cx["rows"].values() for r in rs if _hears(r)])
     return cx["told"]
 
 
@@ -1921,9 +1954,11 @@ def follow(church: Dict[str, Any], now: Optional[datetime] = None, *, only: Opti
     zone = _church_zone(church)
     ents = _entries(biz, {s.get("event_entry_id") for s in work} | {r.get("entry_id") for r in asks}, zone)
     rows: Dict[str, List[Dict[str, Any]]] = {}
-    if work:
-        for row in _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=in.({_ids(s['id'] for s in work)})"
-                         f"&select={FOLLOW_ROWS}"):
+    sids = sorted({str(s["id"]) for s in work})
+    for i in range(0, len(sids), 100):
+        # Paged: a short read must never read as "nobody's on this date".
+        for row in _read_all(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=in.({_ids(sids[i:i + 100])})"
+                             f"&select={FOLLOW_ROWS}", "id.asc"):
             rows.setdefault(str(row["service_id"]), []).append(row)
     cx = {"church": church, "biz": biz, "zone": zone, "now": now, "rows": rows, "told": None, "tell": None,
           "on": _open_church(church)}
@@ -1970,6 +2005,7 @@ def unsettled(church: Dict[str, Any], services: Iterable[Dict[str, Any]],
         zone = _church_zone(church)
         ents = _entries(biz, {s.get("entry_id") for s in evs}, zone)
         out = set()
+        stale = now - timedelta(days=1)
         for s in evs:
             eid = str(s.get("entry_id") or "")
             if not eid:
@@ -1979,6 +2015,14 @@ def unsettled(church: Dict[str, Any], services: Iterable[Dict[str, Any]],
                 out.add(str(s["id"]))
             elif not _same_time(ent.get("at"), s.get("at")) and not _wont_follow(biz, ent, now, zone):
                 out.add(str(s["id"]))
+            else:
+                continue
+            changed = _at((ent or {}).get("updated_at"))
+            if changed is not None and changed < stale:
+                # A change this old should have been followed long ago: a follow stuck
+                # (unsent, a read that keeps failing) shows here, as the reminders wait.
+                print(f"[event-volunteers] {biz[:8]}: the reminders for an event date are held for a change "
+                      f"made {(now - changed).days} day(s) ago that hasn't been followed", flush=True)
         loose = [str(s["id"]) for s in evs if not s.get("entry_id")]
         if loose:
             out |= {str(r["service_id"]) for r in _read(
@@ -2069,8 +2113,10 @@ def check_upload(raw: Any) -> bytes:
     if len(raw) > FLYER_BYTES:
         raise HTTPException(400, TOO_HEAVY)
     try:
-        # Image.open reads the header only: the kind and the size are known
-        # before a single pixel is decoded (load, exif_transpose).
+        # Image.open reads the header only: the kind and the size are checked
+        # before anything is decoded on purpose. Reading the EXIF turn after
+        # that may decode a PNG (its EXIF can sit after the pixels), but only
+        # a picture already inside the caps.
         with Image.open(io.BytesIO(raw)) as im:
             if im.format not in FLYER_KINDS:
                 raise HTTPException(400, NOT_A_KIND)

@@ -516,7 +516,12 @@ quoted.
    - Event requests on Who serves when and The week;
    - flyer thumbs in the event list, the church calendar and Home;
    - RolesEditor's two ticks (works with kids, anyone can sign up);
-   - the FE calls `/changed` after every event save.
+   - the FE calls `/changed` after every event save;
+   - the FE round-trips each signup's `via` unchanged when it saves an event
+     (the `Signup` shape is wider now: `via` is what keeps a public sign-up
+     from earning hours);
+   - the FE validates `data._flyer` with `flyer_of`'s whole-match rule (6.12)
+     before it shows the picture.
 5. **S5 · Chief**: `create_module_entry` / `update_module_entry` for an
    event take `teams: [{place, n}]` and `flyer: "make"|artwork id`, and file
    the request through the same code. Plus a read verb, "how full is my
@@ -689,9 +694,13 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   migration.
 - **A person's latest move notice names the date's time** (after review). A
   key on (assignment, time) alone said nothing when an event went 6, 7, 6, 7:
-  the last 7 was already "told". `n` counts the person's move notices, read
-  from the ledger once per church, so every real move is a new key and two
-  replicas still meet on the same one. Someone whose latest notice names
+  the last 7 was already "told". `n` counts the person's move notices, so
+  every real move is a new key and two replicas still meet on the same one.
+  The ledger is read for the people on the dates being followed only, newest
+  first and paged whole (a capped read once lost the newest rows and brought
+  the silent move back). The latest is the highest `n`, and between two of
+  the same `n` (two replicas racing two new times) the later written.
+  Someone whose latest notice names
   another time than the date's hears it's back ("is back to Fri, Oct 30,
   6:00 PM"); that covers a sync that told people, lost the date's write, and
   then the office put the event back.
@@ -705,7 +714,9 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   `sunday_serving_alerts.church_tick`): no ask, no reminder, for an event that
   went away or moved and hasn't been followed yet. That ends the race between
   quiet hours ending and the 7 AM morning reminder. A change that is undone
-  in the night lets the reminders go as before.
+  in the night lets the reminders go as before. A date held for a change made
+  more than a day ago is said in the logs, so a follow stuck on a failing read
+  shows.
 - **Who hears:** a yes, and an ask that already went out. An ask still
   waiting to go out says the new time when it goes. Offered spots, no's and
   someone asked to cover hear nothing.
@@ -744,9 +755,11 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
 - **One church, a handful of reads** (after review). The sweep finds the
   churches with something to follow in two reads (dates from an entry still
   to come or started in the last 48 hours; asks waiting, or on for a date not
-  long past), then reads each church once: its dates, its asks, their events
-  (two reads), the rows on those dates and, when anyone would hear, the move
-  ledger. `/changed` reads the same set and acts on its own event and on the
+  long past), each paged in a stable order so no church is missed past the
+  server's 1,000-row cap. Then it reads each church once: its dates, its
+  asks, their events (two reads), the rows on those dates (paged: a short
+  read never reads as "nobody's on this date") and, when anyone would hear,
+  their move notices. `/changed` reads the same set and acts on its own event and on the
   asks whose event was deleted. The sweep's answer gains `followed`, `moved`,
   `cancelled` and `people_told` only with the switch on.
 
@@ -808,8 +821,9 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
 - **`church_serving.event_credits`** reads only the year asked, by each
   room's own date field, and only the keys hours need (the day, signups,
   `_roles`, `_serve_minutes`, the public registrations), never every event's
-  whole data (after review). A read that fails counts no events and says so in
-  the logs; the rest of the hours still show.
+  whole data (after review). A read that fails fails the hours the way every
+  other hours read does (a 503, Reports' "couldn't be read"): church_serving
+  never shows fewer hours than there are, and Reports never comes out short.
 - **An event archived after it started keeps its hours; archived before, it
   was called off** (after review). `module_entries` keeps no `archived_at`, so
   its `updated_at` (moved by every save, the archive's included) stands in:

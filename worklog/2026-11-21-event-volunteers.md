@@ -76,3 +76,11 @@ earn none, the flyer's limits are read before decoding and its gallery pick foll
 the gallery's own rule, and flyer_of pins the event. Found on the way, not ours:
 `test_member_portal_department_week.py` (2) and `test_member_lumen_home5.py` (2) fail
 on plain main in the evening (quiet hours, the time of day), as they do on this branch.
+
+Second review (same PR): the batched reads now page past PostgREST's 1,000-row cap
+(the rows on the dates followed, the sweep's two finding reads), the move ledger is
+read only for the people on those dates, newest first and paged, with a tie on n going
+to the later-written notice; the hours read fails like the rest of church_serving
+(never fewer hours, Reports never short); a reminder hold for a change over a day old is
+said in the logs; spec section 9 S4 asks the office app to round-trip `via` and to hold
+`_flyer` to the whole-match rule.

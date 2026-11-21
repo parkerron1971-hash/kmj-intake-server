@@ -973,16 +973,11 @@ def event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[D
     event credit is {contact_id, event, minutes, day}. A team place at the
     event's own date and a special role there count once, the longer: the
     other one's credits are left out. `only`/`people` as _sunday_spans. A
-    read that fails counts no events (said in the logs), never a 503: the
-    rest of the hours still show."""
+    read that fails is a 503 like every other read here (_need): hours are
+    never shown fewer than they are, and Reports never comes out short."""
     if not _events_open(biz_id):
         return sundays, []
-    try:
-        return _event_credits(biz_id, zone, lo, hi, sundays, only, people)
-    except HTTPException:
-        print(f"[event-volunteers] {biz_id[:8]}: the events' helper hours couldn't be read; counted without them",
-              flush=True)
-        return sundays, []
+    return _event_credits(biz_id, zone, lo, hi, sundays, only, people)
 
 
 def _event_rows(biz_id: str, mods: Dict[str, Dict[str, Any]], first: date, last: date) -> List[Dict[str, Any]]:

@@ -32,7 +32,7 @@ import event_volunteers as evv  # noqa: E402
 import member_push  # noqa: E402
 import sb_clients  # noqa: E402
 import sunday_planning as sp  # noqa: E402
-from test_event_volunteers import (BIZ, E_LOCK, E_OUT, NOW, ask, church, rows)  # noqa: E402,F401
+from test_event_volunteers import (BIZ, E_LOCK, E_OUT, E_THEIRS, NOW, OTHER, ask, church, rows)  # noqa: E402,F401
 from test_sunday_planning import JO, LEE, MARCUS, ZONE  # noqa: E402
 
 A_YES, A_ASKED, A_FRESH = (f"a5500000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3))
@@ -534,3 +534,128 @@ def test_the_sweep_reads_a_church_once_however_many_events(ev, monkeypatch):
                         ("/member_push_sends", 1), ("/event_volunteer_requests", 2)):
         assert sum(x.startswith(table) for x in church) <= most, (table, [x for x in church if x.startswith(table)])
     assert next(r for r in rows(c) if r["id"].endswith("9"))["status"] == "on", "a long-past ask is left alone"
+
+
+# ─── past the server's cap (PostgREST answers 1,000 rows at most) ─────
+
+
+def capped(monkeypatch, cap, tables, only_global=False):
+    """The server's cap, made small: a read of these tables returns at most
+    `cap` rows, honouring order, offset and limit as PostgREST does."""
+    from urllib.parse import parse_qsl
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(evv, "PAGE", cap)
+
+    def get(path, **k):
+        rows = real(path)
+        table = path.lstrip("/").partition("?")[0]
+        q = dict(parse_qsl(path.partition("?")[2], keep_blank_values=True))
+        hit = table in tables and not (only_global and "business_id=eq." in path)
+        if not isinstance(rows, list) or not (hit or "offset" in q):
+            return rows
+        for part in reversed((q.get("order") or "").split(",")):
+            if part:
+                col, _, way = part.partition(".")
+                rows.sort(key=lambda r: str(r.get(col) or ""), reverse=way == "desc")
+        off = int(q.get("offset") or 0)
+        most = min(int(q.get("limit") or cap), cap) if hit else int(q.get("limit") or len(rows))
+        if not hit:     # any other paged read pages as the server would, uncapped
+            most = cap if "offset" in q else most
+        return rows[off:off + most]
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+
+
+def test_every_row_on_a_date_is_read_past_the_cap(ev, monkeypatch):
+    c = ev
+    sid = on_with_people(c)
+    held(c, sid)[A_FRESH]["notified_at"] = NOW.isoformat()       # three people who hear
+    capped(monkeypatch, 2, {"serve_assignments"})
+    entry(c)["data"]["date"] = "2026-10-31T19:00"
+    assert changed(c).json()["told"] == 3, "a short read never reads as nobody on the date"
+    entry(c)["status"] = "archived"
+    assert changed(c).json() == {"date": "cancelled", "told": 3, "requests": 1}
+    assert held(c, sid) == {}, "every row taken back"
+
+
+def _counted_ledger(c, monkeypatch):
+    """The ledger's rows written a second apart, as a real one is."""
+    real = sb_clients.sb_post_as_service
+    tick = {"n": 0}
+
+    def post(path, body, prefer=None, **k):
+        got = real(path, body, prefer, **k)
+        if path.startswith("/member_push_sends") and got:
+            tick["n"] += 1
+            for r in c.db.t["member_push_sends"]:
+                if r["ref_id"] == body["ref_id"]:
+                    r["created_at"] = (NOW + timedelta(seconds=tick["n"])).isoformat()
+        return got
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+
+
+def test_the_ledger_is_read_whole_past_the_cap(ev, monkeypatch):
+    c = ev
+    on_with_people(c)
+    _counted_ledger(c, monkeypatch)
+    capped(monkeypatch, 1, {"member_push_sends"})
+    for when in ("2026-10-30T19:00", "2026-10-30T18:00", "2026-10-30T19:00", "2026-10-30T18:00"):
+        entry(c)["data"]["date"] = when
+        assert changed(c).json()["told"] == 2, when
+    assert last_said(c, JO) == "The Youth Lock-in moved to Fri, Oct 30, 6:00 PM"
+    assert sorted(int(x["ref_id"].rsplit("-", 1)[1]) for x in c.db.t["member_push_sends"]
+                  if A_YES in x["ref_id"]) == [0, 1, 2, 3]
+
+
+def test_two_notices_of_one_n_the_later_written_is_the_latest(ev):
+    """Two replicas raced two new times and both claimed n: the time the
+    person heard last is the later-written one, so nobody is 'corrected'
+    to the time they already have."""
+    c = ev
+    sid = on_with_people(c)
+    entry(c)["data"]["date"] = "2026-10-30T19:00"
+    assert changed(c).json()["told"] == 2
+    c.db.t["member_push_sends"] = [
+        {"id": "f1", "business_id": BIZ, "kind": "serving", "ref_id": evv.move_ref(A_YES, svc_at(c, sid), 1),
+         "created_at": (NOW + timedelta(minutes=2)).isoformat()},
+        {"id": "f2", "business_id": BIZ, "kind": "serving",
+         "ref_id": evv.move_ref(A_YES, svc_at(c, sid) + timedelta(hours=2), 1),
+         "created_at": (NOW + timedelta(minutes=1)).isoformat()},
+        {"id": "f3", "business_id": BIZ, "kind": "serving", "ref_id": evv.move_ref(A_ASKED, svc_at(c, sid), 0),
+         "created_at": NOW.isoformat()},
+    ]
+    assert changed(c).json() == {"date": "same", "told": 0, "requests": 0}
+
+
+def svc_at(c, sid):
+    from datetime import datetime as dt
+    return dt.fromisoformat(svc(c, sid)["starts_at"])
+
+
+def test_every_church_with_work_is_found_past_the_cap(ev, monkeypatch):
+    c = ev
+    on_with_people(c)
+    assert ask(c, "owner", E_OUT, {c.greeter: 1}).status_code == 200
+    c.db.t["worship_services"].append({"id": "5e800000-0000-4000-8000-000000000001", "business_id": OTHER,
+                                       "title": "Their night", "kind": "event", "event_entry_id": E_THEIRS,
+                                       "starts_at": "2026-10-30T23:00:00+00:00", "place": "", "items": [],
+                                       "archived_at": None, "is_template": False})
+    capped(monkeypatch, 1, {"worship_services", "event_volunteer_requests"}, only_global=True)
+    seen = []
+    real = evv.follow
+    monkeypatch.setattr(evv, "follow", lambda church, now=None, **k: seen.append(str(church["id"])) or real(church, now, **k))
+    evv.sweep_tick(NOW + timedelta(minutes=30))
+    assert sorted(seen) == sorted([BIZ, OTHER])
+
+
+def test_a_date_held_for_a_day_old_change_is_said_in_the_logs(ev, capsys):
+    c = ev
+    sid = on_with_people(c)
+    biz = c.db.t["businesses"][0]
+    entry(c)["data"]["date"] = "2026-10-31T19:00"
+    services = [{"id": sid, "event": True, "entry_id": E_LOCK, "at": svc_at(c, sid)}]
+    entry(c)["updated_at"] = (NOW - timedelta(hours=3)).isoformat()
+    assert evv.unsettled(biz, services, NOW) == {sid}
+    assert "held for a change" not in capsys.readouterr().out, "a fresh change: nothing to say"
+    entry(c)["updated_at"] = (NOW - timedelta(days=2)).isoformat()
+    assert evv.unsettled(biz, services, NOW) == {sid}
+    assert "held for a change made 2 day(s) ago" in capsys.readouterr().out

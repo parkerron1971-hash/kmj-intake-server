@@ -371,14 +371,19 @@ def test_the_hours_read_is_bounded_to_the_year_and_the_keys_it_needs(hours):
     assert not any(",data&" in r or "select=id,module_id,status,updated_at,data" in r for r in reads), "never the whole data"
 
 
-def test_a_read_that_fails_counts_no_events_and_the_page_still_shows(hours, monkeypatch, capsys):
+def test_a_read_that_fails_fails_the_hours_never_fewer(hours, monkeypatch):
+    """church_serving's own rule: a read that fails is a 503, never fewer
+    hours, and Reports says it couldn't read Serving rather than come out short."""
+    from fastapi import HTTPException
     c = hours
     real = sb_clients.sb_get_as_service
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda path, **k: None if path.startswith("/module_entries") else real(path, **k))
-    got = mine(c, JO)
-    assert (got["minutes"], got["events"]) == (90, 0), "the team place still counts; the events say nothing"
-    assert "helper hours couldn't be read" in capsys.readouterr().out
+    with pytest.raises(HTTPException) as got:
+        mine(c, JO)
+    assert got.value.status_code == 503
+    ctx = {"biz_id": BIZ, "biz": c.biz, "year": 2026, "now": NOW, "today": NOW.date(), "current": True}
+    assert all(s["value"] is None for s in church_reports.serving(ctx)["stats"])
 
 
 @pytest.mark.parametrize("touched, counts", [("2026-10-21T09:00:00+00:00", 120), ("2026-10-19T09:00:00+00:00", 0),
