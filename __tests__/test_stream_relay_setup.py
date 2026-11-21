@@ -29,6 +29,15 @@ def test_ingest_is_rtmps_only_and_everything_else_is_local():
     assert m["paths"]["all_others"]["overridePublisher"] is True
 
 
+def test_the_copies_can_hold_a_whole_keyframe():
+    """The default queue (512 packets, about 740 KB) overflowed on keyframes
+    at 6 Mbps and damaged the picture on every copy. It must hold the largest
+    keyframe the agent's 25 Mbps limit allows: one second of it, about 3.1 MB."""
+    size = yaml.safe_load((ROOT / "mediamtx.yml").read_text())["writeQueueSize"]
+    assert size & (size - 1) == 0, "MediaMTX refuses a size that isn't a power of two"
+    assert size * 1450 >= 25e6 / 8
+
+
 def test_the_firewall_opens_ssh_443_and_80_only_and_ssh_takes_keys_only():
     c = yaml.safe_load((ROOT / "setup" / "cloud-init.yaml").read_text())
     allowed = [cmd for cmd in c["runcmd"] if isinstance(cmd, str) and cmd.startswith("ufw allow")]

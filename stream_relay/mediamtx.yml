@@ -23,6 +23,13 @@ logLevel: info
 logDestinations: [stdout]
 readTimeout: 10s
 writeTimeout: 10s
+# Packets queued per copy. MediaMTX hands a whole video frame to each copy at
+# once, and the default of 512 holds about 740 KB. A keyframe at an ordinary
+# 6 Mbps reaches that, and every copy then loses part of the picture (measured
+# 2026-11-08: 28 warnings a minute, "Missing reference picture" in the copy
+# members watch). 4096 holds about 5.9 MB, past the largest keyframe the
+# agent's 25 Mbps limit lets through. Must be a power of two.
+writeQueueSize: 4096
 
 authMethod: http
 authHTTPAddress: http://127.0.0.1:9100/auth
