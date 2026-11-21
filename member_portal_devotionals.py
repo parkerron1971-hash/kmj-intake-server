@@ -1036,9 +1036,12 @@ async def start_over(request: Request):
             return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
         if not mpc._allowed(church, me):
             return go(err="slow")
-        ok = await asyncio.to_thread(clear_done, bid, cid, str(dev["id"]))
-        if ok and not dev.get("starts_on") and plan in mine:
+        # The start moves first: if clearing then fails, the marks are still there (a retry does both).
+        ok = True
+        if not dev.get("starts_on") and plan in mine:
             ok = await asyncio.to_thread(restart, bid, cid, plan, date.today())
+        if ok:
+            ok = await asyncio.to_thread(clear_done, bid, cid, str(dev["id"]))
     if not ok:
         return go(err="error")
     return _wrote(go(done="over"), bid, cid)

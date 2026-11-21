@@ -220,3 +220,15 @@ def test_start_over_in_the_preview_saves_nothing(bible, fake, monkeypatch):  # n
     r = c.post("/my/bible/plans/over", data={"plan": f"devotional:{D1}"}, follow_redirects=False)
     assert r.headers["location"] == f"/my/bible/plans/{D1}?err=preview"
     assert fake.t["devotional_progress"] == before
+
+
+def test_start_over_keeps_the_marks_when_the_new_start_fails(bible, fake, monkeypatch):  # noqa: F811
+    import member_portal_devotionals as mpd
+    fake.add("member_plan_starts", business_id=tct.BIZ, contact_id=tct.ANA, plan=f"devotional:{D2}",
+             started_on=(TODAY - timedelta(days=5)).isoformat())
+    fake.add("devotional_progress", business_id=tct.BIZ, contact_id=tct.ANA, devotional_id=D2, day=2,
+             done_at=datetime.now(timezone.utc).isoformat(), checks=[], journal="")
+    monkeypatch.setattr(mpd, "restart", lambda *a: False)
+    r = _app(fake, monkeypatch).post("/my/bible/plans/over", data={"plan": f"devotional:{D2}"}, follow_redirects=False)
+    assert r.headers["location"] == f"/my/bible/plans/{D2}?err=error"
+    assert next(x for x in fake.t["devotional_progress"] if x["devotional_id"] == D2)["done_at"]   # still marked read
