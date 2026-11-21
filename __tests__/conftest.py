@@ -247,4 +247,7 @@ def _fresh_member_cache():
     _mc = _sys.modules.get("member_cache")
     if _mc is not None:
         _mc.forget_all()
+    _mlp = _sys.modules.get("member_lumen_plans")
+    if _mlp is not None:
+        _mlp.forget_everything()
     yield

@@ -175,9 +175,11 @@ async def tick(request: Request):
     from member_portal import _SECURE_HEADERS
     church, me, unavailable = await mpc._signed_in(request)
     form = await request.form()
-    # A plan the member started on their own carries its key.
+    # A plan the member started on their own carries its key (a reading
+    # plan's, or a topic plan's: topic_plans).
+    import topic_plans as tp
     key = str(form.get("plan") or "")
-    key = key if key in rp.PLANS else ""
+    key = key if key in rp.PLANS or tp.is_topic(key) else ""
     back = "/my" if str(form.get("back") or "") == "/my" else (f"/my/bible/plans/{key}" if key else "/my/reading")
 
     def go(**q: str) -> RedirectResponse:
@@ -192,7 +194,8 @@ async def tick(request: Request):
         mine = await asyncio.to_thread(mpd.starts, church["business"]["id"], str(me["id"]))
         if mine is None:
             return go(err="error")
-        plan = mpd.own_plan(key, mine.get(f"reading:{key}"))
+        import member_lumen_plans as mlp
+        plan = mlp.own(key, mine.get(f"reading:{key}"))
     else:
         plan = rp.current(church["business"])
     try:
@@ -205,4 +208,7 @@ async def tick(request: Request):
         return go(err="slow")
     read = str(form.get("read") or "yes") == "yes"
     ok = await asyncio.to_thread(rp.mark, church["business"]["id"], me["id"], plan, day, read)
-    return go(**({"done": "read" if read else "unread"} if ok else {"err": "error"}))
+    if not ok:
+        return go(err="error")
+    import member_portal_devotionals as mpd
+    return mpd._wrote(go(done="read" if read else "unread"), church["business"]["id"], me["id"])

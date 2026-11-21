@@ -655,6 +655,11 @@ async def _lumen_tab(request: Request, biz, site, me, tr: str, where, places, ta
     today = date.today()
     bid, cid = biz["id"], str(me["id"])
     kept = None if preview else mlb.dot_cookie(request.cookies.get(mlb.DEVO_COOKIE), today)
+    if tab == "plans":
+        # Plans (member_lumen_plans): its own reads, each kept.
+        import member_lumen_plans as mlp
+        html, keep = await mlp.tab(request, biz, site, me, kept_dot=kept, preview=preview, today=today)
+        return html, where, keep
     want_dot = tab == "devotional" or (tab in ("read", "plans", "saved") and kept is None)
     church_today = rp.today_for(biz)
     at, lead = where, ""

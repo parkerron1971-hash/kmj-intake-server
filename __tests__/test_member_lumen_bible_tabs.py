@@ -270,30 +270,28 @@ def test_a_church_with_no_devotionals_says_so_quietly(bible, fake, monkeypatch):
 
 
 def test_the_plans_tab(bible, fake, monkeypatch):  # noqa: F811
-    import member_lumen_bible as mlb
-    import reading_plans as rp
+    """Plans (member_lumen_plans, Kevin's approved design): Continue, the
+    church's devotionals as covers, the topics, the whole-Bible shelf.
+    test_member_lumen_plans pins the rest."""
     html = _client(fake, monkeypatch).get("/my/bible?tab=plans").text
-    plans = re.findall(r'<div class="lm-aplan">(.*?)</div>', html)
-    assert len(plans) == 2                                                               # the church's, then hers
-    church, mine = plans
-    assert '<b>12</b>' in church and "With your church · day 12" in church and "Today: Psalms 54–58; Proverbs 12" in church
-    assert 'href="/my/reading"' in church and 'href="/my/bible/psalms/54"' in church
-    mins = mlb.chapters_minutes(rp.schedule("psalms-proverbs-31")[11], "kjv")
-    assert f"About {mins} minutes" in church
-    assert "The Gospels · day 5" in mine and 'href="/my/bible/plans/gospels-30"' in mine and ">Read</a>" in mine
-    # the plans she hasn't started, through today's start route
-    starts = re.findall(r'<form class="lm-pstart" method="post" action="/my/bible/plans/start"><input type="hidden" '
-                        r'name="plan" value="reading:([\w-]+)">', html)
-    assert starts == ["bible-year", "nt-260", "psalms-proverbs-31"]
-    assert re.search(r"365 days · \d+ min a day", html)
-    assert 'href="/my/bible/plans"' in html
+    hero = html[html.index('<section class="lm-pl-hero'):html.index("</section>")]
+    assert "Continue · Day 3 of 7" in hero and "Seven Days of Rest" in hero                # the church's, running
+    assert f'href="/my/bible/plans/{D1}/3">Read day 3</a>' in hero
+    assert 'class="lm-pl-rail"' in html and "From Grace Fellowship" in html
+    assert html.count('class="lm-pl-tp ') == 6 and 'href="/my/bible/plans/topic-anxiety"' in html
+    shelf = html[html.index('id="lm-pl-bh"'):]
+    assert re.findall(r'<span class="lm-pl-art is-len"><b>(\d+)</b>', shelf) == ["365", "260", "30", "31"]
+    assert "With your church · day 12" in shelf and 'href="/my/reading"' in shelf
+    assert "Day 5 of 30" in shelf and 'href="/my/bible/plans/gospels-30"' in shelf
 
 
 def test_a_failed_plans_read_still_offers_the_plans(bible, fake, monkeypatch):  # noqa: F811
     fake.down.add("member_plan_starts")
     html = _client(fake, monkeypatch).get("/my/bible?tab=plans").text
     assert "Your plans couldn't load just now" in html
-    assert "With your church · day 12" in html and html.count('class="lm-pstart"') == 4
+    assert "Continue · Day 3 of 7" in html                                              # the church dated it
+    assert html.count('class="lm-pl-tp ') == 6 and "<small>Day " not in html.split('id="lm-pl-th"')[1].split("</section>")[0]
+    assert html.count('<span class="lm-pl-art is-len">') == 4 and "With your church · day 12" in html
 
 
 def test_minutes_are_the_words_at_reading_pace():
