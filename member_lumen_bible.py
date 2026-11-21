@@ -383,7 +383,10 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
                  f'<span>{_e(label)}</span>{lm.ic("chevron", 16)}')
         return (f'<a class="lm-rstep {cls}" href="/my/bible/{bt.slug(c)}/{n}" aria-label="{"Previous" if cls == "prev" else "Next"}: '
                 f'{_e(label)}">{inner}</a>')
-    book = "Psalms" if code == "PSA" else bt.NAME[code]
+    # Under the big number, the book's full title ("The Gospel of John",
+    # bible_text.TITLES), as the mock reads; the label a screen reader hears
+    # stays "<book> <chapter>".
+    book = bt.TITLES.get(code) or ("Psalms" if code == "PSA" else bt.NAME[code])
     head = (f'<h1 class="lm-chap"><span class="mp-sr">{_e(name)} {ch}</span><b aria-hidden="true">{ch}</b>'
             f'<span aria-hidden="true">{_e(book)}</span></h1>')
     first = f'<p class="lm-rlead">{_e(lead)}</p>' if lead else ""
