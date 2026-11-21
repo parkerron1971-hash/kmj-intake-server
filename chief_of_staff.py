@@ -262,6 +262,7 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_schedule as _church_schedule  # the leaders schedule: who is away, asks, what repeats
+import chief_event_volunteers as _event_volunteers  # an event's volunteers and flyer: the serving teams' ask, how full
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
 import chief_church_structure as _church_structure  # the standard start: a church's office team, drafted for review
@@ -424,6 +425,7 @@ _ACTION_PHRASES = {
     "list_duties": "reading who does what",
     **_church_assign.PROGRESS,
     **_church_schedule.PROGRESS,
+    **_event_volunteers.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
     **_church_structure.PROGRESS,
@@ -6366,13 +6368,21 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
                      f"{module.get('name')} is access-restricted — manage it in its secure view, not here.")
 
     # An events room (event_roster): the occasion's volunteer roles and the
-    # people on them, in the shape the room reads (chief_roster).
-    roster = None
+    # people on them, in the shape the room reads (chief_roster); where the
+    # church asks its serving teams, the teams and the flyer too, shown
+    # before anything is saved (chief_event_volunteers).
+    roster = plan = None
     if module.get("archetype") == "event_roster":
+        import chief_event_volunteers as cev
         import chief_roster
+        explicit = chief_roster.asks_for_roster(action) and await asyncio.to_thread(
+            cev.roles_explicit, biz["id"], cev.turn_user(action))
         data, roster = chief_roster.shape(module, data, roles=action.get("roles"),
-                                          volunteers=action.get("volunteers"))
+                                          volunteers=action.get("volunteers"), explicit=explicit)
         await _known_contacts(biz["id"], roster["added"])
+        plan = await cev.before_save(biz, module, action, data, roles=roster["roles"])
+        if plan.get("kind") == "stop":
+            return plan["result"]
 
     from chief_code import entity_id
     inserted = await _sb(client, "POST", "/module_entries", {
@@ -6387,7 +6397,11 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
     if roster is not None:
         made = inserted[0] if isinstance(inserted, list) and isinstance(inserted[0], dict) else {}
         page = await asyncio.to_thread(_events_page_for, biz, module, data, made.get("id"), False)
-        return _roster_result("create_module_entry", "entry added", module, data, roster, made.get("id"), page)
+        res = _roster_result("create_module_entry", "entry added", module, data, roster, made.get("id"), page)
+        # Saved: then the flyer, the ask and the follow, the office's order.
+        # Whatever happens there, the event stays saved.
+        import chief_event_volunteers as cev
+        return await cev.after_save(biz, made.get("id"), plan or {}, res)
     title = data.get("title") or data.get("deliverable_name") or "(new entry)"
     return {
         "type": "create_module_entry",
@@ -6507,40 +6521,61 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     if not entry_id:
         return _fail("update_module_entry", "entry_id required")
     patch = action.get("data") or {}
+    import chief_event_volunteers as cev
     import chief_roster
-    # An event's volunteer roles or people may come beside an empty data.
+    # An event's volunteer roles or people, its serving teams or its flyer,
+    # may come beside an empty data.
     roster_ask = isinstance(patch, dict) and chief_roster.asks_for_roster(action)
-    if not isinstance(patch, dict) or not (patch or roster_ask):
+    teams_ask = isinstance(patch, dict) and cev.asks(action)
+    if not isinstance(patch, dict) or not (patch or roster_ask or teams_ask):
         return _fail("update_module_entry", "data must be a non-empty object")
 
     # Read existing entry so we can merge rather than replace.
     rows = await _sb(client, "GET",
         f"/module_entries?id=eq.{entry_id}&business_id=eq.{biz['id']}"
-        f"&select=id,module_id,data&limit=1") or []
+        f"&select=id,module_id,status,data&limit=1") or []
     if not rows:
         return _fail("update_module_entry", "entry not found")
     existing = rows[0]
     merged = {**(existing.get("data") or {}), **patch}
-    module = roster = None
-    if roster_ask:
+    module = roster = plan = None
+    user = cev.turn_user(action)
+    # A plain change to an event (its day, its place) is followed on Who
+    # serves when at once, as the office's save is: the room is read for
+    # that only where asking could be open (signed in, switch not off, the
+    # migration in), so every other update reads what it read before.
+    follows = user is not None and await asyncio.to_thread(cev.could_follow)
+    if roster_ask or teams_ask or follows:
         # An events room (event_roster): roles keep their ids, people go on
         # their role (chief_roster), so nobody falls off the list.
         module = await _validate_module(client, biz["id"], existing.get("module_id"))
         if (module or {}).get("archetype") == "event_roster":
+            explicit = roster_ask and await asyncio.to_thread(cev.roles_explicit, biz["id"], user)
             merged, roster = chief_roster.shape(module, patch, before=existing.get("data") or {},
-                                                roles=action.get("roles"), volunteers=action.get("volunteers"))
+                                                roles=action.get("roles"), volunteers=action.get("volunteers"),
+                                                explicit=explicit)
             await _known_contacts(biz["id"], roster["added"])
+            plan = await cev.before_save(biz, module, action, merged, entry=existing, roles=roster["roles"])
+            if plan.get("kind") == "stop":
+                return plan["result"]
         elif not patch:
             return _fail("update_module_entry", "data must be a non-empty object")
 
-    updated = await _sb(client, "PATCH", f"/module_entries?id=eq.{entry_id}",
-                       {"data": merged})
-    if not updated:
-        return _fail("update_module_entry", "update failed")
+    # Only the teams or a flyer: the event itself is as it was, so it isn't
+    # written again (the flyer's own write is guarded by the event's revision).
+    if patch or roster_ask or roster is None:
+        updated = await _sb(client, "PATCH", f"/module_entries?id=eq.{entry_id}",
+                           {"data": merged})
+        if not updated:
+            return _fail("update_module_entry", "update failed")
 
     if roster is not None:
         page = await asyncio.to_thread(_events_page_for, biz, module, merged, entry_id, True)
-        return _roster_result("update_module_entry", "updated", module, merged, roster, entry_id, page)
+        res = _roster_result("update_module_entry", "updated", module, merged, roster, entry_id, page)
+        if roster_ask or teams_ask:
+            return await cev.after_save(biz, entry_id, plan or {}, res)
+        # A plain change (no roles, teams or flyer): as before, and followed.
+        await cev.after_save(biz, entry_id, plan or {}, res)
     return {
         "type": "update_module_entry",
         "result": "updated",
@@ -12454,6 +12489,8 @@ ACTION_HANDLERS = {
     **_church_assign.HANDLERS,
     # The leaders schedule (chief_church_schedule): who is away, asking and answering, what repeats, the week.
     **_church_schedule.HANDLERS,
+    # An event's volunteers (chief_event_volunteers): how full one event is, both kinds.
+    **_event_volunteers.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
     **_church_structure.HANDLERS,
@@ -15948,6 +15985,11 @@ async def chief_chat(
                 # The leaders schedule (chief_church_schedule): the same, only where it (or the volunteers'
                 # week) is open for the church; a read that fails adds nothing.
                 _login_block += await asyncio.to_thread(_church_schedule.turn_line, biz, str(user_session.user.id))
+                # An event's volunteers (chief_event_volunteers): only where asking the serving teams is
+                # open for the church and this login; the tail, never a cached segment (owner mode opens
+                # it by login, and a Viewer's line differs). A read that fails adds nothing.
+                _login_block += await asyncio.to_thread(_event_volunteers.turn_line, biz,
+                                                        str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the

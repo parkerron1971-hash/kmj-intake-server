@@ -26,6 +26,17 @@ A new occasion's roles are the ones asked for. On an occasion already there,
 a role named again keeps its id and takes the new number, a new one is
 added, and the others stay: removing a role is done in the room, where the
 people on it can be seen.
+
+A role's two ticks (docs/EVENT_VOLUNTEERS.md 3.3): `kids` (works with kids,
+so it needs a current background check) and `open` (anyone can sign up on
+the public events page). A role with no `open` key keeps today's public
+behaviour, so where the church asks its serving teams (event_volunteers'
+switch open and the migration in: the office shows both ticks there), a role
+Chief MAKES writes both outright, false unless asked (`explicit`). A role it
+names again takes a tick only when one was said; a role it doesn't touch
+keeps its keys exactly. Where asking is closed nothing changes: no tick is
+written, and none the model sends is taken (the office has no tick there to
+undo one).
 """
 from __future__ import annotations
 
@@ -99,17 +110,19 @@ def asked_roles(raw: Any) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for r in raw:
+        flags: Dict[str, bool] = {}
         if isinstance(r, str):
             label, needed, rid = r, None, None
         elif isinstance(r, dict):
             label = r.get("label") or r.get("name") or r.get("role") or ""
             needed = next((r[k] for k in ("needed", "count", "people") if r.get(k) not in (None, "")), None)
             rid = r.get("id") if isinstance(r.get("id"), str) else None
+            flags = {k: r[k] for k in KEPT_FLAGS if isinstance(r.get(k), bool)}   # only what was said
         else:
             continue
         label = _plain(label)[:LABEL_MAX]
         if label:
-            out.append({"id": rid, "label": label, "needed": needed})
+            out.append({"id": rid, "label": label, "needed": needed, **flags})
     return out
 
 
@@ -119,21 +132,35 @@ def _find(roles: List[Dict[str, Any]], said: Optional[str], rid: Optional[str] =
                                                                             or r["id"] == said))), None)
 
 
-def merge_roles(have: List[Dict[str, Any]], asked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def made_flags(said: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+    """A role Chief makes where asking is open: both ticks outright, false
+    unless that one was said (docs/EVENT_VOLUNTEERS.md 3.3)."""
+    said = said or {}
+    return {k: said.get(k) is True for k in KEPT_FLAGS}
+
+
+def merge_roles(have: List[Dict[str, Any]], asked: List[Dict[str, Any]],
+                explicit: bool = False) -> List[Dict[str, Any]]:
     """`have` with `asked` added. A role named again (by its id or its
     label, any case) keeps its id and takes the new number when one was
-    said; a new one gets its own id. Never more than MAX_ROLES."""
+    said; a new one gets its own id. Never more than MAX_ROLES. With
+    `explicit` (asking open here), a new role writes both ticks (made_flags)
+    and a role named again takes a tick only when one was said; without it
+    no tick is written or taken."""
     out = [dict(r) for r in have]
     for a in asked:
         hit = _find(out, a["label"], a.get("id"))
         if hit:
             if a.get("needed") is not None:
                 hit["needed"] = _needed(a["needed"])
+            if explicit:
+                hit.update({k: a[k] for k in KEPT_FLAGS if isinstance(a.get(k), bool)})
             continue
         if len(out) >= MAX_ROLES:
             break
         out.append({"id": role_id(a["label"], (r["id"] for r in out)), "label": a["label"],
-                    "needed": _needed(1 if a.get("needed") is None else a["needed"])})
+                    "needed": _needed(1 if a.get("needed") is None else a["needed"]),
+                    **(made_flags(a) if explicit else {})})
     return out
 
 
@@ -159,10 +186,12 @@ def asked_people(raw: Any) -> List[Dict[str, Any]]:
 
 
 def place(roles: List[Dict[str, Any]], signups: List[Dict[str, Any]],
-          people: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+          people: List[Dict[str, Any]],
+          explicit: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Each person on their role: (roles, signups, the signups added). A
-    role nobody listed is added for them, needing as many as were put on it.
-    Someone already on that role (by name or contact) isn't added twice."""
+    role nobody listed is added for them, needing as many as were put on it
+    (with `explicit`, both its ticks off: made_flags). Someone already on
+    that role (by name or contact) isn't added twice."""
     roles = [dict(r) for r in roles]
     signups = list(signups)
     added: List[Dict[str, Any]] = []
@@ -170,7 +199,8 @@ def place(roles: List[Dict[str, Any]], signups: List[Dict[str, Any]],
     for p in people:
         role = _find(roles, p["role"]) if p["role"] else None
         if p["role"] and not role and len(roles) < MAX_ROLES:
-            role = {"id": role_id(p["role"], (r["id"] for r in roles)), "label": p["role"], "needed": 1}
+            role = {"id": role_id(p["role"], (r["id"] for r in roles)), "label": p["role"], "needed": 1,
+                    **(made_flags() if explicit else {})}
             roles.append(role)
             made[role["id"]] = 0
         rid = role["id"] if role else None
@@ -214,7 +244,8 @@ def asks_for_roster(action: Dict[str, Any]) -> bool:
 
 
 def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[str, Any]] = None,
-          roles: Any = None, volunteers: Any = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+          roles: Any = None, volunteers: Any = None,
+          explicit: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """The data to save for an occasion in an event_roster room, and what
     changed: {"roles": the occasion's roles now, "added": the signups added}.
 
@@ -222,7 +253,9 @@ def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[s
     or an update's changes); `before` the occasion's data as it was (None
     for a new one). Roles and people may come beside `data` ("roles",
     "volunteers") or inside it ("_roles", or "roles"/"volunteers" when the
-    room has no field of that name)."""
+    room has no field of that name). `explicit`: asking is open at this
+    church (chief_event_volunteers.roles_explicit), so a role made here
+    writes its two ticks (see the module's note)."""
     p = params(module)
     fields = _fields(module)
     patch = dict(patch or {})
@@ -242,10 +275,13 @@ def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[s
         start = clean_roles(own) if isinstance(own, list) else p["roles"]
     if not asked and not people:
         return out, {"roles": start, "added": []}
-    now = merge_roles(start, asked)
+    if not explicit:
+        # Asking closed here: a tick the model sent is never taken (as today).
+        asked = [{k: v for k, v in a.items() if k not in KEPT_FLAGS} for a in asked]
+    now = merge_roles(start, asked, explicit)
     raw = out.get(p["signups_field"])
     signups = [s for s in raw if isinstance(s, dict)] if isinstance(raw, list) else []
-    now, signups, added = place(now, signups, people)
+    now, signups, added = place(now, signups, people, explicit)
     if asked or now != start or isinstance(own, list):
         out[ROLES_FIELD] = now
     if people:

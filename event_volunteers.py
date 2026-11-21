@@ -57,6 +57,12 @@ S3 (around the event): following the event (sync, on save and in the sweep),
 the flyer (upload, attach, take off; flyer_of() is the one validator every
 reader goes through), a kids role's check (church_serving.cleared) and the
 special helpers' hours (church_serving.event_credits).
+
+S5 (Chief, chief_event_volunteers): Chief calls these routes' own functions as
+the signed-in login, never a copy: enabled() and status() (the gate and the
+places), ask_blocks() (the ask's checks before anything is written, shared
+with ask()), gallery_reader()/_artwork(), attach_flyer() (the flyer route's
+body, shared with put_flyer()), ask(), changed() and picture().
 """
 from __future__ import annotations
 
@@ -219,6 +225,14 @@ def open_for(business_id: Any, user: Any = None) -> bool:
     for it (on, or owner and the platform owner's own church or login), and
     event dates open there too (an ask's yes makes one)."""
     return _church_switch(business_id, user) and sd.open_for(business_id, user)
+
+
+def enabled(business_id: Any, user: Any = None) -> bool:
+    """The status route's `enabled`, and Chief's (chief_event_volunteers):
+    the migration in, Who serves when on, the switch open here for this
+    login, and a church whose teams have owners. Who may ask is still each
+    route's own gate (_login, the Viewer's refusal)."""
+    return ready() and sp.mode() != "off" and open_for(business_id, user) and sp._office(business_id)
 
 
 # ─── the column and the table ────────────────────────────────────────
@@ -544,6 +558,28 @@ def upcoming_gate(ent: Dict[str, Any], now: datetime) -> None:
                                  "away. Ask for volunteers when it's closer.")
 
 
+def ask_blocks(biz: str, ent: Dict[str, Any], now: datetime, zone) -> None:
+    """What stops an ask before anything is written (spec 6.1), in the ask's
+    own words: the event upcoming (a start time, not past, within
+    EVENT_AHEAD_DAYS), not during a Sunday service, and, for an event that
+    is saved, no live ask and not on Who serves when another way. The ask
+    route asks it, and so does Chief's look before saving
+    (chief_event_volunteers), on the event as it is about to be saved."""
+    upcoming_gate(ent, now)
+    if sd.is_sunday(ent["at"]) and sp.during_sunday_service(biz, ent["at"], zone):
+        raise HTTPException(400, SUNDAY_CLASH)
+    eid = ent.get("entry_id")
+    if not eid:
+        return
+    if live_request(biz, eid):
+        raise HTTPException(409, ASKED)
+    if live_date(biz, eid):
+        # Made the November 17 way, with no ask: its numbers are changed there.
+        who = _who_schedules(_business(biz))
+        raise HTTPException(409, f"This event is already on Who serves when. {who[:1].upper()}{who[1:]} can change "
+                                 "its numbers there.")
+
+
 def _requests_of(biz: str, entry_id: str, live: bool = True) -> List[Dict[str, Any]]:
     status = f"&status=in.({','.join(LIVE)})" if live else ""
     return _read(f"/{TABLE}?business_id=eq.{_q(biz)}&entry_id=eq.{_q(entry_id)}{status}"
@@ -609,7 +645,7 @@ def status(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = sp._uuid(business_id)
     import business_access
     business_access.assert_access(biz, user, "viewer")
-    if not ready() or sp.mode() == "off" or not open_for(biz, user) or not sp._office(biz):
+    if not enabled(biz, user):
         return {"enabled": False, "ready": ready(), "can_ask": False, "can_schedule": False, "teams": [],
                 "holders": []}
     me = _login(biz, user)
@@ -788,17 +824,8 @@ def ask(entry_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_
     zone = sp._zone(biz)
     now = sp._now().astimezone(zone)
     ent = event_entry(biz, eid, zone)
-    upcoming_gate(ent, now)
-    if sd.is_sunday(ent["at"]) and sp.during_sunday_service(biz, ent["at"], zone):
-        raise HTTPException(400, SUNDAY_CLASH)
+    ask_blocks(biz, ent, now, zone)
     church = _business(biz)
-    if live_request(biz, eid):
-        raise HTTPException(409, ASKED)
-    if live_date(biz, eid):
-        # Made the November 17 way, with no ask: its numbers are changed there.
-        who = _who_schedules(church)
-        raise HTTPException(409, f"This event is already on Who serves when. {who[:1].upper()}{who[1:]} can change "
-                                 "its numbers there.")
     places = volunteer_places(biz)
     needs = clean_needs(biz, body.get("needs"), places)
     note = _note(body.get("note"))
@@ -2257,10 +2284,22 @@ async def _flyer_body(request: Any) -> Tuple[Any, Optional[bytes], Any]:
 async def put_flyer(entry_id: str, request: Request, user: AuthedUser = Depends(require_user)):
     """The event's flyer (spec 6.12): an upload, or a picture from the
     church's gallery. {data: the event's whole data now, flyer}."""
+    business_id, raw, artwork_id = await _flyer_body(request)
+    return await attach_flyer(business_id, entry_id, user, raw=raw, artwork_id=artwork_id)
+
+
+async def attach_flyer(business_id: Any, entry_id: str, user: AuthedUser, *, raw: Optional[bytes] = None,
+                       artwork_id: Any = None) -> Dict[str, Any]:
+    """The flyer route's work once its body is read: the gate, an upload's
+    checks or a gallery picture's (gallery_reader, _artwork), the copies and
+    the write. Chief puts a gallery picture on an event through here too
+    (chief_event_volunteers), as the signed-in login, so there is one way a
+    flyer goes on."""
     import asyncio
     import httpx
     import image_studio
-    business_id, raw, artwork_id = await _flyer_body(request)
+    if raw is None and not artwork_id:
+        raise HTTPException(400, "Upload a picture, or pick one from the gallery.")
     me, ent = await asyncio.to_thread(_flyer_gate, business_id, entry_id, user)
     biz, eid = me["biz"], ent["entry_id"]
     church = await asyncio.to_thread(_business, biz)

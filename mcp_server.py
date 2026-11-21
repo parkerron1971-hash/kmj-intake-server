@@ -227,13 +227,34 @@ _ROSTER_PROPS: Dict[str, Any] = {
     "roles": {"type": "array", "description": "Events only: the volunteer roles the event needs.",
               "items": {"type": "object", "properties": {"label": {"type": "string"},
                                                          "needed": {"type": "integer", "minimum": 1,
-                                                                    "maximum": 50}},
+                                                                    "maximum": 50},
+                                                         "kids": {"type": "boolean",
+                                                                  "description": "Only where the turn's EVENT "
+                                                                                 "VOLUNTEERS line shows: works "
+                                                                                 "with kids."},
+                                                         "open": {"type": "boolean",
+                                                                  "description": "Only where that line shows: "
+                                                                                 "anyone can sign up on the "
+                                                                                 "public page."}},
                         "required": ["label"]}},
     "volunteers": {"type": "array", "description": "Events only: people already serving, each on a role.",
                    "items": {"type": "object", "properties": {"name": {"type": "string"},
                                                               "role": {"type": "string"},
                                                               "contact_id": {"type": "string"}},
                              "required": ["name"]}},
+    # The serving teams' ask and the flyer (chief_event_volunteers, docs/EVENT_VOLUNTEERS.md S5): read only on
+    # Chief's own turn for a signed-in office login where asking is open; anywhere else (an outside agent
+    # included) the event saves as before and the result says they weren't asked.
+    "teams": {"type": "array", "description": ("Events, only where the turn's EVENT VOLUNTEERS line shows: the "
+                                               "serving teams' places to ask, named as said, each with how many."),
+              "items": {"type": "object", "properties": {"place": {"type": "string"},
+                                                         "n": {"type": "integer", "minimum": 1, "maximum": 50}},
+                        "required": ["place"]}},
+    "teams_note": {"type": "string", "description": "Events: a note with the ask to the serving teams."},
+    "flyer": {"type": "string", "description": ("Events, only where that line shows: a gallery picture's id to "
+                                                "put on as the flyer, or \"make\".")},
+    "confirmed": {"type": "boolean", "description": ("Events: true only after the person said yes to what the "
+                                                     "first send showed.")},
 }
 
 

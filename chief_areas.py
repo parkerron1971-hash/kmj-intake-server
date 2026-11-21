@@ -107,6 +107,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # church_week), never an area's.
         "who_is_away", "time_off_asks", "check_dates", "serving_week", "ask_time_off", "answer_time_off",
         "take_back_time_off", "add_repeat", "take_off_repeat",
+        # An event's volunteers (chief_event_volunteers): how full one event is. Who may read it, and whose names,
+        # is the office's own picture's (event_volunteers.picture), never an area's.
+        "event_volunteers",
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
         "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
