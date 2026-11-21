@@ -941,7 +941,7 @@ def _pc_words(pname: str, caller: str, what: str, first: str) -> Dict[str, str]:
         "subject": f"{pname} would like to {what}",
         "text": "\n\n".join([f"Hi {first}," if first else "Hello,",
                              f"{pname} talked with {caller} on their welcome call and would like to {what}.",
-                             "It’s noted on their follow-up on the Follow-up board. Help them take the step."]),
+                             "Chief noted it on their welcome call. Open Visitor flow to help them take the step."]),
     }
 
 
@@ -1068,7 +1068,10 @@ def may_read(business: Dict[str, Any], user: Any, row: Dict[str, Any]) -> bool:
     """The follow-up's caller (an office login whose person it was handed
     to), anyone who sees the Guests room (church_guests' gate: the owner and
     admins always, People & care's areas), the owner, the admins. A view
-    that can't be read is a 503, never a yes."""
+    that can't be read is a 503, never a yes. People & care's areas and
+    whoever does First-time guests open every guest's sheet in Visitor flow
+    (church_guests.reads_every_guest); a login that is only some guests'
+    caller opens theirs alone (the check above), though it sees the room."""
     role = str(business.get("_caller_role") or "")
     uid = str(getattr(user, "id", "") or "")
     if role in ("owner", "admin") or (uid and uid == str(business.get("owner_id") or "")):
@@ -1082,7 +1085,7 @@ def may_read(business: Dict[str, Any], user: Any, row: Dict[str, Any]) -> bool:
         except HTTPException:
             raise HTTPException(503, UNREAD)
     import church_guests
-    return church_guests._areas_ok(str(business["id"]), uid, role)
+    return church_guests.reads_every_guest(business, user)
 
 
 def viewer_person(business: Dict[str, Any], user: Any) -> str:

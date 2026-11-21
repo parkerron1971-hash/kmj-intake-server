@@ -297,7 +297,7 @@ def list_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             for d in by_lane[lane]:
                 also = [cd.lane_label(ln) for ln in d["lanes"][1:]]
                 tags = [d["key"], d["day"]] + (["money"] if d["money"] else []) + ([f"also {_join(also)}"] if also else [])
-                where = chief_office.place(d["key"]) if places else None
+                where = chief_office.place(d["key"], business) if places else None
                 lines.append(f"- {d['label']} ({'; '.join(tags)}): {_who_short(d)}."
                              + (f" Done in: {where}." if where else ""))
         if needs:

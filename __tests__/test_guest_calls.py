@@ -116,8 +116,9 @@ def told(monkeypatch):
         sent["email"].append((to, subject, key))
         return True
 
-    async def alert(biz_id, title, body, key, person):
+    async def alert(biz_id, title, body, key, person, action="Open the Follow-up board"):
         sent["alert"].append((title, key))
+        sent.setdefault("action", []).append(action)
         return True
 
     def login(ctx, uid, words, ref):
@@ -366,6 +367,7 @@ def test_the_ladder_reminds_then_the_backup_takes_it_then_the_pastor_hears(g, to
     assert _row(g, row["id"])["late_level"] == 3
     assert told["login"][-1][:2] == (OWNER, "Marcus Taylor hasn’t had a welcome call"), "Kevin is the owner's person"
     assert told["alert"][-1][0] == "Hand Marcus Taylor to someone else?"
+    assert told["action"][-1] == "Open Visitor flow", "a guest's call is worked in Visitor flow"
     kinds = [n["kind"] for n in g.t["church_follow_up_notes"] if n["follow_up_id"] == row["id"]]
     assert kinds.count("nudged") == 1 and kinds.count("reassigned") == 1 and kinds.count("pastors_told") == 1
     asyncio.run(cfu.sweep(now=due + timedelta(days=5)))

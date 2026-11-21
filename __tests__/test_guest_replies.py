@@ -671,7 +671,7 @@ def test_later_runs_off_the_request_path_and_never_raises(monkeypatch):
     assert seen == [(1, "guest-replies")]
 
 
-def test_tell_login_opens_where_its_told_and_defaults_to_the_follow_up_board(monkeypatch):
+def test_tell_login_opens_where_its_told_and_defaults_to_visitor_flow(monkeypatch):
     import types
     import church_assignments as cas
     import church_leader_tasks as clt
@@ -688,7 +688,8 @@ def test_tell_login_opens_where_its_told_and_defaults_to_the_follow_up_board(mon
                                 conf={"tell": {"app": True, "email": True}})
     words = {"title": "t", "body": "b", "subject": "s", "text": "x"}
     assert real(ctx, RENEE_SEAT, words, "ref") is True
-    assert pushes == [gc.NAV] and mails[0].endswith("|Open the Follow-up board")
+    assert gc.NAV == "operate:guests"                      # Visitor flow, where a guest's call is worked
+    assert pushes == [gc.NAV] and mails[0].endswith("/?nav=operate:guests|Open Visitor flow")
     assert real(ctx, RENEE_SEAT, words, "ref", nav=f"operate:sms:{LENA}", link="https://app/x",
                 label="Open their texts") is True
     assert pushes[-1] == f"operate:sms:{LENA}" and mails[-1] == "https://app/x|Open their texts"

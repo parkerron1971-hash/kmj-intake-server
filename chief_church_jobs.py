@@ -537,7 +537,7 @@ def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
             # When it falls, and where on the church's menu it is done (confirmed:
             # chief_office.place, the same words THE OFFICE gives).
             bits = [d["when"] + (", their pick" if d.get("picked") else "")] if d["when"] else []
-            where = chief_office.place(d["key"])
+            where = chief_office.place(d["key"], getattr(J.ch, "business", None))
             if where:
                 bits.append(f"done in {where}")
             return d["label"] + (f" ({'; '.join(bits)})" if bits else "")

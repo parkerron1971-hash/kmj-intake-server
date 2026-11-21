@@ -95,6 +95,8 @@ DOOR = {
     # Addresses are given out through Chief; the domain and its mail live in Email Setup.
     "church_email": {"area": "build", "id": "email-setup", "label": "Open Email Setup"},
     # People & Care. The member directory is one of the church's doors.
+    # (Where the Welcome Path is on, first-time guests open Visitor flow
+    # instead: ROOM_DOOR, door_of.)
     "first_guests": {"area": "operate", "id": "follow-up", "label": "Open the Follow-up board"},
     "care_visits": {"area": "operate", "id": "care", "label": "Open Prayer & care"},
     "prayer": {"area": "operate", "id": "care", "label": "Open Prayer & care"},
@@ -171,6 +173,36 @@ def room_door(business: Dict[str, Any], door: Optional[Dict[str, Any]], memo: Di
         return dict(NO_ROSTER)
     name = " ".join(str(room.get("name") or "").split()) or "Services & Events"
     return {"area": "operate", "id": f"module:{room['id']}", "label": f"Open {name}"}
+
+
+# Visitor flow, the guests' room (church_guests; Kevin, 2026-11-21, "One
+# Visitor flow room"): where the Welcome Path is on, a first-time guest's
+# welcome call is worked there and the Follow-up board leaves them off, so
+# First-time guests and every guest's line open it. Its id is the room's own
+# page (the app's menu row, Visitor flow, lands on the same room).
+ROOM_DOOR = {"area": "operate", "id": "guests", "label": "Open Visitor flow"}
+
+
+def path_on(business: Dict[str, Any]) -> bool:
+    """The Welcome Path for this church (guest_path); unreadable is off."""
+    try:
+        import guest_path
+        return guest_path.switched_on(str(business["id"]))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def door_of(key: str, business: Dict[str, Any], on: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+    """A duty's door (DOOR), with First-time guests opening Visitor flow
+    where the Welcome Path is on."""
+    if key == "first_guests" and (path_on(business) if on is None else on):
+        return dict(ROOM_DOOR)
+    return DOOR.get(key)
+
+
+def _is_guest(row: Dict[str, Any]) -> bool:
+    import guest_path
+    return guest_path.is_guest_follow_up(row)
 
 
 # The first-time guests' Sunday line (new_here.sunday_cards, Kevin approved
@@ -266,10 +298,15 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
         me_name = next((str(c["name"]).strip() for c in me if str(c.get("name") or "").strip()), None)
 
     needs: List[Dict[str, Any]] = []
-    # Follow-ups handed to them.
+    guests_on: Optional[bool] = None       # the Welcome Path, read once if a line needs it
+    # Follow-ups handed to them. A first-time guest's opens Visitor flow
+    # where the Welcome Path is on (the board leaves guests to it).
     if me_ids:
         rows = _need(f"/church_follow_ups?business_id=eq.{_q(biz)}&leader_contact_id=in.({','.join(_q(i) for i in me_ids)})"
-                     "&status=eq.open&select=id,contact_id,card_name,due_at,created_at&order=due_at.asc&limit=50")
+                     "&status=eq.open&select=id,contact_id,card_name,card_key,path_kind,due_at,created_at"
+                     "&order=due_at.asc&limit=50")
+        if any(_is_guest(r) for r in rows):
+            guests_on = path_on(business)
         names = _names(biz, [r["contact_id"] for r in rows])
         for r in rows:
             due = _parse(r.get("due_at"))
@@ -279,7 +316,7 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
                           "title": f"{who} is waiting to hear from you." if late else f"{who} was handed to you.",
                           "detail": f"{r.get('card_name') or 'A card'} · " + (
                               f"due {_when(r.get('due_at'), now)}" if late else f"handed {_when(r.get('created_at'), now)}"),
-                          "door": DOOR["follow_up"]})
+                          "door": dict(ROOM_DOOR) if guests_on and _is_guest(r) else DOOR["follow_up"]})
     # Prayer & care handed to their login: one line, nothing of what was
     # asked. Late when a first step is past due (care_handoff); the due
     # columns arrive with APPLY-2026-11-18-care-login-due.sql, and until
@@ -359,10 +396,29 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own:
         except HTTPException:
             from_office = None
             print(f"[church_my_week] {biz[:8]}: what the office sent wasn't read", flush=True)
-    # The whole church: follow-ups with no one, and late ones.
+    # The whole church: follow-ups with no one, and late ones. Where the
+    # Welcome Path is on, first-time guests' are said apart, opening Visitor
+    # flow, where they are worked.
     if whole:
         open_rows = _need(f"/church_follow_ups?business_id=eq.{_q(biz)}&status=in.(open,handed_back)"
-                          "&select=status,leader_contact_id,due_at&limit=500")
+                          "&select=status,leader_contact_id,due_at,card_key,path_kind&limit=500")
+        if guests_on is None and any(_is_guest(r) for r in open_rows):
+            guests_on = path_on(business)
+        if guests_on:
+            guest_rows = [r for r in open_rows if _is_guest(r)]
+            open_rows = [r for r in open_rows if not _is_guest(r)]
+            g_none = sum(1 for r in guest_rows if r.get("status") == "handed_back" or not r.get("leader_contact_id"))
+            g_late = sum(1 for r in guest_rows if r.get("status") == "open" and r.get("leader_contact_id")
+                         and (_parse(r.get("due_at")) or now) < now)
+            if g_none:
+                needs.append({"kind": "no_one", "late": True, "area": "people_care",
+                              "title": f"{g_none} {'guest has' if g_none == 1 else 'guests have'} no one to call them.",
+                              "detail": "Open them in Visitor flow and hand them to someone.", "door": dict(ROOM_DOOR)})
+            if g_late:
+                needs.append({"kind": "late", "late": False, "area": "people_care",
+                              "title": f"{g_late} welcome call{'s are' if g_late != 1 else ' is'} late.",
+                              "detail": "Each caller has already been reminded; Visitor flow says who has each guest.",
+                              "door": dict(ROOM_DOOR)})
         no_one = sum(1 for r in open_rows if r.get("status") == "handed_back" or not r.get("leader_contact_id"))
         late = sum(1 for r in open_rows if r.get("status") == "open" and (_parse(r.get("due_at")) or now) < now)
         if no_one:
@@ -838,7 +894,7 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
         else:
             is_today = key_today in days
         item = {"key": key, "label": d["label"], "does": d["does"], "area": d["area"], "when": said, "days": days,
-                "door": room_door(business, DOOR.get(key), rooms), "today": is_today}
+                "door": room_door(business, door_of(key, business), rooms), "today": is_today}
         if assign:
             item["movable"] = cas.movable(key)
         if pick:

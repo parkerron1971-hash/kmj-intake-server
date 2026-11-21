@@ -1,5 +1,6 @@
-"""church_guests.py — the Guests room: one room under People for everything
-about first-time guests (the Welcome Path, step 6 of the build order).
+"""church_guests.py — Visitor flow (built as the Guests room): one room under
+People for everything about first-time guests (the Welcome Path, step 6 of
+the build order).
 
 Kevin, 2026-11-20: "capture visitors, place them in a flow where they
 receive automated texts from the church, chief should be sending a follow
@@ -32,7 +33,16 @@ app hides the room. A church login at Manager or above (the Follow-up
 board's floor, church_router.CARE_MIN_ROLE) whose areas include People &
 care: the owner and admins always, every login while Who sees what is off
 (church_areas.mode()), otherwise church_areas.my_areas (the whole church,
-or people_care among its areas). A view that can't be read is a 503.
+or people_care among its areas). Since 2026-11-21 also a login that makes
+the welcome calls (whoever does First-time guests, or the caller of an open
+guest's call): every guest call's link opens this room. A view that can't
+be read is a 503.
+
+The name (Kevin, 2026-11-21, "One Visitor flow room"): the app calls this
+room Visitor flow. It opens from the People menu's Visitor flow row where
+the status says open, and takes the old Visitor flow page's place; the
+Follow-up board leaves first-time guests to it (church_router's
+guests=room). Its routes keep their /church/guests paths.
 
 Who a guest is (both reads): a contact of the church with any of
   - contacts.metadata.new_here.texted_at (New here: the text door, and
@@ -287,15 +297,84 @@ def _areas_ok(biz_id: str, uid: str, role: str) -> bool:
     return areas is None or CARE_AREA in areas
 
 
+def _calls_guests(biz: Dict[str, Any], user: Any) -> bool:
+    """A login that makes the welcome calls, whatever its areas (Kevin,
+    2026-11-21, "One Visitor flow room": every guest call's link, push and
+    email opens Visitor flow, so whoever gets one must be able to open it):
+    whoever does First-time guests (church_duties), or the caller of a guest
+    whose welcome follow-up is open or handed back (the follow-up's leader is
+    this login's person, church_over.Church.login_person). A read that fails
+    is a 503, never a yes."""
+    biz_id = str(biz["id"])
+    import church_duties
+    if church_duties.holds(biz_id, user, guest_path.FIRST_GUESTS):
+        return True
+    person = _person_of(biz, user)
+    if not person:
+        return False
+    rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz_id)}&leader_contact_id=eq.{_q(person)}"
+                 "&status=in.(open,handed_back)&select=card_key,path_kind&limit=500")
+    if rows is None:
+        raise HTTPException(503, "Your calls couldn't be read just now. Try again.")
+    return any(guest_path.is_guest_follow_up(r) for r in rows)
+
+
+def _person_of(biz: Dict[str, Any], user: Any) -> str:
+    """This login's person at the church (church_over.Church.login_person:
+    its tied record, else the one its email names); '' when none. A read
+    that fails is a 503."""
+    import church_over
+    try:
+        return str(church_over.Church(biz).login_person.get(str(getattr(user, "id", "") or "")) or "")
+    except HTTPException:
+        raise HTTPException(503, "Your calls couldn't be read just now. Try again.")
+
+
+def reads_every_guest(biz: Dict[str, Any], user: Any) -> bool:
+    """Whether this login opens any guest's sheet (Chief's brief) in Visitor
+    flow: People & care's areas, or whoever does First-time guests (they make
+    every guest's call). A login that is only some guests' caller opens its
+    own guests' sheets alone (guest_brief.may_read). A read that fails is a
+    503, never a yes."""
+    if _areas_ok(str(biz["id"]), str(getattr(user, "id", "") or ""), str(biz.get("_caller_role") or "")):
+        return True
+    import church_duties
+    return church_duties.holds(str(biz["id"]), user, guest_path.FIRST_GUESTS)
+
+
+def room_ok(biz: Dict[str, Any], user: Any) -> bool:
+    """Whether this login has Visitor flow (the guests' room) at a church
+    whose Welcome Path is on: People & care's areas (_areas_ok), or a login
+    that makes the welcome calls (_calls_guests). A read that fails is a 503."""
+    if _areas_ok(str(biz["id"]), str(getattr(user, "id", "") or ""), str(biz.get("_caller_role") or "")):
+        return True
+    return _calls_guests(biz, user)
+
+
 def _gate(biz: Dict[str, Any], session: UserSession) -> str:
     if not cfu.is_church(biz):
         raise HTTPException(404, "Not Found")
     biz_id = str(biz["id"])
     if not guest_path.switched_on(biz_id):
         raise HTTPException(404, "Not Found")
-    if not _areas_ok(biz_id, str(session.user.id), str(biz.get("_caller_role") or "")):
-        raise HTTPException(403, "The Guests room is for People & care.")
+    if not room_ok(biz, session.user):
+        raise HTTPException(403, "Visitor flow is for People & care and whoever makes the welcome calls.")
     return biz_id
+
+
+def room_open(biz: Dict[str, Any], user: Any) -> bool:
+    """The room's gate as a yes or no (the Follow-up board asks it before
+    leaving guests off): a church, the Welcome Path on, this login allowed.
+    Anything that can't be read is a no, so the board keeps every guest."""
+    try:
+        if not cfu.is_church(biz) or not guest_path.switched_on(str(biz["id"])):
+            return False
+        return room_ok(biz, user)
+    except HTTPException:
+        return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[church_guests] room check failed ({type(e).__name__}); the board keeps its guests", flush=True)
+        return False
 
 
 # ─── Who the guests are ───────────────────────────────────────────────
@@ -618,7 +697,7 @@ def status_of(g: Dict[str, Any], tz: Any, now: datetime) -> Dict[str, str]:
     if fu["status"] == "handed_back":
         return {"tone": "need", "line": "Handed back", "sub": f"{caller} handed them back" if caller else ""}
     if fu["status"] == "open" and not fu.get("caller"):
-        return {"tone": "need", "line": "No one has them yet", "sub": "Hand them to someone on the Follow-up board"}
+        return {"tone": "need", "line": "No one has them yet", "sub": "Open them to hand them to someone"}
     if fu["reached"]:
         sub = f"Next: {fu['step_title']}" if fu["status"] == "open" and fu["step_title"] else (
             "Done" if fu["status"] == "done" else "")
@@ -726,14 +805,14 @@ def next_move(listed: List[Dict[str, Any]], unlisted_waiting: int, now: datetime
             detail += f" Last try: {OUTCOME_WORDS[last]}."
         return {"kind": "call", "guest_id": g["id"], "follow_up_id": fu["id"],
                 "line": f"{who(g)}'s welcome call is {late_words(due, now)}.", "detail": detail,
-                "action": "Open Follow-up"}
+                "action": f"Open {_first(g['name'])}" if g["name"] else "Open their call"}
     nobody = [g for g in listed if (g.get("follow_up") or {}).get("status") == "handed_back"
               or ((g.get("follow_up") or {}).get("status") == "open" and not g["follow_up"].get("caller"))]
     if nobody:
         g = min(nobody, key=lambda g: g["start"])
         fu = g["follow_up"]
         detail = (f"{fu['caller']['name']} handed them back." if fu.get("status") == "handed_back" and fu.get("caller")
-                  and fu["caller"].get("name") else "Hand them to someone on the Follow-up board.")
+                  and fu["caller"].get("name") else "Open them and hand them to someone.")
         return {"kind": "hand_on", "guest_id": g["id"], "follow_up_id": fu["id"],
                 "line": f"{who(g)} has no one to call them yet.", "detail": detail,
                 "action": f"Hand {_first(g['name'])} on" if g["name"] else "Hand them on"}
@@ -1036,9 +1115,10 @@ def _unread() -> HTTPException:
 @router.get("/church/guests/{business_id}/status")
 def get_status(business_id: str, biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
                session: UserSession = Depends(sb_clients.authed_request)):
-    """Whether this login has the Guests room: the menu asks this once (the
-    same gate as the room, without reading a single guest). A no is the
-    room's own 404 or 403."""
+    """Whether this login has Visitor flow, the guests' room: the app asks
+    this once (the same gate as the room, without reading a single guest)
+    and opens the room from the menu's Visitor flow row; a no is the room's
+    own 404 or 403, and the row opens the old Visitor flow page."""
     _gate(biz, session)
     return {"open": True}
 

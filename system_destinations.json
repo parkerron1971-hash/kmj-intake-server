@@ -164,6 +164,7 @@
     "operate/inbox": "operate/operate:inbox",
     "grow/insights": "grow/retention",
     "build/analytics": "grow/funnel",
+    "operate/guests": "grow/funnel",
     "build/products": "operate/offerings-manager"
   }
 }
