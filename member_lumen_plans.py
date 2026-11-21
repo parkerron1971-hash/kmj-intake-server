@@ -399,7 +399,7 @@ def hero(biz: Dict[str, Any], site, c: Dict[str, Any], *, ticks: Optional[set], 
         title = m.get("title") or plan["title"]
         sub = (f"{day_title(key, now)} · {day_label(key, now)}" if m.get("kind") == "topic"
                else f"Today: {day_label(key, now)}")
-        href = day_href(key, n)
+        href = f"/my/bible/plans/{key}/{n}"
         streak = rp.streak(done, now) if done is not None else 0
         if m.get("kind") == "topic":
             cls = f" tp-{m['hue']}"
@@ -604,8 +604,9 @@ def _day_row(key: str, n: int, plan: Optional[Dict[str, Any]], done: set, upto: 
     circle = (_tick(key, n, read, live) if plan and not shut else
               f'<span class="lm-pp-c" aria-hidden="true">{n}</span>')
     text = f'<b>{_e(title)}</b><small>{_e(sub)}</small>'
+    to = f"/my/bible/plans/{key}/{n}" if plan else day_href(key, n)
     body = (f'<span class="lm-pp-dt">{text}</span>' if shut else
-            f'<a class="lm-pp-dt" href="{_e(day_href(key, n))}">{text}</a>')
+            f'<a class="lm-pp-dt" href="{_e(to)}">{text}</a>')
     return f'<li class="lm-pp-d{" " + cls if cls else ""}">{circle}{body}</li>'
 
 
@@ -644,7 +645,7 @@ def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key
                 f'<span><b>You finished it</b><small>Every day is still here to read again.</small></span></div>')
     elif upto:
         n = _target(now, upto, done)
-        acts = f'<a class="lm-btn" href="{_e(day_href(key, n))}">{"Continue" if done else "Read"} day {n}</a>'
+        acts = f'<a class="lm-btn" href="/my/bible/plans/{key}/{n}">{"Continue" if done else "Read"} day {n}</a>'
     else:
         note = f'<p class="lm-pp-fine">Day 1 opens {_short_date(plan["start"])}.</p>'
     if plan and done is not None and not preview and not failed and plan["start"] < today:
@@ -773,6 +774,31 @@ def render_devotional(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any
             + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
             f'<ol class="lm-pp-days">{"".join(rows)}</ol></section>')
     return _shell(biz, site, title, page, tab="bible", who=me)
+
+
+async def day_page(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any], key: str, raw: str, *,
+                   tr: str = "kjv", preview: bool = False):
+    """GET /my/bible/plans/<reading or topic plan>/<n> under the new look: a
+    day of a plan the member started, open (today's or before), else back to
+    the plan's page. (html, status) or a redirect."""
+    import asyncio
+    import member_lumen_plan_day as mlpd
+    import reading_plans as rp
+    from fastapi.responses import RedirectResponse
+    from member_portal import _SECURE_HEADERS
+    bid, cid = biz["id"], str(me["id"])
+    ver = "" if preview else version(request)
+    mine = await asyncio.to_thread(starts, bid, cid, ver, preview)
+    plan = own(key, (mine or {}).get(f"reading:{key}"))
+    back = RedirectResponse(f"/my/bible/plans/{key}", status_code=303, headers=_SECURE_HEADERS)
+    if mine is None or not plan or not raw.isdigit():
+        return back
+    n = int(raw)
+    if not 1 <= n <= rp.readable_upto(plan):
+        return back
+    done = await asyncio.to_thread(read_days, bid, cid, plan, ver, preview)
+    html = mlpd.render_plan_day(biz, site, request, me, key, n, plan, done, tr=tr, preview=preview)
+    return html, (503 if done is None else 200)
 
 
 async def plan_page(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any], key: str, *, tr: str = "kjv",

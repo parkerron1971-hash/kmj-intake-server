@@ -8,14 +8,9 @@
 #     (its day, title, a dot a day, Read today, Listen only when Listen can
 #     work), More devotionals below without it; with nothing running, what's
 #     next, the last one again, or one to start; nothing made up;
-#   - a day: the church's picture (only when it chose one or a photo is
-#     named for it), the green plate (Day N of M, the title, who and how
-#     long, the days as dots, Listen, Share), the scripture, the words, the
-#     line to hold, Reflect with the private journal, Pray, Do today,
-#     Together, the checklist, Mark as read, the days before and after, Aa,
-#     no tab bar; a preview and a failed read save nothing;
-#   - night reading: the reader's moon and cookie, the page arrives dark,
-#     the green bar stays green;
+#   - a day: since the Plans design (2026-11-21) the new look's day is the
+#     day in steps (member_lumen_plan_day, test_member_lumen_plan_day); this
+#     module's own day (render_day) still saves nothing in a preview;
 #   - no new reads, off, on or at night;
 #   - the CSS lives in its own block in the served sheet, under body.lm,
 #     before the type.
@@ -178,101 +173,6 @@ def test_a_running_devotional_wins_and_the_church_comes_first():
 # ─── a day ───────────────────────────────────────────────────────────
 
 
-def test_a_day_reads_like_a_book(full, fake, monkeypatch):  # noqa: F811
-    import member_lumen_bible as mlb
-    import member_lumen_devotional as mld
-    _speak(monkeypatch, True)
-    c = _client(fake, monkeypatch)
-    on, reads_on = _reads(fake, c, DAY3)
-    monkeypatch.setenv("MEMBER_LUMEN", "off")
-    _, reads_off = _reads(fake, c, DAY3)
-    assert reads_on == reads_off
-    monkeypatch.setenv("MEMBER_LUMEN", "on")
-    assert _body_class(on).split()[:2] == ["lm", "lm-push"] and "lm-dark" not in _body_class(on).split()
-    assert '<nav class="mb-nav' not in on                                               # no tab bar while reading
-    assert f'<meta name="theme-color" content="{mld.GREEN}">' in on
-    top = on[on.index('<header class="mb-top lm-mid">'):on.index("</header>")]
-    assert f'class="mb-back" href="/my/bible/plans/{D1}"' in top and "Seven Days of Rest" in top
-    assert '<span class="lm-dd-bt">Seven Days of Rest · Day 3</span>' in top
-    assert 'id="lm-dd-aa"' in top and 'id="lm-moon" aria-pressed="false"' in top and 'class="lm-rprog"' in top
-    assert f'data-day="{mld.GREEN}" data-night="{mld.GREEN}"' in top
-    # the green plate
-    hero = on[on.index('<section class="lm-dd-hero'):]
-    hero = hero[:hero.index("</section>")]
-    assert "Seven Days of Rest · Day 3 of 7" in hero
-    assert '<h1 class="lm-dd-t" id="dv-h">Planted by the <em>Water</em></h1>' in hero
-    assert "Pastor James · about 2 minutes" in hero
-    track = re.findall(r'<(a|span) class="([^"]*)"(?: href="([^"]+)")? aria-label="([^"]+)"', hero)
-    assert [t[3] for t in track] == ["Day 1, read", "Day 2, read", "Day 3", "Day 4, not open yet", "Day 5, not open yet",
-                                     "Day 6, not open yet", "Day 7, not open yet"]
-    assert [t[0] for t in track] == ["a", "a", "a", "span", "span", "span", "span"]
-    assert 'aria-label="Day 3" aria-current="page" data-here' in hero
-    assert 'id="dv-listen"' in hero and 'id="dv-share"' in hero and "Planted by the Water: Jeremiah 17:7-8" in hero
-    assert "lm-dd-ph" not in hero                                                      # no picture chosen or named
-    # the scripture, the words, the line to hold
-    scrip = on[on.index('<section class="lm-dd-scrip"'):]
-    scrip = scrip[:scrip.index("</section>")]
-    assert "Jeremiah 17:7-8 · KJV" in scrip and "Blessed <i>is</i> the man that trusteth in the LORD" in scrip                # the supplied word upright
-    assert "“" not in scrip and 'href="/my/bible/jeremiah/17?v=7-8#v7">Read Jeremiah 17' in scrip
-    body = on[on.index('<div class="lm-dd-body">'):]
-    assert body.index("a plant that is placed") < body.index("Roots grow in hidden places") < body.index("</div>")
-    assert '<p class="lm-dd-pull">Roots are ordinary work.</p>' in on
-    # Reflect, Pray, Do today, Together
-    assert on.index(">Reflect</h2>") < on.index(">Pray</h2>") < on.index(">Do today</h2>") < on.index(">Together</h2>")
-    assert '<p class="lm-dd-qn" id="lm-dd-qn">Where is the heat right now?</p>' in on
-    ta = re.search(r"<textarea [^>]*>", on).group(0)
-    assert 'data-journal maxlength="4000"' in ta and "disabled" not in ta
-    assert "Private to you. Only you can read it." in on
-    # the checklist, Mark as read, the days around it
-    assert re.findall(r'class="lm-dd-ci" type="button" data-key="([\w-]+)" aria-pressed="(\w+)"', on) == [
-        ("first-look", "false"), ("kind-word", "false")]
-    assert '<span class="lm-dd-n" data-count>0 of 2</span>' in on
-    assert '<button class="lm-dd-mark" type="button" data-act="done">Mark day 3 as read</button>' in on
-    assert '<div class="lm-dd-card" data-donecard hidden>' in on and 'data-act="undo"' in on
-    assert "Day 4, “Sabbath”, opens tomorrow morning." in on
-    nav = on[on.index('<nav class="lm-dd-nav"'):]
-    nav = nav[:nav.index("</nav>")]
-    assert f'class="lm-dd-step prev" href="/my/bible/plans/{D1}/2"' in nav and "Still Waters" in nav
-    assert 'class="lm-dd-step next is-shut"' in nav and "Day 4 · tomorrow" in nav and "Sabbath" in nav
-    assert mld.DAY_JS in on and mlb.NIGHT_JS in on and "lm-vc" not in mlb.NIGHT_JS      # the moon, not the card
-
-
-def test_a_day_done_says_so_and_how_many_in_a_row(full, fake, monkeypatch):  # noqa: F811
-    on = _client(fake, monkeypatch).get(f"/my/bible/plans/{D1}/2").text
-    assert '<button class="lm-dd-mark" type="button" data-act="done" hidden>' in on
-    assert '<div class="lm-dd-card" data-donecard>' in on
-    assert "Day 2 is done.<span data-streak> Two in a row.</span>" in on
-    assert "Day 3, “Planted by the Water”, is ready when you are." in on
-    assert f'class="lm-dd-step next" href="/my/bible/plans/{D1}/3"' in on
-
-
-def test_the_churchs_picture_heads_the_day(full, fake, monkeypatch):  # noqa: F811
-    biz = fake.biz[tct.BIZ]
-    biz["settings"]["member_portal"]["pictures"] = {f"devotional:{D1}": {"url": "https://cdn.example.test/rest.jpg",
-                                                                          "look": "bw"}}
-    on = _client(fake, monkeypatch).get(DAY3).text
-    hero = on[on.index('<section class="lm-dd-hero'):]
-    assert hero.startswith('<section class="lm-dd-hero has-ph"')
-    assert '<span class="lm-dd-ph"><span class="mb-ph is-bw ' in hero and 'src="https://cdn.example.test/rest.jpg"' in hero
-    assert 'fetchpriority="high"' in hero[:hero.index("</span></span>")]
-    # a photo named for it, in colour
-    biz["settings"]["member_portal"]["pictures"] = {}
-    import member_app_photos as photos
-    monkeypatch.setattr(photos, "photos", lambda b, site, limit=None: ["/public/site-assets/grace/seven-days-rest.jpg"])
-    on = _client(fake, monkeypatch).get(DAY3).text
-    assert 'class="mb-ph is-colour ' in on and "seven-days-rest.jpg" in on
-
-
-def test_without_listen_and_when_the_day_cant_save(full, fake, monkeypatch):  # noqa: F811
-    _speak(monkeypatch, False)
-    on = _client(fake, monkeypatch).get(DAY3).text
-    assert 'id="dv-listen"' not in on and 'id="dv-share"' in on
-    # the member's day can't be read: the page says so (today's 503 page), as before
-    fake.down.add("devotional_progress")
-    r = _client(fake, monkeypatch).get(DAY3)
-    assert r.status_code == 503 and "couldn't load" in r.text
-
-
 def test_a_preview_saves_nothing(full, fake):  # noqa: F811
     import devotionals as dv
     import member_lumen_devotional as mld
@@ -289,23 +189,6 @@ def test_a_preview_saves_nothing(full, fake):  # noqa: F811
 
 
 # ─── night reading ───────────────────────────────────────────────────
-
-
-def test_night_reading_arrives_dark_and_reads_nothing_new(full, fake, monkeypatch):  # noqa: F811
-    import member_lumen_bible as mlb
-    import member_lumen_devotional as mld
-    c = _client(fake, monkeypatch)
-    c.cookies.set(mlb.NIGHT_COOKIE, "1")
-    night, reads_night = _reads(fake, c, DAY3)
-    c.cookies.clear()
-    _, reads_day = _reads(fake, c, DAY3)
-    assert reads_night == reads_day
-    assert _body_class(night).split()[:2] == ["lm", "lm-push"] and "lm-dark" in _body_class(night).split()
-    assert 'id="lm-moon" aria-pressed="true"' in night
-    assert f'<meta name="theme-color" content="{mld.GREEN}">' in night                   # the green bar stays green
-    # only the reader and the day read it: the Devotional tab stays white
-    c.cookies.set(mlb.NIGHT_COOKIE, "1")
-    assert "lm-dark" not in _body_class(c.get("/my/bible?tab=devotional").text).split()
 
 
 def test_the_readers_script_is_the_moon_and_the_card_unchanged():

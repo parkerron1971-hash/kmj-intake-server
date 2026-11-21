@@ -159,7 +159,7 @@ def test_continue_falls_to_the_members_own_latest_plan(bible, fake, monkeypatch)
     hero = _hero(c.get("/my/bible?tab=plans").text)
     assert "Continue · Day 5 of 30" in hero and "The Gospels in 30 days" in hero and "Today: Matthew 13–15" in hero
     assert ('<i>1</i><i>2</i><i class="ok">3</i><i class="ok">4</i><i class="now">5</i><i>6</i><i>7</i>') in hero
-    assert 'href="/my/bible/matthew/13">Read day 5</a>' in hero and "2 days in a row" in hero
+    assert 'href="/my/bible/plans/gospels-30/5">Read day 5</a>' in hero and "2 days in a row" in hero
     # a topic plan started today is the latest
     fake.add("member_plan_starts", business_id=tct.BIZ, contact_id=tct.ANA, plan="reading:topic-anxiety",
              started_on=TODAY.isoformat())
@@ -169,7 +169,7 @@ def test_continue_falls_to_the_members_own_latest_plan(bible, fake, monkeypatch)
     hero = _hero(html)
     assert hero.startswith('<section class="lm-pl-hero tp-a"') and "When you&#x27;re anxious" in hero
     assert "Cast your cares on Him · 1 Peter 5:6-7 · Psalm 55:22" in hero
-    assert 'href="/my/bible/1-peter/5?v=6-7">Read day 1</a>' in hero and "in a row" not in hero
+    assert 'href="/my/bible/plans/topic-anxiety/1">Read day 1</a>' in hero and "in a row" not in hero
     assert '<b>Anxiety</b><small>Day 1 of 7</small>' in _section(html, "lm-pl-th")
 
 
@@ -317,7 +317,7 @@ def test_start_tick_and_finish_a_topic_plan(bible, fake, monkeypatch):  # noqa: 
     assert {"plan": "reading:topic-healing", "started_on": TODAY.isoformat()}.items() <= next(
         x for x in fake.t["member_plan_starts"] if x["plan"] == "reading:topic-healing").items()
     html = c.get("/my/bible/plans/topic-healing").text
-    assert '<a class="lm-btn" href="/my/bible/psalms/147?v=3">Read day 1</a>' in html
+    assert '<a class="lm-btn" href="/my/bible/plans/topic-healing/1">Read day 1</a>' in html
     first = re.search(r'<li class="lm-pp-d is-now">(.*?)</li>', html).group(1)
     assert ('<input type="hidden" name="back" value="/my/bible/plans/topic-healing"><input type="hidden" name="plan" '
             'value="topic-healing"><button class="lm-pp-c" type="submit" aria-label="Day 1: mark as read" '
