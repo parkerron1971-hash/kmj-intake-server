@@ -689,18 +689,20 @@ def serve_minutes(data: Any) -> int:
     return _minutes(data if isinstance(data, dict) else {})
 
 
-# What the event page says of someone on a kids role without a current
-# check, by their check's own state (church_serving.checks_of).
+# What the event page says of someone on a kids role who may not take it,
+# by their check's state as a kids role reads it (church_serving.kids_status).
+# A teen of 13 to 17 is a junior helper and needs no words (Kevin, 2026-11-21).
 CHECK_WORDS = {"overdue": "Check overdue", "none": "No check on file", "blocked": "No check on file",
-               "teen": "Under 18"}
+               "child": "Under 13"}
 
 
 def _kids_checks(biz: str, user: AuthedUser, roles: List[Dict[str, Any]],
                  signups: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    """Each person on this event's kids roles and their check's state
-    (church_serving.checks_of: ok, due, overdue, none, blocked, teen), or
-    None when this login may not read who's cleared (church_serving._access's
-    `checks`) or there is no kids role with a person on it."""
+    """Each person on this event's kids roles and their check's state as a
+    kids role reads it (church_serving.kids_status: ok, due, overdue, none,
+    blocked, junior, child), or None when this login may not read who's
+    cleared (church_serving._access's `checks`) or there is no kids role with
+    a person on it."""
     kids = {str(r.get("id")) for r in roles if r.get("kids") is True}
     cids = {str(s["contact_id"]) for s in signups if s.get("contact_id") and s.get("role") in kids}
     if not cids:
@@ -717,14 +719,15 @@ def _kids_checks(biz: str, user: AuthedUser, roles: List[Dict[str, Any]],
         got = cs.checks_of(access["biz"], cids, today)
     except HTTPException:
         return None
-    return {cid: (got.get(cid) or {}).get("status") or "none" for cid in cids}
+    return {cid: cs.kids_status(got.get(cid)) for cid in cids}
 
 
 def _check_marks(status: Optional[str]) -> Dict[str, Any]:
-    """{checked, check}: whether the check is current (church_serving.CLEARED)
-    and, when it isn't, why ("Check overdue", "No check on file", "Under 18")."""
+    """{checked, check}: whether this person may take a kids role
+    (church_serving.KIDS_ROLE_OK: a current check, or a junior helper of 13
+    to 17) and, when not, why ("Check overdue", "No check on file", "Under 13")."""
     import church_serving as cs
-    ok = status in cs.CLEARED
+    ok = status in cs.KIDS_ROLE_OK
     return {"checked": ok, "check": None if ok else CHECK_WORDS.get(status or "none", "No check on file")}
 
 
@@ -774,7 +777,7 @@ def picture(entry_id: str, business_id: str, user: AuthedUser = Depends(require_
     import events_rsvp_router as ev
     signups = ev.read_signups(ent["data"], ent["signups_field"])
     # A kids role's people carry `checked` and, when it isn't current, `check`
-    # ("Check overdue", "No check on file", "Under 18"; spec 6.10) for a login
+    # ("Check overdue", "No check on file", "Under 13"; spec 6.10) for a login
     # that may read who's cleared, by church_serving's own rule, and nobody else.
     checks = _kids_checks(biz, me["user"], ent["roles"], signups)
     special = []

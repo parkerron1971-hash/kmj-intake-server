@@ -38,7 +38,9 @@ the Build item "Love City leaves Subsplash (M-1)".
                     blocked ... no check on record and on the schedule with
                                 kids or youth within SOON_DAYS: "Can't serve
                                 with kids yet"
-                    teen ...... under 18: checks are for adults
+                    teen ...... under 18: checks are for adults (an event's
+                                kids role takes a teen of 13 to 17 as a
+                                junior helper: kids_status, Kevin 2026-11-21)
                   "Send check reminders" goes the ways serving already
                   reaches people: a phone alert (member_push "serving") and
                   an email with the office's own check link (a setting; no
@@ -894,8 +896,11 @@ def checks_of(biz: Dict[str, Any], people: Iterable[str], today: date,
     (check_on), under 18 (teen), and check_state, given each one's next time
     on the schedule with kids or youth as the caller knows it (`nexts`,
     {contact_id: {day, place, team}}): no check on record and a next time is
-    `blocked`, "Can't serve with kids yet". {contact_id: {status, due, on}}.
-    PRIVATE to whoever may read who's cleared (_access's `checks`)."""
+    `blocked`, "Can't serve with kids yet". {contact_id: {status, due, on,
+    age}}: age in years from the same birthdate (None without one), so an
+    event's kids role can tell a junior helper from a child (kids_status)
+    with no read of its own. PRIVATE to whoever may read who's cleared
+    (_access's `checks`)."""
     biz_id = str(biz["id"])
     ids = sorted({str(p) for p in people if p})
     if not ids:
@@ -918,18 +923,37 @@ def checks_of(biz: Dict[str, Any], people: Iterable[str], today: date,
         on = check_on(dates.get(cid, []), recorded.get(cid) or {})
         age = _age(person.get("birthdate"), today)
         state = check_state(on, settings["check_years"], today, age is not None and age < 18, (nexts or {}).get(cid))
-        out[cid] = {"on": on.isoformat() if on else None, **state}
+        out[cid] = {"on": on.isoformat() if on else None, **state, "age": age}
     return out
 
 
 CLEARED = ("ok", "due")     # a check still good today (due: it runs out within DUE_DAYS)
+# An event's kids role (docs/EVENT_VOLUNTEERS.md 6.10; Kevin, 2026-11-21,
+# "yes and yes"): checks are for adults, so a teen of JUNIOR_AGE to 17 helps
+# as a junior helper; a child under JUNIOR_AGE is never offered one.
+JUNIOR_AGE = 13
+KIDS_ROLE_OK = CLEARED + ("junior",)
+
+
+def kids_status(c: Optional[Dict[str, Any]]) -> str:
+    """One checks_of row as an event's kids role reads it: its own status,
+    except under 18 (`teen`), which is `junior` from JUNIOR_AGE to 17 and
+    `child` under it, by the age checks_of worked out from the birthdate.
+    Someone checks_of didn't find is `none`."""
+    c = c or {}
+    status = c.get("status") or "none"
+    if status != "teen":
+        return status
+    age = c.get("age")
+    return "junior" if isinstance(age, int) and age >= JUNIOR_AGE else "child"
 
 
 def cleared(biz: Any, people: Iterable[str], today: Optional[date] = None) -> Set[str]:
-    """Which of these people may serve with kids now: a current background
-    check, by checks_of's own rule (the rule The week reads for "Can't serve
-    with kids yet"). An event's kids role (docs/EVENT_VOLUNTEERS.md 6.10) is
-    offered only to them. Under 18 is never cleared: checks are for adults.
+    """Which of these people may take an event's kids role now
+    (docs/EVENT_VOLUNTEERS.md 6.10): a current background check by checks_of's
+    own rule (ok or due), or a teen of 13 to 17, a junior helper (kids_status;
+    checks are for adults). An overdue check, none on file, or a child under
+    13 is never cleared. The week's own flag reads the same checks_of.
     `biz` is the church's row, or its id."""
     if not isinstance(biz, dict):
         biz = _business(_uuid(biz, "church"))
@@ -937,7 +961,7 @@ def cleared(biz: Any, people: Iterable[str], today: Optional[date] = None) -> Se
     if not ids:
         return set()
     today = today or _now().astimezone(_zone(str(biz["id"]))).date()
-    return {cid for cid, c in checks_of(biz, ids, today).items() if c["status"] in CLEARED}
+    return {cid for cid, c in checks_of(biz, ids, today).items() if kids_status(c) in KIDS_ROLE_OK}
 
 
 # ─── Special helpers at an event (docs/EVENT_VOLUNTEERS.md 6.6) ────────

@@ -357,14 +357,30 @@ def _lightest(ids: Iterable[str], folks: Dict[str, Dict[str, Any]], load: Dict[s
 
 
 def first_guests_logins(ch: Any, load: Dict[str, int], skip: Iterable[str] = ()) -> List[str]:
-    """Whoever does First-time guests, in the order to try them: each
-    Manager login holding the duty (the fewest open guest calls first), then
-    the owner. A login whose person is in `skip` is passed over."""
+    """Whoever does First-time guests, in the order to try them: the Manager
+    logins holding the duty, People & Care's own first (Kevin, 2026-11-20:
+    "by default the calls goes to people and care"), then a Manager the duty
+    was given to, then an Executive Pastor or office overseer, who holds every
+    non-money duty by oversight and makes the calls only when nobody else
+    does (on 2026-11-21 Love City's Executive Pastor was picked over People &
+    Care on the name tie-break); inside each, the fewest open guest calls
+    first; then the owner. A login whose person is in `skip` is passed over."""
+    import church_duties as cd
     skip = set(skip)
     lp = ch.login_person
+    home = set(cd.CATALOG[guest_path.FIRST_GUESTS]["lanes"])
 
-    def rank(u: str) -> Tuple[int, str, str]:
-        return (load.get(lp.get(u) or "", 0), ch.login_name(u).casefold(), u)
+    def tier(u: str) -> int:
+        try:
+            lanes = set(ch.lanes(u))
+        except Exception:  # noqa: BLE001  (a lane that can't be read decides nothing: the middle)
+            return 1
+        if cd.EXEC in lanes:
+            return 2
+        return 0 if lanes & home else 1
+
+    def rank(u: str) -> Tuple[int, int, str, str]:
+        return (tier(u), load.get(lp.get(u) or "", 0), ch.login_name(u).casefold(), u)
     out = sorted((u for u, s in ch.seats.items()
                   if s.get("role") == "manager" and u != ch.owner and guest_path.FIRST_GUESTS in ch.held(u)
                   and lp.get(u) not in skip), key=rank)

@@ -2643,8 +2643,8 @@ order. Only services still to come make a line.
 | Field | What it is |
 |---|---|
 | `kind` | `short`, `no_answer`, `cant_serve_kids`, or `clear` (the one line when nothing needs a look). For the frontend's icon or colour only; never show it. |
-| `title` | The line, in full. `short`: "{department} is short {one, two…} on {day}: {places}." (a place needing two reads "Nursery (2)"). `no_answer`: "{department}: {name} hasn't answered for {day}." `cant_serve_kids`: "{department}: {name} can't serve with kids yet." `clear`: "Everything is filled for Sunday." (every day still to come at which some team has a place: "for Sunday and Thursday"; a service no team has a place at, such as an event date with only ChurchSavvy's teams, is never named), "This week's services have passed." (every service with places has started), "Nothing is on the schedule this week." (no service this week at which a team has a place) or "No teams are on Who serves when yet." `{day}` is the weekday, with the time when the week has two services that weekday ("Sunday at 9 AM"). A team on no department's card says its own name where a department's would be ("Parking Team: …"). |
-| `details` | The smaller lines under it, in full, each its own line (may be empty). `short`: one per person on a place who is away ("{name} is away. Two people on the {team} team are free that morning.", "One person…", "Nobody else…"; morning, afternoon or evening by the service's time), and "The worship team fills this in ChurchSavvy." for ChurchSavvy's door. `no_answer`: "{first name} was asked on Monday." (today, yesterday, a weekday within the week, else "on Nov 9"; no line when the ask has no time). `cant_serve_kids`: "{first name}'s background check isn't on record. {first name} is on for Sunday." (or "was asked for Sunday"). |
+| `title` | The line, in full. `short`: "{department} is short {one, two…} on {day}: {places}." (a place needing two reads "Nursery (2)"). `no_answer`: "{department}: {name} hasn't answered for {day}." `cant_serve_kids`: "{department}: {name} can't serve with kids yet." (no check on record) or "{department}: {name}'s background check is overdue." (one that ran out; 2026-11-21). `clear`: "Everything is filled for Sunday." (every day still to come at which some team has a place: "for Sunday and Thursday"; a service no team has a place at, such as an event date with only ChurchSavvy's teams, is never named), "This week's services have passed." (every service with places has started), "Nothing is on the schedule this week." (no service this week at which a team has a place) or "No teams are on Who serves when yet." `{day}` is the weekday, with the time when the week has two services that weekday ("Sunday at 9 AM"). A team on no department's card says its own name where a department's would be ("Parking Team: …"). |
+| `details` | The smaller lines under it, in full, each its own line (may be empty). `short`: one per person on a place who is away ("{name} is away. Two people on the {team} team are free that morning.", "One person…", "Nobody else…"; morning, afternoon or evening by the service's time), and "The worship team fills this in ChurchSavvy." for ChurchSavvy's door. `no_answer`: "{first name} was asked on Monday." (today, yesterday, a weekday within the week, else "on Nov 9"; no line when the ask has no time). `cant_serve_kids`: "{first name}'s background check isn't on record. {first name} is on for Sunday." (or "was asked for Sunday"); for a check that ran out, "{first name}'s background check ran out on Mar 1, 2022. {first name} is on for Sunday." (the year only when it isn't this one). |
 | `service_id`, `day` | The service the line is about (`null` on `clear`). |
 | `find` | For a `short` line on the Volunteers' door: `{group_id, service_id, day}` of the first short team, for a "Find someone" button to Who serves when (see rows). `null` otherwise. |
 
@@ -2682,8 +2682,9 @@ when's team order). A department with no Sunday team has no card.
 | `place_id`, `place`, `slot` | The place and which of its spots. |
 | `person` | `{contact_id, name}` of whoever is on it, or `null` for an open place. |
 | `who` | The name to show, or "Open place". |
-| `state` | `on`, `no_answer`, `open`, `away`, `cant_serve_kids`; never shown. |
-| `state_words` | "On", "No answer yet", "Open", "Away", "Can't serve with kids yet": show this. |
+| `state` | `on`, `no_answer`, `open`, `away`, `cant_serve_kids`; never shown. `cant_serve_kids` covers no check on record and a check that ran out alike. |
+| `state_words` | "On", "No answer yet", "Open", "Away", "Can't serve with kids yet", "Check overdue": show this. |
+| `check_status` | On a `cant_serve_kids` row, why: `blocked` (no check on record) or `overdue` (it ran out); `null` on every other row. Never shown. |
 | `minutes`, `hours_words` | That person's serving this year (`0`, "No hours yet"; "45 minutes"; "1 hour"; "3 hours"; "1.5 hours"). Both `null` on an open place, and on every row for a login that doesn't read hours. |
 | `find` | `{group_id, service_id, day}` on an open or away place of a Volunteers' team at a service still to come: "Find someone", opening Who serves when's Volunteers door on that team and day. `null` otherwise. |
 | `note` | On an open or away place of a ChurchSavvy team: "The worship team fills this in ChurchSavvy." (show it where "Find someone" would be); `null` otherwise. |
@@ -2712,8 +2713,13 @@ The page needs none of them to draw itself; they say why a field is `null`.
 - **"Can't serve with kids yet" is church_serving's `blocked`** (`checks_of`, `check_state`): no
   check on record (the latest of the leader approval's and one recorded on Serving) and on the
   schedule with Kids & youth (a Sunday team `church_serving._kids_teams` places there), at a service
-  of this week still to come. Under 18 is never blocked. A check that ran out, or runs out within
-  the month, is not this state, and neither is any check on record (Serving's page shows those).
+  of this week still to come. Under 18 is never blocked.
+- **"Check overdue" is church_serving's `overdue`** (Kevin, 2026-11-21, "yes and yes";
+  docs/EVENT_VOLUNTEERS.md section 11): a check that ran out, for someone on the schedule the same
+  way. It is the same state, `cant_serve_kids` (counted on, the same chip, Look at first's same
+  place, My department's office line), with `check_status` `overdue` and its own words. A check
+  that runs out within the month is neither (Serving's page shows those), and neither is someone
+  under 18.
   Only worked out for a login that may read it: anyone else's request makes no check read at all
   (no leaders' dates, no Kids & youth teams; pinned on the reads).
 

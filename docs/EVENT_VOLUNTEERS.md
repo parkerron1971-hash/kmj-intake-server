@@ -339,20 +339,26 @@ the same rule. A Sunday event date's words always carry the event's title
 These are the existing `_roles` and signups, with three rules added:
 
 - **Kids roles** (`kids: true`):
-  - In the member app, I'll help shows only when the person has a current
-    background check: ok or due in `church_serving.checks_of`, through one
-    helper (`church_serving.cleared`). This is deliberately stricter than The
-    week's "Can't serve with kids yet", which flags only someone with no check
-    on file who is on the schedule soon: an overdue check, or anyone under 18,
-    is never offered a kids role. Both read the same `checks_of`; The week's
-    own flag is unchanged.
-  - Without a check, the role reads "Needs a background check. Ask the
-    office." with no button. The server refuses a signup the page didn't
-    offer (a 403 in those words).
+  - In the member app, I'll help shows only to someone with a current
+    background check (ok or due in `church_serving.checks_of`) or to a teen
+    of 13 to 17, as a junior helper: checks are for adults (Kevin,
+    2026-11-21, "yes and yes"). One helper decides it
+    (`church_serving.cleared`, through `kids_status`), and the age comes from
+    the birthdate `checks_of` already reads, with no read of its own. An
+    adult whose check ran out, anyone with no check on file, and a child
+    under 13 are never offered a kids role.
+  - The week reads the same `checks_of` for its own flag: someone on a kids
+    team's place soon with no check on file ("Can't serve with kids yet")
+    or, since the same day, a check that ran out ("Check overdue"). Under 18
+    is never flagged there.
+  - Anyone not offered it reads "Needs a background check. Ask the office."
+    with no button. The server refuses a signup the page didn't offer (a 403
+    in those words).
   - The public page never shows a kids role.
   - The office may still put anyone on one by name. The event page then
-    says why that person isn't cleared: "Check overdue", "No check on file"
-    or "Under 18" (only to a login that may read who's cleared).
+    says why that person may not take it: "Check overdue", "No check on
+    file" or "Under 13" (only to a login that may read who's cleared). A
+    junior helper reads like anyone cleared: `checked` true, no words.
 - **Open roles** (`open: true`): the public events page shows only these on
   a public event. A role with no `open` key keeps today's behavior (3.3).
 - **The member app's I'll help** works on any non-kids role, and on kids
@@ -802,6 +808,7 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   Kevin's "current background check"): ok or due in `checks_of`, never under
   18. The week keeps its own flag (blocked only) for now; both read
   `checks_of`. Teens and The week's overdue flag go to Kevin separately.
+  (Both changed 2026-11-21: see "Kevin's two calls" below.)
 - **The member app is form posts with redirects**, so a refusal comes back as
   the page's notice: `err=kids` "Needs a background check. Ask the office."
   and, for a full role, `err=filled&entry={id}&role={id}`: the page looks the
@@ -811,7 +818,8 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   URL-encoded.
 - **The office's picture says why** (after review): a kids role's people carry
   `checked` and `check` ("Check overdue", "No check on file", "Under 18"),
-  only for a login `church_serving` lets read who's cleared.
+  only for a login `church_serving` lets read who's cleared. ("Under 18" is
+  "Under 13" since 2026-11-21.)
 - **The public page:** a role that says neither `kids` nor `open` reads
   exactly as before. A hidden role's public signup is the same 400 as a role
   that isn't there.
@@ -1046,3 +1054,53 @@ comes off Who serves when, and a flyer comes off on the event's page. Each is
 shown first, needs the person's yes, and never runs unattended or from an
 outside agent. The Chief-only reads' review list (`test_tool_loop.py`)
 gained `event_volunteers`.
+
+### Kevin's two calls (2026-11-21)
+
+Asked: "Should teens be allowed as junior helpers on kids roles? Right now
+anyone under 18 is refused." and "Should The week flag volunteers whose
+background check has expired? Today it only flags people with no check on
+file." Kevin: **"yes and yes"**.
+
+**Teens on kids roles (6.10).**
+- A teen of 13 to 17 may take an event's kids role as a junior helper, with
+  no check of their own: checks are for adults. A child under 13 is still
+  never offered one. An adult's check must still be current (ok or due), so
+  an overdue check is still refused.
+- The age is worked out by `checks_of` from the birthdate it already reads
+  for `teen`, and rides on its row as `age`. `church_serving.kids_status`
+  turns `teen` into `junior` (13 to 17) or `child` (under 13), and
+  `cleared` lets in `KIDS_ROLE_OK` (ok, due, junior). No new read per
+  person. A `teen` row can't lack an age (teen needs a birthdate), and one
+  that did would read as a child.
+- The member app's offer and the server's re-check both go through
+  `cleared`, so they can't disagree. The office's picture marks a junior
+  helper `checked: true` with no words, like anyone cleared, and says
+  "Under 13" for a child. The member app's refusal words are unchanged
+  ("Needs a background check. Ask the office.").
+- The Serving page, My serving and the check reminders still read `teen`
+  as before: none of them asks a teen for a check.
+- No switch of its own: it applies wherever an event has a kids role, and
+  the office and Chief make those only where EVENT_VOLUNTEERS is open (it
+  opens only where CHURCH_EVENT_VOLUNTEERS does).
+
+**The week flags a check that ran out (docs/CHURCH_SCHEDULE.md 8.4).**
+- Someone on a kids team's place at a service still to come in the week
+  shown, whose check ran out (`overdue` in `checks_of`), is flagged as well
+  as someone with no check on file (`blocked`). Under 18 is never flagged.
+- Shape: the same state, `cant_serve_kids`, for both, so every reader of a
+  row's state treats them alike with no change: the office page's chip and
+  its tone (the frontend's `STATE_TONE`, which reads any state it doesn't
+  know as `open`), the counts (still on the schedule), Look at first's order,
+  My department's "The office is handling this place" and its quiet
+  no-answer line, and Chief's `serving_week`. A new field on every row,
+  `check_status`, says which (`blocked`, `overdue`, or null). The row's
+  `state_words` is "Check overdue", and Look at first says "{department}:
+  {name}'s background check is overdue." / "{first}'s background check ran
+  out on Mar 1, 2022. {first} is on for Sunday." (the year only when it
+  isn't this one). The frontend shows both verbatim, so it needs no change.
+- Private exactly as before: only a login church_serving lets read who's
+  cleared sees it; for anyone else the page is byte for byte the page with
+  a current check. The member app's My department never says why.
+- Left as it is: a check still good today that runs out before a service
+  later in the week shown reads On (checks_of's `due`), as it did.

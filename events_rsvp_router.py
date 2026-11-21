@@ -213,7 +213,8 @@ def role_fill(role: Dict[str, Any], signups: List[Dict[str, Any]]) -> Dict[str, 
 
 def kids_role(role: Dict[str, Any]) -> bool:
     """A role that works with kids (docs/EVENT_VOLUNTEERS.md 3.3): only
-    for people with a current background check, never on the public page."""
+    for people church_serving.cleared clears (a current background check, or
+    a junior helper of 13 to 17), never on the public page."""
     return isinstance(role, dict) and role.get("kids") is True
 
 

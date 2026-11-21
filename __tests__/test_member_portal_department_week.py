@@ -648,6 +648,29 @@ def test_no_hours_no_check_state_and_the_office_line_for_an_uncleared_kids_place
     assert before == after, "the office's line is the only difference"
 
 
+def test_a_check_that_ran_out_is_the_offices_place_too_and_never_said(hope, shell):
+    """Kevin, 2026-11-21 ("yes and yes"): The week flags a check that ran out
+    as well as none on record. On the phone it is the same office line, and
+    nothing says why: no state, no "overdue", no check word, and Toby's
+    no-answer line goes as it does for a place the office is handling."""
+    contact(hope, "n041")["metadata"] = {"serving": {"check_on": "2020-03-01"}}
+    contact(hope, "n043")["metadata"] = {"serving": {"check_on": "2020-03-01"}}
+    d = mine(hope, "kara")
+    blob = json.dumps(d)
+    assert "overdue" not in blob and "check_status" not in blob and "cant_serve" not in blob
+    rows = rows_of(d, "Kids", "Kids Check-in", "Sunday 10:30 AM")
+    assert (rows[0]["who"], rows[0]["state"], rows[0]["words"], rows[0]["find"]) == \
+        ("Lila Penn", "office", OFFICE_LINE, None)
+    assert (rows[2]["who"], rows[2]["state"], rows[2]["words"]) == ("Toby Wells", "office", OFFICE_LINE)
+    assert not [x for x in d["look"] if "Toby" in x["title"] or any("Toby" in t for t in x["details"])]
+    shown = text(page(hope, "kara")[0])
+    assert OFFICE_LINE in shown and not PRIVATE.search(shown) and "overdue" not in shown.lower()
+    office = cw.week({"biz": c3.church(hope, HOPE), "role": "owner", "change": frozenset(), "hours": False,
+                      "checks": True}, "2026-11-22")
+    assert {"Kids: Toby Wells hasn't answered for Sunday.", "Kids: Toby Wells's background check is overdue.",
+            "Kids: Lila Penn's background check is overdue."} <= {x["title"] for x in office["look"]}
+
+
 def test_with_serving_switched_off_nobody_is_said_to_be_with_the_office(hope, monkeypatch):
     monkeypatch.setenv("CHURCH_SERVING", "off")
     hope.reads.clear()

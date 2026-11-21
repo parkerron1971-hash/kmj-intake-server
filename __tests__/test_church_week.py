@@ -15,9 +15,12 @@ purpose to see its test go red:
     both doors; anyone else with a seat is a 403, a stranger a 404. Every read
     is this church's, every value quoted
   2 PAGED: no read stops at 1,000 rows (a team of 1,150 people)
-  3 CHECKS: "Can't serve with kids yet" only for whoever may read who's
-    cleared (church_serving's rule); for anyone else the page is byte for
-    byte what it would be if the person had a check. Hours the same way
+  3 CHECKS: "Can't serve with kids yet" (no check on record) and "Check
+    overdue" (one that ran out; Kevin, 2026-11-21) only for whoever may read
+    who's cleared (church_serving's rule), both the one state
+    cant_serve_kids with check_status saying which; under 18 never; for
+    anyone else the page is byte for byte what it would be if the person had
+    a check. Hours the same way
   4 PRIVATE: no away note, no ask, no reason, no answer's note, no phone, no
     email; names only of the church's own people on its teams and leaders
   5 PLAIN WORDS: no ids, keys or title words in anything the page shows
@@ -297,6 +300,9 @@ def test_the_week_as_whoever_keeps_the_volunteers_reads_it(app):
     lila = row(body, "Kids", SUN, "Nursery", 1)
     assert (lila["who"], lila["state"], lila["state_words"], lila["minutes"], lila["hours_words"]) == \
         ("Lila Penn", "cant_serve_kids", "Can't serve with kids yet", 180, "3 hours")
+    assert lila["check_status"] == "blocked"
+    others = [r for c in body["departments"] for s in c["services"] for r in s["rows"] if r is not lila]
+    assert others and all(r["check_status"] is None for r in others), "only a flagged place says why"
     dara = row(body, "Kids", SUN, "Nursery", 2)
     assert (dara["who"], dara["state"], dara["state_words"]) == ("Dara Quinn", "away", "Away")
     assert dara["find"] == {"group_id": KIDS, "service_id": SUN, "day": "2026-11-22"} and dara["note"] is None
@@ -496,6 +502,10 @@ def test_cant_serve_with_kids_yet_is_never_given_away(app, db):
     contact(db, "n041")["metadata"] = {"serving": {"check_on": "2026-03-01"}}
     assert get(app, "mila").text == before
     assert "cant_serve_kids" not in get(app, "sunny").text, "and with her check on record, nobody sees it"
+    # A check that ran out is just as private.
+    contact(db, "n041")["metadata"] = {"serving": {"check_on": "2020-03-01"}}
+    assert get(app, "mila").text == before
+    assert "Check overdue" in get(app, "sunny").text and "overdue" not in before.lower()
 
 
 def test_a_full_sunday_with_someone_unchecked_reads_full_to_whoever_cant_see_checks(app, db):
@@ -576,22 +586,44 @@ def _leader_date(db, handle, on):
     (lambda db: contact(db, "n041").update(metadata={"serving": {"check_on": "2024-12-01"}}), "due"),
     (lambda db: contact(db, "n041").update(metadata={"serving": {"check_on": "2026-03-01"}}), "ok"),
     (lambda db: _leader_date(db, "n041", "2026-05-01"), "ok"),             # the Kids leaders page's date
-    (lambda db: contact(db, "n041").update(birthdate="2012-01-01"), "teen"),
+    (lambda db: contact(db, "n041").update(birthdate="2012-01-01"), "teen"),          # 14: a teen
+    (lambda db: contact(db, "n041").update(birthdate="2016-01-01"), "teen"),          # 10: a child
     (lambda db: None, "blocked"),
-], ids=["ran_out", "runs_out_soon", "recorded", "leader_approval", "under_18", "none_on_record"])
-def test_only_no_check_on_record_reads_cant_serve_with_kids_yet(app, db, set_up, status):
-    """For whoever may read who's cleared: a check that ran out, or runs out
-    within the month, or one on record either way, is On; so is someone
-    under 18. Only none on record is "Can't serve with kids yet"."""
+], ids=["ran_out", "runs_out_soon", "recorded", "leader_approval", "under_18", "under_13", "none_on_record"])
+def test_no_check_on_record_or_one_that_ran_out_is_flagged(app, db, set_up, status):
+    """For whoever may read who's cleared: none on record is "Can't serve
+    with kids yet", and (Kevin, 2026-11-21, "yes and yes") a check that ran
+    out is "Check overdue"; both are cant_serve_kids, check_status says
+    which. A check that runs out within the month, or one on record either
+    way, is On; so is anyone under 18 (checks are for adults)."""
     set_up(db)
     biz = c3.church(db, HOPE)
     lila = db.who[HOPE]["n041"]
     got = church_serving.checks_of(biz, [lila], NOW.astimezone(NY).date(), {lila: {"day": "2026-11-22"}})
     assert got[lila]["status"] == status
     body = week(app, "sunny")
-    state = row(body, "Kids", SUN, "Nursery", 1)["state"]
-    assert state == ("cant_serve_kids" if status == "blocked" else "on"), status
-    assert ("Kids: Lila Penn can't serve with kids yet." in [x["title"] for x in body["look"]]) == (status == "blocked")
+    r = row(body, "Kids", SUN, "Nursery", 1)
+    assert (r["state"], r["state_words"], r["check_status"]) == {
+        "blocked": ("cant_serve_kids", "Can't serve with kids yet", "blocked"),
+        "overdue": ("cant_serve_kids", "Check overdue", "overdue"),
+    }.get(status, ("on", "On", None)), status
+    assert [(x["title"], x["details"]) for x in body["look"] if x["kind"] == "cant_serve_kids"] == {
+        "blocked": [("Kids: Lila Penn can't serve with kids yet.",
+                     ["Lila's background check isn't on record. Lila is on for Sunday."])],
+        "overdue": [("Kids: Lila Penn's background check is overdue.",
+                     ["Lila's background check ran out on Mar 1, 2022. Lila is on for Sunday."])],
+    }.get(status, []), status
+    # Either way she still counts as on the schedule, for every reader.
+    assert body["counts"]["on"] == 6
+
+
+def test_a_check_that_ran_out_this_year_says_the_day_alone(app, db):
+    """Read on Nov 18, 2026, a two-year check from Nov 1, 2024 ran out on
+    Nov 1: no year, it's this one."""
+    contact(db, "n041")["metadata"] = {"serving": {"check_on": "2024-11-01"}}
+    look = [x for x in week(app, "sunny")["look"] if x["kind"] == "cant_serve_kids"]
+    assert look[0]["details"] == ["Lila's background check ran out on Nov 1. Lila is on for Sunday."]
+    assert cw._ran_out_on(None, date(2026, 11, 18)) == "" and cw._ran_out_on("x", date(2026, 11, 18)) == ""
 
 
 def test_the_latest_check_date_is_the_one_that_counts(app, db):
