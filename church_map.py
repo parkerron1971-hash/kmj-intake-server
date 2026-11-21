@@ -178,7 +178,10 @@ def _q(v: Any) -> str:
 
 
 def _rows(path: str) -> Optional[List[Dict[str, Any]]]:
-    rows = sb_clients.sb_get_as_service(path)
+    # church_meetings.read: a read naming step 3's columns (a board's kind)
+    # falls back to the old read only when they are certainly not there.
+    import church_meetings as cmt
+    rows = cmt.read(path)
     return rows if isinstance(rows, list) else None
 
 
@@ -558,10 +561,10 @@ _THINGS = {"group": ("groups", "name", "&active=eq.true"),
 
 def thing(kind: str) -> Tuple[str, str, str]:
     """A unit kind's thing: its table, its name and what still counts as
-    there (_THINGS). A board is a board: once step 3's columns are there, a
-    group that only meets (the huddle, the leaders meeting) is never one a
-    department hangs from (church_meetings.board_kind, docs/CHURCH_SCHEDULE.md
-    10.2)."""
+    there (_THINGS). A board is a board: a group that only meets (the
+    huddle, the leaders meeting) is never one a department hangs from
+    (church_meetings.board_kind; read through _need, the old read only when
+    the column is certainly not there; docs/CHURCH_SCHEDULE.md 10.2)."""
     table, col, live = _THINGS[kind]
     if kind == "board":
         import church_meetings as cmt

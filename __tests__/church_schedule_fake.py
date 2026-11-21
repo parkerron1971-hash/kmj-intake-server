@@ -639,6 +639,22 @@ def _meet_delete(d, path):
     return True
 
 
+def _projected(path, rows):
+    """A read of the board's tables, or the answers, answers with the columns
+    its select names and no others, as PostgREST does (a column left out of
+    the select is not in the row; one named that a row lacks is null), so a
+    read that forgets to name kind or from_list can't pass on a row that
+    happens to carry it."""
+    table, _, qs = path.lstrip("/").partition("?")
+    if table not in (*BOARD_TABLES, "church_meeting_answers") or not isinstance(rows, list):
+        return rows
+    sel = next((v for k, _, v in (p.partition("=") for p in qs.split("&")) if k == "select"), None)
+    if not sel or sel == "*" or "(" in sel:
+        return rows
+    cols = [c.strip() for c in sel.split(",") if c.strip()]
+    return [{c: r.get(c) for c in cols} for r in rows]
+
+
 def _meetings_tables(d, meetings):
     """The board's six tables at every church (church_three made two of
     them), as the board's own file and step 3's make them."""
@@ -696,7 +712,9 @@ def build(monkeypatch, *, mode: str = "on", limits: bool = False, meetings: bool
     def get(path, **k):
         d.reads.append(path)
         sb_clients._LAST.error = None
-        return None if failing("get", path) or absent(path) or _meet_absent(d, path) else real["get"](path, **k)
+        if failing("get", path) or absent(path) or _meet_absent(d, path):
+            return None
+        return _projected(path, real["get"](path, **k))
 
     def post(path, body, prefer=None, **k):
         d.posts.append((path.split("?")[0], bool(k.get("redact"))))

@@ -480,7 +480,8 @@ def _q(v: Any) -> str:
 
 
 def _get(path: str) -> List[Dict[str, Any]]:
-    rows = sb_clients.sb_get_as_service(path)
+    import church_meetings as cmt
+    rows = cmt.read(path)          # the old read only when step 3's columns are certainly not there
     if rows is None:
         raise Unavailable(path.split("?")[0])
     return rows
@@ -571,10 +572,12 @@ def _boards_vote(business_id: str, decision_id: str) -> None:
     """The board's vote is a decision a board made: its meeting's group (and
     the group the decision names) must be a board. A decision recorded in
     the huddle or the leaders meeting (a group that only meets, step 3) is
-    never the board's vote on a minister's housing allowance. Nothing is
-    read before step 3's columns are there (every group is a board then)."""
+    never the board's vote on a minister's housing allowance. Read whatever
+    the switch says; before step 3's columns are there every group is a
+    board (the boards' read falls back, church_meetings.read), and a read
+    that fails is the 503 every read here is."""
     import church_meetings as cmt
-    if not cmt.ready():
+    if cmt.pinned_absent():
         return
     rows = _get(f"/church_board_decisions?id=eq.{_q(decision_id)}&business_id=eq.{_q(business_id)}"
                 "&select=board_id,meeting_id&limit=1")

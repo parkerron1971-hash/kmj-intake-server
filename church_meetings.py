@@ -58,9 +58,12 @@ Switched by CHURCH_MEETINGS: off | owner | on, owner when unset (the
 platform owner's own church, and his own login), and only where
 CHURCH_BOARD is open too. Until ready() says the tables are there, every
 route here answers 404 and Meetings & minutes is Board & minutes exactly:
-its name, its reads (no new column named) and its writes. Every reader that
-means a board reads kind=eq.board once the columns are there, whatever the
-switch says (board_kind()): a meeting's people never give the board's yes.
+its name, its answers and its writes. Every reader that tells a board from
+a meeting fails closed, whatever the switch says and whatever ready() says:
+it names step 3's columns (kind=eq.board, from_list, audience) and reads
+through read(), which uses the old read only when the database says for
+certain the columns aren't there, and is a 503 on a timeout. A meeting's
+people never give the board's yes.
 """
 from __future__ import annotations
 
@@ -83,6 +86,7 @@ SWITCH = "CHURCH_MEETINGS"
 KINDS = ("board", "meeting")
 AUDIENCES = ("members", "leaders", "office")
 LISTS = ("leaders", "office")              # the groups that follow the leaders list
+BOARD_TABLES = ("church_boards", "church_board_members", "church_board_meetings")
 ANSWERS = ("yes", "cant")
 NOTE_MAX = 200
 LENGTH_MIN, LENGTH_MAX = 5, 720
@@ -91,13 +95,23 @@ OLD_NAME = "Board & minutes"
 READY_SECONDS = 600.0                      # the tables, once there, are asked about again in ten minutes
 MISSING_SECONDS = 60.0                     # not there (or couldn't tell): asked again a minute later
 
-# What a read names once the tables are there (and never before: the
-# columns aren't there to name). church_board and every board reader add
-# them through the helpers below, so the lint (test_board_readers_name_kind)
-# sees each read name kind, audience or cancelled_at.
+# What a read names of step 3's columns. Every reader that tells a board
+# from a meeting (who gives the board's yes, who writes a group, the Board
+# tab, the map, the board's log and the housing vote) names them always and
+# reads through read(): the old read, without them, only when the database
+# says for certain they aren't there (before the file). A timeout or a 5xx
+# is a 503, never the old read, which would count a meeting as a board. The
+# lint (test_board_readers_name_kind) sees each read name them.
+KIND_BOARD = "&kind=eq.board"
+NOT_CALLED_OFF = "&cancelled_at=is.null"
 GROUP_COLS = ",kind,audience"
 MEETING_COLS = ",cancelled_at,series_id,series_day,length_minutes,created_by"
 SEAT_COLS = ",from_list"
+NEW_BITS = (KIND_BOARD, NOT_CALLED_OFF, MEETING_COLS, GROUP_COLS, SEAT_COLS)
+# The database saying a column or a table isn't there: Postgres's undefined
+# column and undefined table, PostgREST's column and table "not in the
+# schema cache". Nothing else is "not there".
+ABSENT_CODES = ("42703", "42P01", "PGRST204", "PGRST205")
 
 UNREAD = "The meetings couldn't be read just now. Try again."
 UNSAVED = "That didn't save. Try again."
@@ -185,10 +199,13 @@ def _no_table(err: Dict[str, Any]) -> bool:
 
 def ready() -> bool:
     """True once church_meeting_answers answers (one transaction makes all
-    four tables and the columns). church_schedule.ready's rule: only "no
-    such table" says it isn't there; a blip keeps the last answer, and with
-    none yet reads as not there (the routes answer 404 for a minute, and
-    every board reader reads as before, never a 500). NEVER RAISES."""
+    four tables and the columns): whether step 3's routes and features run.
+    church_schedule.ready's rule for "no such table", with one change: only
+    a definite answer is kept (yes ten minutes, no a minute); a blip keeps
+    the last answer for this call only and is asked again on the next, and
+    with none yet reads as not there (the routes answer 404, never a 500).
+    The readers that tell a board from a meeting never ask this: they read
+    through read(). NEVER RAISES."""
     if _FORCE is not None:
         return _FORCE
     if not sb_clients.sb_url():
@@ -203,13 +220,62 @@ def ready() -> bool:
     except Exception:  # noqa: BLE001 — a fake or a broken client is "couldn't tell"
         rows, err = None, None
     if isinstance(rows, list):
-        got = True
-    elif err and _no_table(err):
-        got = False
-    else:
-        got = bool(yes)
-    _STATE["yes"], _STATE["at"] = got, now
-    return got
+        _STATE["yes"], _STATE["at"] = True, now
+        return True
+    if err and _no_table(err):
+        _STATE["yes"], _STATE["at"] = False, now
+        return False
+    return bool(yes)                # couldn't tell: not kept
+
+
+def absent(err: Optional[Dict[str, Any]]) -> bool:
+    """The database said for certain a column or a table isn't there."""
+    if not err:
+        return False
+    code = str(err.get("code") or "")
+    return code in ABSENT_CODES or (err.get("status") == 404 and code.startswith("PGRST"))
+
+
+def without_new(path: str) -> str:
+    """The same read without step 3's columns: the read as it was."""
+    for bit in NEW_BITS:
+        path = path.replace(bit, "")
+    return path
+
+
+def pinned_absent() -> bool:
+    """The tables are pinned as not there (a test's conftest, never
+    production): nothing of step 3 is named or read, as before the file."""
+    return _FORCE is False
+
+
+def read(path: str) -> Optional[List[Dict[str, Any]]]:
+    """A read that may name step 3's columns (through the helpers below):
+    as it is, and only when the database says for certain those columns
+    aren't there (before the file), the same read without them. A read that
+    fails any other way (a timeout, a 5xx) is None: the caller's 503, never
+    the old read. A definite answer is kept for ready(). The helpers name
+    nothing when the tables are pinned as not there (pinned_absent), so a
+    read is then exactly the old one. NEVER RAISES."""
+    try:
+        rows = sb_clients.sb_get_as_service(path)
+        names = path.lstrip("/").split("?")[0] in BOARD_TABLES and path != without_new(path)
+        if isinstance(rows, list):
+            if names:
+                _definite(True)
+            return rows
+        if not names or _FORCE is not None or not absent(sb_clients.last_error()):
+            return None
+        _definite(False)
+        rows = sb_clients.sb_get_as_service(without_new(path))
+        return rows if isinstance(rows, list) else None
+    except Exception:  # noqa: BLE001 — a broken client is "couldn't read"
+        return None
+
+
+def _definite(yes: bool) -> None:
+    if _FORCE is None:
+        _STATE["yes"], _STATE["at"] = yes, clock.monotonic()
 
 
 def on(biz: Any) -> bool:
@@ -233,22 +299,27 @@ def name_for(*, user: Any = None, biz: Any = None) -> str:
 # ─── What a read names, once the columns are there ───────────────────
 
 def board_kind() -> str:
-    """'&kind=eq.board' once the columns are there, '' before: every read
-    that means a board (one whose people give the board's yes on money, a
-    board on the leaders map, the Board tab, the board's own decisions)."""
-    return "&kind=eq.board" if ready() else ""
+    """'&kind=eq.board' for every read that means a board (one whose people
+    give the board's yes on money, a board on the leaders map, the Board
+    tab, the board's own decisions), read through read(); nothing when the
+    tables are pinned as not there."""
+    return "" if pinned_absent() else KIND_BOARD
 
 
 def group_cols() -> str:
-    return GROUP_COLS if ready() else ""
+    return "" if pinned_absent() else GROUP_COLS
 
 
 def meeting_cols() -> str:
-    return MEETING_COLS if ready() else ""
+    return "" if pinned_absent() else MEETING_COLS
 
 
 def seat_cols() -> str:
-    return SEAT_COLS if ready() else ""
+    return "" if pinned_absent() else SEAT_COLS
+
+
+def not_called_off() -> str:
+    return "" if pinned_absent() else NOT_CALLED_OFF
 
 
 def is_list(group: Optional[Dict[str, Any]]) -> bool:
@@ -292,7 +363,7 @@ def _plain(v: Any) -> str:
 
 
 def _need(path: str) -> List[Dict[str, Any]]:
-    rows = sb_clients.sb_get_as_service(path)
+    rows = read(path)
     if not isinstance(rows, list):
         raise HTTPException(503, UNREAD)
     return rows
@@ -512,6 +583,12 @@ def set_meeting(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     elif who.startswith("group:"):
         group = cb._board(me, who[len("group:"):])
         title = name[:cb.TITLE_MAX]
+        # A group for the list named by its id: its seats follow the list
+        # before the meeting is made, as for every leader or the office
+        # (who may set it is asked first, so nobody else writes seats).
+        cb._writes(me, group["id"])
+        cb._meeting_fields(fields, partial=False)
+        before_page(me, group)
     else:
         raise HTTPException(400, "Pick who comes: every leader, the office, or a group.")
     out = cb.add_meeting(me, {"board_id": str(group["id"]), "title": title, **fields})
@@ -538,8 +615,9 @@ def current(a: Dict[str, Any], m: Dict[str, Any]) -> bool:
 def cant_now(biz: str, m: Dict[str, Any]) -> Set[str]:
     """The seats that said "I can't" for this meeting's time: "End the
     meeting" marks them excused, not absent. Nothing read before the
-    tables; a failed read is a 503 (the meeting stays open)."""
-    if not ready():
+    tables (the meeting was read without step 3's columns); a failed read is
+    a 503 (the meeting stays open)."""
+    if "cancelled_at" not in m:
         return set()
     return {str(a["member_id"]) for a in answers_of(biz, [m["id"]]) if a.get("answer") == "cant" and current(a, m)}
 

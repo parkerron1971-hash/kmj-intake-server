@@ -214,8 +214,135 @@ def test_ready_reads_no_such_table_as_no_and_a_blip_as_the_last_answer(monkeypat
     cmt._STATE["at"] = -1e9
     said.update(rows=None, err={"status": 503, "code": "", "message": "timeout"})
     assert cmt.ready() is True, "a blip keeps the last answer"
+    assert cmt._STATE == {"yes": True, "at": -1e9}, "and isn't kept: the next call asks again"
     cmt._STATE.update(yes=None, at=-1e9)
     assert cmt.ready() is False, "with no answer yet, a blip reads as not there"
+    assert cmt._STATE == {"yes": None, "at": -1e9}
+
+
+def test_read_falls_back_only_when_the_columns_are_certainly_not_there(monkeypatch):
+    monkeypatch.setattr(cmt, "_FORCE", None)
+    monkeypatch.setattr(cmt, "_STATE", {"yes": None, "at": 0.0})
+    asked = []
+    said = {"err": None}
+
+    def get(path, **k):
+        asked.append(path)
+        return None if cmt.KIND_BOARD in path or cmt.GROUP_COLS in path else [{"id": "x"}]
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(sb_clients, "last_error", lambda: said["err"])
+    path = f"/church_boards?business_id=eq.x&archived=eq.false{cmt.KIND_BOARD}&select=id{cmt.GROUP_COLS}&limit=9"
+    for err in ({"status": 503, "code": "", "message": "timeout"}, {"status": 500, "code": "57014"}, None,
+                {"status": 400, "code": "22P02"}):
+        said["err"] = err
+        asked.clear()
+        assert cmt.read(path) is None and asked == [path], err
+    assert cmt._STATE["yes"] is None, "couldn't tell: nothing kept"
+    for code in ("42703", "42P01", "PGRST204", "PGRST205"):
+        said["err"] = {"status": 400, "code": code}
+        asked.clear()
+        assert cmt.read(path) == [{"id": "x"}] and asked == [path, "/church_boards?business_id=eq.x"
+                                                             "&archived=eq.false&select=id&limit=9"], code
+    assert cmt._STATE["yes"] is False, "a definite answer is kept"
+    # Another table's path is never stripped: only the board's tables carry the bits.
+    said["err"] = {"status": 400, "code": "42703"}
+    asked.clear()
+    assert cmt.read(f"/church_department_units?x=1{cmt.KIND_BOARD}") is None
+
+
+def _check_in(app, db, when):
+    """A check-in group with Andre on a Member seat: he writes it, he keeps no meetings."""
+    andre = fake.seat(db, LC, "andre", role="member")
+    as_(app, LC, "owner")
+    group = ok(app.post("/church/board/boards", json={"business_id": LC, "name": "Youth check-in",
+                                                      "kind": "meeting"}))["board"]
+    ok(app.post(f"/church/board/boards/{group['id']}/members", json={"business_id": LC, "contact_id": who(db, "andre")}))
+    app.who.update(id=andre, email="andre@lovecity.org")
+    mid = ok(set_meeting(app, f"group:{group['id']}", "Check-in", when=when))["meeting"]["id"]
+    for step in ("in_progress", "drafted"):
+        ok(app.patch(f"/church/board/meetings/{mid}", json={"business_id": LC, "status": step}))
+    as_(app, LC, "owner")
+    return andre, group, mid
+
+
+def _cant_tell(monkeypatch, db):
+    """Production, where nothing is pinned, with the tables there and the
+    probe timing out: ready() can't tell, and it says no throughout (as a
+    "no" kept for a minute after the file goes in would): nothing a reader
+    sees may change that for these checks."""
+    monkeypatch.setattr(cmt, "_FORCE", None)
+    monkeypatch.setattr(cmt, "_STATE", {"yes": None, "at": 0.0})
+    monkeypatch.setattr(sb_clients, "sb_url", lambda: "https://db.example")
+    db.fail = {"get": "/church_meeting_answers"}
+    assert cmt.ready() is False and cmt._STATE == {"yes": None, "at": 0.0}, "couldn't tell: not kept"
+    monkeypatch.setattr(cmt, "_definite", lambda yes: None)
+
+
+def test_a_probe_that_cant_tell_never_makes_a_meeting_a_board_nor_gives_a_list_seat_a_pen(app, db, monkeypatch):
+    got = ok(set_meeting(app))
+    gid, mid = got["board"]["id"], got["meeting"]["id"]
+    huddle = _decide(app, mid, "Paint the nursery")
+    eb = elder_board(db)
+    vote = _decide(app, ok(set_meeting(app, f"group:{eb['id']}", "Elders"))["meeting"]["id"], "Housing")
+    andre, check_in, drafted = _check_in(app, db, "2026-11-10T00:00:00+00:00")
+    _cant_tell(monkeypatch, db)
+    # The board's yes on money: boards only, in the office and in the member app.
+    me = {"biz": church(db), "_board_yes": {}}
+    assert cml._open_boards(me) == eb["id"]
+    assert set(cml.board_people(me)) == {who(db, "marcus"), who(db, "tanya")}
+    assert who(db, "tiara@") not in cml.board({"biz": church(db), "_board_yes": {}})
+    assert "board" not in cml.steps_of({"biz": church(db), "_board_yes": {}, "member": True,
+                                        "contact_id": who(db, "andre")})
+    # The Board tab, the leaders map (and Chief's, which reads through thing()).
+    assert mpb.boards_of(LC, who(db, "andre")) == set()
+    assert church_map._things(LC, "board", [gid, eb["id"], check_in["id"]]) == {eb["id"]: "Elder Board"}
+    # The board's log and the housing allowance's vote.
+    assert [d["id"] for d in ok(app.get(f"/church/board/decisions?business_id={LC}"))["decisions"]] == [vote]
+    with pytest.raises(HTTPException) as e:
+        ha._check_links(LC, {"board_decision_id": huddle})
+    assert e.value.detail == ha.NOT_BOARDS_VOTE
+    # A list seat has no pen, and a check-in's minutes are still the keepers' to approve.
+    as_(app, LC, "tiara")
+    assert app.post(f"/church/board/meetings/{mid}/items", json={"business_id": LC, "title": "Snacks"}).status_code == 403
+    from auth_supabase import AuthedUser
+    me_t = cb._access(LC, AuthedUser(id=who(db, "tiara@"), email=app.who["email"], role="authenticated"))
+    assert gid in me_t["listed"] and not cb.may_write(me_t, gid), "her seat is read as the list's"
+    app.who.update(id=andre, email="andre@lovecity.org")
+    r = app.post(f"/church/board/meetings/{drafted}/approve", json={"business_id": LC})
+    assert r.status_code == 403 and "approves a meeting's minutes" in r.json()["detail"]
+    assert not [w for w in db.refused if "step 3" in w], "nothing fell back: the columns are there"
+
+
+def test_a_read_that_times_out_is_a_503_never_the_old_read(app, db, monkeypatch):
+    ok(set_meeting(app))
+    eb = elder_board(db)
+    vote = _decide(app, ok(set_meeting(app, f"group:{eb['id']}", "Elders"))["meeting"]["id"], "Housing")
+    _cant_tell(monkeypatch, db)
+    me = {"biz": church(db), "_board_yes": {}}
+    # The read naming step 3's columns times out; the old read would answer, and must not be used.
+    real = sb_clients.sb_get_as_service
+
+    def slow(path, **k):
+        if path.lstrip("/").split("?")[0] in cmt.BOARD_TABLES and path != cmt.without_new(path):
+            sb_clients._LAST.error = {"status": 504, "code": "", "message": "timeout"}
+            return None
+        return real(path, **k)
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", slow)
+    for fn, word in ((lambda: cml._open_boards(dict(me)), cml.UNREAD), (lambda: mpb.boards_of(LC, who(db, "marcus")),
+                                                                         "couldn't be read"),
+                     (lambda: church_map._things(LC, "board", [elder_board(db)["id"]]), church_map.UNREAD)):
+        with pytest.raises(HTTPException) as e:
+            fn()
+        assert e.value.status_code == 503 and word in e.value.detail
+    r = app.get(f"/church/board?business_id={LC}")
+    assert r.status_code == 503 and "couldn't be read just now" in r.json()["detail"], "who a login sits on, too"
+    with pytest.raises(ha.Unavailable):
+        ha._boards_vote(LC, vote)
+    as_(app, LC, "tiara")
+    assert app.get(f"/church/board?business_id={LC}").status_code == 503, "never a pen by default"
+    assert not [w for w in db.refused if "step 3" in w]
 
 
 def test_the_page_is_meetings_and_minutes_where_step_3_is_open(app, db):
@@ -235,7 +362,8 @@ def test_a_group_for_every_leader_is_made_once_and_seats_the_list(app, db):
     got = ok(set_meeting(app, place="Fellowship hall", length_minutes=90))
     g = got["board"]
     assert (g["kind"], g["audience"], g["follows_list"]) == ("meeting", "leaders", True)
-    assert g["quorum"] is None and g["quorum_words"] == "", "no quorum line for a meeting group"
+    assert g["quorum_shown"] is False, "no quorum line for a meeting group"
+    assert isinstance(g["quorum"], int) and g["quorum_words"], "the fields the page reads are all there"
     assert got["series"] is None and got["room"] is None
     assert got["meeting"]["length_minutes"] == 90 and got["meeting"]["place"] == "Fellowship hall"
     mine = seats(db, g["id"])
@@ -325,6 +453,21 @@ def test_with_the_leaders_list_closed_a_meeting_is_for_a_board_or_a_group(app, d
     assert r.status_code == 409 and r.json()["detail"] == cmt.NO_LIST
     got = ok(set_meeting(app, f"group:{elder_board(db)['id']}", "Budget night"))
     assert got["meeting"]["title"] == "Budget night" and got["board"]["kind"] == "board"
+
+
+def test_a_list_group_named_by_its_id_is_kept_in_step_before_the_meeting(app, db):
+    gid = ok(set_meeting(app))["board"]["id"]
+    relist(db, "calvin", "leaders")
+    relist(db, "dana", "leaders")
+    as_(app, LC, "tiara")                                         # a list seat: not hers to set
+    before = len(db.t["church_board_members"])
+    r = app.post("/church/meetings", json={"business_id": LC, "who": f"group:{gid}", "starts_at": LATER})
+    assert r.status_code == 403 and len(db.t["church_board_members"]) == before, "nobody else writes seats"
+    as_(app, LC, "owner")
+    got = ok(app.post("/church/meetings", json={"business_id": LC, "who": f"group:{gid}", "name": "Prayer night",
+                                                "starts_at": LATER}))
+    assert {"Calvin Owens", "Dana Owens"} <= {p["name"] for p in got["roster"]}
+    assert seat_of(db, gid, "calvin")["from_list"] and seat_of(db, gid, "dana")["active"]
 
 
 def test_a_meeting_for_a_group_follows_church_boards_own_rules(app, db):
@@ -636,7 +779,7 @@ def test_the_login_that_set_the_meeting_reads_the_note(app, db):
     tasha = fake.seat(db, LC, "tasha", role="member")
     group = ok(app.post("/church/board/boards", json={"business_id": LC, "name": "Youth check-in",
                                                       "kind": "meeting"}))["board"]
-    assert group["kind"] == "meeting" and group["audience"] == "members" and group["quorum"] is None
+    assert group["kind"] == "meeting" and group["audience"] == "members" and group["quorum_shown"] is False
     for h in ("andre", "tasha", "gloria"):
         ok(app.post(f"/church/board/boards/{group['id']}/members", json={"business_id": LC, "contact_id": who(db, h)}))
     app.who.update(id=andre, email="andre@lovecity.org")
@@ -727,6 +870,14 @@ def test_the_member_side_is_closed_with_the_switch(app, db, monkeypatch):
     assert db.reads == []
 
 
+def test_an_answer_is_posted_redacted(app, db):
+    mid = ok(set_meeting(app))["meeting"]["id"]
+    db.posts.clear()
+    ok(answer(app, mid, answer="cant", note="Surgery that week"))
+    sent = [p for p in db.posts if p[0] == "/church_meeting_answers"]
+    assert sent == [("/church_meeting_answers", True)], "a note never reaches a failure log"
+
+
 def test_a_failed_answer_write_is_a_503_and_nothing_changes(app, db):
     mid = ok(set_meeting(app))["meeting"]["id"]
     db.fail = {"post": "/church_meeting_answers"}
@@ -770,17 +921,21 @@ def test_i_cant_reads_as_excused_when_the_meeting_ends(app, db):
 def test_a_meeting_group_has_a_quorum_line_only_when_the_keepers_set_a_count(app, db):
     got = ok(set_meeting(app))
     gid, mid = got["board"]["id"], got["meeting"]["id"]
-    assert open_page(app, mid)["quorum"] is None
+    page = open_page(app, mid)
+    # The page reads every field of the quorum (MeetingView's roll call, its facts, the minutes): always the
+    # whole dict, and quorum_shown says whether a line is drawn.
+    assert page["quorum_shown"] is False and set(page["quorum"]) == {"kind", "count", "needed", "present", "total", "met"}
     mark = ok(app.put(f"/church/board/meetings/{mid}/attendance",
                       json={"business_id": LC, "member_id": seat_of(db, gid, "andre")["id"], "status": "present"}))
-    assert mark["quorum"] is None
+    assert mark["quorum_shown"] is False and mark["quorum"]["present"] == 1 and set(mark["quorum"]) == {"kind", "count", "needed", "present", "total", "met"}
     board = ok(app.patch(f"/church/board/boards/{gid}", json={"business_id": LC, "quorum_kind": "count",
                                                               "quorum_count": 5}))["board"]
-    assert board["quorum"] == 5 and board["quorum_words"] == "5 present"
-    assert open_page(app, mid)["quorum"]["needed"] == 5
+    assert board["quorum"] == 5 and board["quorum_words"] == "5 present" and board["quorum_shown"] is True
+    assert open_page(app, mid)["quorum"]["needed"] == 5 and open_page(app, mid)["quorum_shown"] is True
     # The board's own line, as ever.
     eb = elder_board(db)["id"]
-    assert ok(set_meeting(app, f"group:{eb}", "Elders"))["quorum"]["needed"] == 2
+    elders = ok(set_meeting(app, f"group:{eb}", "Elders"))
+    assert elders["quorum"]["needed"] == 2 and elders["quorum_shown"] is True
 
 
 def test_a_group_for_the_list_keeps_its_kind_and_a_name_an_open_one_has(app, db):
@@ -814,3 +969,29 @@ def test_the_routes_are_mounted_before_the_catch_all_and_need_a_sign_in():
     c = TestClient(kmj_intake_automation.app)
     assert c.get(f"/church/meetings/{c3.uid(1, 1)}/answers?business_id={LC}").status_code in (401, 403)
     assert c.post("/church/meetings", json={"business_id": LC}).status_code in (401, 403)
+
+
+def test_with_meetings_off_a_meeting_kind_is_refused_and_ending_a_board_meeting_is_as_before(monkeypatch):
+    d = fake.build(monkeypatch, meetings=True, meetings_mode="off")
+    a = fake.meetings_client(d)
+    as_(a, LC, "owner")
+    groups = len(d.t["church_boards"])
+    r = a.post("/church/board/boards", json={"business_id": LC, "name": "Huddle", "kind": "meeting"})
+    assert r.status_code == 409 and r.json()["detail"] == cb.NOT_YET == "Meetings aren't switched on here yet."
+    assert len(d.t["church_boards"]) == groups, "never a board made in its place"
+    eb = elder_board(d)["id"]
+    r = a.patch(f"/church/board/boards/{eb}", json={"business_id": LC, "kind": "meeting"})
+    assert r.status_code == 409 and elder_board(d)["kind"] == "board"
+    assert ok(a.post("/church/board/boards", json={"business_id": LC, "name": "Trustees", "kind": "board"}))
+    # Ending a board meeting: the open items wait for Carry, as they always have.
+    first = ok(a.post("/church/board/meetings", json={"business_id": LC, "board_id": eb,
+                                                      "starts_at": "2026-11-17T00:00:00+00:00"}))["meeting"]["id"]
+    nxt = ok(a.post("/church/board/meetings", json={"business_id": LC, "board_id": eb,
+                                                    "starts_at": NEXT_WEEK}))["meeting"]["id"]
+    item = ok(a.post(f"/church/board/meetings/{first}/items", json={"business_id": LC, "title": "Roof bids"}))["item"]
+    ok(a.patch(f"/church/board/items/{item}", json={"business_id": LC, "status": "tabled"}))
+    ok(a.patch(f"/church/board/meetings/{first}", json={"business_id": LC, "status": "in_progress"}))
+    ended = ok(a.patch(f"/church/board/meetings/{first}", json={"business_id": LC, "status": "drafted"}))
+    assert "carried_on" not in ended
+    assert not [i for i in d.t["church_board_items"] if i.get("carried_from") == item]
+    assert ok(a.post(f"/church/board/meetings/{nxt}/carry", json={"business_id": LC}))["carried"] == 1

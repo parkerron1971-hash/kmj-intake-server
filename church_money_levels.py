@@ -115,8 +115,13 @@ def _at(v: Any) -> Optional[datetime]:
 
 
 def _need(path: str) -> List[Dict[str, Any]]:
-    """A read that must answer: a failed one is a 503, never "nobody"."""
-    rows = sb_clients.sb_get_as_service(path)
+    """A read that must answer: a failed one is a 503, never "nobody". One
+    naming step 3's columns (the boards, kind=eq.board) falls back to the
+    old read only when the database says for certain they aren't there
+    (church_meetings.read): a timeout is a 503, never a meeting's people
+    giving the board's yes."""
+    import church_meetings as cmt
+    rows = cmt.read(path)
     if not isinstance(rows, list):
         raise HTTPException(503, UNREAD)
     return rows
@@ -252,9 +257,9 @@ def pastors(me: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _open_boards(me: Dict[str, Any]) -> str:
     """The church's boards that aren't archived, as an id list for in.().
-    Boards only (church_meetings.board_kind: kind=eq.board once step 3's
-    columns are there): a meeting group's people (the huddle, the leaders
-    meeting) never give the board's yes on money."""
+    Boards only (church_meetings.board_kind: kind=eq.board, the old read only
+    when the column is certainly not there): a meeting group's people (the
+    huddle, the leaders meeting) never give the board's yes on money."""
     if "_boards" not in me:
         import church_meetings as cmt
         me["_boards"] = _ids(x.get("id") for x in _need(

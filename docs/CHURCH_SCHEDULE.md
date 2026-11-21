@@ -3148,9 +3148,11 @@ keeping the list in step, Set a meeting for a one-off, the answers and the note'
 board reader of 10.2 taught `kind`, the first four of "What the old code must learn", the rename's
 words, the lint (`test_board_readers_name_kind.py`), the checklist
 (`test_church_board_meeting_groups.py`), `test_church_meetings.py`, and `church_schedule_fake`
-taught the tables (`build(meetings=True)`). Until the file is applied `ready()` says no: every
-`/church/meetings/*` route answers 404, the page is Board & minutes, and every read of the board's
-tables names no new column, exactly as before. 10.12 is what was decided while building it.
+taught the tables (`build(meetings=True)`). Until the file is applied every `/church/meetings/*`
+route answers 404, the page is Board & minutes, and every answer of the board's pages is the one it
+was; the readers that tell a board from a meeting name step 3's columns always and use the old read
+only when the database says for certain they aren't there, so a read that times out is a 503,
+never a meeting counted as a board. 10.12 is what was decided while building it.
 
 ### 10.1 The five calls (the pastor's)
 
@@ -3764,60 +3766,90 @@ From the review of #2001:
 
 ### 10.12 Decided while building S3-2 (#2020)
 
-All decided in the build; none is the pastor's call, and any can be reopened with him.
+All decided in the build (the review of #2020 included); none is the pastor's call, and any can
+be reopened with him.
 
-1. **A reader means a board by `kind=eq.board` whenever the columns are there, whatever the switch
-   says** (`church_meetings.board_kind()`, asked of `ready()` alone). A meeting group made while
-   step 3 was open stays out of the board's yes on money, the leaders map, the Board tab, the
-   board's log and the housing allowance's vote after the switch is closed again.
-2. **Every read names step 3's columns only once `ready()` says the tables are there**, through one
-   helper each (`board_kind`, `group_cols`, `meeting_cols`, `seat_cols`; `church_board`'s
-   `meeting_fields`, `member_fields`, `board_fields`), so before the file every read is the one it
-   was. `GET /church/board/status` always carries `name` and `meetings` (Board & minutes and
-   false while closed).
-3. **The lint accepts `from_list` on a seat read**, beside `kind`, `audience` and `cancelled_at`:
-   a seat is the list's exactly when its group's audience isn't `members` (the database holds it),
-   so a seat read that names it tells a list seat from a board's. Seven reads are pinned, each
-   with why (a meeting's own id or a drafted or approved status, which a meeting called off never
-   has; seats of ids a `kind=eq.board` read gave). `church_map` reads boards only through
-   `church_map.thing()`, which `chief_map` and `church_map_batch` use too.
+1. **A reader that tells a board from a meeting fails closed.** Every read of the board's tables
+   that decides who gives the board's yes on money (`church_money_levels._open_boards`, and
+   `board`, `board_people`, `steps_of` and `approver` over it), the Board tab
+   (`member_portal_board.boards_of`), the leaders map's boards (`church_map.thing("board")`, which
+   Chief's map reads too), the board's log (`decisions_log`), the housing allowance's vote
+   (`housing_allowance._boards_vote`) and who writes a group (`church_board._access`, `_board`,
+   `_boards`, `may_write`, `approve`) always names step 3's columns (`kind=eq.board`, and
+   `from_list`, `audience`, `cancelled_at` where it needs them) and reads through
+   `church_meetings.read`. The old read, without them, is used only when the database says for
+   certain they aren't there (Postgres 42703 or 42P01, PostgREST PGRST204 or PGRST205: before the
+   file). A timeout or a 5xx is a 503 in plain words, never the old read, which would count a
+   meeting as a board; and none of it asks `ready()`, so a probe that can't tell, or a "no" kept
+   for a minute after the file goes in, changes nothing. It holds whatever the switch says: a
+   meeting group made while step 3 was open stays out of all of it after the switch is closed.
+2. **Before the file, every answer is the one it was.** Production names the columns, is told they
+   aren't there, and reads the old way (one refused read more until the file is applied); a test
+   pins the tables as not there (`church_meetings._FORCE = False` in `conftest`), and then nothing
+   names them at all. `test_before_the_file_every_flow_reads_and_answers_as_it_always_did` runs
+   the board's flows both ways and gets the same answers. `ready()` (the routes, Set a meeting,
+   the keeping in step, the name) keeps only a definite answer: a probe that can't tell is asked
+   again on the next call. `GET /church/board/status` always carries `name` and `meetings` (Board
+   & minutes and false while closed).
+3. **The lint checks filters, not just names.** A read of `church_boards` must filter on kind
+   (`board_kind()` or `kind=eq.`); a read of the seats or the meetings must name kind, audience,
+   `from_list` (a seat is the list's exactly when its group's audience isn't `members`) or
+   `cancelled_at`; `church_board_decisions` is scanned too; anything else is pinned with why (21
+   pins: a row by its own id; drafted or approved minutes, which a meeting called off never is;
+   seats of ids a `kind=eq.board` read gave; every group on purpose, read with its kind). Every
+   such read goes through the reader that falls back only on "not there", never
+   `sb_get_as_service` on its own. The callers outside `church_board.py` of `_boards`, `_members`
+   and `groups_of_login` (renamed from `boards_of_login`: it is every group a login sits on) are
+   pinned the same way. `church_map` reads boards only through `church_map.thing()`, which
+   `chief_map` and `church_map_batch` use too.
 4. **A list seat carries the person's office login (`Church.person_login`)**, as 10.2 says, and
    follows it: the keeping in step writes `user_id` again when a person gets an office login or
    loses one. A leader whose login is a Member seat has a list seat with no login, so they read
    and answer the meeting in the member app (S3-5), not in the office app. (If the pastor wants
    them in the office app too, the seat would carry `Church.login_person`'s login instead.)
 5. **When the list is kept in step in S3-2:** on the office meeting page (`GET
-   /church/board/meetings/{id}`), on both answers routes and in Set a meeting, with the roster
-   read fresh; and in the member app's two functions with `roster_kept`. Not on the list of
-   groups (`GET /church/board`). A roster or seat read that fails there is a 503, never a stale
-   list shown as current. The hourly sweep (S3-3) does the rest.
+   /church/board/meetings/{id}`), on both answers routes and in Set a meeting (for every leader,
+   for the office, and for a group for the list named by its id, once the login may set it), with
+   the roster read fresh; and in the member app's two functions with `roster_kept`. Not on the
+   list of groups (`GET /church/board`), nor on any other page: there a seat may lag until a
+   keeper opens the meeting, and S3-3's hourly sweep closes that gap. A roster or seat read that
+   fails is a 503, never a stale list shown as current.
 6. **Set a meeting checks every field before anything is made** (a bad day or length makes no
    group); `name` is the group's name for every leader or the office and the meeting's title for
    `group:<id>`; `repeat` and `space_id` are refused in plain words until S3-3 builds them.
 7. **A check-in is `POST /church/board/boards` with `kind: 'meeting'`**, by the keepers (who set up
    boards today); `PATCH` may turn a group of its own people into a board or back (the keepers'
-   choice, 10.2), never a group for the list (409).
+   choice, 10.2), never a group for the list (409). With step 3 closed for the login, a kind
+   other than `board` is a 409 in plain words ("Meetings aren't switched on here yet."), never a
+   board made in its place.
 8. **Renaming a group for the list, or opening one again, onto a name an open one has is a 409 in
    plain words** ("There's already a meeting called Leaders meeting.", from the 23505), in S3-2
    rather than S3-3, since the board's edit could already rename and reopen.
 9. **A meeting group's minutes:** `send_minutes` sends them to its active seats with "Minutes:" and
    "The minutes, to read" (no "for the board's approval", no quorum line unless the keepers set a
-   count); only the keepers approve them, with one press and no later meeting needed.
-10. **Carrying, for meetings called off:** nothing is carried into one (Carry is a 409 in plain
+   count); only the keepers approve them, with one press and no later meeting needed. **The emailed
+   minutes list who was present, absent and excused, as a board's do**: attendance is a normal part
+   of minutes, so whoever said "I can't" is listed as excused. Their note never goes out.
+10. **The quorum is always the whole dict** (the office page reads every field of it); a group
+    that only meets says `quorum_shown: false` (on the group, the meeting page and a mark) unless
+    the keepers set a count, and the minutes leave the line out. The flag is there only once step
+    3's columns were read.
+11. **Carrying, for meetings called off:** nothing is carried into one (Carry is a 409 in plain
     words); an earlier meeting called off never happened, so whatever its agenda still holds open
     carries on with the tabled items and follow-ups (it may have been carried into it before it
-    was called off); and ending a meeting carries its group's open items into the group's next
-    meeting still to come and not called off, when one is there. A one-off made by hand still
-    carries the open items as it is made, as Board & minutes always has; the sweep (S3-3) never
-    carries.
-11. **The board's vote on a housing allowance** must be a decision whose own row and whose
+    was called off). Where step 3 is open for the church (`church_meetings.on`), ending a meeting
+    carries its group's open items into the group's next meeting still to come and not called
+    off; closed, ending a board's meeting is what it was (the items wait for Carry or the next
+    meeting made). A one-off made by hand still carries the open items as it is made, as Board &
+    minutes always has; the sweep (S3-3) never carries.
+12. **The board's vote on a housing allowance** must be a decision whose own row and whose
     meeting both name a board; anything else is refused in plain words.
-12. **The note's readers** are 10.2's, and "the person who wrote it" is read as both the person the
+13. **The note's readers** are 10.2's, and "the person who wrote it" is read as both the person the
     answer is about (their seat by login or person) and whoever gave it (`by_user_id`). An answer
     for an old time is listed with those who haven't answered, with what they said then and no
-    note.
-13. **"I can't" reads as excused when any meeting ends**, a board's too: an answer is to a
+    note. The answer is written with `redact=True`, so a refused write never logs the note.
+14. **"I can't" reads as excused when any meeting ends**, a board's too: an answer is to a
     meeting, whatever its group.
-14. **The member app's side is built as functions, not routes** (`person_view`, `person_answer`):
+15. **The member app's side is built as functions, not routes** (`person_view`, `person_answer`):
     10.7 gives every member-app route to S3-5 and S3-6, so S3-5 draws the form over them. The
     90-day clearing of a note is S3-6's (10.9), not built here.

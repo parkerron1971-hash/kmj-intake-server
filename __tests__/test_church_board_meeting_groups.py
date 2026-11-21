@@ -39,7 +39,7 @@ LAST_WEEK = "2026-11-10T00:00:00+00:00"
 # A string that isn't a test's name says why that half can't apply.
 CHECKLIST = {
     "_access": ("test_a_list_seat_is_mine_and_listed", "n/a: who a login is, before any meeting"),
-    "boards_of_login": ("test_a_list_seat_is_mine_and_listed", "n/a: seats, not meetings"),
+    "groups_of_login": ("test_a_list_seat_is_mine_and_listed", "n/a: seats, not meetings"),
     "_boards": ("test_groups_carry_kind_and_audience", "n/a: groups, not meetings"),
     "_board": ("test_groups_carry_kind_and_audience", "n/a: groups, not meetings"),
     "may_write": ("test_a_list_seat_is_mine_and_listed", "n/a: groups, not meetings"),
@@ -104,6 +104,10 @@ def call_off(db, mid):
     m.update(cancelled_at=fake.NOW.isoformat(), cancelled_by=c3.church(db, LC)["owner_id"])
 
 
+def seats_of(db, gid):
+    return [s for s in db.t["church_board_members"] if s["board_id"] == gid and s.get("active") is not False]
+
+
 def seat(db, gid, h):
     return next(s for s in db.t["church_board_members"] if s["board_id"] == gid and s["contact_id"] == who(db, h))
 
@@ -126,7 +130,7 @@ def test_a_list_seat_is_mine_and_listed(app, db):
     g = leaders(app)["board"]
     as_(app, LC, "tiara")
     me = cb._access(LC, cb_user(app))
-    assert g["id"] in me["mine"] and g["id"] in me["listed"] and cb.boards_of_login(LC, who(db, "tiara@")) == {g["id"]}
+    assert g["id"] in me["mine"] and g["id"] in me["listed"] and cb.groups_of_login(LC, who(db, "tiara@")) == {g["id"]}
     assert cb.may_write(me, g["id"]) is False, "a seat the list gave reads, never writes"
     as_(app, LC, "naiya")
     keeper = cb._access(LC, cb_user(app))
@@ -189,13 +193,15 @@ def test_page_and_summary(app, db):
 def test_no_quorum_line_for_a_meeting_group(app, db):
     g = leaders(app)
     gid, mid = g["board"]["id"], g["meeting"]["id"]
-    assert g["board"]["quorum"] is None and g["board"]["quorum_words"] == "" and g["quorum"] is None
+    assert g["board"]["quorum_shown"] is False and g["quorum_shown"] is False
+    assert set(g["quorum"]) == {"kind", "count", "needed", "present", "total", "met"} and g["quorum"]["total"] == len(seats_of(db, gid))
     mark = ok(app.put(f"/church/board/meetings/{mid}/attendance",
                       json={"business_id": LC, "member_id": seat(db, gid, "andre")["id"], "status": "present"}))
-    assert mark["quorum"] is None
+    assert mark["quorum_shown"] is False and set(mark["quorum"]) == {"kind", "count", "needed", "present", "total", "met"}
     me = cb._access(LC, cb_user(app))
     assert cb.quorum_of({"kind": "meeting", "quorum_kind": "count", "quorum_count": 3}, 10, 2)["needed"] == 3
-    assert cb.quorum_of(cb._board(me, gid), 10, 2) is None
+    assert cb.has_quorum(cb._board(me, gid)) is False and cb.quorum_of(cb._board(me, gid), 10, 2)["needed"] == 6
+    assert cb.has_quorum({"kind": "meeting", "quorum_kind": "count", "quorum_count": 3}) is True
     assert cb.quorum_of(elder_board(db), 2, 2)["met"] is True
 
 
@@ -336,3 +342,99 @@ def test_add_meeting_on_a_list_group(app, db):
     as_(app, LC, "owner")
     assert ok(app.post("/church/board/meetings", json={"business_id": LC, "board_id": g["id"],
                                                        "starts_at": LATER}))["meeting"]["called_off"] is False
+
+
+# ─── Before the file: the same flows read and answer as they always did ───
+
+def _flow(monkeypatch, force):
+    """Board & minutes end to end on the database before step 3's file:
+    a board and its people, two meetings, an agenda carried, a decision,
+    the end, the minutes sent and approved, the log, and every reader that
+    means a board. `force` False is the tables pinned as not there (the
+    old reads, nothing named); None is production, which names step 3's
+    columns and falls back when the database says they aren't there."""
+    import church_map
+    import church_money_levels as cml
+    import housing_allowance as ha
+    d = fake.build(monkeypatch, meetings=False)
+    monkeypatch.setattr(cmt, "_FORCE", force)
+    monkeypatch.setattr(cmt, "_STATE", {"yes": None, "at": 0.0})
+    a = fake.meetings_client(d)
+    as_(a, LC, "owner")
+    out = {}
+    board = ok(a.post("/church/board/boards", json={"business_id": LC, "name": "Deacons"}))["board"]
+    bid = board["id"]
+    r = a.post("/church/board/boards", json={"business_id": LC, "name": "Huddle", "kind": "meeting"})
+    out["meeting_kind"] = (r.status_code, r.json())
+    r = a.patch(f"/church/board/boards/{bid}", json={"business_id": LC, "kind": "meeting"})
+    out["edit_kind"] = (r.status_code, r.json())
+    seat = ok(a.post(f"/church/board/boards/{bid}/members", json={"business_id": LC, "contact_id": who(d, "marcus")}))
+    ok(a.post(f"/church/board/boards/{bid}/members", json={"business_id": LC, "contact_id": who(d, "tanya")}))
+    out["edit_member"] = ok(a.patch(f"/church/board/members/{seat['member']['id']}",
+                                    json={"business_id": LC, "title": "Chair"}))
+    out["edit_board"] = ok(a.patch(f"/church/board/boards/{bid}", json={"business_id": LC, "name": "Deacons"}))
+    first = ok(a.post("/church/board/meetings", json={"business_id": LC, "board_id": bid, "starts_at": LAST_WEEK}))
+    fid = first["meeting"]["id"]
+    item = ok(a.post(f"/church/board/meetings/{fid}/items", json={"business_id": LC, "title": "Roof bids"}))["item"]
+    ok(a.patch(f"/church/board/items/{item}", json={"business_id": LC, "status": "tabled"}))
+    vote = ok(a.post(f"/church/board/meetings/{fid}/items", json={"business_id": LC, "title": "Housing"}))["item"]
+    out["decided"] = ok(a.post(f"/church/board/items/{vote}/decisions",
+                               json={"business_id": LC, "motion": "Housing allowance", "result": "carried"}))
+    nxt = ok(a.post("/church/board/meetings", json={"business_id": LC, "board_id": bid, "starts_at": NEXT_WEEK}))
+    out["next_made"] = nxt
+    out["carry"] = ok(a.post(f"/church/board/meetings/{nxt['meeting']['id']}/carry", json={"business_id": LC}))
+    ok(a.put(f"/church/board/meetings/{fid}/attendance",
+             json={"business_id": LC, "member_id": seat["member"]["id"], "status": "present"}))
+    out["started"] = ok(a.patch(f"/church/board/meetings/{fid}", json={"business_id": LC, "status": "in_progress"}))
+    out["ended"] = ok(a.patch(f"/church/board/meetings/{fid}", json={"business_id": LC, "status": "drafted"}))
+    out["sent"] = ok(a.post(f"/church/board/meetings/{fid}/send", json={"business_id": LC}))
+    out["approved"] = ok(a.post(f"/church/board/meetings/{fid}/approve",
+                                json={"business_id": LC, "in_meeting_id": nxt["meeting"]["id"]}))
+    out["page"] = ok(a.get(f"/church/board?business_id={LC}"))
+    out["meeting_page"] = ok(a.get(f"/church/board/meetings/{fid}?business_id={LC}"))
+    out["log"] = ok(a.get(f"/church/board/decisions?business_id={LC}"))
+    out["status"] = ok(a.get(f"/church/board/status?business_id={LC}"))
+    decision = next(x["id"] for x in d.t["church_board_decisions"] if x["item_id"] == vote)
+    out["housing"] = ha._check_links(LC, {"board_decision_id": decision})
+    me = {"biz": c3.church(d, LC), "_board_yes": {}}
+    out["money"] = (cml._open_boards(me), cml.board_people(me), cml.board({"biz": c3.church(d, LC), "_board_yes": {}}))
+    out["tab"] = sorted(mpb.boards_of(LC, who(d, "marcus")))
+    out["map"] = church_map._things(LC, "board", [b["id"] for b in d.t["church_boards"]])
+    out["attendance"] = sorted((x["member_id"], x["status"]) for x in d.t["church_board_attendance"])
+    out["mail"] = [{k: v for k, v in m.items() if k != "key"} for m in d.sent]
+    return d, out
+
+
+def _same_shape(x):
+    """Ids made fresh on each run (a carried item, an attendance mark) read
+    as their order of first appearance."""
+    import json
+    import re
+    seen = {}
+    text = json.dumps(x, sort_keys=True, default=str)
+    return re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                  lambda m: seen.setdefault(m.group(0), f"id{len(seen)}"), text)
+
+
+def test_before_the_file_every_flow_reads_and_answers_as_it_always_did(monkeypatch):
+    pinned, old = _flow(monkeypatch, False)
+    assert not [w for w in pinned.refused if "step 3" in w], pinned.refused
+    news = [r for r in pinned.reads if r.lstrip("/").split("?")[0] in fake.BOARD_TABLES
+            and fake.MEET_COLS.search(r.partition("?")[2])]
+    assert news == [], "nothing names a step 3 column"
+    # The old shapes: no kind, no called off, no quorum flag, no next; I can't marks nobody excused.
+    assert "kind" not in old["page"]["boards"][0] and "next" not in old["page"]
+    assert "called_off" not in old["meeting_page"]["meeting"] and "quorum_shown" not in old["meeting_page"]
+    assert "carried_on" not in old["ended"] and old["carry"]["carried"] == 0, "carried as the next was made"
+    assert old["next_made"]["carried"] == 1
+    assert {s for _m, s in old["attendance"]} == {"present", "absent"}
+    assert old["meeting_kind"][0] == 409 and old["edit_kind"][0] == 409
+    assert old["status"]["name"] == "Board & minutes" and old["status"]["meetings"] is False
+    assert old["housing"] is None and old["tab"] and old["money"][0]
+    assert all(m["subject"].startswith("Draft minutes") and "reading" not in m for m in old["mail"])
+    assert [d["motion"] for d in old["log"]["decisions"]] == ["Housing allowance"]
+    # Production before the file names step 3's columns, is told they aren't there, and reads the
+    # old way: every answer the same.
+    probing, new = _flow(monkeypatch, None)
+    assert [w for w in probing.refused if "step 3" in w], "it asked with the columns first"
+    assert _same_shape(new) == _same_shape(old)

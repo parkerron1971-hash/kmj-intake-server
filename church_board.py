@@ -134,6 +134,7 @@ DOCS_MAX, VOTES_MAX, QUORUM_MAX = 20, 1000, 500
 PAST_DAYS = 3 * 366                        # the board page lists three years of meetings
 NOT_CHURCH = "Board & minutes are for churches"
 NOT_CHURCH_MEETINGS = "Meetings & minutes are for churches"     # with step 3 open (docs/CHURCH_SCHEDULE.md 10.4)
+NOT_YET = "Meetings aren't switched on here yet."
 NOT_YOURS = ("The board's pages are for the owner, admins and the board's own members. "
              "An admin can add you to a board.")
 
@@ -224,7 +225,7 @@ def _uuid(v: Any, what: str) -> str:
 def _need(path: str) -> List[Dict[str, Any]]:
     """A read that must answer: a failed one (or the tables before their
     migration) is a 503, never an empty board."""
-    rows = sb_clients.sb_get_as_service(path)
+    rows = cmt.read(path)
     if not isinstance(rows, list):
         raise HTTPException(503, "The board's pages couldn't be read just now. Try again.")
     return rows
@@ -295,10 +296,11 @@ def _seats_of_login(biz_id: str, uid: str) -> List[Dict[str, Any]]:
                  f"&select=board_id{cmt.seat_cols()}&limit=200")
 
 
-def boards_of_login(biz_id: str, uid: str) -> Set[str]:
-    """The boards this login sits on (an active member row with their
-    login), a group for the leaders list included (a seat the list gave
-    reads it). A read that fails is a 503, never "none"."""
+def groups_of_login(biz_id: str, uid: str) -> Set[str]:
+    """The groups this login sits on (an active member row with their
+    login): boards, and meetings too (a seat the leaders list gave reads its
+    group). Never "the boards": a reader that means a board reads
+    kind=eq.board. A read that fails is a 503, never "none"."""
     return {str(r["board_id"]) for r in _seats_of_login(biz_id, uid) if r.get("board_id")}
 
 
@@ -367,8 +369,7 @@ def _writes(me: Dict[str, Any], board_id: Any) -> None:
 
 def _ready(biz_id: str) -> bool:
     """The six tables answer (one migration makes them)."""
-    return isinstance(sb_clients.sb_get_as_service(
-        f"/church_board_decisions?business_id=eq.{_q(biz_id)}&select=id&limit=1"), list)
+    return isinstance(cmt.read(f"/church_board_decisions?business_id=eq.{_q(biz_id)}&select=id&limit=1"), list)
 
 
 # ─── Quorum ───────────────────────────────────────────────────────────
@@ -393,10 +394,16 @@ def has_quorum(b: Dict[str, Any]) -> bool:
     return not cmt.is_meeting(b) or b.get("quorum_kind") == "count"
 
 
-def quorum_of(b: Dict[str, Any], total: int, present: int) -> Optional[Dict[str, Any]]:
-    if not has_quorum(b):
-        return None
+def quorum_of(b: Dict[str, Any], total: int, present: int) -> Dict[str, Any]:
+    """The quorum, always (the page reads every field of it); has_quorum
+    says whether a line is shown for it."""
     return quorum(b.get("quorum_kind") or "majority", b.get("quorum_count"), total, present)
+
+
+def quorum_flag(b: Dict[str, Any]) -> Dict[str, bool]:
+    """quorum_shown, once step 3's columns were read (a group with a kind):
+    false for a group that only meets and has no count set."""
+    return {"quorum_shown": has_quorum(b)} if "kind" in b else {}
 
 
 # ─── Boards and members: reading ──────────────────────────────────────
@@ -463,11 +470,10 @@ def member_view(m: Dict[str, Any]) -> Dict[str, Any]:
 
 def board_view(me: Dict[str, Any], b: Dict[str, Any], members: List[Dict[str, Any]]) -> Dict[str, Any]:
     mine = [member_view(m) for m in members if str(m["board_id"]) == str(b["id"]) and m.get("active") is not False]
-    q = quorum_of(b, len(mine), 0)
     out = {"id": str(b["id"]), "name": b.get("name") or "", "quorum_kind": b.get("quorum_kind") or "majority",
            "quorum_count": b.get("quorum_count"), "archived": bool(b.get("archived")),
-           "quorum_words": quorum_words(b.get("quorum_kind") or "majority", b.get("quorum_count")) if q else "",
-           "quorum": q["needed"] if q else None,
+           "quorum_words": quorum_words(b.get("quorum_kind") or "majority", b.get("quorum_count")),
+           "quorum": quorum_of(b, len(mine), 0)["needed"], **quorum_flag(b),
            "members": mine, "mine": str(b["id"]) in me["mine"], "write": may_write(me, b["id"])}
     if "kind" in b:
         # Step 3: a board governs, a meeting only meets; a group for the
@@ -585,7 +591,7 @@ def page(me: Dict[str, Any]) -> Dict[str, Any]:
         "me": {"manage": me["boss"], "write": any(may_write(me, i) for i in ids), "role": me["role"]},
         "tz": getattr(zone, "key", "UTC"),
     }
-    if cmt.ready():
+    if any("cancelled_at" in m for m in meetings):
         out["next"] = next_of(meetings)
     return out
 
@@ -660,7 +666,7 @@ def meeting_page(me: Dict[str, Any], m: Dict[str, Any]) -> Dict[str, Any]:
         "meeting": {**meeting_summary(m, items, decisions), "approved_in": approved_in},
         "board": board_view(me, board, members),
         "roster": people,
-        "quorum": quorum_of(board, len(people), present),
+        "quorum": quorum_of(board, len(people), present), **quorum_flag(board),
         "items": [_item_view(i, decisions, names, carried) for i in items],
         "waiting": waiting, "approves": approves,
         "can": {"write": write and m.get("status") != "approved", "manage": me["boss"],
@@ -705,8 +711,9 @@ def add_board(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     if not name:
         raise HTTPException(400, "Name the board: Elders, Deacons, Trustees.")
     extra: Dict[str, Any] = {}
-    if body.get("kind") not in (None, "", "board") and _meetings_open(me):
-        # With step 3 closed a kind is ignored, as it always was: a board.
+    if body.get("kind") not in (None, "", "board"):
+        if not _meetings_open(me):
+            raise HTTPException(409, NOT_YET)
         extra["kind"] = _kind(body["kind"])
     have = _need(f"/church_boards?business_id=eq.{_q(biz)}&archived=eq.false&select=id,name,sort{cmt.group_cols()}"
                  "&limit=100")
@@ -733,10 +740,12 @@ def edit_board(me: Dict[str, Any], board_id: str, body: Dict[str, Any]) -> Dict[
         fields.update(_quorum_fields(body, b))
     if "archived" in body:
         fields["archived"] = body.get("archived") is True
-    if "kind" in body and body.get("kind") != b.get("kind", "board") and _meetings_open(me):
+    if "kind" in body and body.get("kind") != b.get("kind", "board"):
         # Making a check-in a board (or a board a meeting) is the keepers'
         # choice; a group for the list is always a meeting. With step 3
-        # closed a kind is ignored, as it always was.
+        # closed, a meeting is never made, nor a board in its place.
+        if not _meetings_open(me):
+            raise HTTPException(409, NOT_YET)
         if cmt.is_list(b):
             raise HTTPException(409, "A meeting for every leader or the office stays a meeting.")
         fields["kind"] = _kind(body["kind"])
@@ -1021,7 +1030,7 @@ def edit_meeting(me: Dict[str, Any], meeting_id: str, body: Dict[str, Any]) -> D
     if not got:
         raise HTTPException(409, "Someone changed this meeting just now. Open it again.")
     out = meeting_page(me, got[0])
-    if fields.get("status") == "drafted" and cmt.ready():
+    if fields.get("status") == "drafted" and cmt.on(me["biz"]):
         out["carried_on"] = carry_on(me, got[0])
     return out
 
@@ -1035,7 +1044,7 @@ def carry_on(me: Dict[str, Any], m: Dict[str, Any]) -> Optional[int]:
     biz = str(me["biz"]["id"])
     try:
         nxt = _need(f"/church_board_meetings?business_id=eq.{_q(biz)}&board_id=eq.{_q(m['board_id'])}"
-                    f"&status=eq.planned&cancelled_at=is.null&starts_at=gt.{_q(m['starts_at'])}"
+                    f"&status=eq.planned{cmt.not_called_off()}&starts_at=gt.{_q(m['starts_at'])}"
                     f"&select={meeting_fields()}&order=starts_at.asc&limit=1")
         return carry_forward(me, nxt[0]) if nxt else 0
     except HTTPException:
@@ -1099,7 +1108,8 @@ def mark(me: Dict[str, Any], meeting_id: str, body: Dict[str, Any]) -> Dict[str,
     board = _board(me, m["board_id"])
     people = roster(m, members, _attendance(biz, str(m["id"])))
     present = sum(1 for p in people if p["status"] == "present")
-    return {"member_id": mid, "status": status, "quorum": quorum_of(board, len(people), present)}
+    return {"member_id": mid, "status": status, "quorum": quorum_of(board, len(people), present),
+            **quorum_flag(board)}
 
 
 # ─── Agenda items ─────────────────────────────────────────────────────
@@ -1419,7 +1429,7 @@ def minutes_text(church: str, mp: Dict[str, Any], zone: ZoneInfo) -> str:
     for s, word in (("present", "Present"), ("absent", "Absent"), ("excused", "Excused")):
         if by[s]:
             lines.append(f"{word}: {', '.join(by[s])}.")
-    if q:
+    if mp.get("quorum_shown", True):
         lines.append(f"Quorum: {q['present']} of {q['total']} present, {q['needed']} needed. "
                      f"{'The quorum was met.' if q['met'] else 'The quorum was not met.'}")
     for a in mp.get("approves") or []:
@@ -1542,7 +1552,7 @@ def approve(me: Dict[str, Any], meeting_id: str, in_meeting_id: Any = None) -> D
     with one press."""
     m = _meeting(me, meeting_id)
     _writes(me, m["board_id"])
-    if cmt.ready() and cmt.is_meeting(_board(me, m["board_id"])):
+    if not cmt.pinned_absent() and cmt.is_meeting(_board(me, m["board_id"])):
         _boss(me, "The owner, an admin, or whoever keeps the meetings approves a meeting's minutes.")
     if m.get("status") == "approved":
         raise HTTPException(409, "These minutes are approved already.")
