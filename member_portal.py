@@ -791,9 +791,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         if mll.here() != "light" or tab == "me":
             moves = mll.dark_tokens(biz, theme) + moves
         # Share (member_lumen_share): the sheet's script, on a page with a
-        # share control only.
+        # share control only; "Send to someone at church" on it while
+        # Messages' own count for the page says this member may chat.
         import member_lumen_share
-        script = script + member_lumen_share.page_js(body)
+        script = script + member_lumen_share.page_js(body, send=member_lumen_share.send_open())
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>

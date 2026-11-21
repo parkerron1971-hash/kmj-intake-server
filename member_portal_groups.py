@@ -1882,11 +1882,15 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                 f'<div class="gc-tray-in">{"".join(tray)}</div></details>' if tray else "")
         if lumen:
             import member_lumen_people as lp
+            # A note carried from the share sheet ("Send to someone at church",
+            # member_portal_messaging.say_of): in the box, unsent.
+            say = mpm.say_of(request)
+            prefill = f' value="{_e(say)}"' if say else ""
             compose = (f'<form class="gc-compose lm-cmp" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
                        f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
                        f'<div class="gc-row">{plus}<label class="mp-sr" for="gc-say">Message the group</label>'
                        f'<span class="lm-cfield"><input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
-                       f'placeholder="Message {_e(g.get("name") or "the group")}">{lp.send_button("gc-send")}</span></div>'
+                       f'placeholder="Message {_e(g.get("name") or "the group")}"{prefill}>{lp.send_button("gc-send")}</span></div>'
                        f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
         else:
             compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'

@@ -313,7 +313,9 @@ def chat_unread(business_id: str, me_id: str, group_ids: List[str],
 async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """What's unread in Messages, while church threads are open here:
     {"notes": church_threads.summary, "chat": n, "total": n, "groups": {group
-    id: its chat's count}}. Kept
+    id: its chat's count}, "chats": whether the church's chats are on and
+    this member may chat (may_chat; the share sheet's "Send to someone at
+    church" asks it, member_lumen_share.send_open)}. Kept
     COUNTS_SECONDS per member per replica (reading something here forgets
     it). None when threads aren't open or a read failed. Never raises."""
     try:
@@ -328,6 +330,7 @@ async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, 
             return None
 
         by_group: Dict[str, int] = {}
+        may = {"chats": False}
 
         async def chats() -> Optional[int]:
             import member_portal_messaging as mpm
@@ -336,12 +339,14 @@ async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, 
             full = await asyncio.to_thread(mpm._me_profile, key[0], me)
             if not may_chat(full):
                 return 0
+            may["chats"] = True
             return await asyncio.to_thread(chat_unread, key[0], key[1], gids, by_group)
         notes, chat = await asyncio.gather(asyncio.to_thread(ct.summary, key[0], key[1], gids), chats())
         if notes is None:
             return None
         out = {"notes": notes, "chat": chat or 0,
-               "total": sum(t["unread"] for t in notes.values()) + (chat or 0), "groups": by_group if chat else {}}
+               "total": sum(t["unread"] for t in notes.values()) + (chat or 0), "groups": by_group if chat else {},
+               "chats": may["chats"]}
         _COUNTS[key] = (time.monotonic(), out)
         return out
     except Exception:
@@ -530,8 +535,15 @@ def _lumen_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
     """Messages in the new look (member_lumen_people): the church's
     conversation pinned first, then every chat newest first (the groups,
     the leaders' room, private chats), each with its unread count; the same
-    rows and the same doors as render_messages, read the same way."""
+    rows and the same doors as render_messages, read the same way.
+
+    With ?say= (the share sheet's "Send to someone at church") it is the
+    picker: the note, then only the conversations a member can write in
+    (the groups' chats while open, the leaders' room, private chats) and
+    Start a chat, each opening with the note in the box (unsent); not the
+    church office, requests or Your teens. Nothing more is read."""
     import member_lumen_people as lp
+    import member_portal_messaging as mpm
     name = (biz.get("name") or "").strip() or "Your church"
     church = got.get(ct.CHURCH) or {"last": None, "unread": 0}
     last = church.get("last")
@@ -540,6 +552,7 @@ def _lumen_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
                           when_short((last or {}).get("created_at"), zone) if last else "", church["unread"],
                           pin="From your church")
     open_chats = gate is None
+    say = mpm.say_of(request) if open_chats else ""
     chat_rows = (chats or []) if open_chats else []
     by_group = {str(r.get("group_id") or "").lower(): r for r in chat_rows if r.get("kind") == "group"}
 
@@ -554,30 +567,38 @@ def _lumen_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, A
         line, at = _group_line(g, chat, note, zone)
         href = (f"/my/groups/{gid}/chat" if open_chats and g.get("chat_on") is not False
                 else f"/my/inbox/group/{gid}")
+        if say:
+            if not href.endswith("/chat"):
+                continue                      # its notes aren't a conversation to write in
+            href = mpm.with_say(href, say)
         unread = int(chat.get("unread") or 0) + int(note.get("unread") or 0)
         items.append((at, gname, lp.inbox_row(href, lp.group_mark(gname), gname, line, when(at), unread)))
     for r in chat_rows:
         at = _at(r.get("at"), zone) if r.get("at") else None
         if r.get("kind") == "leaders":
-            items.append((at, r["title"], lp.inbox_row("/my/groups/leaders", lp.group_mark(r["title"]), r["title"],
+            items.append((at, r["title"], lp.inbox_row(mpm.with_say("/my/groups/leaders", say), lp.group_mark(r["title"]),
+                                                       r["title"],
                                                        str(r.get("preview") or ""), when(at), int(r.get("unread") or 0))))
         elif r.get("kind") == "direct":
-            items.append((at, r["title"], lp.inbox_row(f"/my/messages/{r['id']}", lp.face(r.get("photo") or "", r["title"]),
+            items.append((at, r["title"], lp.inbox_row(mpm.with_say(f"/my/messages/{r['id']}", say),
+                                                       lp.face(r.get("photo") or "", r["title"]),
                                                        r["title"], str(r.get("preview") or ""), when(at),
                                                        int(r.get("unread") or 0))))
-    asked = (requests or []) if open_chats else []
-    return lumen_inbox_page(biz, site, request, me, rows=[pinned] + _newest_first(items), requests=asked,
-                            gate=gate, start=start if open_chats else None, family=family if open_chats else None)
+    asked = (requests or []) if open_chats and not say else []
+    return lumen_inbox_page(biz, site, request, me, rows=([] if say else [pinned]) + _newest_first(items),
+                            requests=asked, gate=gate, start=start if open_chats else None,
+                            family=family if open_chats and not say else None, say=say)
 
 
 def lumen_inbox_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], *, rows: List[str],
                      requests: List[Dict[str, Any]], gate: Optional[str] = None,
                      start: Optional[List[Dict[str, Any]]] = None,
-                     family: Optional[List[Dict[str, Any]]] = None, empty: str = "") -> str:
+                     family: Optional[List[Dict[str, Any]]] = None, empty: str = "", say: str = "") -> str:
     """The inbox page in the new look, from its rows (member_lumen_people
     .inbox_row): the heading, chat requests, the rows (or `empty`), then
     Start a chat and Your teens. member_portal_messaging.render_inbox uses
-    it too."""
+    it too. `say` (member_portal_messaging.say_of): the picker, the note on
+    top and each row opening with it in the box; the rows carry it already."""
     import member_lumen_people as lp
     import member_lumen_ui as lm
     import member_photos as ph
@@ -589,11 +610,22 @@ def lumen_inbox_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, 
         words = GATE_WORDS.get(gate, "Chats aren't open to you right now.")
         go = ('<a class="lm-btn sm" href="/my/messages?join=1">Read the guidelines</a>' if gate == "guidelines" else "")
         body.append(f'<div class="lm-req lm-gate"><p class="lm-reqt">{_e(words)}</p>{go}</div>')
-    body.extend(lp.request_row(r["id"], lp.face(r.get("photo") or "", r["title"]), r["title"]) for r in requests)
-    body.append(lp.inbox(rows) if rows else lp.note(empty))
+    if say:
+        import member_lumen_share as msh
+        body.append(f'<div class="lm-req lm-say"><span class="lm-av" aria-hidden="true">{msh.icon("send", 18)}</span>'
+                    f'<p class="lm-reqt"><b>Send to someone at church</b><br>{_e(say)}</p></div>'
+                    + lp.note("Pick a person or a group. Your note waits in the box until you press Send."))
+        if rows:
+            body.append(lm.section("Your chats") + lp.inbox(rows))
+        elif not start:
+            body.append(lp.note("No one to send it to yet. Join a group, and its chat and its people show here."))
+    else:
+        body.extend(lp.request_row(r["id"], lp.face(r.get("photo") or "", r["title"]), r["title"]) for r in requests)
+        body.append(lp.inbox(rows) if rows else lp.note(empty))
     if start:
         body.append(lm.section("Start a chat") + '<div class="lm-list">' + "".join(
-            lm.row(f"/my/messages/to/{p['id']}", lp.face("", p["name"]), mpm.first_and_initial(p["name"]), p["why"])
+            lm.row(mpm.with_say(f"/my/messages/to/{p['id']}", say), lp.face("", p["name"]),
+                   mpm.first_and_initial(p["name"]), p["why"])
             for p in start) + '</div>')
     if family:
         body.append(lm.section("Your teens") + '<div class="lm-list">' + "".join(

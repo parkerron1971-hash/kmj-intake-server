@@ -365,6 +365,27 @@ def test_the_message_page_opens_the_sheet_and_reads_nothing_more(share, fake, mo
     assert "lm-share" not in off and mls.js_url() not in off
 
 
+def test_the_sheet_offers_send_only_to_a_member_who_may_chat(share, fake, monkeypatch):
+    # "Send to someone at church" (member_lumen_share.send_open): the script tag says so only while Messages'
+    # own count for the page says the church's chats are on and this member may chat. No read more.
+    c = _app(fake, monkeypatch)
+    page, _ = _reads(fake, c, f"/my/sermons/{SERMON}")
+    assert f'<script src="{mls.js_url()}" defer></script>' in page                  # chats off: no row
+    tct._chats_on(fake, tct.ANA)
+    import member_portal_threads as mpt
+    mpt._COUNTS.clear()
+    on, reads_on = _reads(fake, c, f"/my/sermons/{SERMON}")
+    assert on.count(f'<script src="{mls.js_url()}" defer data-send="1"></script>') == 1
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    mpt._COUNTS.clear()
+    off, reads_off = _reads(fake, c, f"/my/sermons/{SERMON}")
+    assert reads_on == reads_off and "data-send" not in off                          # the count reads it anyway
+    monkeypatch.setenv("MEMBER_LUMEN", "on")
+    fake.t["msg_members"] = [m for m in fake.t["msg_members"] if m["contact_id"] != tct.ANA]   # her switch off
+    mpt._COUNTS.clear()
+    assert "data-send" not in _reads(fake, c, f"/my/sermons/{SERMON}")[0]
+
+
 def test_watch_shares_the_latest_message(share, fake, monkeypatch):
     import member_portal_sermons as mps
     c = _app(fake, monkeypatch)
@@ -452,7 +473,12 @@ def test_the_sheet_does_what_the_mock_shows():
     js = mls.JS_TEXT
     for target in ("Your story", "Text a friend", "Copy link", "More apps"):
         assert f"<b>{target}</b>" in mls.SHEET
-    assert "Send to someone at church" not in js                                         # no compose with a picked person
+    # Send to someone at church: drawn hidden, shown only when the page's script tag says the member may chat;
+    # it opens Messages' picker with the title and the public link (capped), never a send.
+    assert "<b>Send to someone at church</b>" in mls.SHEET and "Inside the app, to a member or a group" in mls.SHEET
+    assert 'data-sh="send" hidden' in mls.SHEET
+    assert "getAttribute('data-send')==='1'" in js and "q('[data-sh=send]').hidden=!SEND" in js
+    assert "'/my/messages?say='+encodeURIComponent(" in js and "SAY=300" in js and "fetch('/my/messages" not in js
     assert "'sms:?&body='" in js and "navigator.share" in js and "navigator.canShare" in js
     assert "navigator.clipboard" in js and "'Link copied'" in js and "image/png" in js
     assert 'role=\\"dialog\\"' in js and 'aria-modal=\\"true\\"' in js and 'aria-labelledby=\\"lm-shs-h\\"' in js

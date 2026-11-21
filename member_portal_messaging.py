@@ -552,12 +552,14 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
         # threads are closed here, and no clock: today's inbox reads none).
         import member_lumen_people as lp
         import member_portal_threads as mpt
+        say = say_of(request)        # the share sheet's "Send to someone at church": the picker
 
         def lrow(r):
             av = lp.group_mark(r["title"]) if r["kind"] != "direct" else lp.face(r.get("photo") or "", r["title"])
-            return lp.inbox_row(f"/my/messages/{r['id']}", av, r["title"], r["preview"], "", r["unread"])
-        return mpt.lumen_inbox_page(biz, site, request, me, rows=[lrow(r) for r in rows], requests=requests,
-                                    start=groups_open, family=family,
+            return lp.inbox_row(with_say(f"/my/messages/{r['id']}", say), av, r["title"], r["preview"], "", r["unread"])
+        return mpt.lumen_inbox_page(biz, site, request, me, rows=[lrow(r) for r in rows],
+                                    requests=[] if say else requests, start=groups_open,
+                                    family=None if say else family, say=say,
                                     empty="No chats yet. Open one from a group, or start one with someone below.")
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -784,6 +786,26 @@ if(f)f.addEventListener('mb:sent',function(e){{var x=e.detail||{{}};if(typeof x.
 
 
 # ─── page handlers (GET, through member_portal.serve) ────────────────
+
+
+# A note carried into a conversation's box (the share sheet's "Send to
+# someone at church": the content's title and its public link), at most
+# this long, one line.
+SAY_MAX = 300
+
+
+def say_of(request) -> str:
+    """The `say` a page was opened with, made safe to carry: control
+    characters and runs of space made one space, at most SAY_MAX characters;
+    '' without one. It is only ever written into a box (escaped) for the
+    member to send or not; nothing here sends it."""
+    raw = re.sub(r"[\x00-\x1f\x7f]+", " ", str(request.query_params.get("say") or ""))
+    return " ".join(raw.split())[:SAY_MAX].strip()
+
+
+def with_say(href: str, say: str) -> str:
+    """`href` carrying the note (quoted), or as it was without one."""
+    return f"{href}{'&' if '?' in href else '?'}say={quote(say, safe='')}" if say else href
 
 
 def _me_profile(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
