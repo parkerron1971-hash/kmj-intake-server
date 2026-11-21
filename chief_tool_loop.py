@@ -345,8 +345,12 @@ def remaining_tag_actions(actions):
     # attempt. A prose tag must not retry it or incur a second charge.
     link_operations = {r.get('link_operation') for r in _writes_this_turn.get()
                        if r.get('type') == 'link_wallet_pilot'}
+    # An event saved natively with its teams or flyer (chief_event_volunteers):
+    # the same send as a tag in the reply would save it, and ask, again.
+    import chief_event_volunteers
     return [a for a in actions if not (image_attempted() and a.get("type") == "generate_image")
-            and not (a.get('type') == 'link_wallet_pilot' and a.get('operation', 'status') in link_operations)]
+            and not (a.get('type') == 'link_wallet_pilot' and a.get('operation', 'status') in link_operations)
+            and not chief_event_volunteers.ran_this_turn(a)]
 
 
 def _link_pilot_offered() -> bool:

@@ -6375,12 +6375,15 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
     if module.get("archetype") == "event_roster":
         import chief_event_volunteers as cev
         import chief_roster
+        user = cev.turn_user(action)
         explicit = chief_roster.asks_for_roster(action) and await asyncio.to_thread(
-            cev.roles_explicit, biz["id"], cev.turn_user(action))
+            cev.roles_explicit, biz["id"], user)
+        # With nobody signed in (an unattended run, an outside agent) no tick the model sent is taken.
         data, roster = chief_roster.shape(module, data, roles=action.get("roles"),
-                                          volunteers=action.get("volunteers"), explicit=explicit)
+                                          volunteers=action.get("volunteers"), explicit=explicit,
+                                          take=user is not None)
         await _known_contacts(biz["id"], roster["added"])
-        plan = await cev.before_save(biz, module, action, data, roles=roster["roles"])
+        plan = await cev.before_save(biz, module, action, data, roles=roster["roles"], user=user)
         if plan.get("kind") == "stop":
             return plan["result"]
 
@@ -6531,9 +6534,10 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
         return _fail("update_module_entry", "data must be a non-empty object")
 
     # Read existing entry so we can merge rather than replace.
+    # The entry's room comes with it (its archetype, embedded): no second read.
     rows = await _sb(client, "GET",
         f"/module_entries?id=eq.{entry_id}&business_id=eq.{biz['id']}"
-        f"&select=id,module_id,status,data&limit=1") or []
+        f"&select=id,module_id,status,data,custom_modules(archetype)&limit=1") or []
     if not rows:
         return _fail("update_module_entry", "entry not found")
     existing = rows[0]
@@ -6541,21 +6545,26 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     module = roster = plan = None
     user = cev.turn_user(action)
     # A plain change to an event (its day, its place) is followed on Who
-    # serves when at once, as the office's save is: the room is read for
-    # that only where asking could be open (signed in, switch not off, the
-    # migration in), so every other update reads what it read before.
-    follows = user is not None and await asyncio.to_thread(cev.could_follow)
+    # serves when at once, as the office's save is: only an events room's
+    # entry, signed in, at a church where asking could be open (the switch
+    # not off, the migration in). Every other update reads what it read before.
+    follows = (user is not None and cev.room_of(existing) == "event_roster"
+               and await asyncio.to_thread(cev.could_open, biz))
     if roster_ask or teams_ask or follows:
         # An events room (event_roster): roles keep their ids, people go on
         # their role (chief_roster), so nobody falls off the list.
         module = await _validate_module(client, biz["id"], existing.get("module_id"))
         if (module or {}).get("archetype") == "event_roster":
             explicit = roster_ask and await asyncio.to_thread(cev.roles_explicit, biz["id"], user)
-            merged, roster = chief_roster.shape(module, patch, before=existing.get("data") or {},
+            before = existing.get("data") or {}
+            merged, roster = chief_roster.shape(module, patch, before=before,
                                                 roles=action.get("roles"), volunteers=action.get("volunteers"),
-                                                explicit=explicit)
+                                                explicit=explicit, take=user is not None)
             await _known_contacts(biz["id"], roster["added"])
-            plan = await cev.before_save(biz, module, action, merged, entry=existing, roles=roster["roles"])
+            # A tick that lets more people in (kids off, open on) is shown first, like the teams.
+            loose = cev.loosened(module, before, roster["roles"]) if roster_ask else []
+            plan = await cev.before_save(biz, module, action, merged, entry=existing, roles=roster["roles"],
+                                         loose=loose, other=bool(patch) or roster_ask, user=user)
             if plan.get("kind") == "stop":
                 return plan["result"]
         elif not patch:

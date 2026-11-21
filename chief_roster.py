@@ -36,7 +36,9 @@ Chief MAKES writes both outright, false unless asked (`explicit`). A role it
 names again takes a tick only when one was said; a role it doesn't touch
 keeps its keys exactly. Where asking is closed nothing changes: no tick is
 written, and none the model sends is taken (the office has no tick there to
-undo one).
+undo one). With nobody signed in (`take` false) no tick is taken either. A
+tick that lets more people in on a role already there (kids off, open on) is
+shown first and saved only on the person's yes (chief_event_volunteers).
 """
 from __future__ import annotations
 
@@ -245,7 +247,7 @@ def asks_for_roster(action: Dict[str, Any]) -> bool:
 
 def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[str, Any]] = None,
           roles: Any = None, volunteers: Any = None,
-          explicit: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+          explicit: bool = False, take: bool = True) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """The data to save for an occasion in an event_roster room, and what
     changed: {"roles": the occasion's roles now, "added": the signups added}.
 
@@ -255,7 +257,9 @@ def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[s
     "volunteers") or inside it ("_roles", or "roles"/"volunteers" when the
     room has no field of that name). `explicit`: asking is open at this
     church (chief_event_volunteers.roles_explicit), so a role made here
-    writes its two ticks (see the module's note)."""
+    writes its two ticks (see the module's note). `take`: someone signed in
+    is asking; without them (an unattended run, an outside agent) no tick
+    the model sent is taken, and every role keeps its own."""
     p = params(module)
     fields = _fields(module)
     patch = dict(patch or {})
@@ -275,8 +279,9 @@ def shape(module: Dict[str, Any], patch: Dict[str, Any], before: Optional[Dict[s
         start = clean_roles(own) if isinstance(own, list) else p["roles"]
     if not asked and not people:
         return out, {"roles": start, "added": []}
-    if not explicit:
-        # Asking closed here: a tick the model sent is never taken (as today).
+    if not explicit or not take:
+        # Asking closed here, or nobody signed in: a tick the model sent is
+        # never taken (as today), and every role keeps its own.
         asked = [{k: v for k, v in a.items() if k not in KEPT_FLAGS} for a in asked]
     now = merge_roles(start, asked, explicit)
     raw = out.get(p["signups_field"])
