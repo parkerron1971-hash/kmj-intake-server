@@ -773,6 +773,12 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
                             show=str(request.query_params.get("show") or "all"), preview=preview, tr=tr,
                             flash=mpc._flash(request)), (503 if devs is None else 200)
     key = parts[0]
+    import member_lumen
+    import topic_plans as tp
+    if len(parts) == 1 and (key in rp.PLANS or tp.is_topic(key)) and member_lumen.page():
+        # The new look's plan page (member_lumen_plans), started or not.
+        import member_lumen_plans as mlp
+        return await mlp.plan_page(request, biz, site, me, key, tr=tr, preview=preview)
     if key in rp.PLANS and len(parts) == 1:
         mine = await asyncio.to_thread(_or_empty, starts, preview, bid, cid)
         plan = own_plan(key, (mine or {}).get(f"reading:{key}"))
@@ -912,12 +918,15 @@ async def start_plan(request: Request):
         qs = "&".join(f"{k}={v}" for k, v in q.items())
         return RedirectResponse(to + (f"?{qs}" if qs else ""), status_code=303, headers=_SECURE_HEADERS)
     back = "/my/bible/plans" + (f"/{plan[11:]}" if plan.startswith("devotional:") and _UUID.fullmatch(plan[11:]) else "")
+    import topic_plans as tp
+    if plan.startswith("reading:") and tp.is_topic(plan[8:]):
+        back = f"/my/bible/plans/{plan[8:]}"        # a topic plan's page (the new look's only)
     if unavailable:
         return go(back, err="preview" if unavailable == "preview" else "error")
     if not me:
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     bid = church["business"]["id"]
-    if plan.startswith("reading:") and plan[8:] in rp.PLANS:
+    if plan.startswith("reading:") and (plan[8:] in rp.PLANS or tp.is_topic(plan[8:])):
         to = f"/my/bible/plans/{plan[8:]}"
     elif plan.startswith("devotional:") and _UUID.fullmatch(plan[11:]):
         dev, ok = await asyncio.to_thread(dv.one, bid, plan[11:])
@@ -932,7 +941,7 @@ async def start_plan(request: Request):
         return go(back, err="slow")
     if not await asyncio.to_thread(start, bid, str(me["id"]), plan, date.today()):
         return go(back, err="error")
-    return go(to)
+    return _wrote(go(to), bid, me["id"])
 
 
 @router.post("/my/bible/plans/stop", include_in_schema=False)
@@ -941,14 +950,18 @@ async def stop_plan(request: Request):
     import asyncio
     import member_portal_church as mpc
     from member_portal import _SECURE_HEADERS
+    import topic_plans as tp
     church, me, unavailable = await mpc._signed_in(request)
     form = await request.form()
     plan = str(form.get("plan") or "")
-    if unavailable or not me or not (plan.startswith("reading:") and plan[8:] in rp.PLANS):
-        return RedirectResponse("/my/bible/plans?show=reading", status_code=303, headers=_SECURE_HEADERS)
+    # The new look's plan page sends back=tab: back to the Bible tab's Plans.
+    done_to = "/my/bible?tab=plans" if str(form.get("back") or "") == "tab" else "/my/bible/plans?show=reading"
+    if unavailable or not me or not (plan.startswith("reading:") and (plan[8:] in rp.PLANS or tp.is_topic(plan[8:]))):
+        return RedirectResponse(done_to, status_code=303, headers=_SECURE_HEADERS)
     ok = await asyncio.to_thread(stop, church["business"]["id"], str(me["id"]), plan)
-    return RedirectResponse("/my/bible/plans?show=reading" if ok else f"/my/bible/plans/{plan[8:]}?err=error",
+    resp = RedirectResponse(done_to if ok else f"/my/bible/plans/{plan[8:]}?err=error",
                             status_code=303, headers=_SECURE_HEADERS)
+    return _wrote(resp, church["business"]["id"], me["id"]) if ok else resp
 
 
 def clean_change(body: Dict[str, Any], dev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1024,5 +1037,15 @@ async def save_my_day(request: Request):
     days = await asyncio.to_thread(progress, bid, cid, dev_id) or {}
     done = {d for d, r in days.items() if r.get("done_at")}
     upto = dv.open_upto(dv.run_start(dev, started), count)
-    return JSONResponse({"ok": True, "done": bool(row.get("done_at")), "checks": row.get("checks") or [],
-                         "streak": dv.streak(done, upto)}, headers=h)
+    return _wrote(JSONResponse({"ok": True, "done": bool(row.get("done_at")), "checks": row.get("checks") or [],
+                                "streak": dv.streak(done, upto)}, headers=h), bid, cid)
+
+
+def _wrote(resp, business_id, contact_id):
+    """A member's plans changed: the new look's Plans (member_lumen_plans)
+    forgets what it kept for them, and while the new look can be on, gives
+    their phone a new plans version so every server copy reads afresh."""
+    import member_lumen
+    import member_lumen_plans as mlp
+    mlp.forget(business_id, contact_id)
+    return mlp.stamp(resp) if member_lumen.mode() != "off" else resp

@@ -155,7 +155,10 @@ def test_a_failed_devotionals_read_leaves_the_rest(bible, fake, monkeypatch):  #
     devo = c.get("/my/bible?tab=devotional").text
     assert "devotionals couldn't load just now" in devo and 'class="lm-vod"' in devo   # the verse still shows
     plans = c.get("/my/bible?tab=plans").text
-    assert "Today: Psalms 54–58; Proverbs 12" in plans and 'href="/my/reading"' in plans
+    # no devotional to continue: her own plan is, and the church's still opens from its cover
+    assert "Continue · Day 5 of 30" in plans and "Today: Matthew 13–15" in plans
+    assert 'href="/my/reading"' in plans and "With your church · day 12" in plans
+    assert "From Grace Fellowship" not in plans                                        # left out, not "nothing here"
 
 
 # ─── the reader ──────────────────────────────────────────────────────
@@ -339,8 +342,9 @@ def test_a_reading_plan_is_under_the_bible(bible, fake, monkeypatch):  # noqa: F
     assert "in a <em>month</em>" in html and "of 31 days read" in html
     assert html.count('class="lm-circle"') >= 7 and 'action="/my/reading"' in html
     assert "to catch up" in html
+    # a plan of her own is a plan's page (member_lumen_plans), back to the Bible tab's Plans
     own = _client(fake, monkeypatch).get("/my/bible/plans/gospels-30").text
-    assert 'href="/my/bible/plans"' in own and "Stop this plan" in own and 'name="plan" value="gospels-30"' in own
+    assert 'href="/my/bible?tab=plans"' in own and "Stop this plan" in own and 'name="plan" value="gospels-30"' in own
 
 
 def test_search_books_and_notes(bible, fake, monkeypatch):  # noqa: F811

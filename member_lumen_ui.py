@@ -509,7 +509,7 @@ def templates() -> Tuple[Template, ...]:
     member_lumen_moments.CSS: the moments in Prayer, Give and Messages; member_lumen_feed.CSS: Home's feed and
     the comments under each post; member_lumen_home.CSS: the top of Home, Look 5.1;
     member_lumen_devotional.CSS: the devotional on the Bible tab and its
-    day; member_pastor.CSS: Meet the pastor; member_lumen_connect.CSS: Connect and a group's page, Look 5.1;
+    day; member_lumen_plans.CSS: the Bible tab's Plans and a plan's page; member_pastor.CSS: Meet the pastor; member_lumen_connect.CSS: Connect and a group's page, Look 5.1;
     member_lumen_watch.CSS: Watch, a series and a message, Look 5.1; member_lumen_stories.CSS: Home's moments
     and their viewer; member_moments.CSS: a leader's own moment and its composer; member_lumen_share.CSS: the share sheet; member_mini.CSS: the mini player), and
     last the type (member_lumen_fonts: the faces and the church's pairing, which set every block's fonts).
@@ -525,6 +525,7 @@ def templates() -> Tuple[Template, ...]:
     import member_lumen_moments
     import member_lumen_motion
     import member_lumen_people
+    import member_lumen_plans
     import member_lumen_share
     import member_lumen_stories
     import member_lumen_watch
@@ -533,7 +534,7 @@ def templates() -> Tuple[Template, ...]:
     import member_pastor
     return (_CSS, Template(member_lumen_bible.CSS), Template(member_lumen_classes.CSS), member_lumen_give.CSS,
             member_lumen_people.CSS_PEOPLE, member_lumen_motion.CSS, member_lumen_moments.CSS, member_lumen_feed.CSS,
-            member_lumen_home.CSS, Template(member_lumen_devotional.CSS), member_pastor.CSS, member_lumen_connect.CSS,
+            member_lumen_home.CSS, Template(member_lumen_devotional.CSS), Template(member_lumen_plans.CSS), member_pastor.CSS, member_lumen_connect.CSS,
             member_lumen_watch.CSS, member_lumen_stories.CSS, Template(member_moments.CSS), member_lumen_share.CSS,
             member_mini.CSS,
             member_lumen_fonts.template())
