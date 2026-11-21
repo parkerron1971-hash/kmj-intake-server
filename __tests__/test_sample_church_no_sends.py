@@ -102,6 +102,8 @@ TICKS = {
     "church_team_rollup": "church_team_week:rollup_tick",
     "church_assignments_sweep": "church_assignments:sweep_tick",
     "church_handovers_sweep": "church_handovers:sweep_tick",
+    # The office's missing tells: open_for() asks sample_church.skip() for every church.
+    "church_tells_sweep": "church_tells:sweep_tick",
     # The leaders schedule's notices: its churches go through drop_samples, and each notice asks skip() first.
     "church_schedule_sweep": "church_schedule_tell:sweep_tick",
     "church_mail_alert_sweep": "church_mail_alerts:sweep",
