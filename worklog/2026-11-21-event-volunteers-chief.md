@@ -24,6 +24,7 @@ decisions:
   - "make: the only server path is the Light Table (owner-only, STUDIO_LIGHT_TABLE, class C and paid, drawn in the background, attached only on Use as the flyer); Chief never starts it from a save and hands over the office's way"
   - "event_volunteers (how full is my event) is Chief's alone (needs the login, like serving_week), gated like asking, the picture's own name rules; notes fenced and tainting"
   - "The availability line rides the turn's tail beside the leaders schedule's (owner mode opens it by login; a Viewer's line differs); the universal and per-business segments are unchanged"
+  - "Second review: closed, the read's names follow the office picture's own gate (_login), or, where it has none, the login's own token; a send repeated after its save is already saved (never armed again, a day, a new event only while it's still there); a repeat is matched by its event and its own digest and logs no second undo; the setup receipt says what's true where asking is closed; a plain change pays for the follow only where the church itself follows (_follows)"
 related: [2026-11-21-event-volunteers.md, 2026-11-18-church-schedule.md]
 ---
 Before building I read both repos' work logs. The backend's
@@ -35,7 +36,7 @@ what making a flyer costs. The only open PR on these files, #1465 (booking
 calendar copies), doesn't touch the event code.
 
 New: `chief_event_volunteers.py`, and its tests in
-`__tests__/test_chief_event_volunteers.py` (74 tests). The writes in the tests go through the real
+`__tests__/test_chief_event_volunteers.py` (88 tests). The writes in the tests go through the real
 doors: `_execute_actions` for a tag or an outside agent, and `chief_tool_loop.execute_tool_use` for a
 native call, then the reply's tags.
 
@@ -52,6 +53,6 @@ Changed:
 - `__tests__/test_tool_loop.py`: the Chief-only reads' review list.
 
 Each rule was broken once on purpose, and its test went red. The first build had 20 sabotages;
-after review there are 27, covering every review fix and the standing rules, all listed in the
-PR. The decisions beyond the spec are in
+after the first review there were 27, and after the second 35, covering every review fix and the
+standing rules, all listed in the PR. The decisions beyond the spec are in
 `docs/EVENT_VOLUNTEERS.md` section 11, S5.

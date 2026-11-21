@@ -883,6 +883,12 @@ in the leaders schedule's look:
   minutes old. The consume is one write (shown to used), so two sends or two
   replicas can't both save one look. Anything else (another plan, another
   login, too old, already saved) shows the look again.
+- A send repeated after its save is "already saved", with the event's name
+  and day. It's never shown or armed again, so a yes to it saves nothing.
+  That holds for SAVED_HOURS (24 hours) after the save, and, for a new event,
+  only while an event of that name is still in the room: a plan saved and
+  then taken away may be shown and saved again. A different plan always gets
+  its own look.
 - A second send in the turn that showed it doesn't count: they haven't heard
   it yet.
 - A confirmed send on a tainted turn is held, without using up the look,
@@ -894,10 +900,12 @@ holds only the reply's cleaned prose. A token in an action's result never
 reaches the next turn unless it's put on the screen. A server-side claim
 needs no token, is replica-safe, and needs no migration.
 
-**Once a turn.** A save that went ahead is kept on the turn's context. The
-same event sent again in the turn gets the first answer, and nothing is
-filed twice. The same send as a tag in the reply, after the native call
-already ran, is dropped (`chief_tool_loop.remaining_tag_actions`).
+**Once a turn.** A save that went ahead is kept on the turn's context, by
+its event and its own digest. The very same send again in the turn gets the
+first answer, marked so the door logs no second undo, and nothing is filed
+twice. A different change to the same event in the turn (the teams, then a
+flyer) goes ahead on its own. The same send as a tag in the reply, after the
+native call already ran, is dropped (`chief_tool_loop.remaining_tag_actions`).
 
 **What stops an ask is said before saving, and nothing is saved.** That
 covers:
@@ -980,8 +988,9 @@ over the office's way instead:
 **The events-room setup.** With builds on, `chief_build_runtime.route_actions`
 folds a reply that makes the events room and the event into one background
 setup. That setup runs with nobody signed in, so the event's teams and flyer
-can't go with it. A receipt says so ("the serving teams weren't asked ...
-once it's saved, ask again") instead of dropping them without a word.
+can't go with it. A receipt says so instead of dropping them without a word.
+Where asking is open it says "once it's saved, ask again"; where it isn't, it
+says asking the serving teams (or putting a flyer on) isn't on here yet.
 
 **How full is my event** is `event_volunteers`, a read that is Chief's alone
 (`chief_only`, sensitive). It needs the signed-in login, so it's off the
@@ -993,7 +1002,13 @@ outside agent and KAI surfaces, like `serving_week`.
   the picture gives them.
 - Elsewhere (closed, not ready, not a church) it answers from the event's
   own roles and sign-ups, as its room shows them, with no word of the
-  serving teams.
+  serving teams. Who may read the names is decided before anything is read.
+  Where the office's own picture has a gate (`_login`: an office login of a
+  church whose teams have owners, with the migration in), that gate decides,
+  switch or no switch; a login it refuses hears its refusal. Where it has no
+  gate (before the migration, Who serves when off, not such a church), the
+  rooms are read with the login's own token, as `list_module_entries` reads
+  them, so the database's rules decide. Never names read as the server.
 - Someone else's words raise the turn's taint on the turn's own context.
   That covers the ask's note, the answer's note, and the names on the
   event's own roles, which members and the public type. It also covers
@@ -1016,10 +1031,14 @@ cache refreshes once at deploy.
 **A plain change to an event is followed at once,** as the office's save is.
 An `update_module_entry` with no roles, teams or flyer calls `changed` after
 the save. The entry is read with its room's archetype embedded
-(`custom_modules(archetype)`), so it's still one read. The room itself is
-read only for an events room's entry, signed in, at a church where asking
-could be open (the switch not off, the migration in). Every other update
-reads exactly what it read before, and answers as before.
+(`custom_modules(archetype)`), so it's still one read. The room, the gate
+and the events page are read only for an events room's entry, signed in, at
+a church the follow itself opens for (`_follows`: the switch open for the
+church, not just for a login, event dates open there, never a sample church;
+the owner mode's lookup is kept ten minutes). In owner mode every other
+church, even with the platform owner's own login there, pays nothing. A new
+event's follow has the same gate. Every other update reads exactly what it
+read before, and answers as before.
 
 **The registry.** `create_module_entry` and `update_module_entry` stay class
 A. A waiting ask is taken back on the event's page, one that went straight on

@@ -13872,6 +13872,10 @@ async def _record_undoable(client, biz, atype: str, action: Dict, result: Dict) 
         return
     if _action_failed(result):
         return
+    if isinstance(result, dict) and result.get("_repeat"):
+        # The same send again in one turn, answered with its first result
+        # (chief_event_volunteers): one change, one undo.
+        return
     # No inverse buildable for THIS instance (a missing id, usually) — then
     # it is not undoable in practice, whatever the verb allows in principle.
     if action_inverse.build_inverse(atype, action, result) is None:

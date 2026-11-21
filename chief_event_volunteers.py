@@ -41,8 +41,10 @@ ledger (member_push_sends, kind chief_event_look, ref_id the login and a
 sha256 of the exact params and what was shown; server-only, every replica
 reads it, no migration). Sent again with "confirmed" once they say yes, it
 saves only when it consumes that claim (unused, this login, the same params,
-under half an hour old; one save a look). A second send in the turn whose
-first one showed it doesn't count: they haven't heard it yet. A token the
+under half an hour old; one save a look). The same send after its save
+is "already saved" (for a day, and for a new event while it's still in its
+room), never shown or armed again. A second send in the turn whose first
+one showed it doesn't count: they haven't heard it yet. A token the
 model carried could not do this: the history the app sends back is the
 reply's cleaned prose, so a token in a result never reaches the next turn
 unless it is put on the screen. Anything that would stop the ask (an unknown
@@ -51,9 +53,11 @@ before anything is saved. An ask already there, or the event already on Who
 serves when, never blocks the rest of a change: the teams are left out and
 the words say where their numbers change.
 
-ONCE A TURN. A save that went ahead is kept on the turn's context: the same
-event sent again in the turn gets the first answer, and its tag after the
-same native call is dropped (chief_tool_loop.remaining_tag_actions).
+ONCE A TURN. A save that went ahead is kept on the turn's context, by its
+event and its own digest: the very same send again in the turn gets the
+first answer (no second undo is logged), a different change to the same
+event goes ahead, and the tag after the same native call is dropped
+(chief_tool_loop.remaining_tag_actions).
 
 THE SWITCH. Only where asking is open for the church and this login
 (event_volunteers.enabled: the migration in, the switch open, a church whose
@@ -63,7 +67,10 @@ plainly why. With nobody signed in (an unattended run, an outside agent) no
 tick the model sent is taken. How to use any of it rides the turn's tail only
 where it is open (turn_line), never a cached segment: the switch's owner mode
 opens it by login. Elsewhere event_volunteers answers from the event's own
-roles and sign-ups, with no word of the serving teams.
+roles and sign-ups, with no word of the serving teams, and only to whom the
+office's own picture would show them (its gate, _login), or, where it has no
+gate, as the rooms read with the login's own token: never names read as the
+server.
 
 A FAILURE AFTER THE SAVE never takes the event back: the result says the
 event is saved and, in the server's own words, what didn't go.
@@ -99,6 +106,7 @@ MAKE_NOT_OWNER = ("A flyer is made in the Studio by the church's owner. You can 
                   "gallery, on the event's Volunteers and flyer in {room}.")
 AFTER_SETUP = ("The event is being set up in the background, so {what}. Once it's saved, ask again and I'll show "
                "what saving does first.")
+CLOSED_SETUP = "The event is being set up in the background. {doing} {is_} on here yet, so {what}."
 AGAIN = 'Once they say yes, send the same again with "confirmed":true.'
 MAX_TEAMS = 60
 RESULT_MAX = 6000
@@ -109,6 +117,7 @@ VERBS = ("create_module_entry", "update_module_entry")
 # The look's claim, in the member notes' own ledger (event_volunteers.LEDGER).
 LOOK_KIND = "chief_event_look"
 LOOK_MINUTES = 30
+SAVED_HOURS = 24            # the very same plan saved this recently is "already saved", never armed again
 SHOWN, USED = "shown", "used"
 
 # What a first send showed THIS TURN (the event it would save): its second
@@ -245,14 +254,22 @@ def could_follow() -> bool:
 
 
 def could_open(business: Dict[str, Any]) -> bool:
-    """could_follow, and the business a church (from its own row, no read).
-    Only then is a plain change to an events room's entry followed."""
+    """Whether an events room's entry here is followed at all: could_follow,
+    a church (from its own row), and the follow's own gate for the church
+    itself (event_volunteers._follows: the switch open for the church, not
+    for a login, event dates open there, never a sample church; the owner
+    mode's lookup is kept ten minutes). Only then does a plain change pay for
+    the room, the gate and the follow."""
     if not could_follow():
         return False
-    if not (business or {}).get("type"):
-        return True                     # a row read without its type: the follow's own gate decides
-    import church_follow_up
-    return church_follow_up.is_church(business)
+    if (business or {}).get("type"):
+        import church_follow_up
+        if not church_follow_up.is_church(business):
+            return False
+    try:
+        return bool((business or {}).get("id")) and _ev()._follows(business)
+    except Exception:  # noqa: BLE001 — couldn't tell is no follow; the sweep follows what's missed
+        return False
 
 
 def room_of(entry: Dict[str, Any]) -> str:
@@ -461,32 +478,83 @@ def _ref(uid: str, digest: str) -> str:
     return f"look:{uid}:{digest[:56]}"
 
 
-def _show(biz_id: str, uid: str, digest: str) -> None:
-    """Claim what was shown: (re)written as shown, its time now. A write
+def _claim_path(biz_id: str, uid: str, digest: str) -> str:
+    ev = _ev()
+    return (f"/member_push_sends?business_id=eq.{ev._q(biz_id)}&kind=eq.{LOOK_KIND}"
+            f"&ref_id=eq.{ev._q(_ref(uid, digest))}")
+
+
+def _saved_lately(row: Optional[Dict[str, Any]]) -> bool:
+    """A claim used (the plan saved) under SAVED_HOURS ago."""
+    ev = _ev()
+    at = ev._at((row or {}).get("created_at"))
+    return bool(row) and row.get("title") == USED and at is not None and at > ev._now() - timedelta(hours=SAVED_HOURS)
+
+
+def _claim_row(biz_id: str, uid: str, digest: str) -> Optional[Dict[str, Any]]:
+    """This login's claim for this plan, or None (none, or it couldn't be read)."""
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(_claim_path(biz_id, uid, digest) + "&select=id,title,created_at&limit=1")
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _still_there(biz_id: str, module: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """Whether the new event a used claim saved is still in its room (by
+    its name): a plan saved and then taken away may be saved again. A read
+    that fails says it is, so nothing is ever filed twice."""
+    import chief_roster
+    ev = _ev()
+    tf = chief_roster.params(module)["title_field"]
+    want = _key(data.get(tf) or data.get("title"))
+    try:
+        rows = ev._read(f"/module_entries?business_id=eq.{ev._q(biz_id)}&module_id=eq.{ev._q(module.get('id'))}"
+                        "&status=eq.active&select=id,data&order=created_at.desc&limit=200")
+    except HTTPException:
+        return True
+    return any(_key((r.get("data") or {}).get(tf)) == want for r in rows)
+
+
+def _show(biz_id: str, uid: str, digest: str, still=None) -> str:
+    """Claim what was shown: "shown" (written, or a claim still waiting or
+    long since used made shown again, its time now), or "saved" when the
+    very same plan was saved under SAVED_HOURS ago: that is never armed
+    again, so a send repeated after its save can't save it twice. A write
     that fails is said in the log; the confirm then shows the look again."""
     import sb_clients
     ev = _ev()
-    got = sb_clients.sb_post_as_service(ev.LEDGER, {
-        "business_id": biz_id, "kind": LOOK_KIND, "ref_id": _ref(uid, digest), "title": SHOWN, "body": None,
-        "url": None, "sent_by": uid, "recipients": 0, "created_at": ev._iso(ev._now())},
-        prefer="resolution=merge-duplicates,return=representation")
+    row = _claim_row(biz_id, uid, digest)
+    if _saved_lately(row) and (still is None or still()):
+        return "saved"
+    now = ev._iso(ev._now())
+    if row:
+        got = sb_clients.sb_patch_as_service(_claim_path(biz_id, uid, digest) + f"&id=eq.{ev._q(row['id'])}",
+                                             {"title": SHOWN, "created_at": now})
+    else:
+        # A row that lands meanwhile (another replica) is left as it is: never armed again from here.
+        got = sb_clients.sb_post_as_service(ev.LEDGER, {
+            "business_id": biz_id, "kind": LOOK_KIND, "ref_id": _ref(uid, digest), "title": SHOWN, "body": None,
+            "url": None, "sent_by": uid, "recipients": 0, "created_at": now},
+            prefer="resolution=ignore-duplicates,return=representation")
     if not isinstance(got, list):
         print(f"[chief_event_volunteers] {biz_id[:8]}: a shown plan wasn't claimed", flush=True)
+    return "shown"
 
 
-def _consume(biz_id: str, uid: str, digest: str) -> Optional[bool]:
+def _consume(biz_id: str, uid: str, digest: str) -> Optional[str]:
     """Whether this login was shown exactly this plan in the last half hour
-    and it hasn't been saved since: one write that marks it used, so two
-    sends (or two replicas) can't both save it. None: couldn't be read."""
+    and it hasn't been saved since: "took" (one write marks it used, so two
+    sends or two replicas can't both save it), "unshown" (never shown, too
+    long ago, or already saved: _show tells those apart), or None (couldn't
+    be read)."""
     import sb_clients
     ev = _ev()
     since = ev._iso(ev._now() - timedelta(minutes=LOOK_MINUTES))
     got = sb_clients.sb_patch_as_service(
-        f"/member_push_sends?business_id=eq.{ev._q(biz_id)}&kind=eq.{LOOK_KIND}&ref_id=eq.{ev._q(_ref(uid, digest))}"
-        f"&title=eq.{SHOWN}&created_at=gte.{ev._q(since)}&select=id", {"title": USED})
+        _claim_path(biz_id, uid, digest) + f"&title=eq.{SHOWN}&created_at=gte.{ev._q(since)}&select=id",
+        {"title": USED, "created_at": ev._iso(ev._now())})
     if not isinstance(got, list):
         return None
-    return bool(got)
+    return "took" if got else "unshown"
 
 
 # ─── Before the save: the gate, the look, and what stops it ───────────
@@ -574,7 +642,8 @@ def _look(biz: Dict[str, Any], module: Dict[str, Any], action: Dict[str, Any], d
     atype = "update_module_entry" if entry else "create_module_entry"
     ev, sp = _ev(), _sp()
     if not asks(action) and not loose:
-        return {"kind": "none", "user": user, "follow": bool(user) and open_here(biz["id"], user)}
+        return {"kind": "none", "user": user,
+                "follow": bool(user) and could_open(biz) and open_here(biz["id"], user)}
     flyer, flyer_problem = _flyer_said(action.get("flyer"))
     wants_teams = action.get("teams") not in (None, "", [], {})
     without = ("without asking them" + (" or a flyer" if action.get("flyer") else "") if wants_teams
@@ -683,11 +752,17 @@ def _look(biz: Dict[str, Any], module: Dict[str, Any], action: Dict[str, Any], d
         f"NOT SAVED YET, shown first: {look} Read this to them in these words and ask if it's right. {AGAIN} "
         "Not in this turn: they haven't heard it yet. Don't say it's saved or that anyone was asked."),
         nav, look=look)}
+    already = {"kind": "stop", "result": _stop(atype, (
+        f"{ev.The(title)} on {_when(ent)} is already saved just like this, so nothing was saved again."), (
+        f"ALREADY SAVED: {ev.The(title)} on {_when(ent)} was saved just like this already. Say so in these words; "
+        "nothing new was saved or asked. Don't send it again."), nav)}
+    # A new event's plan saved and then taken away (the event is gone) may
+    # be shown and saved again; an event already there is its own record.
+    still = None if eid else (lambda: _still_there(bid, module, data))
     if not action.get("confirmed") or target in looked:
         # A second send in the turn whose first one showed this doesn't
         # count: they haven't heard it yet.
-        _show(bid, str(user.id), digest)
-        return shown
+        return already if _show(bid, str(user.id), digest, still) == "saved" else shown
     if tainted:
         return {"kind": "stop", "result": _stop(atype, (
             "Before I save this, say it once more: I read other people's words this turn, so I wait for you. "
@@ -700,11 +775,11 @@ def _look(biz: Dict[str, Any], module: Dict[str, Any], action: Dict[str, Any], d
         return {"kind": "stop", "result": _stop(atype, "Nothing saved yet. That couldn't be checked just now. "
                                                        "Try again in a minute.", (
             "NOT SAVED: whether this was shown to them couldn't be read just now. Say so plainly."), nav)}
-    if not took:
+    if took != "took":
         # Not what they were shown (another plan, another login, too long
-        # ago, or already saved): shown now, and saved only on their yes.
-        _show(bid, str(user.id), digest)
-        return shown
+        # ago), or already saved: shown now and saved only on their yes, or
+        # said to be saved, never armed again (_show).
+        return already if _show(bid, str(user.id), digest, still) == "saved" else shown
     return go
 
 
@@ -722,8 +797,10 @@ async def before_save(biz: Dict[str, Any], module: Dict[str, Any], action: Dict[
     if asks(action) or loose:
         target, raw = _target(module, data, (entry or {}).get("id")), _raw(action)
         for (t, r), first in _DONE.get():
-            if t == target or r == raw:
-                return {"kind": "stop", "result": dict(first)}
+            if t == target and r == raw:
+                # The very same send again: its first answer, marked so the
+                # door doesn't log a second undo for one change.
+                return {"kind": "stop", "result": {**first, "_repeat": True}}
     try:
         from chief_of_staff import untrusted_taint
         tainted = bool(untrusted_taint())
@@ -851,16 +928,47 @@ def after_setup(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """chief_build_runtime folds an events room's create into one setup
     that runs in the background with nobody signed in, so it can't ask the
     teams or put a flyer on: a receipt that says so, in plain words."""
-    what = [w for w, on in (("the serving teams weren't asked", entry.get("teams") not in (None, "", [], {})),
-                            ("no flyer was put on", entry.get("flyer") not in (None, "", [], {}))) if on]
-    if not what:
+    teams = entry.get("teams") not in (None, "", [], {})
+    flyer = entry.get("flyer") not in (None, "", [], {})
+    if not (teams or flyer):
         return None
-    return {"type": "event_volunteers", "_after_setup": " and ".join(what)}
+    return {"type": "event_volunteers", "_after_setup": {"teams": teams, "flyer": flyer}}
+
+
+def _setup_words(biz: Dict[str, Any], user: Any, said: Any) -> str:
+    """The receipt's words: where asking is open, ask again once it's saved;
+    where it isn't, that it isn't on here (never a promise it can't keep)."""
+    said = said if isinstance(said, dict) else {}
+    teams, flyer = said.get("teams") is True, said.get("flyer") is True
+    what = _join([w for w, on in (("the serving teams weren't asked", teams), ("no flyer was put on", flyer)) if on])
+    if not what:
+        what = "nothing more was added"
+    if user is not None and open_here(biz["id"], user):
+        return AFTER_SETUP.format(what=what)
+    doing = _join([w for w, on in (("Asking the serving teams", teams), ("putting a flyer on an event", flyer)) if on])
+    return CLOSED_SETUP.format(doing=doing[:1].upper() + doing[1:] if doing else "That",
+                               is_="aren't" if teams and flyer else "isn't", what=what)
 
 
 # ─── The read: how full is my event ───────────────────────────────────
 
-def _find(biz_id: str, action: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+def _login_reader():
+    """A reader that reads as the signed-in login (their own token: the
+    database's own rules decide what they see), or None with no token."""
+    import sb_clients
+    jwt = sb_clients.get_current_user_jwt()
+    if not jwt:
+        return None
+
+    def read(path: str) -> List[Dict[str, Any]]:
+        rows = sb_clients.sb_get_as_user(path, jwt)
+        if not isinstance(rows, list):
+            raise HTTPException(503, _ev().UNREAD)
+        return rows
+    return read
+
+
+def _find(biz_id: str, action: Dict[str, Any], read=None) -> Tuple[Optional[str], Optional[str]]:
     """(the event's entry id, or the words that say why there isn't one).
     By its id, or by its name among the events rooms' entries: one that's
     coming up before one that's past; two of the same name are named back
@@ -874,13 +982,14 @@ def _find(biz_id: str, action: Dict[str, Any]) -> Tuple[Optional[str], Optional[
     said = _key(action.get("event") or action.get("title") or action.get("name"))
     if not said:
         return None, "Which event? Name it, as the Youth Lock-in."
-    import events_rsvp_router as er
-    mods = er.roster_modules_for(biz_id)
+    read = read or ev._read
+    mods = read(f"/custom_modules?business_id=eq.{ev._q(biz_id)}&archetype=eq.event_roster&is_active=eq.true"
+                "&select=id,name,archetype_params&limit=50")
     if not mods:
         return None, "There's no events room here yet."
     room = mods[0].get("name") if len(mods) == 1 else None
-    rows = ev._read(f"/module_entries?business_id=eq.{ev._q(biz_id)}&module_id=in.({ev._ids(m['id'] for m in mods)})"
-                    "&status=eq.active&select=id,module_id,status,data&order=created_at.desc&limit=500")
+    rows = read(f"/module_entries?business_id=eq.{ev._q(biz_id)}&module_id=in.({ev._ids(m['id'] for m in mods)})"
+                "&status=eq.active&select=id,module_id,status,data&order=created_at.desc&limit=500")
     zone = sp._zone(biz_id)
     today = sp._now().astimezone(zone).date()
     by_mod = {str(m["id"]): {**m, "is_active": True} for m in mods}
@@ -1052,23 +1161,40 @@ def _read(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
     atype = "event_volunteers"
     if action.get("_unattended"):
         return _fail(atype, "an event's volunteers are read only when someone at the church asks.")
-    if action.get("_after_setup"):
-        said = AFTER_SETUP.format(what=_plain(action["_after_setup"])[:120])
-        return {"result": said, "label": said}
-    ev = _ev()
+    ev, sp = _ev(), _sp()
     user = turn_user(action)
+    if action.get("_after_setup"):
+        said = _setup_words(biz, user, action["_after_setup"])
+        return {"result": said, "label": said}
+    if user is None:
+        return _fail(atype, "an event's volunteers are read for someone signed in to the church's office.")
     bid = str(biz["id"])
-    asking = user is not None and open_here(bid, user)
+    asking = open_here(bid, user)
+    office = asking
     try:
-        eid, why = _find(bid, action)
+        # Who may read it, before anything is read: where the office's own
+        # picture has a gate, that gate (_login: an office login of a church
+        # whose teams have owners, with the migration in), switch or no
+        # switch. Where it has none (before the migration, Who serves when
+        # off, not such a church), what list_module_entries gives this login:
+        # the rooms read with their own token, so the database's rules decide.
+        office = asking or (ev.ready() and sp.mode() != "off" and sp._office(bid))
+        if office:
+            ev._login(bid, user)
+            read = None
+        else:
+            read = _login_reader()
+            if read is None:
+                return _fail(atype, "an event's volunteers are read for someone signed in to the church's office.")
+        eid, why = _find(bid, action, read)
         if not eid:
             return _fail(atype, why or "Which event?")
-        zone = _sp()._zone(bid)
+        zone = sp._zone(bid)
         if asking:
             pic = ev.picture(eid, bid, user)
-        ent = ev.event_entry(bid, eid, zone)
+        ent = ev.event_entry(bid, eid, zone, read)
     except HTTPException as e:
-        if not asking and e.status_code == 404:
+        if not office and e.status_code == 404:
             return _fail(atype, "that event isn't one of the events here.")
         return _fail(atype, _lower(_said(e)))
     from system_destinations import module_destination

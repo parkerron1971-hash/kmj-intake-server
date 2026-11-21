@@ -514,17 +514,20 @@ def needs_words(needs: Dict[str, Any], places: List[Dict[str, Any]], before: Opt
 
 # ─── the event ───────────────────────────────────────────────────────
 
-def event_entry(biz: str, entry_id: str, zone) -> Dict[str, Any]:
+def event_entry(biz: str, entry_id: str, zone, read=None) -> Dict[str, Any]:
     """One of this church's Services & Events entries (an event_roster
     room's): its title, day and time on the church's clock (`at` is None for
-    a bare date), place, data and roles. 404 for anything else."""
-    rows = _read(f"/module_entries?id=eq.{_q(entry_id)}&business_id=eq.{_q(biz)}"
-                 f"&select=id,module_id,status,data&limit=1")
+    a bare date), place, data and roles. 404 for anything else. `read` is
+    who reads it: the server (_read) unless Chief hands it the login's own
+    reader (chief_event_volunteers, where this picture's gate can't apply)."""
+    read = read or _read
+    rows = read(f"/module_entries?id=eq.{_q(entry_id)}&business_id=eq.{_q(biz)}"
+                f"&select=id,module_id,status,data&limit=1")
     if not rows:
         raise HTTPException(404, NO_EVENT)
     e = rows[0]
-    mods = _read(f"/custom_modules?id=eq.{_q(e.get('module_id'))}&business_id=eq.{_q(biz)}"
-                 f"&archetype=eq.event_roster&select=id,archetype_params,is_active&limit=1")
+    mods = read(f"/custom_modules?id=eq.{_q(e.get('module_id'))}&business_id=eq.{_q(biz)}"
+                f"&archetype=eq.event_roster&select=id,archetype_params,is_active&limit=1")
     if not mods:
         raise HTTPException(404, NO_EVENT)
     return entry_view(e, mods[0], zone)

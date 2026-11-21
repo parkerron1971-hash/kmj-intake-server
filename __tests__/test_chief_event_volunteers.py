@@ -374,7 +374,7 @@ def test_a_confirm_saves_only_what_this_login_was_shown(ch, via):
     assert not cos._action_failed(got) and got["teams_ask"] == "on" and supper(c) is not None
     [req] = rows(c)
     again = send("owner", action)
-    assert again["needs_confirmation"] and len(rows(c)) == 1, "a look is saved once"
+    assert again["label"] == ("The Harvest supper on Sat, Oct 31, 5:00 PM is already saved just like this, so nothing was saved again.") and len(rows(c)) == 1, "a look is saved once"
 
 
 def test_a_second_send_in_the_same_turn_doesnt_count(ch):
@@ -408,8 +408,56 @@ def test_the_same_event_confirmed_twice_in_a_turn_files_once(ch):
     action = create(teams=[{"place": "greeter", "n": 1}])
     door(c, "shapretta", action)
     first, second = door(c, "shapretta", {**action, "confirmed": True}, {**action, "confirmed": True})
-    assert not cos._action_failed(first) and second == first, "the first answer, again"
+    assert not cos._action_failed(first) and second == {**first, "_repeat": True}, "the first answer, again"
     assert supper(c) is not None and len(rows(c)) == 1
+    assert len(c.db.t["chief_undo_log"]) == 1, "one change, one undo: the repeat logs none"
+
+
+def test_two_different_changes_to_one_event_in_a_turn_both_go(ch):
+    """The teams, then a flyer, for the same event in one turn: the second isn't the first again."""
+    c = ch
+    teams, picture = update(teams=[{"place": "usher", "n": 1}]), update(flyer=ART)
+    door(c, "owner", teams, picture)                                      # turn one: both shown
+    a, b = door(c, "owner", {**teams, "confirmed": True}, {**picture, "confirmed": True})
+    assert a["teams_ask"] == "on" and b.get("flyer_state") == "on" and "_repeat" not in b, (a, b)
+    assert len(rows(c)) == 1 and evv.flyer_of(entry(c, E_LOCK)["data"], BIZ, E_LOCK)
+
+
+@pytest.mark.parametrize("via", ["tag", "native"])
+def test_a_send_repeated_after_its_save_is_already_saved_never_armed_again(ch, via):
+    """The model sends last turn's confirmed create again: it says it's saved, shows nothing, arms
+    nothing, and a yes after that saves nothing. A new plan still gets its own look."""
+    c = ch
+    action = create(teams=[{"place": "greeter", "n": 1}])
+
+    def send(a):
+        if via == "tag":
+            return door(c, "owner", a)[0]
+        return native(c, "owner", ("create_module_entry", {k: v for k, v in a.items() if k != "type"})).writes[0]
+    send(action)
+    assert send({**action, "confirmed": True})["teams_ask"] == "on"
+    for again in ({**action, "confirmed": True}, action, {**action, "confirmed": True}):
+        got = send(again)
+        assert got["label"] == ("The Harvest supper on Sat, Oct 31, 5:00 PM is already saved just like this, so nothing was saved again.") and "look" not in got, got
+        assert len(rows(c)) == 1 and len([e for e in c.db.t["module_entries"]
+                                          if (e.get("data") or {}).get("title") == SUPPER["title"]]) == 1
+        assert [r["title"] for r in looks(c)] == [cev.USED], "never armed again"
+    other = send(create(teams=[{"place": "greeter", "n": 2}]))
+    assert other["label"].startswith("Before I save:") and "2 on Greeter" in other["look"]
+
+
+def test_a_saved_event_taken_away_may_be_saved_again(ch):
+    c = ch
+    action = create(teams=[{"place": "greeter", "n": 1}])
+    shown_then_saved(c, "owner", action)
+    supper(c)["status"] = "deleted"
+    # What the follow does when an event goes away: its ask closed, its date off Who serves when.
+    c.db.t["event_volunteer_requests"] = []
+    c.db.t["worship_services"] = [s for s in c.db.t["worship_services"] if s.get("kind") != "event"]
+    [look] = door(c, "owner", {**action, "confirmed": True})
+    assert look["label"].startswith("Before I save:"), "shown again, not 'already saved'"
+    [got] = door(c, "owner", {**action, "confirmed": True})
+    assert got["teams_ask"] == "on" and len(rows(c)) == 1, got.get("volunteers_said")
 
 
 def test_a_native_call_and_the_same_tag_in_the_reply_file_once(ch):
@@ -424,10 +472,11 @@ def test_a_native_call_and_the_same_tag_in_the_reply_file_once(ch):
     # Two native calls in one turn: the second gets the first answer.
     c.db.t["module_entries"] = [e for e in c.db.t["module_entries"] if e is not supper(c)]
     c.db.t["event_volunteer_requests"] = []
+    args = {**args, "teams": [{"place": "greeter", "n": 2}]}         # a new plan (the first one was saved)
     native(c, "shapretta", ("create_module_entry", args))
     out = native(c, "shapretta", ("create_module_entry", {**args, "confirmed": True}),
                  ("create_module_entry", {**args, "confirmed": True}))
-    assert out.writes[0] == out.writes[1] and len(rows(c)) == 1 and supper(c) is not None
+    assert out.writes[1] == {**out.writes[0], "_repeat": True} and len(rows(c)) == 1 and supper(c) is not None
 
 
 # ─── the ask, through the route ───────────────────────────────────────
@@ -783,6 +832,9 @@ def test_two_events_of_one_name_are_named_back(ch):
 @pytest.mark.parametrize("how", ["switch off", "not ready", "not a church"])
 def test_where_asking_is_closed_the_read_answers_from_the_events_own_roles(ch, monkeypatch, how):
     c = ch
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "get_current_user_jwt", lambda: "jwt-u-owner")
+    monkeypatch.setattr(sb_clients, "sb_get_as_user", lambda path, jwt: c.db.get(path))
     asked(c, "owner", E_LOCK)               # asked while it was open: still never said once it's closed
     if how == "switch off":
         monkeypatch.setenv("EVENT_VOLUNTEERS", "off")
@@ -841,7 +893,7 @@ def test_the_setup_that_folds_an_events_create_says_the_teams_werent_asked(ch):
                              {"type": "create_module_entry", "module_id": "Events", "data": dict(SUPPER),
                               "teams": "2 greeters", "flyer": ART}])
     assert out[0]["type"] == "submit_work_order" and out[-1] == {
-        "type": "event_volunteers", "_after_setup": "the serving teams weren't asked and no flyer was put on"}
+        "type": "event_volunteers", "_after_setup": {"teams": True, "flyer": True}}
     [got] = door(ch, "owner", out[-1])
     assert got["result"] == ("The event is being set up in the background, so the serving teams weren't asked and no "
                              "flyer was put on. Once it's saved, ask again and I'll show what saving does first.")
@@ -913,3 +965,83 @@ def test_the_line_rides_the_turns_tail_never_a_cached_segment():
     at = src.index("_login_block += await asyncio.to_thread(_event_volunteers.turn_line, biz,")
     assert src.index("_login_block += await asyncio.to_thread(_church_schedule.turn_line") < at
     assert at < src.index(r'growth_turn_block = _login_block + "\n" + growth_turn_block')
+
+
+# ─── the second review ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("who", ["owner", "laquesha", "viewer", "member", "outsider"])
+def test_where_asking_is_closed_the_read_follows_the_pictures_own_gate(ch, monkeypatch, who):
+    """Closed, the names on the event's roles reach exactly the logins the office's own picture lets in;
+    anyone it refuses hears its refusal, and nothing read as the server."""
+    c = ch
+    import church_spaces
+    monkeypatch.setattr(church_spaces, "_office", lambda biz, uid, role: uid not in ("u-viewer", "u-member",
+                                                                                     "u-outsider"))
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "off")
+    r = c.as_(who).get(f"/church/event-volunteers/{E_LOCK}?business_id={BIZ}")
+    [got] = door(c, who, {"type": "event_volunteers", "event": "Youth Lock-in"})
+    if r.status_code == 200:
+        assert "Ana Cruz" in got["result"] and "serving teams" not in got["result"], who
+    else:
+        assert r.status_code == 403 and cos._action_failed(got), who
+        assert r.json()["detail"] in got["result"] and "Ana Cruz" not in got["result"] and "Lock-in" not in got["label"]
+
+
+@pytest.mark.parametrize("who, sees", [("owner", True), ("member", False)])
+def test_where_the_picture_has_no_gate_the_read_reads_as_the_login(ch, monkeypatch, who, sees):
+    """Before the migration (no picture at all), the rooms are read with the login's own token, as
+    list_module_entries reads them: the database's rules decide, never the server's key."""
+    c = ch
+    monkeypatch.setattr(evv, "_FORCE", False)
+    import sb_clients
+    tokens = []
+
+    def as_user(path, jwt):
+        tokens.append(jwt)
+        return c.db.get(path) if jwt == "jwt-u-owner" else []
+    monkeypatch.setattr(sb_clients, "sb_get_as_user", as_user)
+    monkeypatch.setattr(sb_clients, "get_current_user_jwt", lambda: f"jwt-{PEOPLE[who].id}")
+    [got] = door(c, who, {"type": "event_volunteers", "event": "Youth Lock-in"})
+    assert tokens and set(tokens) == {f"jwt-{PEOPLE[who].id}"}, "read as the login, every read"
+    if sees:
+        assert "Ana Cruz" in got["result"]
+    else:
+        assert cos._action_failed(got) and "Ana Cruz" not in got["result"]
+    monkeypatch.setattr(sb_clients, "get_current_user_jwt", lambda: None)
+    [got] = door(c, who, {"type": "event_volunteers", "event": "Youth Lock-in"})
+    assert cos._action_failed(got) and "signed in" in got["result"] and "Ana Cruz" not in got["result"]
+
+
+def test_the_setup_receipt_says_whats_true_where_asking_isnt_open(ch, monkeypatch):
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "off")
+    [got] = door(ch, "owner", {"type": "event_volunteers", "_after_setup": {"teams": True, "flyer": True}})
+    assert got["result"] == ("The event is being set up in the background. Asking the serving teams and putting a "
+                             "flyer on an event aren't on here yet, so the serving teams weren't asked and no flyer "
+                             "was put on.")
+    [got] = door(ch, "owner", {"type": "event_volunteers", "_after_setup": {"teams": True}})
+    assert got["result"] == ("The event is being set up in the background. Asking the serving teams isn't on here "
+                             "yet, so the serving teams weren't asked.")
+    assert "ask again" not in got["result"]
+
+
+@pytest.mark.parametrize("who", ["shapretta", "owner"])
+def test_in_owner_mode_a_church_that_isnt_open_pays_for_no_follow(ch, monkeypatch, who):
+    """EVENT_VOLUNTEERS=owner opens it for the platform owner's own church; at any other church (even
+    with the platform owner's own login there) a plain change to an event reads no room, asks no gate
+    and builds no events-page line."""
+    c = ch
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "owner")
+    gates, pages = [], []
+    real = evv.enabled
+    monkeypatch.setattr(evv, "enabled", lambda *a, **k: gates.append(a) or real(*a, **k))
+    monkeypatch.setattr(cos, "_events_page_for", lambda *a, **k: pages.append(a))
+    c.reads.clear()
+    [got] = door(c, who, update(data={"location": "The gym"}))
+    assert got["result"] == "updated" and entry(c, E_LOCK)["data"]["location"] == "The gym"
+    assert not [p for m, p in c.reads if p.startswith("/custom_modules")] and gates == [] and pages == []
+    # Where it is open for the church: the follow's reads, and only then.
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "on")
+    c.reads.clear()
+    door(c, who, update(data={"location": "The hall"}))
+    assert [p for m, p in c.reads if p.startswith("/custom_modules")] and gates
