@@ -15,8 +15,16 @@ member_portal_lumen.render_home from what Home already reads:
     flag on Home's posts);
   - the church's next service (member_lumen_home.service_next), its time,
     its message when one is dated that day, its picture spot;
+  - the church's newest message while it's new (preached in the last
+    seven days: member_feed_more.message_of, Home's own library), unless
+    the service's moment already carries it: Watch, and Share (Kevin's
+    Home plan, 2026-11-21: "the stories row never shows" at a church with
+    one service and no posts; message_moment);
   - each of the member's groups' next gathering within two days, with its
     RSVP;
+  - the class the member is in and hasn't finished (member_portal_lumen
+    .my_class: academy_member_classes, kept two minutes), with Continue to
+    their classes (class_moment);
   - the church's events in the next seven days that have a picture.
 In that order. Fewer than two, and the row isn't drawn. Nothing is made up:
 a moment's line is its record's own words (a title, the devotional's line
@@ -39,10 +47,10 @@ a reply pill when member messaging lets this member write there (the
 pastor, when member messages allow it; the group's chat; else the church's
 conversation while church threads are open), Love when it is a real
 reaction (a post's, through /my/news/react), and Share only on the church's
-own content with a public page (Sunday's message, or the service or an
-event on the public events page, upcoming_for's "public" mark: contract 1's
+own content with a public page (Sunday's message or the newest message, or
+the service or an event on the public events page, upcoming_for's "public" mark: contract 1's
 <a class="lm-share">, written by member_lumen_share.link, with
-data-share-id "<message|event>:<id>"; never a group's gathering, a members'
+data-share-id "<message|event>:<id>"; never a group's gathering, a class, a members'
 post, nor a devotional, which has no public page). Its buttons are today's forms posting to today's routes
 (each with its own session, same-site and rate checks): this file adds no
 route and no write.
@@ -54,7 +62,7 @@ rule under .lm. Pure functions, no I/O.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from string import Template
 from typing import Any, Dict, List, Optional
@@ -168,6 +176,68 @@ def moment(*, mid: str, label: str, ring: str, bg: str, face: str, name: str, hr
     return {"id": mid, "label": label, "ring": ring, "bg": bg, "face": face, "name": name, "href": href,
             "kicker": kicker, "line": line, "sub": sub, "when": when, "action": action, "reply": reply,
             "love": love, "share": share}
+
+
+def _day_label(d: Optional[date], today: date) -> str:
+    """The circle's word for a message's day: 'Today', 'Yesterday', last
+    Sunday's 'Last week', else the weekday ('Wednesday')."""
+    if not d:
+        return "New message"
+    n = (today - d).days
+    if n <= 0:
+        return "Today"
+    if n == 1:
+        return "Yesterday"
+    return "Last week" if d.weekday() == 6 else f"{d:%A}"
+
+
+def message_moment(biz: Dict[str, Any], site, lib: Dict[str, Any], s: Dict[str, Any], pool: List[str], today: date, *,
+                   face: str, church: str) -> Dict[str, Any]:
+    """The church's newest message while it's new (member_feed_more.message_of):
+    its own picture (the series' art, else the church's photo named for it,
+    else its video picture), "New message · Sunday, November 15", its title,
+    who preached it and the series, Watch (Listen for a message with only
+    audio) to its page, and Share (contract 1: its public page)."""
+    import member_app_ui as ui
+    import member_lumen_home as lh
+    import member_lumen_share as msh
+    import member_portal_sermons as mps
+    import member_yt_pictures as myp
+    sid = str(s["id"])
+    title = (s.get("title") or "").strip() or "Message"
+    try:
+        d: Optional[date] = date.fromisoformat(str(s.get("preached_on") or "")[:10])
+    except ValueError:
+        d = None
+    series = mps._titles(lib).get(str(s.get("series_id") or ""), "")
+    small = msh.message_art(lib, s, site, pool)
+    wide = small
+    if small and small == myp.picture_url(s.get("video_url")):
+        wide = myp.picture_url(s.get("video_url"), wide=True) or small
+    ring = ui.art(small) if small else ui.default_art("messages")
+    bg = ui.art(wide) if wide else ui.default_art("messages", night=True)
+    n = (today - d).days if d else None
+    when = "Today" if n == 0 else "Yesterday" if n == 1 else (f"{d:%A}, {d:%B} {d.day}" if d else "")
+    kicker = " · ".join(x for x in ("New message", when) if x)
+    video, audio = (s.get("video_url") or "").strip(), (s.get("audio_url") or "").strip()
+    href = f"/my/sermons/{sid}"
+    act = lh.link_button(href, "Watch", "lm-mvb") if video or not audio else lh.link_button(f"{href}?listen=1", "Listen", "lm-mvb")
+    return moment(mid=f"ms:{sid}", label=_day_label(d, today), ring=ring, bg=bg, face=face, name=church, href=href,
+                  kicker=kicker, line=clip(title, 140), sub=" · ".join(x for x in (s.get("speaker") or "", series) if x),
+                  action=act, share=share("message", sid, msh.message_href(sid), title, kicker, small))
+
+
+def class_moment(c: Dict[str, Any], ring: str, bg: str, *, face: str, church: str) -> Dict[str, Any]:
+    """The class the member is in and hasn't finished (member_portal_lumen
+    .my_class): "Your class · Lesson 2 of 4", its name, the next lesson, and
+    Continue to the member's classes. A class has no public page: no Share."""
+    import member_lumen_home as lh
+    total, done = int(c.get("total") or 0), int(c.get("done") or 0)
+    kicker = f"Your class · Lesson {done + 1} of {total}" if total and done < total else "Your class"
+    words = (c.get("program") or c.get("title") or "").replace(":", " ").split()
+    return moment(mid=f"cl:{c['course_id']}:{done}", label=" ".join(words[:2]) or "Your class", ring=ring, bg=bg,
+                  face=face, name=church, href="/my/classes", kicker=kicker, line=clip(c.get("title") or "", 140),
+                  sub=clip(c.get("lesson") or "", 120), action=lh.link_button("/my/classes", "Continue", "lm-mvb"))
 
 
 def row(moments: List[Dict[str, Any]]) -> str:

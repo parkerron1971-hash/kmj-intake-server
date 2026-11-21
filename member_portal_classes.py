@@ -86,12 +86,22 @@ def tab_on(business_id: str, me: Optional[Dict[str, Any]]) -> bool:
     return classes_on(business_id) or in_a_class(business_id, me)
 
 
-def classes_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """{'mine', 'programs', 'open', 'tz'}, or None when it couldn't be read
-    (the page says "try again" rather than showing no classes)."""
+def member_classes(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """academy_member_classes as it came: {'mine', 'programs', 'open'}, or
+    None when it couldn't be read. classes_for adds the church's clock;
+    Home's class (member_portal_lumen.my_class) needs only this."""
     out = sb_clients.sb_post_as_service("/rpc/academy_member_classes",
                                         {"p_business": business_id, "p_contact": str(me["id"])})
     if not isinstance(out, dict) or not all(isinstance(out.get(k), list) for k in ("mine", "programs", "open")):
+        return None
+    return out
+
+
+def classes_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """{'mine', 'programs', 'open', 'tz'}, or None when it couldn't be read
+    (the page says "try again" rather than showing no classes)."""
+    out = member_classes(business_id, me)
+    if out is None:
         return None
     try:
         from outside_calendar import business_timezone
