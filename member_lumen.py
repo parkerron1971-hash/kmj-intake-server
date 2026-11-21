@@ -112,6 +112,19 @@ def visible(request: Any, ctx: Optional[Mapping[str, Any]]) -> bool:
     return False
 
 
+def at_church(business_id: Any) -> bool:
+    """Whether anyone at this church can wear the new look today (Mission
+    Control asks before it shows what only the new look does, such as
+    members posting in their groups): on, owner or preview at the
+    platform owner's own church; never with it off."""
+    m = mode()
+    if m == "on":
+        return True
+    if m in ("owner", "preview"):
+        return _platform_church(business_id)
+    return False
+
+
 def here() -> bool:
     """Whether the member page being drawn wears the new look (set by
     member_portal.serve for this request)."""

@@ -953,6 +953,7 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     held = _get(f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id,post_id,contact_id,body,created_at"
                 f"&order=created_at.desc&limit=50")
     # Members' group posts the check held (member_posts), beside the comments.
+    import member_lumen
     import member_posts
     held_posts = member_posts.held_posts(biz_id)
     # ...and leaders' moments the check held (member_moments). None: the
@@ -1001,7 +1002,13 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
                    "reports_open": len(reports)},
         "posters": [{"contact_id": str(p["contact_id"]), "name": (poster_people.get(str(p["contact_id"])) or {}).get("name") or ""}
                     for p in posters],
-        "settings": {"comments": (((business.get("settings") or {}).get("news") or {}).get("comments")) is not False},
+        "settings": {"comments": (((business.get("settings") or {}).get("news") or {}).get("comments")) is not False,
+                     # Members posting in their groups (member_posts): on
+                     # unless the church turned it off; only the new look
+                     # has the composer, so the room shows the switch only
+                     # where it's on (member_lumen.at_church).
+                     "member_posts": member_posts.on(business),
+                     "member_posts_here": member_lumen.at_church(biz_id)},
         # Phone alerts (news_alerts): the church's switch, today's count of
         # the day's most, how celebrations ring.
         "alerts": _alerts_view(business),
@@ -1289,14 +1296,18 @@ class NewsSettingsIn(BaseModel):
     celebration_alerts: Optional[Literal["morning", "none"]] = None
     # An important post reaches the people without the app (news_reach).
     reach_rest: Optional[bool] = None
+    # Members posting in their groups (member_posts.SWITCH; the owner's
+    # preview has the same switch at /my/post/switch).
+    member_posts: Optional[bool] = None
 
 
 @router.post("/church/news/settings")
 def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)):
     """Comments on News (settings.news.comments), phone alerts for News
     (settings.member_portal.notifications.news), celebration alerts
-    (settings.news.celebration_alerts) and reaching the people without the
-    app (settings.news.reach_rest)."""
+    (settings.news.celebration_alerts), reaching the people without the
+    app (settings.news.reach_rest) and members posting in their groups
+    (settings.member_portal.member_posts: False when off, gone when on)."""
     import kids_router
     biz_id = kids_router._uuid(body.business_id, "business_id")
     _need(biz_id, user, "admin")
@@ -1310,12 +1321,26 @@ def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)
     if body.reach_rest is not None:
         news["reach_rest"] = bool(body.reach_rest)
     new = {**settings, "news": news}
-    if body.alerts is not None:
+    if body.alerts is not None or body.member_posts is not None:
+        import member_posts
         portal = dict(settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {})
-        kinds = dict(portal.get("notifications") if isinstance(portal.get("notifications"), dict) else {})
-        kinds["news"] = bool(body.alerts)
-        new["member_portal"] = {**portal, "notifications": kinds}
+        if body.alerts is not None:
+            kinds = dict(portal.get("notifications") if isinstance(portal.get("notifications"), dict) else {})
+            kinds["news"] = bool(body.alerts)
+            portal["notifications"] = kinds
+        if body.member_posts is True:
+            portal.pop(member_posts.SWITCH, None)
+        elif body.member_posts is False:
+            portal[member_posts.SWITCH] = False
+        new["member_portal"] = portal
     ok = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz_id)}", {"settings": new})
     if ok is None:
         raise _unavailable()
+    if body.member_posts is not None:
+        # The member app keeps the church's row a little while; this server
+        # drops its copy so the switch shows here at once.
+        import member_cache
+        member_cache.forget_church(biz_id)
+        logger.info("member posting switched", extra={"business_id": biz_id, "on": body.member_posts,
+                                                      "by": f"office:{user.id}"})
     return {"ok": True}

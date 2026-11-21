@@ -410,6 +410,37 @@ def _office(monkeypatch, role):
     return TestClient(app)
 
 
+def test_the_office_turns_members_posting_off_and_on(fake, monkeypatch):
+    import member_cache
+    import member_posts as mpo
+    forgot = []
+    monkeypatch.setattr(member_cache, "forget_church", lambda b: forgot.append(str(b)))
+    fake.t["businesses"] = [{"id": BIZ, "name": "Love City Church", "owner_id": "o1",
+                             "settings": {"news": {"comments": False}, "member_portal": {"notifications": {"live": True}}}}]
+    body = {"business_id": BIZ, "member_posts": False, "alerts": True}
+    assert _office(monkeypatch, "member").post("/church/news/settings", json=body).status_code == 403
+    assert _office(monkeypatch, "admin").post("/church/news/settings", json=body).status_code == 200
+    s = fake.t["businesses"][0]["settings"]
+    assert s["member_portal"] == {"notifications": {"live": True, "news": True}, "member_posts": False}
+    assert s["news"] == {"comments": False} and not mpo.on(fake.t["businesses"][0]) and forgot == [BIZ]
+    on = {"business_id": BIZ, "member_posts": True}
+    assert _office(monkeypatch, "admin").post("/church/news/settings", json=on).status_code == 200
+    row = fake.t["businesses"][0]
+    assert row["settings"]["member_portal"] == {"notifications": {"live": True, "news": True}} and mpo.on(row)
+    # Another setting leaves the switch, and the member app's kept rows, alone.
+    other = {"business_id": BIZ, "comments": True}
+    assert _office(monkeypatch, "admin").post("/church/news/settings", json=other).status_code == 200
+    assert "member_posts" not in fake.t["businesses"][0]["settings"]["member_portal"] and len(forgot) == 2
+
+
+def test_the_switch_shows_only_where_the_new_look_is(monkeypatch):
+    import member_lumen
+    monkeypatch.setattr(member_lumen, "_platform_church", lambda b: b == BIZ)
+    for mode, here, elsewhere in (("off", False, False), ("preview", True, False), ("owner", True, False), ("on", True, True)):
+        monkeypatch.setenv("MEMBER_LUMEN", mode)
+        assert (member_lumen.at_church(BIZ), member_lumen.at_church("another")) == (here, elsewhere), mode
+
+
 def test_posting_needs_a_seat_that_edits(fake, monkeypatch):
     fake.t["businesses"] = [{"id": BIZ, "name": "Love City Church", "settings": {}, "owner_id": "o1"}]
     body = {"business_id": BIZ, "title": "Fall Fest", "body": "Oct 31", "pin": True}
@@ -434,10 +465,12 @@ def test_the_office_page_counts_and_never_shows_a_comments_words(fake, monkeypat
     _say(_me(MONIQUE), "We'll be there")
     _screen(monkeypatch, "harm")
     _say(_me(TEEN), "something unkind")
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
     v = _office(monkeypatch, "viewer").get(f"/church/news?business_id={BIZ}").json()
     row = v["posts"][0]
     assert (row["seen"], row["reactions"], row["comment_n"], row["for"]) == (1, 1, 1, "Sisters in the City")
     assert v["app_people"] == 2 and v["safety"]["held_week"] == 1 and v["held"][0]["post_title"]
+    assert v["settings"] == {"comments": True, "member_posts": True, "member_posts_here": False}
     assert "something unkind" not in str(v) and "We'll be there" not in str(v)
     # The leaders the church can pick: whoever leads a group, not yet picked.
     assert [c["contact_id"] for c in v["candidates"]] == [TASHA]
