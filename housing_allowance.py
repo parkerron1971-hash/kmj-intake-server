@@ -100,7 +100,7 @@ import os
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -340,6 +340,14 @@ def _step(key: str, state: str, label: str, detail: str) -> Dict[str, str]:
     return {"key": key, "state": state, "label": label, "detail": detail}
 
 
+def _page_name(business_id: Any) -> str:
+    """Board & minutes, or Meetings & minutes where step 3 is open for the
+    church (docs/CHURCH_SCHEDULE.md 10.4). Nothing is read before step 3's
+    tables are there."""
+    import church_meetings as cmt
+    return cmt.name_for(biz=business_id) if business_id else cmt.OLD_NAME
+
+
 def _when(d: Any) -> str:
     day = _day_or_none(d)
     return f"{day:%B} {day.day}, {day.year}" if day else "the day it was set"
@@ -359,8 +367,8 @@ def paper_trail(allowance: Dict[str, Any], entries: List[Dict[str, Any]], f: Dic
                          f"The amount is linked to the Board decision from {vote}."))
     else:
         out.append(_step("board_vote", "todo", "Record the board's vote",
-                         "The board sets the amount in writing. Record the vote in Board & minutes and "
-                         "link it here."))
+                         "The board sets the amount in writing. Record the vote in "
+                         f"{_page_name(allowance.get('business_id'))} and link it here."))
 
     early = f.get("paid_before_designation") or 0
     if early:
@@ -472,7 +480,8 @@ def _q(v: Any) -> str:
 
 
 def _get(path: str) -> List[Dict[str, Any]]:
-    rows = sb_clients.sb_get_as_service(path)
+    import church_meetings as cmt
+    rows = cmt.read(path)          # the old read only when step 3's columns are certainly not there
     if rows is None:
         raise Unavailable(path.split("?")[0])
     return rows
@@ -551,6 +560,41 @@ def _check_links(business_id: str, body: Dict[str, Any]) -> None:
                        ("employee_id", "employees")):
         if body.get(key) and not _belongs(table, business_id, body[key]):
             raise HTTPException(400, f"{key} isn't one of this business's records")
+    if body.get("board_decision_id"):
+        _boards_vote(business_id, str(body["board_decision_id"]))
+
+
+NOT_BOARDS_VOTE = ("That decision was made in a meeting, not by a board. The housing allowance is set by the "
+                   "board's vote: pick it from the board's decisions.")
+
+
+def _boards_vote(business_id: str, decision_id: str) -> None:
+    """The board's vote is a decision a board made: its meeting's group (and
+    the group the decision names) must be a board. A decision recorded in
+    the huddle or the leaders meeting (a group that only meets, step 3) is
+    never the board's vote on a minister's housing allowance. Read whatever
+    the switch says; before step 3's columns are there every group is a
+    board (the boards' read falls back, church_meetings.read), and a read
+    that fails is the 503 every read here is."""
+    import church_meetings as cmt
+    if cmt.pinned_absent():
+        return
+    rows = _get(f"/church_board_decisions?id=eq.{_q(decision_id)}&business_id=eq.{_q(business_id)}"
+                "&select=board_id,meeting_id&limit=1")
+    if not rows:
+        raise HTTPException(400, "board_decision_id isn't one of this business's records")
+    groups = {str(rows[0].get("board_id") or "")}
+    # The decision's meeting, by its id: the group it was held by.
+    held = _get(f"/church_board_meetings?id=eq.{_q(rows[0].get('meeting_id'))}&business_id=eq.{_q(business_id)}"
+                "&select=board_id&limit=1")
+    groups |= {str(m.get("board_id") or "") for m in held}
+    ids = ",".join(_q(g) for g in sorted(groups) if g)
+    boards: Set[str] = set()
+    if ids:
+        boards = {str(b["id"]) for b in _get(
+            f"/church_boards?business_id=eq.{_q(business_id)}&id=in.({ids}){cmt.board_kind()}&select=id&limit=5")}
+    if not held or "" in groups or not groups <= boards:
+        raise HTTPException(400, NOT_BOARDS_VOTE)
 
 
 def _clean_allowance(body: Dict[str, Any], *, partial: bool) -> Dict[str, Any]:

@@ -240,7 +240,8 @@ def test_a_login_on_no_board_is_refused_even_a_manager_that_doesnt_keep_the_meet
         assert ok(client(who).get(f"/church/board/status?business_id={BIZ}"))["enabled"] is False
     # A deacon with a login, linked by their email when the owner added them as a person.
     st = ok(client("deacon").get(f"/church/board/status?business_id={BIZ}"))
-    assert st == {"enabled": True, "manage": False, "member": True, "boards": 1}
+    assert st == {"enabled": True, "manage": False, "member": True, "boards": 1, "name": "Board & minutes",
+                  "meetings": False}
     assert [x["name"] for x in ok(client("deacon").get(f"/church/board?business_id={BIZ}"))["boards"]] == ["Deacons"]
     # No seat at all: not even told the church has boards.
     assert client("stranger").get(f"/church/board?business_id={BIZ}").status_code == 404
@@ -595,7 +596,8 @@ def test_a_manager_that_keeps_the_meetings_sets_up_and_sees_every_board(db):
     deacons, ids = _deacons()
     _lane(db, "clerk", "office_leadership")      # the Church Administrator's lane
     st = ok(client("clerk").get(f"/church/board/status?business_id={BIZ}"))
-    assert st == {"enabled": True, "manage": True, "member": False, "boards": 0}
+    assert st == {"enabled": True, "manage": True, "member": False, "boards": 0, "name": "Board & minutes",
+                  "meetings": False}
     elders = ok(client("clerk").post("/church/board/boards", json={"business_id": BIZ, "name": "Elders"}))["board"]
     ok(_member(elders["id"], who="clerk", contact_id=REED))
     page = ok(client("clerk").get(f"/church/board?business_id={BIZ}"))

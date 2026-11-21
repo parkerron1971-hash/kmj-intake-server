@@ -334,9 +334,13 @@ def tab_on() -> bool:
 
 def boards_of(biz_id: str, person_id: str) -> Set[str]:
     """The boards this person sits on: an active member row with their person
-    (church_board_members.contact_id), on a board that isn't archived. A
-    read that fails raises (a 503), never "none"."""
+    (church_board_members.contact_id), on a board that isn't archived. Boards
+    only (church_meetings.board_kind: kind=eq.board once step 3's columns
+    are there): the leaders meeting or the huddle never gives a leader the
+    Board tab, nor the board's yes on money from it. A read that fails
+    raises (a 503), never "none"."""
     import church_board as cb
+    import church_meetings as cmt
     if not _ID.match(person_id or ""):
         return set()
     rows = cb._need(f"/church_board_members?business_id=eq.{cb._q(biz_id)}&contact_id=eq.{cb._q(person_id)}"
@@ -346,7 +350,7 @@ def boards_of(biz_id: str, person_id: str) -> Set[str]:
         return set()
     return {str(b["id"]) for b in cb._need(
         f"/church_boards?business_id=eq.{cb._q(biz_id)}&id=in.({','.join(cb._q(i) for i in ids)})"
-        "&archived=eq.false&select=id&limit=50")}
+        f"&archived=eq.false{cmt.board_kind()}&select=id&limit=50")}
 
 
 async def on_board(biz: Dict[str, Any], person: Optional[Dict[str, Any]], *, kept: bool = False) -> bool:
@@ -422,7 +426,9 @@ def board_view(biz: Dict[str, Any], person: Dict[str, Any], board_id: str = "", 
         raise HTTPException(403, "This is for the church's boards.")
     board = next((b for b in pg["boards"] if b["id"] == board_id), pg["boards"][0])
     meetings = [m for m in pg["meetings"] if m["board_id"] == board["id"]]
-    coming = sorted((m for m in meetings if m["status"] in ("planned", "in_progress")),
+    # What is coming: never a meeting called off (step 3), which is never
+    # the next one either.
+    coming = sorted((m for m in meetings if m["status"] in ("planned", "in_progress") and not m.get("called_off")),
                     key=lambda m: str(m.get("starts_at") or ""))
     past = [m for m in meetings if m["status"] in ("drafted", "approved")]
     asked = meeting_id if any(m["id"] == meeting_id for m in meetings) else ""

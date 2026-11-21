@@ -313,7 +313,7 @@ class _Names:
         if kind == "role":
             rid = self._find(self.defs, raw, "title", "key")
         else:
-            table, col, live = cm._THINGS[kind]
+            table, col, live = cm.thing(kind)
             rid = self._find(cm._need(f"/{table}?business_id=eq.{cm._q(self.bid)}{live}&select=id,{col}&limit=500"),
                              raw, col)
         return {"kind": kind, "ref": rid} if rid else None
