@@ -3,11 +3,10 @@ title: The office's missing tells (the sweep)
 date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes go with the plan and make those small fixes as well (the seven missing tells on Love City's connection map)"
-status: in progress
-prs: [kmj-intake-server (this PR: the sweep and its rules)]
+status: shipped
+prs: [kmj-intake-server#2038, kmj-intake-server#2039, kmj-intake-server#2040, kmj-intake-server#2041]
 migrations: []
 left_undone:
-  - "The finders: church_tells_money (count closed, pay-back asked), church_tells_rooms (room asked, room answered, leader said yes), church_tells_sunday (sermon draft, count missing, flyer needed) each come in their own PR; until then the sweep finds nothing"
   - "CHURCH_TELLS defaults to owner (Love City only); switch on for every church on a Thursday, on BOTH services"
   - "church_tells isn't a business_settings.SERVER_KEYS key (that list is pinned to SQL the owner applies), so a stale whole-settings write could drop the stamps and repeat a tell once"
 decisions:
