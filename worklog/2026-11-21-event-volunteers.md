@@ -4,7 +4,7 @@ date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-20: "when a event is made there should be questions asked normal service volunteers or special volunteers… request for an amount of volunteers for their event… a way to inser flyer for like a thumbnail… connect the volunteers to events", then "go" on the proposal https://claude.ai/artifact/98Z9QFcaZ6ZNQhLdarKHQB'
 status: in progress
-prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine, merged), kmj-intake-server S3 around the event (this PR)]
+prs: [kmj-intake-server#2019 (S1, merged), kmj-intake-server#2023 (S2 the engine, merged), kmj-intake-server#2026 (S3 around the event)]
 migrations: [supabase/APPLY-2026-11-21-event-volunteers.sql (NOT APPLIED)]
 left_undone:
   - "Kevin applies supabase/APPLY-2026-11-21-event-volunteers.sql; until then every S2 route answers 404 (the status says ready: false) and no read selects worship_services.needs"
