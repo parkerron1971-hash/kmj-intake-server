@@ -8,7 +8,7 @@ prs: ["kmj-intake-server (this PR)"]
 migrations: []
 left_undone:
   - "Love City's eight services are plain watch?v= links today, so nothing changes for them until someone pastes a link with &t= into the message."
-  - "The live page's stream link goes through the same embed, so a live link carrying t= would start there too; a church's live link never carries one in practice, so it is left as it is."
+  - "The live page's stream link goes through the same embed, so a live link carrying t= would start there too; a live link rarely carries one, so it is left as it is."
   - "Vimeo's own #t= in a pasted link is still dropped (asked for YouTube only)."
 decisions:
   - "sermons_public.youtube_start(url): t= or start= in the query or after #, as whole seconds (95, 95s) or 1h22m5s / 82m / 1h, at most a day; 0 for anything else or a link that isn't YouTube. video_embed_src adds ?start=N to the youtube-nocookie embed. Pure, no read."
