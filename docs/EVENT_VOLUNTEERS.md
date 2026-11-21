@@ -848,3 +848,201 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
 - **Left as they are** (decided in review): a private or invite-only
   event's flyer on My serving for the people asked (6.12), and two same-title
   dates on one day after a move (section 10).
+
+### S5 (Chief)
+
+`chief_event_volunteers.py`. Chief writes no rule of its own. It calls the
+office's code, as the signed-in login and never as the owner:
+- the status reader (`status`): the gate, `can_ask`, the Volunteers' places
+  and their Sunday numbers, and who schedules the teams;
+- the ask's own checks before anything is written (`ask_blocks`, factored out
+  of the POST route, plus `clean_needs` and the note);
+- the gallery's rule (`gallery_reader`, `_artwork`);
+- then, once the event is saved, the office's own order: the flyer
+  (`attach_flyer`, the PUT route's body factored out), the ask (`ask`, the
+  POST route itself), and the follow (`changed`, the route the app calls
+  after every save).
+
+`enabled()` is the status route's `enabled`, factored out so Chief asks the
+same question.
+
+**Show before saving, bound to what was shown.** This is enforced in code,
+in the leaders schedule's look:
+- A save that asks the teams, puts a gallery picture on, or loosens a role's
+  tick saves nothing the first time. Its result says what saving will do:
+  the event, its day and time, the places and numbers, who gets the request
+  or that it goes straight on, the roles, any tick it loosens, and the flyer,
+  including when it replaces the event's current one. The label is the
+  read-back the person hears.
+- The look is claimed in `member_push_sends`, the member notes' server-only
+  ledger, as S3's follow already uses it. The kind is `chief_event_look`, and
+  `ref_id` is the login plus a sha256 of the exact params, the read-back and
+  who gets the request.
+- Sent again with `"confirmed":true` after their yes, it saves only by
+  consuming that claim: unused, this login, the same params, under 30
+  minutes old. The consume is one write (shown to used), so two sends or two
+  replicas can't both save one look. Anything else (another plan, another
+  login, too old, already saved) shows the look again.
+- A send repeated after its save is "already saved", with the event's name
+  and day. It's never shown or armed again, so a yes to it saves nothing.
+  That holds for SAVED_HOURS (24 hours) after the save, and, for a new event,
+  only while an event of that name is still in the room: a plan saved and
+  then taken away may be shown and saved again. A different plan always gets
+  its own look.
+- A second send in the turn that showed it doesn't count: they haven't heard
+  it yet.
+- A confirmed send on a tainted turn is held, without using up the look,
+  until they say it again.
+- `"make"` alone has no look, since nothing reaches anyone.
+
+Why not a signed token the model sends back: the history the app returns
+holds only the reply's cleaned prose. A token in an action's result never
+reaches the next turn unless it's put on the screen. A server-side claim
+needs no token, is replica-safe, and needs no migration.
+
+**Once a turn.** A save that went ahead is kept on the turn's context, by
+its event and its own digest. The very same send again in the turn gets the
+first answer, marked so the door logs no second undo, and nothing is filed
+twice. A different change to the same event in the turn (the teams, then a
+flyer) goes ahead on its own. The same send as a tag in the reply, after the
+native call already ran, is dropped (`chief_tool_loop.remaining_tag_actions`).
+
+**What stops an ask is said before saving, and nothing is saved.** That
+covers:
+- an unknown or ChurchSavvy place, or one that could be two;
+- a word that is both a place and a team;
+- one place given two numbers;
+- a number past 50, or a note past 300 letters;
+- no start time, an event that's past or too far away, or a Sunday service;
+- a picture the gallery's rule refuses.
+
+Each is in the server's own words. A refusal that can only happen after the
+save (another ask landing in between, a database blip) keeps the event saved
+and says what didn't go, also in the server's words.
+
+**An ask already there, or the event already on Who serves when, never blocks
+the rest of a change.** The other changes (its time, its place) save, and the
+teams are left out. Chief has no way to change an ask's numbers, so the words
+say where they change: on the event's Volunteers and flyer page, or by
+whoever schedules the teams. With nothing else to save, nothing is saved,
+and the same words are said.
+
+**Places as a person says them.** They resolve against the status reader's
+places:
+- any case, singular or plural, a trailing "team" dropped;
+- "Team: Place" or "Place (Team)" when two teams share a name;
+- a team that has one place;
+- digits in the words ("2 greeters, parking").
+
+No number means the place's Sunday number (call 2). Anything else is named
+back with the church's places, never guessed. There is no partial match.
+
+**Where asking isn't open, the event saves exactly as today** with teams and
+flyer left out, and the result says why in plain words. This covers:
+- the switch closed, or event dates closed;
+- the migration not in;
+- nobody signed in: an unattended run, or an outside agent. The native tools
+  are also the agent surface's list, so it sees the keys, but its turn has no
+  login;
+- a Viewer (the part's refusal);
+- a Member login that doesn't work the office (`NOT_OFFICE`).
+
+**A role's ticks.** Where asking is open (`enabled`, as the office shows the
+two ticks), a role Chief makes writes `kids` and `open` outright, false
+unless said. That includes a role made for a person put on a role nobody
+listed.
+- A role named again takes a tick only when one was said. A role Chief
+  doesn't touch keeps its keys exactly.
+- A tick that lets more people in on a role already there is shown first,
+  saved only on the person's yes, and held on a tainted turn. That's `kids`
+  turned off (no background check needed any more) or `open` turned on (the
+  public page).
+- With nobody signed in, no tick the model sent is taken, and every role
+  keeps its own.
+- A new event with no roles named still writes no `_roles`, so the room's
+  usual roles apply as before.
+- Where asking is closed, no tick is written and none is taken. The public
+  page honors `open: false` whatever the switch says, and the office has no
+  tick there to undo one.
+
+**"make" is the Light Table, and Chief never starts it from a save.** The
+only server path that makes a flyer for an event is the Studio's Light Table
+(`studio_light_table`, through `creative_director.handle_design_flyer`). It
+is:
+- the church owner's (`images.business`), behind `STUDIO_LIGHT_TABLE`;
+- class C and paid: credits, the spend guard before every paid call, the 20
+  a day limit, metering through `llm_call` and `api_usage_logger`, but no
+  `rate_limit` on the design route;
+- drawn in the background, so the picture isn't ready in the same save;
+- put on the event only when the person presses Use as the flyer (S4a's
+  FlyerStudio on the event's page).
+
+Starting it inside a class-A save would skip the class-C gate, so Chief hands
+over the office's way instead:
+- to the owner with the Light Table open: the event's Volunteers and flyer,
+  then Ask Chief to make one;
+- to an owner without it: make one in the Studio and pick it from the
+  gallery;
+- to anyone else: upload one, or pick one on the event's page.
+
+**The events-room setup.** With builds on, `chief_build_runtime.route_actions`
+folds a reply that makes the events room and the event into one background
+setup. That setup runs with nobody signed in, so the event's teams and flyer
+can't go with it. A receipt says so instead of dropping them without a word.
+Where asking is open it says "once it's saved, ask again"; where it isn't, it
+says asking the serving teams (or putting a flyer on) isn't on here yet.
+
+**How full is my event** is `event_volunteers`, a read that is Chief's alone
+(`chief_only`, sensitive). It needs the signed-in login, so it's off the
+outside agent and KAI surfaces, like `serving_week`.
+- Every business's tools carry it, so its description is one short line:
+  only where the turn's EVENT VOLUNTEERS line shows.
+- Where asking is open, it returns the picture route's own reader, as the
+  login. Names on team spots and the check words reach Chief exactly where
+  the picture gives them.
+- Elsewhere (closed, not ready, not a church) it answers from the event's
+  own roles and sign-ups, as its room shows them, with no word of the
+  serving teams. Who may read the names is decided before anything is read.
+  Where the office's own picture has a gate (`_login`: an office login of a
+  church whose teams have owners, with the migration in), that gate decides,
+  switch or no switch; a login it refuses hears its refusal. Where it has no
+  gate (before the migration, Who serves when off, not such a church), the
+  rooms are read with the login's own token, as `list_module_entries` reads
+  them, so the database's rules decide. Never names read as the server.
+- Someone else's words raise the turn's taint on the turn's own context.
+  That covers the ask's note, the answer's note, and the names on the
+  event's own roles, which members and the public type. It also covers
+  whatever `untrusted_text.defuse` found inside the read's thread: the
+  thread's copy of the count would be lost, so the thread hands it back.
+  Team spots' names (contacts, which a stranger may type on the booking
+  widget) are fenced too.
+- An event is found by its id or its name. Its whole name comes before a
+  part of one; for an event that repeats under one name, the next one.
+  Anything else is named back with the days.
+
+**The prompt.** The per-church availability rides the turn's tail (chief
+chat's login block, beside the leaders schedule's `turn_line`), never a
+cached segment. The switch's owner mode opens it by login, a Viewer's line
+differs, and it changes on a Thursday. The universal and per-business
+segments are unchanged. The write tools' schema is static for every business
+and says "only where the turn's EVENT VOLUNTEERS line shows". The tools'
+cache refreshes once at deploy.
+
+**A plain change to an event is followed at once,** as the office's save is.
+An `update_module_entry` with no roles, teams or flyer calls `changed` after
+the save. The entry is read with its room's archetype embedded
+(`custom_modules(archetype)`), so it's still one read. The room, the gate
+and the events page are read only for an events room's entry, signed in, at
+a church the follow itself opens for (`_follows`: the switch open for the
+church, not just for a login, event dates open there, never a sample church;
+the owner mode's lookup is kept ten minutes). In owner mode every other
+church, even with the platform owner's own login there, pays nothing. A new
+event's follow has the same gate. Every other update reads exactly what it
+read before, and answers as before.
+
+**The registry.** `create_module_entry` and `update_module_entry` stay class
+A. A waiting ask is taken back on the event's page, one that went straight on
+comes off Who serves when, and a flyer comes off on the event's page. Each is
+shown first, needs the person's yes, and never runs unattended or from an
+outside agent. The Chief-only reads' review list (`test_tool_loop.py`)
+gained `event_volunteers`.

@@ -307,8 +307,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "update_session":                _w("A", "edits a session row"),
     "create_project":                _w("A", "creates a project"),
     "update_project":                _w("A", "edits a project"),
-    "create_module_entry":           _w("A", "creates a module row"),
-    "update_module_entry":           _w("A", "edits a module row"),
+    # On an event at a church that asks its serving teams (chief_event_volunteers, docs/EVENT_VOLUNTEERS.md S5),
+    # either may also file the event's ask to the serving teams (event_volunteers.ask, as the signed-in login:
+    # taken back while it waits, and an ask that goes straight on comes off Who serves when) and put a gallery
+    # picture on as its flyer (taken off on the event's page). Still A: both are undone in the app, and neither
+    # runs unseen: the first send saves nothing and shows what saving does, the second needs the person's yes,
+    # and neither runs unattended, from an outside agent or on a tainted turn.
+    "create_module_entry":           _w("A", "creates a module row; on an event, may also file its ask to the "
+                                             "serving teams and put a gallery picture on as its flyer, shown first"),
+    "update_module_entry":           _w("A", "edits a module row; on an event, may also file its ask to the "
+                                             "serving teams and put a gallery picture on as its flyer, shown first"),
     "ensure_module":                 _w("A", "creates a module if absent"),
     # Class A: a form is INERT until the practitioner embeds it, and the
     # off switch (is_active) is part of update. Nothing is sent, nothing
@@ -588,6 +596,11 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "check_dates": {**_r("reads, for a few candidate days, who on a church's leaders schedule can't come (names and "
                          "why: away, waiting, something that repeats); sets nothing", sensitive=True),
                     "chief_only": True},
+    # An event's volunteers (chief_event_volunteers, docs/EVENT_VOLUNTEERS.md S5): how full one event is, through
+    # the office's own picture (event_volunteers.picture, its name rules), as the signed-in login, so Chief's alone.
+    "event_volunteers": {**_r("reads how full one event is: the serving teams' spots (open, asked, yes) and its own "
+                              "roles, the ask's state and its note; names only where the picture lets this login "
+                              "read them", sensitive=True), "chief_only": True},
     "serving_week": {**_r("reads one week of a church's volunteers by department (church_week: who is on, open "
                           "places, away; hours and checks only where church_serving lets this login); volunteers by "
                           "name", sensitive=True), "chief_only": True},

@@ -228,6 +228,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
     import chief_church_schedule
     out += list(chief_church_schedule.TOOLS)  # who is away, the asks, candidate days, the volunteers' week: the same
+    import chief_event_volunteers
+    out.append(chief_event_volunteers.TOOL)  # how full one event is: the signed-in login's picture, the same
     import chief_church_jobs
     out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
     import chief_church_sheet
@@ -343,8 +345,12 @@ def remaining_tag_actions(actions):
     # attempt. A prose tag must not retry it or incur a second charge.
     link_operations = {r.get('link_operation') for r in _writes_this_turn.get()
                        if r.get('type') == 'link_wallet_pilot'}
+    # An event saved natively with its teams or flyer (chief_event_volunteers):
+    # the same send as a tag in the reply would save it, and ask, again.
+    import chief_event_volunteers
     return [a for a in actions if not (image_attempted() and a.get("type") == "generate_image")
-            and not (a.get('type') == 'link_wallet_pilot' and a.get('operation', 'status') in link_operations)]
+            and not (a.get('type') == 'link_wallet_pilot' and a.get('operation', 'status') in link_operations)
+            and not chief_event_volunteers.ran_this_turn(a)]
 
 
 def _link_pilot_offered() -> bool:
@@ -501,7 +507,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "list_money_asks",
                                               "draft_church_job", "draft_church_structure",
                                               "church_structure_status", "who_is_away", "time_off_asks",
-                                              "check_dates", "serving_week")):
+                                              "check_dates", "serving_week", "event_volunteers")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

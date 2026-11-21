@@ -896,7 +896,12 @@ def route_actions(actions):
         kind = 'event_setup' if entry or flyer else 'site_door'
         build = {'type':'submit_work_order','kind':kind,'facts':facts}
         remaining = [a for a in actions if a.get('type') not in ('ensure_module','create_module_entry','create_client_form','generate_image') and not (a.get('type')=='set_site_capability' and a.get('capability')=='events')]
-        return [build,*remaining]
+        # The setup runs in the background with nobody signed in, so the folded
+        # event's serving teams and flyer (chief_event_volunteers) can't go with
+        # it: a receipt says so, instead of dropping them without a word.
+        import chief_event_volunteers
+        unasked = chief_event_volunteers.after_setup(entry or {})
+        return [build,*remaining,*([unasked] if unasked else [])]
     out=[]
     for action in actions:
         kind=action.get('type')

@@ -81,7 +81,10 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          "team_week", "monthly_report_draft",
                                          # The leaders schedule (chief_church_schedule): names, days, reasons
                                          # only as the page shows them.
-                                         "who_is_away", "time_off_asks", "check_dates", "serving_week"}
+                                         "who_is_away", "time_off_asks", "check_dates", "serving_week",
+                                         # An event's volunteers (chief_event_volunteers): names only as the
+                                         # office's own picture lets the signed-in login read them.
+                                         "event_volunteers"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
     assert names == (exposed - {"show_view"}) | chief_only, (
         "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "
