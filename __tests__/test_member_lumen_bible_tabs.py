@@ -91,6 +91,27 @@ def test_each_tab_is_a_real_address_with_its_segment_marked(bible, fake, monkeyp
     assert '<nav class="lm-bsegs" aria-label="Bible">' in seg
     assert '<nav class="mb-nav' in html                                                # the tab bar stays
     assert 'class="mb-back"' not in html                                               # a main tab: no back bar
+    # The segmented control is the bar at the top (Look 5.1): no church bar over the Bible.
+    assert '<header class="mb-top lm-own lm-own-bible"><div class="lm-bseg">' in html
+    assert html.count('<header class="mb-top') == 1 and "lm-brand" not in html and 'href="/my/notifications"' not in html
+    assert html.index("</header>") < html.index('<main class="mp-shell')
+
+
+def test_the_reader_s_bar_is_the_segmented_control_with_its_line(bible, fake, monkeypatch):  # noqa: F811
+    """The reader at a chapter: the segmented control is the bar at the top
+    (no church bar), the line of how far you've read on its lower edge; the
+    bar is the sheet's sticky top bar, so the script no longer places it."""
+    import member_lumen_bible as mlb
+    import member_lumen_ui as lm
+    html = _client(fake, monkeypatch).get("/my/bible/john/1").text
+    top = html[html.index('<header class="mb-top lm-own lm-own-bible">'):html.index("</header>")]
+    assert '<span class="lm-rprog" aria-hidden="true"></span>' in top and "lm-brand" not in top
+    assert html.count('<header class="mb-top') == 1 and html.index("</header>") < html.index('<div class="lm-rbar">')
+    assert "style.top" not in mlb.SEG_JS and "location.replace(a.href)" in mlb.SEG_JS
+    css = mlb.CSS
+    assert "body.lm .mb-top.lm-own-bible{" in css and "body.lm .lm-bseg{flex:1;" in css
+    assert ".mp-shell>.lm-bseg" not in css and "top:max(62px" not in css
+    assert ".lm .mb-top.lm-own{min-height:60px;}" in lm.css()
 
 
 def test_the_devotional_dot_and_its_cookie(bible, fake, monkeypatch):  # noqa: F811

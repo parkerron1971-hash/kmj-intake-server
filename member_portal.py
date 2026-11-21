@@ -660,7 +660,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
            wide: bool = False, inline_css: bool = False, lumen_bar: Tuple[str, str] = ("", ""),
            lumen_head: str = "", lumen_dark: bool = False, lumen_bar_colour: str = "",
-           lumen_reader: bool = False) -> str:
+           lumen_reader: bool = False, lumen_top: str = "") -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -681,6 +681,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     new look (the reader's chapter and Aa); today's look ignores it.
     `lumen_head` (a conversation in the new look: member_lumen_people.thead)
     is its face and name in the bar at the top; today's look ignores it.
+    `lumen_top` is a main tab's own top under the new look, in place of the
+    church's bar (Look 5.1: Watch's and Connect's large title with its one
+    button, the Bible's segmented control); today's look ignores it.
     `lumen_dark` draws the page dark under the new look whatever the
     member's look; today's look ignores it. Every new-look page wears the
     member's look (member_lumen_look: Light, Dark or Same as my phone, the
@@ -768,7 +771,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         script = script + member_mini.page_script(body)
         top, body_cls, tabbar, scroll = _lumen_frame(
             biz, theme, title, tab=tab, who=who, back=back, bare=bare, bar=bar, ctx=ctx, name=name, logo=logo,
-            word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head)
+            word=word, avatar=avatar, side=side, body_cls=body_cls, extra=lumen_bar, head=lumen_head, own=lumen_top)
         # The member's look (member_lumen_look): lm-dark (Dark), lm-auto (Same
         # as my phone), nothing (Light), decided by the server so the page
         # arrives in it. Every page under Watch is a cinema
@@ -893,7 +896,8 @@ def lumen_head_look(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
 def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab: Optional[str],
                  who: Optional[Dict[str, Any]], back: Optional[Tuple[str, str]], bare: bool, bar: bool,
                  ctx: Dict[str, Any], name: str, logo: str, word: str, avatar: str, side: Tuple[str, str],
-                 body_cls: str, extra: Tuple[str, str] = ("", ""), head: str = "") -> Tuple[str, str, str, str]:
+                 body_cls: str, extra: Tuple[str, str] = ("", ""), head: str = "",
+                 own: str = "") -> Tuple[str, str, str, str]:
     """The new look's frame for one page (member_lumen_ui): (top bar, body
     class attribute, tab bar, scroll script).
 
@@ -902,7 +906,11 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
     switcher for someone with more than one space); on the right, in Look
     5.1's order, the bell (its dot), the message bubble with the unread count
     (member_portal_threads' count, already read for this page) and the
-    profile picture. Every other page is
+    profile picture. A main tab that draws its own top (`own`, trusted
+    markup: Watch's and Connect's large title with its one button, the
+    Bible's segmented control, as Look 5.1 draws them) has that in the bar
+    instead, and no church bar: .mb-top.lm-own.lm-own-<tab>, still the
+    sticky bar with the phone's safe area. Every other page is
     pushed: a plain back bar, its own back link or, with none, Back to the
     tab it was opened over (the browser's history; Home without it).
     `extra` = (middle, right) puts more in a pushed page's bar: the reader's
@@ -946,6 +954,8 @@ def _lumen_frame(biz: Dict[str, Any], theme: Dict[str, Any], title: str, *, tab:
         f'<header class="mb-top{" lm-mid" if mid else ""}"><div class="mb-top-l">{left}</div>'
         + (f'<div class="lm-barmid">{mid}</div>' if mid else f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>')
         + f'<span class="mb-top-right">{right}{more}</span></header>')
+    if main and own and not bare:
+        top = f'<header class="mb-top lm-own lm-own-{tab}">{own}</header>'
     names = re.findall(r'class="([^"]*)"', body_cls)
     cls = " ".join(["lm", "lm-tab" if main else "lm-push"] + lmf.body_class(biz) + (names[0].split() if names else []))
     import member_app_ui as ui

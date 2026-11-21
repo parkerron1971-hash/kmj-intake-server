@@ -8,8 +8,10 @@ am seeing is actually how it works." Who sees it is member_lumen.py
 library today's Watch reads (member_portal_sermons.load_library: published
 messages and the series); the mock's church is made up, so nothing here is.
 
-WATCH (/my/sermons). The "Watch" title, then Messages | Series (two links:
-/my/sermons and ?view=series, so it works without a script).
+WATCH (/my/sermons). The "Watch" title in the bar at the top, in place of the
+church's bar (as the mock; its search button isn't drawn, since the app has
+no message search), then Messages | Series (two links: /my/sermons and
+?view=series, so it works without a script).
   Messages: the latest message edge to edge on a rounded card (its art, the
   kicker "Latest · <series>, part n", the title in serif, speaker ·
   scripture · how long it runs when this member's phone has played it);
@@ -562,9 +564,14 @@ def _mrow(pg: _Page, s: Dict[str, Any]) -> str:
             f'<small>{_meta(s.get("speaker"), s.get("scripture"), short_day(s.get("preached_on"), pg.today))}</small></span></a>')
 
 
+# Watch's own top bar (Look 5.1), in place of the church's: the large title.
+# The mock's search button isn't drawn: the app has no message search yet.
+TOP = '<h1 class="lw-t1">Watch</h1>'
+
+
 def _head(view: str) -> str:
     cur = ' aria-current="page"'
-    return (f'<h1 class="lw-t1">Watch</h1><nav class="lw-seg" aria-label="Messages or series">'
+    return (f'<nav class="lw-seg" aria-label="Messages or series">'
             f'<a href="/my/sermons"{cur if view != "series" else ""}>Messages</a>'
             f'<a href="/my/sermons?view=series"{cur if view == "series" else ""}>Series</a></nav>')
 
@@ -581,7 +588,7 @@ def watch_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Optional[
         body = (f'<div class="lw lw-watch">{_head(view)}{top}<p class="mp-err lw-pad" role="alert" style="margin-top:20px">'
                 f'Messages couldn\'t load just now. Please try again in a moment.</p>'
                 f'{"" if live else live_card(service, next_occ)}</div>')
-        return _shell(biz, site, "Watch", body, tab="watch", who=who_me)
+        return _shell(biz, site, "Watch", body, tab="watch", who=who_me, lumen_top=TOP)
     if not lib["sermons"]:
         import member_portal_lumen as mlp
         church = (biz.get("name") or "").strip() or "the church"
@@ -590,14 +597,14 @@ def watch_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Optional[
                 f'<h2 id="lw-soon-h">Messages are on the way</h2><p>When {_e(church)} posts a message, it shows up '
                 f'here, ready to watch or listen, with the scripture and notes.</p></section>'
                 f'{"" if live else live_card(service, next_occ)}<div class="lw-pad lw-verse">{mlp.verse_page(bible)}</div></div>')
-        return _shell(biz, site, "Watch", body, tab="watch", who=who_me)
+        return _shell(biz, site, "Watch", body, tab="watch", who=who_me, lumen_top=TOP)
     pg = _Page(biz, site, who_me, lib)
     if view == "series":
         body = f'<div class="lw lw-watch" data-lw-who="{pg.who}">{_head(view)}{top}{_series_grid(pg)}</div>'
-        return _shell(biz, site, "Series", body, tab="watch", who=who_me, script=pg.json())
+        return _shell(biz, site, "Series", body, tab="watch", who=who_me, script=pg.json(), lumen_top=TOP)
     body = (f'<div class="lw lw-watch" data-lw-who="{pg.who}">{_head(view)}{top}{_messages(pg, show_all)}'
             f'{"" if live else live_card(service, next_occ)}</div>')
-    return _shell(biz, site, "Watch", body, tab="watch", who=who_me, script=pg.json())
+    return _shell(biz, site, "Watch", body, tab="watch", who=who_me, script=pg.json(), lumen_top=TOP)
 
 
 def _messages(pg: _Page, show_all: bool) -> str:
@@ -1404,9 +1411,8 @@ CSS = Template("""
 .lm .lw-pad{padding:0 var(--lw-x);}
 .lm .lw-kick{display:flex;align-items:center;gap:7px;margin:0;font:750 11px/1.2 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--acc);}
 .lm .lw-quiet{margin:18px 0 0;font:400 14.5px/1.45 var(--mb-ui);color:var(--fg2);}
-/* the title and Messages | Series */
-.lm .lw-t1{margin:14px var(--lw-x) 0;font:800 30px/1.1 var(--mb-ui);letter-spacing:-.028em;color:var(--fg);}
-.lm .lw-seg{display:flex;margin:14px var(--lw-x) 0;padding:3px;border-radius:14px;background:var(--s1);}
+/* Messages | Series, under the title in the bar (member_lumen_ui: .lm-own) */
+.lm .lw-seg{display:flex;margin:4px var(--lw-x) 0;padding:3px;border-radius:14px;background:var(--s1);}
 .lm .lw-seg a{flex:1;height:36px;border-radius:11px;display:flex;align-items:center;justify-content:center;font:650 14px/1 var(--mb-ui);
   color:var(--fg2);text-decoration:none;}
 .lm .lw-seg a[aria-current]{background:var(--lm-raise);color:var(--fg);box-shadow:0 1px 3px var(--lm-shadow),0 0 0 .5px var(--lm-line);}

@@ -10,8 +10,9 @@ left out.
 CONNECT (/my/connect, member_portal_lumen.render_connect), in the mock's
 order:
 
-  1. "Connect" and "Your people at <church>" (the message bubble with its
-     count is the top bar's, which the shell draws).
+  1. "Connect" and the message bubble with its count in the bar at the top,
+     in place of the church's bar (top(): the count the bar reads already),
+     then "Your people at <church>".
   2. Your groups: a row per group with its picture (the church's own for the
      group, else its initials), when it meets next on the church's clock
      ("Tonight at 7 PM"), and the chat's real unread count
@@ -111,10 +112,22 @@ def _and(names: List[str]) -> str:
 # ─── Connect ─────────────────────────────────────────────────────────
 
 
-def title(church: str) -> str:
-    """The tab's title and who it's about."""
-    return (f'<header class="lm-ctop"><h1 class="lm-ctt">Connect</h1>'
-            f'<p class="lm-ctsub">Your people at {_e(church)}</p></header>')
+def top(biz: Dict[str, Any]) -> str:
+    """The tab's own top bar (Look 5.1), in place of the church's: the large
+    title and, where Messages is on, the message bubble with its unread
+    count (the count the bar reads already: member_portal_threads.BADGE,
+    from member_portal_threads.counts, kept 15 s; nothing more is read)."""
+    import member_lumen_ui as lm
+    import member_portal_messaging as mpm
+    import member_portal_threads as mpt
+    chat = lm.bubble(mpt.BADGE.get()) if mpm.inbox_on(biz) else ""
+    right = f'<span class="mb-top-right">{chat}</span>' if chat else ""
+    return f'<h1 class="lm-ctt">Connect</h1>{right}'
+
+
+def sub(church: str) -> str:
+    """Who the tab is about, under the title in the bar."""
+    return f'<p class="lm-ctsub">Your people at {_e(church)}</p>'
 
 
 def _thumb(biz: Dict[str, Any], g: Dict[str, Any], pool: List[str], used: set, cls: str = "lm-gth") -> str:
@@ -533,6 +546,7 @@ CSS = Template("""
 .lm .lm-ctop{margin:14px 0 0;}
 .lm .lm-ctt{margin:0;font:800 30px/1.05 var(--mb-ui);letter-spacing:-.028em;color:var(--fg);}
 .lm .lm-ctsub{margin:6px 0 0;font:400 14.5px/1.4 var(--mb-ui);color:var(--fg2);}
+.lm .lm-cx>.lm-ctsub:first-child{margin-top:-4px;}
 .lm .lm-cx .lm-sec{margin:32px 0 10px;}
 .lm .lm-cx .lm-h2{font-size:19px;}
 .lm .lm-cxmore{display:inline-block;margin-top:6px;padding:6px 0;color:var(--acc);font:650 14px/1 var(--mb-ui);text-decoration:none;}
