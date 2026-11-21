@@ -14,7 +14,9 @@ what visitors see, served by public_site.py on the church's own host
 
 Published sermons only. A page with nothing published is a branded 404,
 never an empty shelf. Video plays inside the page for YouTube, Vimeo,
-Loom and Facebook links; anything else becomes a plain "Watch" link.
+Loom and Facebook links; anything else becomes a plain "Watch" link. A
+YouTube link's own start time (t= or start=) is kept, so the church's team
+can paste a link that starts at the sermon (youtube_start).
 Audio uses the browser's own player. Everything interpolated is escaped;
 every link was stored as https:// (the table refuses anything else).
 
@@ -65,9 +67,46 @@ def youtube_id(url: str) -> str:
     return ""
 
 
+_START_RE = re.compile(r"^(?:(\d{1,2})h)?(?:(\d{1,4})m)?(?:(\d{1,6})s?)?$")
+START_MAX = 86400
+
+
+def _seconds(v: str) -> int:
+    """'95', '95s', '1h22m5s', '82m' → seconds; 0 for anything else."""
+    v = (v or "").strip().lower()
+    m = _START_RE.match(v) if v else None
+    if not m or not any(m.groups()):
+        return 0
+    h, mins, s = (int(x or 0) for x in m.groups())
+    n = h * 3600 + mins * 60 + s
+    return n if 0 < n <= START_MAX else 0
+
+
+def youtube_start(url: str) -> int:
+    """The second a YouTube link starts at: its t= or start= (seconds, or
+    the 1h22m5s / 82m forms), in the query or after #, on watch, youtu.be,
+    live and embed links; 0 when it has none (or isn't a YouTube link).
+    Pure: no read."""
+    if not youtube_id(url):
+        return 0
+    try:
+        p = urlparse((url or "").strip())
+    except ValueError:
+        return 0
+    for part in (p.query, p.fragment):
+        for x in part.split("&"):
+            k, _, v = x.partition("=")
+            if k in ("t", "start"):
+                n = _seconds(v)
+                if n:
+                    return n
+    return 0
+
+
 def video_embed_src(url: str) -> str:
     """The iframe src for a sermon video link, or '' when the host isn't
-    one we can play in the page (the caller then links out)."""
+    one we can play in the page (the caller then links out). A YouTube
+    link's own start time rides along as the embed's start=."""
     u = (url or "").strip()
     try:
         p = urlparse(u)
@@ -85,7 +124,8 @@ def video_embed_src(url: str) -> str:
     path = p.path or ""
     if host in YOUTUBE_HOSTS:
         vid = youtube_id(u)
-        return f"https://www.youtube-nocookie.com/embed/{vid}" if vid else ""
+        at = youtube_start(u)
+        return (f"https://www.youtube-nocookie.com/embed/{vid}" + (f"?start={at}" if at else "")) if vid else ""
     if host == "vimeo.com":
         vid = _clean_id(path.strip("/").split("/")[0])
         return f"https://player.vimeo.com/video/{vid}" if vid.isdigit() else ""

@@ -68,7 +68,7 @@ moments for ten minutes (localStorage, per member) and the page lays them
 over what the server drew, including on a page the browser kept: a pause
 shows on Watch the moment you go back. Watched = within 45 s of the end
 (or 95% in); started = 20 s in. The player opens where you left off, a
-few seconds back. Video and audio keep their own place (a church's audio
+few seconds back, else where the church's own link starts (a YouTube t=). Video and audio keep their own place (a church's audio
 is often the sermon alone, its video the whole service).
 
 SAVE. The bookmark on Watch and on a message: metadata.member_watch.s =
@@ -774,8 +774,15 @@ def _resume(p: Optional[List[Any]]) -> int:
 
 def _with_start(src: str, at: int) -> str:
     """The embed's own start: YouTube's start=, Vimeo's #t=; the API on
-    for both, so the page hears where the member is."""
+    for both, so the page hears where the member is. Where the member left
+    off (`at`) wins over the link's own start (sermons_public.youtube_start:
+    the church's team can paste a link that starts at the sermon); either
+    way the start is the last parameter, &start=N, where the page's script
+    looks for it."""
     if "youtube" in src:
+        own = re.search(r"[?&]start=(\d+)", src)
+        src = re.sub(r"[?&]start=\d+", "", src)
+        at = at or (int(own.group(1)) if own else 0)
         q = "&" if "?" in src else "?"
         return src + f"{q}enablejsapi=1&rel=0&playsinline=1" + (f"&start={at}" if at else "")
     if "player.vimeo.com" in src:
