@@ -1067,16 +1067,27 @@ def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str
     """The front door (member_app_signin): the church's photo in an open
     doorway, "Welcome home.", and the form in a sheet below."""
     import member_app_signin as sg
+    import member_join as mj
     from public_form_theme import resolve_theme
-    return _shell(biz, site, "Sign in", sg.signin_body(biz, site, resolve_theme(biz, site), error=error, email=email),
+    return _shell(biz, site, "Sign in", sg.signin_body(biz, site, resolve_theme(biz, site), error=error, email=email,
+                                                       join=mj.join_open(biz)),
                   script=sg.SIGNIN_JS, door=True)
 
 
-def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") -> str:
+def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "", join: str = "") -> str:
+    """`join`: member_join's signed pass, for someone joining."""
     import member_app_signin as sg
     return _shell(biz, site, "Enter your code",
-                  sg.code_body(biz, site, email=email, shown=show_ident(email), texted=is_phone(email), error=error),
+                  sg.code_body(biz, site, email=email, shown=show_ident(email), texted=is_phone(email), error=error,
+                               join=join),
                   script=sg.CODE_JS, door=True)
+
+
+def render_join(biz: Dict[str, Any], site=None, *, error: str = "",
+                vals: Optional[Dict[str, Any]] = None) -> str:
+    """New here? Join (member_join)."""
+    import member_app_signin as sg
+    return _shell(biz, site, "Join", sg.join_body(biz, site, error=error, vals=vals), door=True)
 
 
 def render_try_again(biz: Dict[str, Any], site=None) -> str:
@@ -1685,11 +1696,20 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sess and sess.get("unavailable"):
         return _page(render_try_again(biz, site), 503)
     if not sess:
+        if sub == "/my/join":
+            # New here? Join (member_join): someone the church doesn't have yet.
+            import member_join as mj
+            if not sign_in_open(biz):
+                return _page(render_signin_paused(biz, site))
+            if mj.join_open(biz):
+                return _page(render_join(biz, site))
         if sub != "/my":
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
         if not sign_in_open(biz):
             return _page(render_signin_paused(biz, site))
         return _page(render_signin(biz, site))
+    if sub == "/my/join":
+        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     if not sess["me"]:
         return _page(render_choose(biz, site, sess["people"]))
     me, this_year = sess["me"], date.today().year
@@ -2378,17 +2398,32 @@ async def _send_code_text(biz: Dict[str, Any], phone: str, code: str) -> None:
         logger.warning("member code text failed (%s) for business %s", type(e).__name__, biz.get("id"))
 
 
-async def _issue_and_send(biz: Dict[str, Any], email: str) -> None:
+async def _issue_and_send(biz: Dict[str, Any], email: str,
+                          join: Optional[Dict[str, str]] = None) -> None:
     """Runs AFTER the response is sent, so a known address and an unknown
     one answer in the same time: the lookup, the stored code and the mail
-    are all out of the reply's path."""
+    are all out of the reply's path. `join` (member_join's checked pass):
+    someone joining, so an address the church doesn't have gets a code too
+    (their record is made only once that code comes back right)."""
     try:
         people = await asyncio.to_thread(contacts_for_ident, biz["id"], email)
-        if not people or len(people) > MAX_HOUSEHOLD:
-            if people:
-                logger.warning("member sign-in refused: an email or number is on more than %s record "
-                               "at business %s", MAX_HOUSEHOLD, biz.get("id"))
+        if people is None:
             return
+        if not people:
+            if not join:
+                return
+            import rate_limit
+            if not rate_limit.allow_strict("member_join_sent_day", str(biz["id"])):
+                logger.warning("member join: the day's codes to new addresses are spent (business %s)",
+                               str(biz.get("id"))[:8])
+                return
+            name = f"{join.get('first') or ''} {join.get('last') or ''}".strip()
+        elif len(people) > MAX_HOUSEHOLD:
+            logger.warning("member sign-in refused: an email or number is on more than %s record "
+                           "at business %s", MAX_HOUSEHOLD, biz.get("id"))
+            return
+        else:
+            name = people[0].get("name") or ""
         failed = await asyncio.to_thread(failures_today, biz["id"], email)
         if failed is None or failed >= MAX_FAILED_PER_DAY:
             return
@@ -2399,7 +2434,58 @@ async def _issue_and_send(biz: Dict[str, Any], email: str) -> None:
     if is_phone(email):
         await _send_code_text(biz, email, code)
     else:
-        await _send_code_email(biz, email, people[0].get("name") or "", code)
+        await _send_code_email(biz, email, name, code)
+
+
+def _join_pass(biz: Dict[str, Any], form: Any, email: str) -> Tuple[str, Optional[Dict[str, str]]]:
+    """(the raw pass, what it says) when the form carries member_join's pass
+    for this church and address and joining is open; ("", None) otherwise."""
+    raw = str(form.get("join") or "")
+    if not raw:
+        return "", None
+    import member_join as mj
+    if not mj.join_open(biz):
+        return "", None
+    who = mj.read_pass(raw, biz["id"], email)
+    return (raw, who) if who else ("", None)
+
+
+@router.post("/my/join", include_in_schema=False)
+async def join(request: Request):
+    """New here? Join (member_join): the code goes out to an address the
+    church may not have; the record waits for the code to come back."""
+    church = await _church_or_404(request)
+    biz, site = church["business"], church["site"]
+    if not sign_in_open(biz):
+        return _page(render_signin_paused(biz, site))
+    import member_join as mj
+    if not mj.join_open(biz):
+        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+    import rate_limit
+    form = await request.form()
+    vals, error = mj.clean(form)
+    if error:
+        return _page(render_join(biz, site, error=error, vals=vals), 400)
+    email = vals["ident"]
+    token = mj.mint_pass(biz["id"], vals)
+    if str(form.get(mj.HONEYPOT) or "").strip():
+        # A bot filled the field a person never sees: the same page, nothing sent.
+        return _page(render_code(biz, site, email=email, join=token))
+    if not rate_limit.allow_strict("member_join_ip", rate_limit.trusted_client_ip(request)):
+        return _page(render_join(biz, site, vals=vals,
+                                 error="Lots of people are joining from this network just now. "
+                                       "Wait a few minutes, then try again."), 429)
+    key = f"{biz['id']}|{email}"
+    if not rate_limit.allow_strict("member_code_email_minute", key) or \
+            not rate_limit.allow_strict("member_code_email_day", key):
+        return _page(render_code(biz, site, email=email, join=token,
+                                 error=("A code was just texted to this number. Give it a minute."
+                                        if is_phone(email) else
+                                        "A code was just sent to this address. Give it a minute, and check spam.")), 429)
+    from starlette.background import BackgroundTask
+    who = {"first": vals["first"], "last": vals["last"], "visit": vals["visit"]}
+    return HTMLResponse(content=render_code(biz, site, email=email, join=token), headers=_SECURE_HEADERS,
+                        background=BackgroundTask(_issue_and_send, biz, email, who))
 
 
 @router.post("/my/code", include_in_schema=False)
@@ -2420,18 +2506,20 @@ async def request_code(request: Request):
     # address is known, so none of them reveal it.
     ip = rate_limit.trusted_client_ip(request)
     key = f"{biz['id']}|{email}"
+    # "Send a new code" on a joiner's page carries their pass (member_join).
+    token, who = _join_pass(biz, form, email)
     if not rate_limit.allow_strict("member_code_ip", ip):
-        return _page(render_code(biz, site, email=email,
+        return _page(render_code(biz, site, email=email, join=token,
                                  error="Lots of sign-ins from this network just now. Wait a few minutes, then send a new code."), 429)
     if not rate_limit.allow_strict("member_code_email_minute", key) or \
             not rate_limit.allow_strict("member_code_email_day", key):
-        return _page(render_code(biz, site, email=email,
+        return _page(render_code(biz, site, email=email, join=token,
                                  error=("A code was just texted to this number. Give it a minute."
                                         if is_phone(email) else
                                         "A code was just sent to this address. Give it a minute, and check spam.")), 429)
     from starlette.background import BackgroundTask
-    return HTMLResponse(content=render_code(biz, site, email=email), headers=_SECURE_HEADERS,
-                        background=BackgroundTask(_issue_and_send, biz, email))
+    return HTMLResponse(content=render_code(biz, site, email=email, join=token), headers=_SECURE_HEADERS,
+                        background=BackgroundTask(_issue_and_send, biz, email, who))
 
 
 @router.post("/my/verify", include_in_schema=False)
@@ -2454,9 +2542,22 @@ async def verify_code(request: Request):
     people = await asyncio.to_thread(contacts_for_ident, biz["id"], email)
     if people is None:
         return _page(render_try_again(biz, site), 503)
+    # Someone joining (member_join) whose address the church doesn't have:
+    # the right code makes their record, then signs them in.
+    token, who = _join_pass(biz, form, email) if not people else ("", None)
     result = await asyncio.to_thread(check_code, biz["id"], email, str(form.get("code") or ""))
-    if result != "ok" or not people:
-        return _page(render_code(biz, site, email=email, error=GENERIC_CODE_ERROR), 400)
+    if result != "ok" or not (people or who):
+        return _page(render_code(biz, site, email=email, error=GENERIC_CODE_ERROR, join=token), 400)
+    if not people:
+        import member_join as mj
+        person = await asyncio.to_thread(mj.make_person, biz["id"], email, who)
+        if not person:
+            return _page(render_try_again(biz, site), 503)
+        from starlette.background import BackgroundTask
+        resp = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS,
+                                background=BackgroundTask(mj.welcome, biz, person, who["visit"]))
+        _set_session(resp, mint_session(biz["id"], email, person["id"]))
+        return resp
     if len(people) > MAX_HOUSEHOLD:
         return _page(render_shared_address(biz, site), 403)
     cid = people[0]["id"] if len(people) == 1 else ""

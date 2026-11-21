@@ -97,6 +97,21 @@ _CSS = Template("""
 .si-verse cite{font-style:normal;font-size:13px;color:var(--fg2);}
 .si-foot{margin:28px 0 calc(24px + env(safe-area-inset-bottom,0px));text-align:center;font-size:12px;color:var(--fg3);}
 
+/* New here? Join (member_join) */
+.si-join{margin:12px 0 0;text-align:center;font-size:15px;color:var(--fg2);}
+.si-join a,.si-note a{color:var(--acc);font-weight:650;text-decoration:none;}
+.si-two{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.si-two>div{display:flex;flex-direction:column;gap:6px;min-width:0;}
+.si-pick{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:0;padding:0;margin:6px 0 0;min-width:0;}
+.si-pick legend{font-size:14px;font-weight:600;color:var(--fg2);margin:0 0 8px;padding:0;}
+.si-pick label{display:flex;align-items:center;gap:10px;min-height:52px;padding:8px 14px;border-radius:14px;background:var(--s1);
+  font-size:15px;font-weight:600;color:var(--fg);cursor:pointer;}
+.si-pick input{width:20px;height:20px;margin:0;accent-color:var(--acc);flex:none;}
+.si-pick label:has(input:checked){box-shadow:inset 0 0 0 2px var(--acc);}
+.si-check{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--fg);margin:8px 0 2px;cursor:pointer;}
+.si-check input{width:20px;height:20px;margin:0;accent-color:var(--acc);flex:none;}
+.si-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;}
+
 /* the code */
 .si-code,.si-status{position:relative;z-index:1;flex:1;display:flex;flex-direction:column;padding-top:calc(8px + env(safe-area-inset-top,0px));}
 .si-code .mb-back{align-self:flex-start;}
@@ -265,9 +280,13 @@ rs.textContent=txt+' in '+Math.floor(left/60)+':'+('0'+left%60).slice(-2);left--
 # ─── pages (bodies for member_portal._shell) ─────────────────────────
 
 
-def signin_body(biz: Dict[str, Any], site, theme: Dict[str, Any], *, error: str = "", email: str = "") -> str:
+def signin_body(biz: Dict[str, Any], site, theme: Dict[str, Any], *, error: str = "", email: str = "",
+                join: bool = False) -> str:
+    """`join`: the church takes people who aren't on its list yet
+    (member_join), so "New to <church>? Join here" sits under the form."""
     name = (biz.get("name") or "").strip() or "the church"
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
+    join_line = (f'\n  <p class="si-join">New to {_e(name)}? <a href="/my/join">Join here</a></p>' if join else "")
     return f"""<div class="si-first">
 {_top_art(_pic(biz, site), _look(biz))}
 {_brand(biz, site, theme)}
@@ -286,28 +305,43 @@ def signin_body(biz: Dict[str, Any], site, theme: Dict[str, Any], *, error: str 
     {err}
     <button class="mp-go si-go" type="submit"><span>Send my code</span>{ui.icon('arrow', 19)}</button>
   </form>
-  <p class="si-note">{ui.icon('lock', 15)}No password. We'll send you a 6-digit code.</p>
+  <p class="si-note">{ui.icon('lock', 15)}No password. We'll send you a 6-digit code.</p>{join_line}
 </section>
 </div>
 {_verse()}
 {_foot(biz)}"""
 
 
-def code_body(biz: Dict[str, Any], site, *, email: str, shown: str, texted: bool, error: str = "") -> str:
-    """`shown` is the address or number as the member reads it back."""
+def code_body(biz: Dict[str, Any], site, *, email: str, shown: str, texted: bool, error: str = "",
+              join: str = "") -> str:
+    """`shown` is the address or number as the member reads it back.
+    `join` is member_join's signed pass: someone joining, whose page says
+    the code is on its way (the same words whether or not the church
+    already has the address) and carries the pass to the next step."""
     name = (biz.get("name") or "").strip() or "the church"
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     # A fresh code (no error) gets its ten minutes counted down and the
     # minute before another can be sent.
     timer = '' if error else '<p class="si-timer" hidden>Works for <b>10:00</b></p>'
     wait = '' if error else ' data-wait="60"'
+    by = ' by text' if texted else ''
+    keep = f'\n    <input type="hidden" name="join" value="{_e(join)}">' if join else ""
+    back = "/my/join" if join else "/my"
+    if join:
+        to = (f'A 6-digit code is on its way to <strong>{_e(shown)}</strong>{by}. It works for 10 minutes.\n'
+              f'    <a class="si-change" href="/my/join">Change</a>')
+        still = (f"Still nothing? Check the {'number' if texted else 'email'} you typed, "
+                 f"or ask at {_e(name)}'s welcome desk.")
+    else:
+        to = (f"If <strong>{_e(shown)}</strong> is on {_e(name)}'s list, a 6-digit code is on its way{by}. "
+              f'It works for 10 minutes.\n    <a class="si-change" href="/my">Change</a>')
+        still = f"Still nothing? Ask the church office which {'number' if texted else 'email'} they have for you."
     return f"""<div class="si-code">
-  <a class="mb-back" href="/my">{ui.icon('back', 24)}Back</a>
+  <a class="mb-back" href="{back}">{ui.icon('back', 24)}Back</a>
   <h1>Check your {'texts' if texted else 'email'}</h1>
-  <p class="si-to">If <strong>{_e(shown)}</strong> is on {_e(name)}'s list, a 6-digit code is on its way{' by text' if texted else ''}. It works for 10 minutes.
-    <a class="si-change" href="/my">Change</a></p>
+  <p class="si-to">{to}</p>
   <form class="mp-form" method="post" action="/my/verify">
-    <input type="hidden" name="email" value="{_e(email)}">
+    <input type="hidden" name="email" value="{_e(email)}">{keep}
     <label for="mp-code">6-digit code</label>
     <div class="si-otp-wrap">
       <input class="mp-input mp-code" id="mp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
@@ -318,11 +352,48 @@ def code_body(biz: Dict[str, Any], site, *, email: str, shown: str, texted: bool
     <button class="mp-go si-go" type="submit" style="margin-top:8px"><span>Sign in</span>{ui.icon('arrow', 19)}</button>
   </form>
   <form method="post" action="/my/code" class="si-resend mp-noprint">
-    <input type="hidden" name="email" value="{_e(email)}">
+    <input type="hidden" name="email" value="{_e(email)}">{keep}
     <p>Nothing arrived? {'Give it a minute.' if texted else 'Check spam.'}</p>
     <button class="si-again" type="submit"{wait}>{ui.icon('refresh', 16)}<span>Send a new code</span></button>
-    <p>Still nothing? Ask the church office which {'number' if texted else 'email'} they have for you.</p>
+    <p>{still}</p>
   </form>
+  {_foot(biz)}
+</div>"""
+
+
+def join_body(biz: Dict[str, Any], site, *, error: str = "", vals: Dict[str, Any] = None) -> str:
+    """New here? Join (member_join): who they are, how to reach them, new or
+    already coming, and 13 or older. Works without script."""
+    v = vals or {}
+    name = (biz.get("name") or "").strip() or "the church"
+    err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
+
+    def on(key: str, val: str) -> str:
+        return " checked" if v.get(key) == val else ""
+    return f"""<div class="si-code">
+  <a class="mb-back" href="/my">{ui.icon('back', 24)}Back</a>
+  <h1>Join {_e(name)}</h1>
+  <p class="si-to">Tell us who you are. We'll send a 6-digit code to your email or phone, and you're in.</p>
+  <form class="mp-form" method="post" action="/my/join">
+    <div class="si-two">
+      <div><label for="mj-first">First name</label>
+        <input class="mp-input" id="mj-first" name="first" autocomplete="given-name" maxlength="60" required value="{_e(v.get('first') or '')}"></div>
+      <div><label for="mj-last">Last name</label>
+        <input class="mp-input" id="mj-last" name="last" autocomplete="family-name" maxlength="60" required value="{_e(v.get('last') or '')}"></div>
+    </div>
+    <label for="mj-email">Email or mobile number</label>
+    <input class="mp-input" id="mj-email" name="email" type="text" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required value="{_e(v.get('typed') or '')}">
+    <fieldset class="si-pick">
+      <legend>Are you new here?</legend>
+      <label><input type="radio" name="visit" value="new" required{on('visit', 'new')}>I'm new here</label>
+      <label><input type="radio" name="visit" value="attend"{on('visit', 'attend')}>I already come</label>
+    </fieldset>
+    <label class="si-check"><input type="checkbox" name="adult" value="yes" required{on('adult', 'yes')}>I'm 13 or older</label>
+    <div class="si-hp" aria-hidden="true"><label for="mj-site">Leave this empty</label><input id="mj-site" name="website" tabindex="-1" autocomplete="off"></div>
+    {err}
+    <button class="mp-go si-go" type="submit" style="margin-top:8px"><span>Send my code</span>{ui.icon('arrow', 19)}</button>
+  </form>
+  <p class="si-note">Already on {_e(name)}'s list? <a href="/my">Sign in</a></p>
   {_foot(biz)}
 </div>"""
 
