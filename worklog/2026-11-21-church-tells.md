@@ -2,7 +2,7 @@
 title: The office's missing tells (the sweep)
 date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
-asked: "yes go with the plan and make those small fixes as well" (the seven missing tells on Love City's connection map)
+asked: "yes go with the plan and make those small fixes as well (the seven missing tells on Love City's connection map)"
 status: in progress
 prs: [kmj-intake-server (this PR: the sweep and its rules)]
 migrations: []
