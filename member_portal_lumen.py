@@ -8,7 +8,9 @@ never says "nothing yet").
 
 HOME (/my), "Look 5.1" (Kevin, 2026-11-20; the pieces are member_lumen_home
 and member_lumen_stories): the moments (the pastor's word, Sunday, the
-member's groups, the church's events, each opening a full-screen viewer);
+church's newest message while it's new, the member's groups, the class
+they're in (my_class, kept), the church's events, each opening a
+full-screen viewer);
 the greeting by the church's clock and one sentence from the records (Look
 4.1's, unchanged); the four doors (Prayer · Events · Serve · Kids, each with a
 line from the records); This week, horizontal cards for the service, each of
@@ -278,6 +280,51 @@ def may_write(biz: Dict[str, Any], me: Dict[str, Any], other_id: str) -> bool:
     return ok
 
 
+# The class the member is in and hasn't finished (Home's moments), kept
+# CLASS_SECONDS per (church, member): member_cache, as may_write.
+CLASS_SECONDS = 120.0
+_CLASS = None
+
+
+def my_class(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The first class the member is in and hasn't finished, as Connect's
+    Classes row picks it (academy_member_classes' "mine", not completed):
+    {course_id, title, program, total, done, lesson}; {} when there's none (or the
+    church has no class anyone can see: member_portal_classes.classes_on,
+    kept a minute, so a church without classes asks nothing more); None when
+    a read failed (the moment is left out, nothing is kept). Kept
+    CLASS_SECONDS per (church, member)."""
+    global _CLASS
+    import member_cache
+    import member_portal_classes as mcl
+    if _CLASS is None:
+        _CLASS = member_cache.Kept("home_class", CLASS_SECONDS)
+    key = (str(biz.get("id")), str(me.get("id")))
+    hit, got = _CLASS.get(key)
+    if hit:
+        return got
+    out: Dict[str, Any] = {}
+    try:
+        raw = mcl.member_classes(key[0], me) if mcl.classes_on(key[0]) else {}
+    except Exception:  # noqa: BLE001 — the moment is left out
+        logger.warning("home: the class skipped", exc_info=True)
+        raw = None
+    if raw is None:
+        return None
+    if raw:
+        for c in raw.get("mine") or []:
+            total, done = int(c.get("total") or 0), int(c.get("done") or 0)
+            if c.get("status") == "completed" or (total and done >= total) or not c.get("course_id"):
+                continue
+            n = c.get("next") if isinstance(c.get("next"), dict) else {}
+            out = {"course_id": str(c["course_id"]), "title": str(c.get("title") or c.get("program") or "").strip(),
+                   "program": str(c.get("program") or "").strip(), "total": total, "done": done,
+                   "lesson": str(n.get("lesson") or n.get("title") or "").strip()}
+            break
+    _CLASS.put(key, out, tag=key[0])
+    return out
+
+
 async def news_and_reply(biz: Dict[str, Any], me: Dict[str, Any], feed_kw: Dict[str, Any], *, preview: bool = False):
     """Home's news read (church_news.home_view) and, for the new Home's
     pastor's moment, whether the member may write to the pastor who posted
@@ -333,7 +380,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 told_us: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, dark: bool = False,
                 pastor: Optional[Dict[str, Any]] = None, posts: Optional[List[Dict[str, Any]]] = None,
                 gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None,
-                leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False) -> str:
+                leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False,
+                klass: Optional[Dict[str, Any]] = None) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
     the composer, then `news` (the feed, member_portal_news.home_block) and
@@ -624,10 +672,12 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         moments.extend(first_c + ([derived] if derived and not took else []) + after_c)
         can_post = "" if mmo.own_showing(leaders, me) else mmo.home_rights(leaders, me, groups)
         lead_love = any(not c.get("mine") and c.get("slides") for c in first_c + after_c)
+    sun_msg = ""
     if svc and not samples.is_sample(svc_o or {}):
         d, t = svc["day"], svc.get("time")
         msg = next((s for s in (library or {}).get("sermons") or [] if str(s.get("preached_on") or "")[:10] == d.isoformat()
                     and not samples.is_sample(s)), None)
+        sun_msg = str((msg or {}).get("id") or "")
         series = mps._titles(library).get(str((msg or {}).get("series_id") or ""), "") if msg else ""
         pic, lk = photos.choose(biz, "home", pool, fallback=photos.hero(pool), look="colour")
         if not pic and msg:
@@ -654,6 +704,12 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             ring=ui.picture(pic, lk, "welcome"), bg=ui.picture(pic, lk, "welcome", night=True), face=church_face,
             name=church, href="/my/events", kicker=kicker, line=line, sub=" · ".join(x for x in (series, place) if x),
             action=main, reply=(to_church[0], "Ask the church…") if to_church else None, share=share))
+    # The church's newest message while it's new (member_feed_more.message_of:
+    # preached in the last week, never a sample), unless Sunday's moment is it.
+    import member_feed_more as mfm
+    new_msg = mfm.message_of(library, day0)
+    if new_msg and str(new_msg.get("id")) != sun_msg:
+        moments.append(mls.message_moment(biz, site, library, new_msg, pool, day0, face=church_face, church=church))
     for gx in week_g:
         if gx["start"] - now > timedelta(days=mls.GROUP_DAYS):
             continue
@@ -669,6 +725,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             sub=" · ".join(x for x in (place, f"{n_going} going" if n_going >= 2 else "") if x),
             action=group_act(gx, "lm-mvb")[0],
             reply=(f"/my/groups/{gid}/chat", "Message the group…") if chat_on and g.get("chat_on") is not False else None))
+    # The class the member is in and hasn't finished (my_class, kept).
+    if klass and klass.get("course_id") and klass.get("title"):
+        pic, lk = photos.choose(biz, f"class:{klass['course_id']}", pool, title=klass["title"], look="colour")
+        moments.append(mls.class_moment(klass, ui.picture(pic, lk, "classes"),
+                                        ui.picture(pic, lk, "classes", night=True), face=church_face, church=church))
     for o in week_occ:
         if samples.is_sample(o):
             continue
