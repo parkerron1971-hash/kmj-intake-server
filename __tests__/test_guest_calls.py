@@ -238,6 +238,29 @@ def test_rules_send_some_guests_elsewhere(g):
     assert plain["leader_contact_id"] == RENEE, "every other guest goes to the caller"
 
 
+def test_people_care_calls_before_the_executive_pastor(g):
+    """Love City, 2026-11-21: the Executive Pastor holds every duty by
+    oversight and her name sorts first, but People & Care makes the calls."""
+    abby = cid(23)
+    g.t["contacts"].append({"id": abby, "business_id": BIZ, "name": "Abby Adams", "email": "abby@example.com",
+                            "phone": "", "metadata": {}})
+    # As Love City's is: no stored lane, seven areas, so every duty in them.
+    g.t["business_users"].append({"business_id": BIZ, "user_id": "u-abby", "invited_email": "abby@example.com",
+                                  "role": "manager", "lane": None, "status": "active", "name": "Abby Adams",
+                                  "areas": ["worship_media", "people_care", "kids_youth", "groups_classes",
+                                            "messages_safety", "website_outreach", "office"]})
+    import church_over
+    ch = church_over.Church(next(b for b in g.t["businesses"] if b["id"] == BIZ))
+    assert guest_path.FIRST_GUESTS in ch.held("u-abby"), "she holds First-time guests through her areas"
+    first = _connect(g)
+    assert first["leader_contact_id"] == RENEE, "People & Care, not the Executive Pastor"
+    second = _connect(g, person=DANA)
+    assert second["leader_contact_id"] == RENEE, "even carrying more open calls than the Executive Pastor"
+    g.t["business_users"] = [s for s in g.t["business_users"] if s["user_id"] != RENEE_SEAT]
+    third = _connect(g, person=KEISHA)
+    assert third["leader_contact_id"] == abby, "with no People & Care login, the Executive Pastor before the owner"
+
+
 def test_with_no_manager_on_first_guests_the_owner_makes_the_call(g):
     g.t["business_users"] = [s for s in g.t["business_users"] if s["user_id"] != RENEE_SEAT]
     row = _connect(g)
