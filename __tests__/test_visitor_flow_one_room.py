@@ -283,13 +283,19 @@ def test_the_room_says_its_name_when_it_refuses(db, gate, monkeypatch):
     assert e.value.status_code == 403 and "Visitor flow" in e.value.detail
 
 
-def test_whoever_has_the_room_reads_every_guests_brief(db, gate):
+def test_people_and_care_and_first_time_guests_read_every_brief_a_caller_only_their_own(db, gate):
     import guest_brief
+    row = {"leader_contact_id": ""}            # (a caller's own guest is guest_brief's own check, pinned there)
     gate["duty"] = True
-    row = {"leader_contact_id": ""}            # (the caller's own check is guest_brief's, pinned there)
-    assert guest_brief.may_read(_biz(), USER, row)
+    assert guest_brief.may_read(_biz(), USER, row), "whoever does First-time guests"
     gate["duty"] = False
     assert not guest_brief.may_read(_biz(), USER, row)
+    gate["view"] = {"areas": ["people_care"]}
+    assert guest_brief.may_read(_biz(), USER, row), "People & care's areas"
+    gate["view"], gate["person"] = {"areas": ["worship_media"]}, TASHA
+    _fu(db, MARCUS, "web:connect_card", leader=TASHA)
+    assert cg.room_open(_biz(), USER), "a caller sees the room"
+    assert not guest_brief.may_read(_biz(), USER, row), "but not another guest's brief"
 
 
 # ─── 4. Every link about a guest's call opens Visitor flow ────────────

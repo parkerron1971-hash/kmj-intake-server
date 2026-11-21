@@ -330,6 +330,18 @@ def _person_of(biz: Dict[str, Any], user: Any) -> str:
         raise HTTPException(503, "Your calls couldn't be read just now. Try again.")
 
 
+def reads_every_guest(biz: Dict[str, Any], user: Any) -> bool:
+    """Whether this login opens any guest's sheet (Chief's brief) in Visitor
+    flow: People & care's areas, or whoever does First-time guests (they make
+    every guest's call). A login that is only some guests' caller opens its
+    own guests' sheets alone (guest_brief.may_read). A read that fails is a
+    503, never a yes."""
+    if _areas_ok(str(biz["id"]), str(getattr(user, "id", "") or ""), str(biz.get("_caller_role") or "")):
+        return True
+    import church_duties
+    return church_duties.holds(str(biz["id"]), user, guest_path.FIRST_GUESTS)
+
+
 def room_ok(biz: Dict[str, Any], user: Any) -> bool:
     """Whether this login has Visitor flow (the guests' room) at a church
     whose Welcome Path is on: People & care's areas (_areas_ok), or a login
