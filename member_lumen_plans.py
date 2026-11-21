@@ -647,6 +647,9 @@ def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key
         acts = f'<a class="lm-btn" href="{_e(day_href(key, n))}">{"Continue" if done else "Read"} day {n}</a>'
     else:
         note = f'<p class="lm-pp-fine">Day 1 opens {_short_date(plan["start"])}.</p>'
+    if plan and done is not None and not preview and not failed and plan["start"] < today:
+        acts += over(f"reading:{key}", "Day 1 opens again today, and the plan runs from here. The days you marked "
+                                       "read stay with the start you're leaving.")
     days = done or set()
     if count <= LIST_ALL or not plan:
         shown = range(1, min(count, LIST_ALL) + 1) if not plan else range(1, count + 1)
@@ -675,6 +678,101 @@ def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key
             + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
             f'<ol class="lm-pp-days">{rows}</ol>{more}</section>{stop}')
     return _shell(biz, site, m["title"], body, tab="bible", who=me)
+
+
+def over(plan: str, words: str) -> str:
+    """Start over: a quiet button that opens to say what it does, then the
+    form that does it (no script needed)."""
+    return (f'<details class="lm-pp-over"><summary>Start over</summary><p>{_e(words)}</p>'
+            f'<form method="post" action="/my/bible/plans/over"><input type="hidden" name="plan" value="{_e(plan)}">'
+            f'<button class="lm-btn sm" type="submit">Start over today</button></form></details>')
+
+
+def _dev_minutes(dev: Dict[str, Any]) -> int:
+    import devotionals as dv
+    days = [d for d in dev.get("days") or [] if isinstance(d, dict)]
+    return max(1, round(sum(dv.minutes(d) for d in days) / len(days))) if days else 0
+
+
+def render_devotional(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], dev: Dict[str, Any],
+                      st: Dict[str, Any], *, today: Optional[date] = None) -> str:
+    """A church devotional's page (screen 2): its cover (the church's
+    picture for it in the church's colour, or a cover of that colour), the
+    church and what kind of devotional, how many days and about how long a
+    day takes, what it's about, Start or Continue day N (or when the church
+    starts it, or You finished it), Start over, and every day with its
+    scripture and whether it's read. `st` is where the member is in it
+    (member_portal_devotionals.state)."""
+    import devotionals as dv
+    import member_app_photos as photos
+    import member_app_ui as ui
+    import member_lumen_bible as mlb
+    import member_portal_church as mpc
+    from member_portal import _shell
+    today = today or date.today()
+    short = mlb._short(biz)
+    title = dev.get("title") or "Devotional"
+    count, done, upto, now = st["count"], st["done"], st["upto"], st["now"]
+    url, _look = photos.choose(biz, f"devotional:{dev['id']}", photos.photos(biz, site), title=title, look="church")
+    art = ui.photo(url, look="church", eager=True) if url else ""
+    mins = _dev_minutes(dev)
+    sub = _days(count) + (f" · about {mins} minute{'' if mins == 1 else 's'} a day" if mins else "")
+    kind = (dev.get("kind") or "").strip() or "Devotional"
+    top = (f'<section class="lm-pp-top{" has-ph" if url else " is-made"}" aria-labelledby="lm-pp-h">{art}'
+           f'<div class="lm-pp-tt"><small>{_e(short)} · {_e(kind)}</small><h1 id="lm-pp-h">{_e(title)}</h1>'
+           f'<small>{_e(sub)}</small></div></section>')
+    about = "".join(f"<p>{_e(p)}</p>" for p in dv.paragraphs(dev.get("about") or ""))
+    k, preview = st["kind"], st["preview"]
+    acts, note = "", ""
+    if k == "new":
+        acts = (f'<form method="post" action="/my/bible/plans/start"><input type="hidden" name="plan" '
+                f'value="devotional:{_e(dev["id"])}"><button class="lm-btn" type="submit"{" disabled" if preview else ""}>'
+                f'Start</button></form>')
+        note = f'<p class="lm-pp-fine">A day opens each day from the day you start: {_days(count)}.</p>'
+    elif k == "upcoming":
+        note = (f'<p class="lm-pp-fine">{_e(short)} starts it together on {_e(_short_date(st["start"]))}. Day 1 opens '
+                f'that morning.</p>')
+    elif k == "finished":
+        note = (f'<div class="lm-pp-fin"><span class="lm-pp-c ok" aria-hidden="true">{ui.icon("check", 16)}</span>'
+                f'<span><b>You finished it</b><small>Every day is still here to read again.</small></span></div>')
+        acts = f'<a class="lm-btn" href="/my/bible/plans/{_e(dev["id"])}/1">Read it again</a>'
+    elif upto:
+        n = _target(now, upto, done)
+        acts = f'<a class="lm-btn" href="/my/bible/plans/{_e(dev["id"])}/{n}">{"Continue" if done else "Read"} day {n}</a>'
+    if not preview and done:
+        words = ("The days you marked read are cleared, so you can walk through it again on the church's days. "
+                 "Your journal stays." if dev.get("starts_on") else
+                 "Day 1 opens again today, and the days you marked read are cleared. Your journal stays.")
+        acts += over(f"devotional:{dev['id']}", words)
+    days = dev.get("days") or []
+    rows = []
+    for n in range(1, count + 1):
+        day = days[n - 1] if n <= len(days) and isinstance(days[n - 1], dict) else {}
+        name = (day.get("title") or "").strip() or f"Day {n}"
+        bits = [(day.get("scripture") or "").strip()]
+        shut = n > upto
+        if n == now:
+            bits.append("today")
+        elif shut and st["start"]:
+            bits.append(f"opens {_short_date(dv.day_on(st['start'], n))}")
+        elif shut:
+            bits.append("opens after you start")
+        sub = " · ".join(b for b in bits if b)
+        cls = " ".join(c for c in ("is-done" if n in done else "", "is-now" if n == now else "",
+                                   "is-shut" if shut else "") if c)
+        circle = f'<span class="lm-pp-c{" ok" if n in done else ""}" aria-hidden="true">{n}</span>'
+        said = f"Day {n}" + (", read" if n in done else "") + f": {name}"
+        text = f'<b>{_e(name)}</b><small>{_e(sub)}</small>'
+        body = (f'<span class="lm-pp-dt">{text}</span>' if shut else
+                f'<a class="lm-pp-dt" href="/my/bible/plans/{_e(dev["id"])}/{n}" aria-label="{_e(said)}">{text}</a>')
+        rows.append(f'<li class="lm-pp-d{" " + cls if cls else ""}">{circle}{body}</li>')
+    page = (f'<a class="mb-back" href="/my/bible?tab=plans">{ui.icon("back", 16)}Plans</a>{top}'
+            + (f'<div class="lm-pp-about">{about}</div>' if about else "")
+            + (f'<p class="mp-ok mp-flash" role="status">Started over.</p>' if request.query_params.get("done") == "over"
+               else mpc._flash(request)) + (f'<div class="lm-pp-acts">{acts}</div>' if acts else "") + note
+            + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
+            f'<ol class="lm-pp-days">{"".join(rows)}</ol></section>')
+    return _shell(biz, site, title, page, tab="bible", who=me)
 
 
 async def plan_page(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any], key: str, *, tr: str = "kjv",
@@ -779,6 +877,24 @@ body.lm .lm-pp-tt h1{margin:0;font-family:var(--mb-serif);font-weight:var(--lm-d
 body.lm .lm-pp-about{margin:16px 0 0;font:400 15px/1.55 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-pp-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;}
 body.lm .lm-pp-acts form{margin:0;}
+body.lm .lm-pp-top>.mb-ph{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;z-index:-2;}
+body.lm .lm-pp-top>.mb-ph img{width:100%;height:100%;object-fit:cover;}
+body.lm .lm-pp-top.has-ph::before{content:"";position:absolute;inset:0;z-index:-1;
+  background:linear-gradient(180deg,rgba(0,0,0,.05) 0%,rgba(0,0,0,.45) 45%,rgba(0,0,0,.85) 100%);}
+body.lm .lm-pp-top.is-made::before{content:"";position:absolute;inset:0;z-index:-1;
+  background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.22) 0 14%,transparent 15%),
+    repeating-radial-gradient(circle at 84% 16%,transparent 0 30px,rgba(255,255,255,.07) 30px 31px);}
+body.lm .lm-pp-about p{margin:16px 0 0;font:400 15px/1.55 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-pp-acts{align-items:center;}
+body.lm .lm-pp-over{display:block;}
+body.lm .lm-pp-over[open]{flex-basis:100%;}
+body.lm .lm-pp-over>summary{display:inline-flex;align-items:center;height:48px;padding:0 18px;border-radius:24px;list-style:none;
+  cursor:pointer;box-shadow:inset 0 0 0 1px var(--lm-line);color:var(--fg);font:650 15px/1 var(--mb-ui);}
+body.lm .lm-pp-over>summary::-webkit-details-marker{display:none;}
+body.lm .lm-pp-over[open]>summary{background:var(--s1);}
+body.lm .lm-pp-over>p{margin:12px 0 0;font:500 13.5px/1.45 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-pp-over>form{margin:10px 0 0;}
+body.lm .lm-pp-over>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 body.lm .lm-pp-fine{margin:12px 0 0;font:500 13px/1.4 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-pp-fin{display:flex;align-items:center;gap:12px;margin-top:16px;padding:14px;border-radius:18px;background:var(--lm-tint);}
 body.lm .lm-pp-fin b{display:block;font:700 15px/1.25 var(--mb-ui);}
