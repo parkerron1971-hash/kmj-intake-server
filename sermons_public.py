@@ -39,6 +39,32 @@ def _clean_id(v: str) -> str:
     return "".join(c for c in v if c.isalnum() or c in "_-")
 
 
+YOUTUBE_HOSTS = ("youtube.com", "youtube-nocookie.com", "youtu.be")
+
+
+def youtube_id(url: str) -> str:
+    """The video id in a YouTube link (watch?v=, youtu.be/, /live/,
+    /shorts/, /embed/), or '' when it isn't one. Pure: no read."""
+    u = (url or "").strip()
+    try:
+        p = urlparse(u)
+    except ValueError:
+        return ""
+    if p.scheme != "https":
+        return ""
+    host = (p.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    path = p.path or ""
+    if host in ("youtube.com", "youtube-nocookie.com"):
+        if path == "/watch":
+            q = dict(x.split("=", 1) for x in p.query.split("&") if "=" in x)
+            return _clean_id(q.get("v", ""))
+        m = re.match(r"^/(?:live|shorts|embed)/([^/?#]+)", path)
+        return _clean_id(m.group(1)) if m else ""
+    if host == "youtu.be":
+        return _clean_id(path.strip("/").split("/")[0])
+    return ""
+
+
 def video_embed_src(url: str) -> str:
     """The iframe src for a sermon video link, or '' when the host isn't
     one we can play in the page (the caller then links out)."""
@@ -57,18 +83,8 @@ def video_embed_src(url: str) -> str:
         return stream_relay_router.watch_url(own)
     host = (p.hostname or "").lower().removeprefix("www.").removeprefix("m.")
     path = p.path or ""
-    if host in ("youtube.com", "youtube-nocookie.com"):
-        vid = ""
-        if path == "/watch":
-            q = dict(x.split("=", 1) for x in p.query.split("&") if "=" in x)
-            vid = q.get("v", "")
-        else:
-            m = re.match(r"^/(?:live|shorts|embed)/([^/?#]+)", path)
-            vid = m.group(1) if m else ""
-        vid = _clean_id(vid)
-        return f"https://www.youtube-nocookie.com/embed/{vid}" if vid else ""
-    if host == "youtu.be":
-        vid = _clean_id(path.strip("/").split("/")[0])
+    if host in YOUTUBE_HOSTS:
+        vid = youtube_id(u)
         return f"https://www.youtube-nocookie.com/embed/{vid}" if vid else ""
     if host == "vimeo.com":
         vid = _clean_id(path.strip("/").split("/")[0])

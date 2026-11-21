@@ -45,6 +45,11 @@ kicker "Series · <when it ran>", the title in serif, the description, then
 Keep watching part n (the part they're in the middle of, else the next one
 they haven't watched) or Play part 1, Share, and every part.
 
+PICTURES. A message's picture is member_portal_sermons._art's: the series'
+own art, else the church's photo named for it, else the message's own
+YouTube picture (member_yt_pictures: the wide one where it's drawn across
+the phone, the small one on rails and rows), else the colour wash.
+
 PICK UP WHERE YOU LEFT OFF. The player tells us where the member is: our
 audio player directly, YouTube and Vimeo through their players' own
 messages (Loom, Facebook and our relay recordings don't say, so those
@@ -436,9 +441,13 @@ class _Page:
         self.who = who(who_me)
         self.today = date.today()
 
-    def art(self, s: Dict[str, Any], used: bool = False) -> str:
+    def art(self, s: Dict[str, Any], used: bool = False, wide: bool = False) -> str:
+        """The message's picture (member_portal_sermons._art), its own video
+        picture before the colour wash; `wide` where it's drawn across the
+        phone."""
         import member_portal_sermons as mps
-        return mps._art(self.lib, s, self.pal, self.site, self.pool, self.used if used else None)
+        return mps._art(self.lib, s, self.pal, self.site, self.pool, self.used if used else None,
+                        yt="wide" if wide else "small")
 
     def part(self, s: Dict[str, Any]) -> Optional[Tuple[int, int, str, str]]:
         return self.ar["part"].get(_sid(s))
@@ -618,7 +627,7 @@ def _messages(pg: _Page, show_all: bool) -> str:
     kick = f"Latest · {pt[2]}, part {pt[0]}" if pt else f"Latest · {short_day(s.get('preached_on'), pg.today)}".rstrip(" ·")
     d = pg.dur(s)
     href = f"/my/sermons/{_e(s['id'])}"
-    art = pg.art(s, used=True)
+    art = pg.art(s, used=True, wide=True)
     audio = bool((s.get("audio_url") or "").strip())
     video = bool((s.get("video_url") or "").strip())
     sample = samples.is_sample(s)
@@ -725,7 +734,7 @@ def series_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Dict[str
     title = pg.ar["titles"].get(series_id) or "Series"
     about = next((x.get("description") for x in lib["series"] if str(x["id"]) == series_id), "") or ""
     import member_app_ui as ui
-    art = pg.art(msgs[-1], used=True) if msgs else ui.poster(series_id, pg.pal, title)
+    art = pg.art(msgs[-1], used=True, wide=True) if msgs else ui.poster(series_id, pg.pal, title)
     when = span(msgs)
     first, word = next_part(pg, msgs)
     play = ""
@@ -837,7 +846,7 @@ def message_page(biz: Dict[str, Any], site, who_me: Dict[str, Any], lib: Dict[st
     audio_url = (s.get("audio_url") or "").strip()
     video_url = (s.get("video_url") or "").strip()
     mode = "a" if audio_url and (listen or not video_url) else "v"
-    art = pg.art(s)
+    art = pg.art(s, wide=True)
     thumb = _src(art)
     series_sub = f"{pt[2]}, part {pt[0]}" if pt else ""
     info = {"title": s.get("title") or "", "sub": unescape(_meta(s.get("speaker"), series_sub)) or (biz.get("name") or ""),
