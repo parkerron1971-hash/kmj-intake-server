@@ -20,7 +20,9 @@ posts edge to edge, a hairline between them:
     icons: Love · Praying · Comment, and Save at the right (the member's
     own list: member_feed_more.toggle_saved); "Loved by Maya and 6 others"
     (the newest Love by name, read with the post's people:
-    church_news._decorate); the words, the poster's name in bold; "View all
+    church_news._decorate), redrawn in place when the member taps Love or
+    Praying or double-taps (the script, from the react route's JSON answer);
+    the words, the poster's name in bold; "View all
     N comments" and the newest comment; the write pill on /my/news/comment,
     its checking, held and crisis (988) answers exactly as before. The
     poster's choice holds: Prayers only is "I'm praying" with how many are;
@@ -390,10 +392,12 @@ def _words(p: Dict[str, Any], who: str = "", *, caption: bool = False) -> str:
 
 
 def _react(p: Dict[str, Any], kind: str, label: str, back: str) -> str:
-    """Love or Praying: News' react form (member_portal_news.RX_JS answers it in place)."""
+    """Love or Praying: News' react form, the feed's own class (lf-rxf): the
+    feed's script answers it in place and redraws "Loved by" from the route's
+    JSON answer (today's RX_JS leaves it alone); a plain post without script."""
     on = kind in (p.get("my_rx") or [])
     icon = _i("heart") if kind == "love" else _i("pray")
-    return (f'<form method="post" action="/my/news/react" class="nw-rxf"><input type="hidden" name="id" value="{_e(p["id"])}">'
+    return (f'<form method="post" action="/my/news/react" class="lf-rxf"><input type="hidden" name="id" value="{_e(p["id"])}">'
             f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="{_e(back)}">'
             f'<button class="lf-act {"lv" if kind == "love" else "pr"}" type="submit" aria-pressed="{"true" if on else "false"}" '
             f'aria-label="{label}">{icon}</button></form>')
@@ -410,23 +414,32 @@ def _save(p: Dict[str, Any], saved: set, back: str) -> str:
 def _likes(p: Dict[str, Any], mode: str) -> str:
     """"Loved by Maya and 6 others" (the newest Love that isn't mine, by
     first name, as the post's own page names who reacted), and how many
-    are praying unless Prayers only already says it."""
+    are praying unless Prayers only already says it. Its data (the counts
+    without the member's own, and who) lets the script redraw it after a tap
+    (likes() in JS, the same words); a post with nothing yet has no line,
+    and the script adds one."""
     rx = p.get("rx") or {}
+    mine = p.get("my_rx") or []
     n, pray = int(rx.get("love") or 0), int(rx.get("pray") or 0)
+    lover = p.get("lover") or {}
     bits = []
     if n:
-        lover = p.get("lover") or {}
         if lover:
             others = n - 1
             more = f' and <b>{others} other{"" if others == 1 else "s"}</b>' if others > 0 else ""
             bits.append(f'Loved by <b>{_e(_first(lover))}</b>{more}')
-        elif "love" in (p.get("my_rx") or []) and n == 1:
+        elif "love" in mine and n == 1:
             bits.append("Loved by <b>you</b>")
         else:
             bits.append(f'Loved by <b>{n} {"person" if n == 1 else "people"}</b>')
     if pray and mode != "prayers":
         bits.append(f'<span>{pray} praying</span>')
-    return f'<p class="lf-likes">{" · ".join(bits)}</p>' if bits else ""
+    if not bits:
+        return ""
+    base_n, base_p = max(0, n - ("love" in mine)), max(0, pray - ("pray" in mine))
+    data = (f' data-n="{base_n}"' if base_n else "") + (f' data-p="{base_p}"' if base_p and mode != "prayers" else "")
+    data += f' data-by="{_e(_first(lover))}"' if lover and n else ""
+    return f'<p class="lf-likes"{data}>{" · ".join(bits)}</p>'
 
 
 def _composer(p: Dict[str, Any], me: Dict[str, Any]) -> str:
@@ -876,6 +889,10 @@ def saved_page(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], post
 # line, or its held or crisis words under the box; a refusal or a lost
 # answer puts the words back with why. Save and "I prayed" answer at once
 # and go in the background (JSON), and turn back if they didn't save.
+# Love and Praying (form.lf-rxf) answer at once too: the heart turns and
+# "Loved by" is redrawn on the phone (likes(): you added or taken away, the
+# count moved, the same words the server writes), then the route's JSON
+# answer ("on") is the truth; a refusal or a lost answer turns both back.
 # Double-tap a photo: Love it (once; a second double-tap doesn't take it
 # back), with one soft heart; the phone's reduced motion keeps it still.
 JS = r"""<script>(function(){
@@ -888,7 +905,23 @@ function say(f,text,cls,role){var s=f.parentNode.querySelector('.lf-cw-say');if(
 function post(f){return fetch(f.getAttribute('action'),{method:'POST',credentials:'same-origin',
   headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(new FormData(f)).toString()})
   .then(function(r){return r.json().then(function(x){return x;},function(){return null;});},function(){return null;});}
+function on(c,k){var b=c.querySelector('.lf-act.'+k);return b&&b.getAttribute('aria-pressed')==='true'?1:0;}
+function likes(c){if(!c)return;var p=c.querySelector('.lf-likes'),a=c.querySelector('.lf-acts');
+  if(!p){if(!a)return;p=el('p','lf-likes');p.hidden=true;a.parentNode.insertBefore(p,a.nextSibling);}
+  var n=(parseInt(p.getAttribute('data-n'),10)||0)+on(c,'lv'),by=p.getAttribute('data-by')||'',
+    k=c.querySelector('.lf-act.pr')?(parseInt(p.getAttribute('data-p'),10)||0)+on(c,'pr'):0;
+  while(p.firstChild)p.removeChild(p.firstChild);
+  if(n){p.appendChild(d.createTextNode('Loved by '));
+    if(by){p.appendChild(el('b',null,by));if(n>1){p.appendChild(d.createTextNode(' and '));p.appendChild(el('b',null,(n-1)+' other'+(n===2?'':'s')));}}
+    else if(n===1&&on(c,'lv'))p.appendChild(el('b',null,'you'));
+    else p.appendChild(el('b',null,n+' '+(n===1?'person':'people')));}
+  if(k){if(n)p.appendChild(d.createTextNode(' · '));p.appendChild(el('span',null,k+' praying'));}
+  p.hidden=!(n||k);}
 d.addEventListener('submit',function(e){var f=e.target;if(!f||!f.matches)return;
+  if(f.matches('form.lf-rxf')){e.preventDefault();var b=f.querySelector('button'),c=f.closest('.lf-post');if(!b||b.disabled)return;
+    var was=b.getAttribute('aria-pressed')==='true';b.setAttribute('aria-pressed',was?'false':'true');likes(c);b.disabled=true;
+    post(f).then(function(x){b.disabled=false;
+      b.setAttribute('aria-pressed',(x&&x.ok&&typeof x.on==='boolean')?(x.on?'true':'false'):(was?'true':'false'));likes(c);});return;}
   if(f.matches('form.lf-savef,form.lf-prayf')){e.preventDefault();var b=f.querySelector('button');if(!b||b.disabled)return;
     var was=b.getAttribute('aria-pressed')==='true';b.setAttribute('aria-pressed',was?'false':'true');b.disabled=true;
     post(f).then(function(x){b.disabled=false;

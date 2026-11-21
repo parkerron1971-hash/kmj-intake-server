@@ -976,8 +976,39 @@ async def _who(request: Request, back: str):
     return church, me, form, None
 
 
+async def _react_json(request: Request):
+    """Love or Praying from Home's feed (member_lumen_feed's script): the
+    same checks and the same toggle as the form post, answered as JSON so
+    the feed redraws its heart and "Loved by" from the server's answer.
+    {ok: true, on: whether the member's reaction is there now, kind}, or
+    {ok: false, code, error}."""
+    import member_instant_send as mis
+    import member_portal_church as mpc
+    from fastapi.responses import JSONResponse
+    church, me, unavailable = await mpc._signed_in(request)
+    if unavailable:
+        return mis.refused("preview" if unavailable == "preview" else "error", 403 if unavailable == "preview" else 503,
+                           own=ERRORS)
+    if not me:
+        return JSONResponse({"ok": False, "code": "signed_out", "error": "Please sign in again, then try once more."},
+                            status_code=401)
+    if not mpc._allowed(church, me):
+        return mis.refused("slow", 429, own=ERRORS)
+    form = await request.form()
+    kind = str(form.get("kind") or "")
+    state: Dict[str, Any] = {}
+    ok, code, _pid = await asyncio.to_thread(cn.react, str(church["business"]["id"]), str(me["id"]),
+                                             str(form.get("id") or ""), kind, state)
+    if not ok:
+        return mis.refused(code, 404 if code == "news_gone" else 503, own=ERRORS)
+    return JSONResponse({"ok": True, "on": bool(state.get("on")), "kind": kind}, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/my/news/react", include_in_schema=False)
 async def react_route(request: Request):
+    import member_instant_send as mis
+    if mis.wants_json(request):
+        return await _react_json(request)
     form0_back = "/my/news"
     church, me, form, stop = await _who(request, form0_back)
     if stop:

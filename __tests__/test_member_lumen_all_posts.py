@@ -147,7 +147,8 @@ def test_the_all_posts_page_is_home_s_cards_ten_at_a_time(church, monkeypatch):
     # Home's cards: Loved by, the react row (and Save) back to this page, the comments, the write pill.
     noah = html[html.index(f'id="p-{P["noah"]}"'):]
     noah = noah[:noah.index("</article>")]
-    assert '<p class="lf-likes">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah and "View all 4 comments" in noah
+    assert ('<p class="lf-likes" data-n="2" data-by="Ben">Loved by <b>Ben</b> and <b>2 others</b></p>' in noah
+            and "View all 4 comments" in noah)
     assert noah.count('name="back" value="/my/news"') == 3                                    # Love · Praying · Save
     assert '<form class="lf-cw" method="post" action="/my/news/comment">' in noah
     # The poster's choice: prayers only, comments off; the event's date leaf and Sign me up.
