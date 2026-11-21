@@ -1105,10 +1105,10 @@ gained `event_volunteers`.
   has no Events line yet: the person line lists Sundays, gatherings and hours
   added only (a frontend follow-up).
 - **The Help Center's export** (`church_findway.json`, from
-  solutionist-studio #1674 on 07f13b37) also brought what module-system had and
-  this copy didn't: Visitor flow taking the Guests room's words (#1660, #1673)
-  and the giving-access answers (#1654). `system_destinations.json` is the
-  frontend's copy again (`guests` and its alias).
+  solutionist-studio #1674 on 07f13b37) also brought the two giving-access
+  answers (#1654) that module-system had and this copy didn't.
+  `system_destinations.json` is the frontend's copy again (it gains the
+  `guests` route beside #2034's alias).
 
 ### Kevin's two calls (2026-11-21)
 

@@ -30,7 +30,7 @@ decisions:
   - "S3: the rest of the S3 calls are in docs/EVENT_VOLUNTEERS.md section 11"
   - "Switch-on 2026-11-21 (Kevin: \"switch on today\", a Saturday, as #1866): EVENT_VOLUNTEERS and CHURCH_EVENT_VOLUNTEERS default on in the code (neither was ever set on Railway, so the web service and the worker read the same); rollback EVENT_VOLUNTEERS=off on both services; tests that leaned on the owner default now set owner, and a test each pins unset as on for any church and off as the rollback"
   - "Switch-on: special helpers' hours count every past event of this year with a role signed up by a member in the app or put on by the office or Chief, events made before today included (church_serving.event_credits is gated by the switch alone), so a church's year of hours goes up on deploy"
-  - "Switch-on: church_findway.json re-exported from solutionist-studio #1674 on 07f13b37 (seven event answers, plus Visitor flow taking the Guests room's words and the giving-access answers the copy lacked); system_destinations.json is the frontend's again"
+  - "Switch-on: church_findway.json re-exported from solutionist-studio #1674 on 07f13b37 (seven event answers, one reworded, plus the two giving-access answers the copy lacked); system_destinations.json is the frontend's again (the guests route beside #2034's alias)"
 related: [2026-11-17-event-volunteer-dates.md, 2026-11-17-events-volunteer-list.md, 2026-11-11-light-table-step2.md, 2026-11-18-church-schedule.md]
 ---
 Before building I read both repos' work logs. The 11-17 event-dates log (backend and
