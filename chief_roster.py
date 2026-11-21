@@ -28,7 +28,8 @@ added, and the others stay: removing a role is done in the room, where the
 people on it can be seen.
 
 A role's two ticks (docs/EVENT_VOLUNTEERS.md 3.3): `kids` (works with kids,
-so it needs a current background check) and `open` (anyone can sign up on
+so it needs a current background check, or a junior helper of 13 to 17:
+church_serving.cleared) and `open` (anyone can sign up on
 the public events page). A role with no `open` key keeps today's public
 behaviour, so where the church asks its serving teams (event_volunteers'
 switch open and the migration in: the office shows both ticks there), a role
