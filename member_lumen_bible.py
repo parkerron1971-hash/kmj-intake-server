@@ -37,7 +37,10 @@ The reader: the chapter pill (opens the book picker), the translation pill,
 Aa (size and font), Listen (the phone reads the chapter aloud with its own
 voice; nothing is sent anywhere, and the button shows only on a phone that
 can), the moon; the chapter's number large in the church's colour, the
-book in small capitals, the verses in the reading face; the previous and
+book in small capitals (its name: the Bible data carries no longer titles,
+so the mock's "The Gospel of John" reads "John"), the verses in the reading
+face, each starting its own line, as the mock sets them (every
+translation; KJV's ¶ paragraphs are today's reader's); the previous and
 next chapter at the end. Tapping a verse opens the verse bar: Share (the
 shared share sheet, .lm-share kind=verse), the five highlighters, Note,
 Copy, Save, Make a card. The tab bar stays while reading.
@@ -296,7 +299,8 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     highlight it, add a note, copy or save it; Aa) in the tab's frame: the
     segmented control on top (`dot`: today's devotional day isn't read
     yet), the chapter and translation pills, Aa, Listen and the moon, the
-    chapter's number large, the previous and next chapter at the end, the
+    chapter's number large, a verse to a line (chapter_html's `lines`),
+    the previous and next chapter at the end, the
     tab bar below. `home`: the page is /my/bible itself (its translation
     links come back there); `lead` a quiet line over the chapter (why a
     first reader starts where they do). Lumen Next stays: the moon
@@ -389,7 +393,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 {first}
 {head}
 <div class="bb-read lm-read" data-book="{code}" data-ch="{ch}" data-tr="{tr}" data-label="{_e(name)} {ch}">
-{mpb.chapter_html(code, ch, tr, rng, marks=marks if editable else None)}
+{mpb.chapter_html(code, ch, tr, rng, marks=marks if editable else None, lines=True)}
 </div>
 <nav class="lm-rnav" aria-label="Chapters">{step(prev, "prev")}{step(nxt, "next")}</nav>
 {_src(tr)}
@@ -1305,6 +1309,8 @@ body.lm .lm-chap>span:last-child{display:block;margin-top:2px;font:700 11px/1.3 
   color:var(--fg3);}
 body.lm .lm-read{padding-bottom:4px;}
 body.lm .lm-read .bb-text{margin:0;color:var(--fg);}
+/* a verse to a line, one after another (Look 5.1): the number, its words, the next verse on a new line */
+body.lm .lm-read .bb-text p{margin:0;}
 body.lm .lm-read .bb-text.sz-s{font-size:17px;}
 body.lm .lm-read .bb-text.sz-l{font-size:23px;}
 body.lm .lm-read .bb-text.f-sans{font-family:var(--mb-ui);}
