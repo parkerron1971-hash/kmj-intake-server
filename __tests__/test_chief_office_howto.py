@@ -92,7 +92,9 @@ def test_the_events_duty_is_done_in_services_and_events_not_on_the_events_page()
 
 # ─── THE OFFICE says each person's places ─────────────────────────────
 
-def test_the_office_says_where_each_person_does_each_thing(db):
+def test_the_office_says_where_each_person_does_each_thing(db, monkeypatch):
+    import guest_path
+    monkeypatch.setattr(guest_path, "switched_on", lambda b: False)      # the Welcome Path off: the board
     ok(run(db, LOVE_CITY, "owner", "set_job_description", who="Naiya Clark", title="Church Administrator",
            description=NAIYA_JOB, source="drafted"))
     text = roster(db)

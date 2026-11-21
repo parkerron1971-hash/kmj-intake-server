@@ -170,17 +170,38 @@ def _who(session: UserSession) -> Tuple[str, str]:
 
 @router.get("/follow-ups")
 def follow_ups(business_id: str = Query(...),
+               guests: Optional[str] = Query(None, max_length=10),
+               leaders_only: bool = Query(False),
                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
                session: UserSession = Depends(sb_clients.authed_request)):
     """The Follow-up board: everyone a card handed to someone, where they
     are on their path, and every note (church_follow_up.board).
 
+    `guests=room` (Kevin, 2026-11-21, "One Visitor flow room"): where this
+    login has Visitor flow (church_guests.room_open: the Welcome Path on and
+    the room's own gate), first-time guests' welcome follow-ups are worked
+    there, so they are left off the board and out of its counts, and the
+    answer carries `guests_in_room`. Without it (an older app), or where the
+    room isn't this login's, the board is as it always was.
+
+    `leaders_only=true`: just `leaders`, whom the office may hand a card to
+    (a guest's sheet in Visitor flow hands them on through the same
+    reassign route). An older server ignores it and answers the whole board,
+    which carries the same list.
+
     Pastors-only notes are People & care's guarded part (church_keys): where
     the church named a keeper, everyone else's board says how many there
     are on a card, never what they say. Writing one stays open."""
-    out = church_follow_up.board(_uuid(business_id))
+    only = leaders_only is True        # (called directly, a Query default is not a yes)
+    skip = False
+    if guests == "room" and not only:
+        import church_guests
+        skip = church_guests.room_open(biz, session.user)
+    out = church_follow_up.board(_uuid(business_id), skip_guests=skip, leaders_only=only)
     if out is None:
         raise HTTPException(503, "Follow-up couldn't be loaded. Try again in a moment.")
+    if only:
+        return out
     import church_keys
     if not church_keys.is_open(_uuid(business_id), session.user, "people_care"):
         for card in out["follow_ups"]:

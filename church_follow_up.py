@@ -841,18 +841,72 @@ def _notes_for(biz: str, ids: List[str]) -> Optional[Dict[str, List[Dict[str, An
     return out
 
 
-def board(business_id: str, *, done_days: int = 30) -> Optional[Dict[str, Any]]:
+def _leader_load(all_roles: List[Dict[str, Any]], all_defs: List[Dict[str, Any]],
+                 open_leaders: Iterable[str]) -> List[Dict[str, Any]]:
+    """Everyone holding an active role (whom the office may hand a card to:
+    reassign's own rule), their roles, and how many open follow-ups each has
+    among `open_leaders` (one leader id per open follow-up)."""
+    import church_roles as cr
+    load: Dict[str, Dict[str, Any]] = {}
+    for r in all_roles:
+        if r["status"] != "active":
+            continue
+        e = load.setdefault(r["contact_id"], {"contact_id": r["contact_id"], "name": r["name"],
+                                              "initials": initials(r["name"]), "roles": [], "open": 0})
+        e["roles"].append({"role": r["role"], "label": cr.title_of(r["role"], all_defs), "scope": r["scope"]})
+    for lid in open_leaders:
+        if lid in load:
+            load[lid]["open"] += 1
+    return sorted(load.values(), key=lambda e: (-e["open"], _norm(e["name"])))
+
+
+def _guest(row: Optional[Dict[str, Any]]) -> bool:
+    import guest_path
+    return guest_path.is_guest_follow_up(row)
+
+
+def board(business_id: str, *, done_days: int = 30, skip_guests: bool = False,
+          leaders_only: bool = False) -> Optional[Dict[str, Any]]:
     """The office's Follow-up board: everyone in follow-up, who has them,
     where they are on their path, and every note (pastors-only ones too:
-    the office is the pastors' side). None when a read failed."""
+    the office is the pastors' side). None when a read failed.
+
+    `skip_guests` (Kevin, 2026-11-21, "One Visitor flow room"): first-time
+    guests' welcome follow-ups (guest_path.is_guest_follow_up) are worked in
+    Visitor flow, so they are neither listed nor counted here, nor in a
+    leader's load; `guests_in_room` says how many are open there. The route
+    asks for it only for a login that has the room.
+
+    `leaders_only`: just whom the office may hand a card to (the Hand to
+    list), for a guest's sheet in Visitor flow; no follow-up or note is read
+    beyond each leader's open count (guests left out with skip_guests)."""
     biz = str(business_id)
     now = _now()
+    if leaders_only:
+        open_rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&status=eq.open&leader_contact_id=not.is.null"
+                          "&select=leader_contact_id,card_key,path_kind&limit=2000")
+        held = roles(biz) if open_rows is not None else None
+        if open_rows is None or held is None:
+            return None
+        import church_roles as cr
+        mine = [r for r in open_rows if not (skip_guests and _guest(r))]
+        return {"leaders": _leader_load(held, cr.defs(biz) or [], (str(r["leader_contact_id"]) for r in mine)),
+                "leaders_only": True}
     since = _iso(now - timedelta(days=done_days))
     rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}"
                  f"&or=(status.in.(open,handed_back),done_at.gte.{_q(since)})"
                  "&select=*&order=created_at.desc&limit=500")
     if rows is None:
         return None
+    in_room = 0
+    if skip_guests:
+        kept: List[Dict[str, Any]] = []
+        for r in rows:
+            if not _guest(r):
+                kept.append(r)
+            elif r.get("status") in ("open", "handed_back"):
+                in_room += 1
+        rows = kept
     all_roles = roles(biz)
     if all_roles is None:
         return None
@@ -869,25 +923,57 @@ def board(business_id: str, *, done_days: int = 30) -> Optional[Dict[str, Any]]:
         if i["leader"]:
             i["leader"]["role_title"] = cr.title_of(i["leader"]["role"], all_defs)
     live = [i for i in items if i["status"] in ("open", "handed_back")]
-    load: Dict[str, Dict[str, Any]] = {}
-    for r in all_roles:
-        if r["status"] != "active":
-            continue
-        e = load.setdefault(r["contact_id"], {"contact_id": r["contact_id"], "name": r["name"],
-                                              "initials": initials(r["name"]), "roles": [], "open": 0})
-        e["roles"].append({"role": r["role"], "label": cr.title_of(r["role"], all_defs), "scope": r["scope"]})
-    for i in live:
-        if i["leader"] and i["leader"]["id"] in load and i["status"] == "open":
-            load[i["leader"]["id"]]["open"] += 1
-    return {
+    out = {
         "follow_ups": items,
         "counts": {"open": sum(1 for i in live if i["status"] == "open"),
                    "with_no_one": sum(1 for i in live if not i["leader"] or i["status"] == "handed_back"),
                    "late": sum(1 for i in live if i["late"]),
                    "done": sum(1 for i in items if i["status"] == "done")},
-        "leaders": sorted(load.values(), key=lambda e: (-e["open"], _norm(e["name"]))),
+        "leaders": _leader_load(all_roles, all_defs,
+                                (i["leader"]["id"] for i in live if i["leader"] and i["status"] == "open")),
         "done_days": done_days,
     }
+    if skip_guests:
+        out["guests_in_room"] = {"open": in_room}
+    return out
+
+
+# Where a first-time guest's welcome follow-up is worked while the Welcome
+# Path is on (Kevin, 2026-11-21, "One Visitor flow room"): Visitor flow, the
+# People menu's row that opens the guests' room (church_guests). The app's
+# nav for it, its button's words and the office alert's. Every other card
+# stays on the Follow-up board.
+ROOM_NAV = "operate:guests"
+ROOM_LABEL = "Open Visitor flow"
+BOARD_LABEL = "Open the Follow-up board"
+
+
+def in_room(business_id: Any, row: Optional[Dict[str, Any]]) -> bool:
+    """A guest's welcome follow-up at a church whose Welcome Path is on: it
+    is worked in Visitor flow, so whatever is said about it points there. A
+    switch that can't be read is off: the board, as before."""
+    if not _guest(row):
+        return False
+    try:
+        import guest_path
+        return guest_path.switched_on(business_id)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _alert_on(row: Optional[Dict[str, Any]], biz_id: str, title: str, body: str, key: str,
+                    person_id: Optional[str]) -> bool:
+    """The office's alert about one follow-up: its button opens Visitor flow
+    for a guest's welcome call while the Welcome Path is on (in_room), the
+    Follow-up board otherwise."""
+    if in_room(biz_id, row):
+        return await _office_alert(biz_id, title, body, key, person_id, action=ROOM_LABEL)
+    return await _office_alert(biz_id, title, body, key, person_id)
+
+
+def where_worked(business_id: Any, row: Optional[Dict[str, Any]]) -> str:
+    """Where a sentence sends someone to hand this one on (in_room)."""
+    return "in Visitor flow" if in_room(business_id, row) else "on the Follow-up board"
 
 
 def _active_holder(biz: str, contact_id: str) -> Optional[Dict[str, Any]]:
@@ -1352,17 +1438,20 @@ async def _email(biz: Dict[str, Any], to_email: str, to_name: str, subject: str,
         return False
 
 
-async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id: Optional[str]) -> bool:
+async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id: Optional[str],
+                        action: str = BOARD_LABEL) -> bool:
     """True when the office's alert was raised (or already stands: it is
     deduplicated on `key`); False when it could not be, so the caller
-    tries again on the next sweep instead of recording it as said."""
+    tries again on the next sweep instead of recording it as said. Its
+    button names where the follow-up is worked (_alert_on: Visitor flow
+    for a guest's welcome call while the Welcome Path is on)."""
     try:
         import httpx
         import notification_engine
         async with httpx.AsyncClient(timeout=20) as client:
             await notification_engine.create_urgent_alert(
                 client, biz_id, title, body, dedup_key=key, dedup_hours=24 * 7,
-                suggested_action="Open the Follow-up board", related_contact_id=person_id)
+                suggested_action=action, related_contact_id=person_id)
         return True
     except Exception:
         logger.warning("church follow-up office alert failed for business %s", biz_id[:8], exc_info=True)
@@ -1571,10 +1660,10 @@ async def _guest_climb(g: Any, biz: Dict[str, Any], r: Dict[str, Any], level: in
                                      f"Your welcome call with {html.escape(pname)} is due {html.escape(due)}. "
                                      "When you’ve talked, jot a quick note on your Lead tab."], lead_link)
         else:
-            ok = await _office_alert(biz_id, f"{pname} is due today",
-                                     f"A welcome call is due {due}. "
-                                     + (f"{lname} has them, with no email on file." if leader else "No one has them."),
-                                     f"church-fu-due-{fid}-{r.get('due_at')}", pid)
+            ok = await _alert_on(r, biz_id, f"{pname} is due today",
+                                 f"A welcome call is due {due}. "
+                                 + (f"{lname} has them, with no email on file." if leader else "No one has them."),
+                                 f"church-fu-due-{fid}-{r.get('due_at')}", pid)
         if not ok:
             return False
         await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
@@ -1598,9 +1687,9 @@ async def _guest_climb(g: Any, biz: Dict[str, Any], r: Dict[str, Any], level: in
                                  + (f" with {html.escape(lname)}" if lname else "")
                                  + ". You’re the church’s backup caller, so Chief handed them to you."], lead_link)
         if not ok:
-            ok = await _office_alert(biz_id, f"Tell {bname} about {pname}",
-                                     f"{pname} was a day past due for a welcome call, so Chief handed them to {bname}, "
-                                     "the backup caller, who has no email on file.", f"church-fu-backup-{fid}", pid)
+            ok = await _alert_on(r, biz_id, f"Tell {bname} about {pname}",
+                                 f"{pname} was a day past due for a welcome call, so Chief handed them to {bname}, "
+                                 "the backup caller, who has no email on file.", f"church-fu-backup-{fid}", pid)
         if not ok:
             return False
         await asyncio.to_thread(_patch, biz_id, fid, {
@@ -1637,14 +1726,14 @@ async def _guest_climb(g: Any, biz: Dict[str, Any], r: Dict[str, Any], level: in
             ok = await _guest_reach(g, biz, cid, p, words, f"gc-pastor-{fid}-{r.get('due_at')}-{cid}",
                                     [f"{html.escape(pname)} is three days past due for a welcome call. "
                                      f"{html.escape(lname or 'The backup')} has them, after the first caller. "
-                                     "Hand them to someone else on the Follow-up board?"], "")
+                                     f"Hand them to someone else {where_worked(biz_id, r)}?"], "")
         sent_any = sent_any or ok
         if ok:
             told_names.append(p.get("name") or "the pastor")
-    alerted = await _office_alert(biz_id, f"Hand {pname} to someone else?",
-                                  f"Three days past the welcome call, with {lname or 'the backup'}. Told: "
-                                  f"{', '.join(told_names) or 'no one'}.",
-                                  f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+    alerted = await _alert_on(r, biz_id, f"Hand {pname} to someone else?",
+                              f"Three days past the welcome call, with {lname or 'the backup'}. Told: "
+                              f"{', '.join(told_names) or 'no one'}.",
+                              f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
     if not (alerted and sent_any):
         return False
     await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
@@ -1778,16 +1867,16 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 stats["told"] += int(told)
             elif leader:
                 told_line = f"Told the office: {leader['name']} has {card} and no email on file"
-                told = await _office_alert(biz_id, f"Tell {leader['name']} about {pname}",
-                                           f"Chief handed {pname} ({r.get('card_name') or 'a card'}) to {leader['name']}, "
-                                           "who has no email on file, so they haven’t been told.",
-                                           f"church-fu-noemail-{fid}", pid)
+                told = await _alert_on(r, biz_id, f"Tell {leader['name']} about {pname}",
+                                       f"Chief handed {pname} ({r.get('card_name') or 'a card'}) to {leader['name']}, "
+                                       "who has no email on file, so they haven’t been told.",
+                                       f"church-fu-noemail-{fid}", pid)
                 stats["office"] += int(told)
             else:
                 told_line = f"Told the office: {card} has no one yet"
-                told = await _office_alert(biz_id, f"{pname} has no one yet",
-                                           f"{r.get('card_name') or 'A card'}: {r.get('reason') or ''}",
-                                           f"church-fu-none-{fid}", pid)
+                told = await _alert_on(r, biz_id, f"{pname} has no one yet",
+                                       f"{r.get('card_name') or 'A card'}: {r.get('reason') or ''}",
+                                       f"church-fu-none-{fid}", pid)
                 stats["office"] += int(told)
             if told:
                 await asyncio.to_thread(_patch, biz_id, fid, {"leader_told_at": _iso(now)})
@@ -1810,9 +1899,9 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                                                     lead_link, "Open your Lead tab"),
                                          f"cfu-nudge-{fid}-{r.get('due_at')}")
             else:
-                delivered = await _office_alert(biz_id, f"{pname} is due today",
-                                                f"“{step_title}” is due. {leader['name'] + ' has them, with no email on file' if leader else 'No one has them'}.",
-                                                f"church-fu-due-{fid}-{r.get('due_at')}", pid)
+                delivered = await _alert_on(r, biz_id, f"{pname} is due today",
+                                            f"“{step_title}” is due. {leader['name'] + ' has them, with no email on file' if leader else 'No one has them'}.",
+                                            f"church-fu-due-{fid}-{r.get('due_at')}", pid)
         told_names = ""
         if kind in ("overseer_told", "next_up"):
             # Up the leader's own chain: a day late, the role they answer to;
@@ -1847,22 +1936,23 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                              _mail_html([f"{html.escape(pname)} ({html.escape(r.get('card_name') or 'a card')}) is {late} past "
                                          f"<b>{html.escape(step_title)}</b>. {html.escape(who)} has them"
                                          + (f", and answers to you." if kind == "overseer_told" else ".")
-                                         + (" Hand them to someone else on the Follow-up board?" if kind == "next_up" and top else "")],
+                                         + (f" Hand them to someone else {where_worked(biz_id, r)}?"
+                                            if kind == "next_up" and top else "")],
                                         "", ""),
                              f"cfu-{kind}-{fid}-{r.get('due_at')}-{p['contact_id']}")
                 sent_any = sent_any or ok
             told_names = ", ".join(p["name"] for p in rung_people)
             label = f" ({rung_role['title']})" if rung_role else ""
             if kind == "overseer_told":
-                alerted = await _office_alert(biz_id, f"{pname} hasn’t been reached",
-                                              f"A day past “{step_title}”. {who} has them. Told: "
-                                              f"{told_names or 'no one above them'}{label}.",
-                                              f"church-fu-late-{fid}-{r.get('due_at')}", pid)
+                alerted = await _alert_on(r, biz_id, f"{pname} hasn’t been reached",
+                                          f"A day past “{step_title}”. {who} has them. Told: "
+                                          f"{told_names or 'no one above them'}{label}.",
+                                          f"church-fu-late-{fid}-{r.get('due_at')}", pid)
             else:
-                alerted = await _office_alert(biz_id, f"Hand {pname} to someone else?",
-                                              f"Three days past “{step_title}” with {who}. Told: "
-                                              f"{told_names or 'no one above them'}{label}.",
-                                              f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+                alerted = await _alert_on(r, biz_id, f"Hand {pname} to someone else?",
+                                          f"Three days past “{step_title}” with {who}. Told: "
+                                          f"{told_names or 'no one above them'}{label}.",
+                                          f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
             delivered = bool(alerted and sent_any)
         if not delivered:
             continue  # the rung is climbed when its message goes out; next sweep tries again

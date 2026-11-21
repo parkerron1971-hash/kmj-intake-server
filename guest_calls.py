@@ -68,8 +68,8 @@ role is gone) has the guest re-handed by the same rules, with a note.
 
 TELLING (church_follow_up._sweep_church, through context()): a login caller
 hears by a push and an email (care_handoff.tell's pattern) with a link to
-the office app's Follow-up board; a member caller keeps today's email to
-the Lead tab. The late ladder for a guest's call (late_step):
+Visitor flow, the guests' room (since 2026-11-21; the Follow-up board leaves
+guests to it); a member caller keeps today's email to the Lead tab. The late ladder for a guest's call (late_step):
   the due day, 9 AM ..... the caller is reminded
   a day late ............ the backup takes the guest, and both hear; with no
                           backup, today's: the role above them hears
@@ -104,7 +104,13 @@ MAX_RULES = 10
 DUE_DAYS = (1, 2, 3)
 DUE_HOUR = 18
 REMIND_BEFORE = timedelta(hours=9)          # 9 AM on the due day
-NAV = "operate:follow-up"
+# Where a guest's call is worked (Kevin, 2026-11-21, "One Visitor flow
+# room"): Visitor flow, the guests' room. Its nav is the room's own page id,
+# which every app since the room shipped opens (the menu's Visitor flow row
+# lands on the same room). Replies keep their own nav (guest_replies).
+NAV = "operate:guests"
+LABEL = "Open Visitor flow"
+DONE_HOW = "When you’ve talked, open them in Visitor flow and press How did it go?"
 OFFICE_ROLES = ("admin", "manager")
 TEAM_KINDS = ("team", "ministry")
 NOT_EDIT = "Who calls our guests is changed by the owner, the admins, or whoever does First-time guests."
@@ -700,8 +706,7 @@ def new_guest_words(pname: str, came: str, due: str, reason: str, first: str) ->
         "text": "\n\n".join([
             f"Hi {first}," if first else "Hello,",
             f"{pname} {came}, and Chief handed them to you for a welcome call. {reason}".strip(),
-            f"Your call is due {due}. When you’ve talked, open them on the Follow-up board and press "
-            "Mark “Reach out” done.",
+            f"Your call is due {due}. {DONE_HOW}",
         ]),
     }
 
@@ -714,8 +719,7 @@ def remind_words(pname: str, due: str, first: str) -> Dict[str, str]:
         "text": "\n\n".join([
             f"Hi {first}," if first else "Hello,",
             f"Your welcome call with {pname} is due {due}.",
-            "When you’ve talked, open them on the Follow-up board and press Mark “Reach out” done. If a day "
-            "goes by, the guest goes to the backup.",
+            f"{DONE_HOW} If a day goes by, the guest goes to the backup.",
         ]),
     }
 
@@ -729,7 +733,7 @@ def backup_words(pname: str, caller: str, first: str) -> Dict[str, str]:
             f"Hi {first}," if first else "Hello,",
             f"{pname} hasn’t had a welcome call, a day past due with {caller}. You’re the church’s backup "
             "caller, so Chief handed them to you.",
-            "When you’ve talked, open them on the Follow-up board and press Mark “Reach out” done.",
+            DONE_HOW,
         ]),
     }
 
@@ -742,7 +746,7 @@ def handed_on_words(pname: str, backup: str, first: str) -> Dict[str, str]:
         "text": "\n\n".join([
             f"Hi {first}," if first else "Hello,",
             f"{pname} was a day past due for a welcome call, so Chief handed them to {backup}, the backup caller.",
-            "Nothing else to do. If you already talked with them, tell the office so it’s on the Follow-up board.",
+            f"Nothing else to do. If you already talked with them, tell {backup} so it’s noted in Visitor flow.",
         ]),
     }
 
@@ -750,12 +754,12 @@ def handed_on_words(pname: str, backup: str, first: str) -> Dict[str, str]:
 def pastor_words(pname: str, who: str) -> Dict[str, str]:
     return {
         "title": f"{pname} hasn’t had a welcome call",
-        "body": f"Three days past due, with {who}. Hand them to someone else on the Follow-up board?",
+        "body": f"Three days past due, with {who}. Hand them to someone else in Visitor flow?",
         "subject": f"{pname} hasn’t had a welcome call",
         "text": "\n\n".join([
             "Hello,",
             f"{pname} is three days past due for a welcome call. {who} has them, after the first caller.",
-            "Check in, or hand them to someone else on the Follow-up board.",
+            "Check in, or hand them to someone else in Visitor flow.",
         ]),
     }
 
@@ -766,13 +770,13 @@ def _link() -> str:
 
 
 def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str, *, nav: str = NAV,
-               link: Optional[str] = None, label: str = "Open the Follow-up board") -> bool:
+               link: Optional[str] = None, label: str = LABEL) -> bool:
     """One notice to one office login, as care_handoff.tell: a push to the
     office app and an email to its sign-in address, each as the church's
-    setting says (both by default), with a link to the Follow-up board (or
-    where `nav` / `link` say: a guest's reply opens their texts,
-    guest_replies). True when either went. Never raises. Run it off the
-    event loop (the email goes through asyncio.run)."""
+    setting says (both by default), with a link to Visitor flow, where the
+    guest's call is worked (or where `nav` / `link` say: a guest's reply
+    opens their texts, guest_replies). True when either went. Never raises.
+    Run it off the event loop (the email goes through asyncio.run)."""
     import church_assignments as cas
     import church_leader_tasks as clt
     import church_office_tasks as cot
@@ -803,7 +807,7 @@ def tell_login(ctx: Ctx, uid: str, words: Dict[str, str], ref: str, *, nav: str 
 
 
 async def office_alert(biz_id: str, title: str, body: str, key: str, person_id: Optional[str] = None,
-                       action: str = "Open the Follow-up board") -> bool:
+                       action: str = LABEL) -> bool:
     try:
         import httpx
         import notification_engine
@@ -837,7 +841,7 @@ async def welcome_question(ctx: Ctx, now: datetime) -> bool:
     ok = await office_alert(
         ctx.ch.b, "Move guest calls to the Welcome Team?",
         f"{lead} now leads your Welcome Team. People & Care keeps making the welcome calls until you say "
-        "otherwise: open Who calls our guests (on the Follow-up board, or Text › New here) and choose "
+        "otherwise: open Who calls in Visitor flow (or Who calls new guests in Text › New here) and choose "
         "the Welcome Team. Guests already handed out stay where they are.",
         f"guest-calls-welcome-{ctx.ch.b}", action="Open Who calls our guests")
     if ok:

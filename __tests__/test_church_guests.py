@@ -409,7 +409,7 @@ def test_the_next_move_in_order(db):
     db.t["sms_messages"] = [s for s in db.t["sms_messages"] if s["id"] != "m4"]
     m = _week(db)["next_move"]
     # the longest-late call: Sam's (due Sunday) before Jordan's (due Monday)
-    assert m["kind"] == "call" and m["guest_id"] == SAM and m["action"] == "Open Follow-up"
+    assert m["kind"] == "call" and m["guest_id"] == SAM and m["action"] == "Open Sam"
     assert m["line"] == "Sam Whitfield's welcome call is a day late." and m["detail"] == "Renee Ellis has them."
     for f in db.t["church_follow_ups"]:
         if f["id"] in (fid(3), fid(6)):
@@ -578,6 +578,7 @@ def areas(monkeypatch):
     monkeypatch.setattr(church_areas, "mode", lambda: state["mode"])
     monkeypatch.setattr(church_areas, "my_areas", lambda b, u, r: state["view"])
     monkeypatch.setattr(church_duties, "holds", lambda b, u, d: d == guest_path.FIRST_GUESTS)
+    monkeypatch.setattr(cg, "_person_of", lambda b, u: state.get("person", ""))
     return state
 
 
@@ -614,6 +615,8 @@ def test_only_a_church(db, monkeypatch, areas):
 
 
 def test_a_seat_below_manager_and_the_areas(db, monkeypatch, areas):
+    import church_duties
+    monkeypatch.setattr(church_duties, "holds", lambda b, u, d: False)       # not the one who calls guests
     assert _client(monkeypatch, role="member").get(f"/church/guests/{BIZ}").status_code == 404
     t = _client(monkeypatch, role="manager")
     areas["view"] = {"areas": ["worship_media"]}

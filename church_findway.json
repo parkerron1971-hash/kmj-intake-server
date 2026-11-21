@@ -1634,23 +1634,18 @@
        "sees": [
         "people_care"
        ],
-       "what": "See every guest who filled in a card, who has them, and which step they are on.",
+       "what": "See the people your cards handed on, who has them, and which step they are on.",
        "words": [
         "follow up",
         "follow-up",
-        "guest",
-        "guests",
-        "visitor",
-        "first time",
-        "welcome",
         "connect card",
-        "new people"
+        "who has them"
        ],
        "answers": [
         {
          "id": "hand-a-guest-to-a-leader",
-         "q": "Hand a guest to a leader",
-         "a": "Open the person on the board, choose a name under Hand to and press Hand on. Chief tells that leader.",
+         "q": "Hand someone to a leader",
+         "a": "Open the person on the board, choose a name under Hand to and press Hand on. Chief tells that leader. A first-time guest in Visitor flow is handed on there: open them and press Hand to someone else.",
          "words": [
           "assign a visitor",
           "who follows up",
@@ -1689,15 +1684,30 @@
        "sees": [
         "people_care"
        ],
-       "what": "See everyone new in a period and how far each has come: back again, a member, serving, leading.",
+       "what": "See your new people and first-time guests, and how far each has come: back again, a member, serving, leading.",
        "words": [
         "visitor",
         "visitors",
-        "guests",
         "visitor flow",
+        "guest",
+        "guests",
+        "first-time guests",
+        "first time guests",
+        "first-timers",
+        "first time",
+        "new guests",
+        "guests this week",
         "new people",
         "came back",
-        "first visit"
+        "first visit",
+        "welcome",
+        "welcome call",
+        "welcome calls",
+        "who calls our guests",
+        "welcome path",
+        "guests room",
+        "guest scorecard",
+        "are our guests staying"
        ],
        "answers": [
         {

@@ -52,7 +52,10 @@ _FILE = Path(__file__).with_name("church_findway.json")
 # Pages the map has a card for that today's menu does not list: the
 # marketing desk is open for every business, and it took their place
 # (Posts opens Marketing; Video studio and Video Clips are tabs of Create).
-TAKEN_BY = {"grow:content": "grow:marketing", "grow:video-studio": "grow:create", "grow:video-clips": "grow:create"}
+# Visitor flow's room (operate:guests, the Welcome Path's) opens from the
+# menu's one Visitor flow row (Kevin, 2026-11-21, "One Visitor flow room").
+TAKEN_BY = {"grow:content": "grow:marketing", "grow:video-studio": "grow:create", "grow:video-clips": "grow:create",
+            "operate:guests": "grow:funnel"}
 NOT_ON_THE_MENU = set(TAKEN_BY)
 
 # An area's short name, for the tag after a page.

@@ -139,15 +139,18 @@ def _at(key: str, button: str = "") -> Optional[str]:
     return page["where"] + (f" → {button}" if button else "")
 
 
-def place(duty: str) -> Optional[str]:
+def place(duty: str, business: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Where a duty is done, in the menu's words: its page, the button its
     work starts from, and any second page ("Sunday › Plan and look back ›
     Services & Events → Roles; also Office › Building › Rooms & spaces → Ask
     for a room"); work through Chief is said so. None when its page isn't on
-    the map (test_chief_office_howto fails then)."""
+    the map (test_chief_office_howto fails then). With `business`, First-time
+    guests at a church whose Welcome Path is on is Visitor flow (My week's
+    own door, church_my_week.door_of), where every guest's call is worked."""
     import church_my_week as mw
-    door = mw.DOOR.get(duty)
-    first = _at(f"{door['area']}:{door['id']}", INSIDE.get(duty, "")) if door else None
+    door = mw.door_of(duty, business) if business else mw.DOOR.get(duty)
+    inside = INSIDE.get(duty, "") if door == mw.DOOR.get(duty) else ""
+    first = _at(f"{door['area']}:{door['id']}", inside) if door else None
     if not first:
         return None
     rest = ["also " + r for r in (_at(k, b) for k, b in ALSO.get(duty, [])) if r]
@@ -156,10 +159,10 @@ def place(duty: str) -> Optional[str]:
     return "; ".join([first, *rest])
 
 
-def _labelled(key: str, paths: bool) -> str:
+def _labelled(key: str, paths: bool, business: Optional[Dict[str, Any]] = None) -> str:
     import church_duties as cd
     label = cd.CATALOG[key]["label"]
-    where = place(key) if paths else None
+    where = place(key, business) if paths else None
     return f"{label} ({where})" if where else label
 
 
@@ -270,7 +273,7 @@ def _person_line(ch: Any, J: Any, e: Dict[str, Any], *, overseers: set, jobs_on:
             bits.append("over the lanes: " + (_join(team) if team else "no Manager is under them yet"))
         if seat == "admin":
             bits.append("does every duty, money ones too")
-    labels = [_labelled(k, paths) for k in e["own"]]
+    labels = [_labelled(k, paths, getattr(ch, "business", None)) for k in e["own"]]
     if labels:
         more = len(labels) - labels_max
         listed = "; ".join(labels[:labels_max]) + (f"; and {more} more" if more > 0 else "")
