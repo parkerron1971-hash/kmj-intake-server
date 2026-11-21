@@ -1047,5 +1047,8 @@ def _wrote(resp, business_id, contact_id):
     their phone a new plans version so every server copy reads afresh."""
     import member_lumen
     import member_lumen_plans as mlp
-    mlp.forget(business_id, contact_id)
+    try:
+        mlp.forget(business_id, contact_id)
+    except Exception:  # noqa: BLE001  (the write went through: never a 500 for it)
+        logger.warning("plans: forget failed", exc_info=True)
     return mlp.stamp(resp) if member_lumen.mode() != "off" else resp

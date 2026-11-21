@@ -417,3 +417,15 @@ def test_the_css_is_its_own_block_under_body_lm():
             if one and not one.startswith(("from", "to", "@keyframes")):
                 assert one.startswith("body.lm"), one
     assert "#" not in re.sub(r"--pl-[ab]:#[0-9A-F]{6}|#fff\b|#FFE1A6|#141414|#2F7A4E|#3C8A5C", "", mlp.CSS)
+
+
+def test_a_saved_write_never_fails_on_forgetting(bible, fake, monkeypatch):  # noqa: F811
+    import member_lumen_plans as mlp
+
+    def boom(*a):
+        raise RuntimeError("kept rows")
+    monkeypatch.setattr(mlp, "forget", boom)
+    c = _app(fake, monkeypatch)
+    r = c.post("/my/bible/plans/start", data={"plan": "reading:topic-money"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/my/bible/plans/topic-money"
+    assert f"{mlp.VERSION_COOKIE}=" in r.headers["set-cookie"]
