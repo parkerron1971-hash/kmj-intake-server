@@ -953,6 +953,7 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     held = _get(f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id,post_id,contact_id,body,created_at"
                 f"&order=created_at.desc&limit=50")
     # Members' group posts the check held (member_posts), beside the comments.
+    import member_lumen
     import member_posts
     held_posts = member_posts.held_posts(biz_id)
     # ...and leaders' moments the check held (member_moments). None: the
@@ -1003,8 +1004,11 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
                     for p in posters],
         "settings": {"comments": (((business.get("settings") or {}).get("news") or {}).get("comments")) is not False,
                      # Members posting in their groups (member_posts): on
-                     # unless the church turned it off.
-                     "member_posts": member_posts.on(business)},
+                     # unless the church turned it off; only the new look
+                     # has the composer, so the room shows the switch only
+                     # where it's on (member_lumen.at_church).
+                     "member_posts": member_posts.on(business),
+                     "member_posts_here": member_lumen.at_church(biz_id)},
         # Phone alerts (news_alerts): the church's switch, today's count of
         # the day's most, how celebrations ring.
         "alerts": _alerts_view(business),
