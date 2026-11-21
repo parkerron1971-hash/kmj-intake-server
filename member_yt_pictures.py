@@ -34,9 +34,11 @@ the church's address, the way the story picture's are read on the server
   (1280 x 720) when the video has one, else sddefault, else hqdefault.
   Either is cut to 16:9 at its centre, which takes the bars off exactly, and
   saved as a JPEG of at most 480 or 1280 across. Kept per server copy
-  (KEEP_S, within BUDGET bytes; a video with no picture is remembered as
-  that for MISS_S; a failed fetch is never kept) and a day by the phone
-  (Cache-Control, ETag). 404 for a name or signature that isn't ours or a
+  (KEEP_S, within BUDGET bytes; only MISS_S when a sharper picture failed to
+  answer on the way; a video with no picture is remembered as that for
+  MISS_S; a failed fetch is never kept) and a day by the phone
+  (Cache-Control, ETag). The story picture that draws one is never kept
+  without it (member_lumen_share.picture). 404 for a name or signature that isn't ours or a
   video with no picture, 503 when YouTube didn't answer. No database read.
 
 Where the picture draws (art()): over the message's own colour wash, so a
@@ -138,6 +140,7 @@ def parse(url: str) -> Optional[Tuple[str, bool]]:
 
 # ─── the picture ─────────────────────────────────────────────────────
 
+# (video id, wide) -> (kept until, on the server's monotonic clock; the JPEG or b"")
 _KEPT: "OrderedDict[Tuple[str, bool], Tuple[float, bytes]]" = OrderedDict()
 _LOCK = threading.Lock()
 
@@ -193,12 +196,15 @@ def cut(raw: bytes, width: int) -> Optional[bytes]:
 
 def get(vid: str, wide: bool) -> Optional[bytes]:
     """The picture's JPEG; b"" when the video has none; None when YouTube
-    didn't answer. Kept (module docstring)."""
+    didn't answer. Kept (module docstring): a found picture KEEP_S, but only
+    MISS_S when a sharper one failed to answer on the way (so a passing blip
+    on maxresdefault doesn't pin the smaller picture for hours), a miss
+    MISS_S, a failure never."""
     key = (vid, wide)
     now = time.monotonic()
     with _LOCK:
         hit = _KEPT.get(key)
-        if hit and now - hit[0] < (KEEP_S if hit[1] else MISS_S):
+        if hit and now < hit[0]:
             _KEPT.move_to_end(key)
             return hit[1]
     failed = False
@@ -215,7 +221,7 @@ def get(vid: str, wide: bool) -> Optional[bytes]:
     if not got and failed:
         return None
     with _LOCK:
-        _KEPT[key] = (now, got)
+        _KEPT[key] = (now + (KEEP_S if got and not failed else MISS_S), got)
         _KEPT.move_to_end(key)
         while sum(len(v[1]) for v in _KEPT.values()) > BUDGET and len(_KEPT) > 1:
             _KEPT.popitem(last=False)

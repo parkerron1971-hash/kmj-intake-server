@@ -1118,7 +1118,10 @@ def tag_of(spec: Mapping[str, Any], marks: Mapping[str, Any]) -> str:
 
 def picture(spec: Mapping[str, Any], marks: Mapping[str, Any], business_id: str) -> Tuple[str, bytes]:
     """(tag, PNG) for what it shows, drawn once per server copy and kept
-    within PNG_BUDGET."""
+    within PNG_BUDGET. A message's video picture comes over the network
+    (member_yt_pictures): drawn without it when YouTube didn't answer, that
+    PNG is neither kept nor tagged (tag ''), so the next ask tries again."""
+    import member_yt_pictures as myp
     tag = tag_of(spec, marks)
     with _PNG_LOCK:
         got = _PNG.get(tag)
@@ -1129,6 +1132,8 @@ def picture(spec: Mapping[str, Any], marks: Mapping[str, Any], business_id: str)
     logo = open_picture(picture_bytes(marks.get("logo") or "", business_id), longest=400) if marks.get("logo") else None
     with _DRAW:
         png = render(spec, marks, photo, logo)
+    if photo is None and str(spec.get("pic") or "").startswith(myp.PREFIX):
+        return "", png
     with _PNG_LOCK:
         _PNG[tag] = png
         while sum(len(v) for v in _PNG.values()) > PNG_BUDGET and len(_PNG) > 1:
@@ -1177,4 +1182,7 @@ async def story(request: Request, kind: str, name: str):
     if request.headers.get("if-none-match") == f'"{tag}"':
         return Response(status_code=304, headers=keep)
     tag, png = await asyncio.to_thread(picture, spec, marks, str(biz["id"]))
+    if not tag:
+        # drawn without its video picture (YouTube didn't answer): not kept by the phone either
+        return Response(content=png, media_type="image/png", headers=_NO)
     return Response(content=png, media_type="image/png", headers=keep)

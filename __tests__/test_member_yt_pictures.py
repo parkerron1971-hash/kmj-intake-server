@@ -298,3 +298,29 @@ def test_the_share_sheet_and_the_story_picture(fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(mls, "_fetch", lambda u: pytest.fail("no other host is asked"))
     assert mls.picture_bytes(spec["pic"], tct.BIZ) == b"JPEG"
     assert mls.picture_bytes(f"/my/yt/{VID}-w.jpg?k=forged", tct.BIZ) is None
+
+
+def test_a_smaller_picture_after_a_blip_is_kept_only_briefly(monkeypatch):
+    import time
+    files = {"maxresdefault": None, "sddefault": _jpeg(640, 480, bars=60), "hqdefault": _jpeg(480, 360, bars=45)}
+    monkeypatch.setattr(myp, "_fetch", lambda u: files[u.rsplit("/", 1)[1][:-4]])
+    assert Image.open(io.BytesIO(myp.get(VID, True))).size == (640, 360)
+    assert myp._KEPT[(VID, True)][0] - time.monotonic() <= myp.MISS_S        # not the six hours
+    myp._KEPT.clear()
+    files["maxresdefault"] = b""                                              # no maxres at all: sd is the picture
+    myp.get(VID, True)
+    assert myp._KEPT[(VID, True)][0] - time.monotonic() > myp.MISS_S
+
+
+def test_a_story_picture_drawn_without_its_video_picture_is_never_kept(monkeypatch):
+    import member_lumen_share as mls
+    monkeypatch.setattr(mls, "render", lambda spec, marks, photo, logo: b"PNG+" if photo else b"PNG-")
+    spec = {"kind": "message", "title": "Love Out Loud", "pic": myp.picture_url(LINK, wide=True), "look": "colour"}
+    marks = {"name": "Grace Fellowship", "logo": ""}
+    mls._PNG.clear()
+    monkeypatch.setattr(myp, "get", lambda vid, wide: None)                  # YouTube didn't answer
+    assert mls.picture(spec, marks, tct.BIZ) == ("", b"PNG-") and not mls._PNG
+    monkeypatch.setattr(myp, "get", lambda vid, wide: _jpeg(1280, 720))
+    tag, png = mls.picture(spec, marks, tct.BIZ)
+    assert tag == mls.tag_of(spec, marks) and png == b"PNG+" and mls._PNG[tag] == b"PNG+"
+    mls._PNG.clear()
