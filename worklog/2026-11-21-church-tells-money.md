@@ -4,7 +4,7 @@ date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes go with the plan and make those small fixes as well (the money tells on Love City's connection map)"
 status: in progress
-prs: [kmj-intake-server (this PR; merges after #2038)]
+prs: [kmj-intake-server#2039]
 migrations: []
 left_undone:
   - "Rides CHURCH_TELLS (owner by default: Love City only); switch on for every church on a Thursday with the rest of the tells"
