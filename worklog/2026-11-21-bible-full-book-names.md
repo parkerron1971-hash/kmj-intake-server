@@ -18,5 +18,5 @@ read, no migration.
 
 Checked: switch off and MEMBER_LUMEN=preview for a non-owner, 951 page x scene dumps each (Home harness 656, Bible
 harness 295): same 951, differ 0 in both modes against main. Reads with the switch on, per page and table, in four looks: Home harness 1984 / 1984 over 328 page-looks, no page differs; Bible harness every page that answers 200 the same, 1132 / 1132 over 224 (its Home is a harness crash on main and here alike, whose parallel reads vary run to run). Member
-suites: RESULTS_TESTS. Shots before and after (Chromium and WebKit, light and dark, 390x844 @2x) in the session
+suites: 1591 passed (test_member_lumen_bible_titles: 16 new; two Bible reader tests now read the full title). Shots before and after (Chromium and WebKit, light and dark, 390x844 @2x) in the session
 scratchpad's watch-fix-shots/ (before-*, titles-*: John 3, Psalm 23, Acts 2, 1 Corinthians 13).
