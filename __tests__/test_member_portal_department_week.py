@@ -99,7 +99,10 @@ def hope(db, monkeypatch):
     import church_threads
     import push_notifications
     monkeypatch.setenv("CHURCH_THREADS", "on")
-    monkeypatch.delenv("MEMBER_QUIET_HOURS", raising=False)
+    # Daytime whatever the clock says: after 9 PM in the church's zone the notes wait for the
+    # morning, which turned these tests red in evening CI runs. The quiet-hours test below
+    # turns quiet hours on for itself.
+    monkeypatch.setenv("MEMBER_QUIET_HOURS", "off")
     for t in ("church_thread_notes", "church_thread_reads", "member_push_subscriptions", "member_push_sends",
               "member_push_prefs", "member_push_held"):
         db.t[t] = []
