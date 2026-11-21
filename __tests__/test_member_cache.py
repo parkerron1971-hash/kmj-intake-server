@@ -204,6 +204,10 @@ def _lead_reads(monkeypatch, roles, led):
     monkeypatch.setattr(group_lead, "led_groups", lambda b, m: calls.append("led") or led)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: calls.append("tasks") or None)
     monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    # A department's leader (church_week.entry, #2011) reads too: pinned, or
+    # whether it read and failed hangs on what other files left in place.
+    import church_week
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     monkeypatch.setattr(member_app_ui, "serve_mode", lambda: False)
     return calls
 
@@ -250,6 +254,8 @@ def test_a_no_behind_a_failed_later_read_is_never_kept(monkeypatch, step):
         return fn
     monkeypatch.setattr(church_leader_tasks, "section", read("tasks", None))
     monkeypatch.setattr(church_schedule, "section", read("schedule", None))
+    import church_week
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     monkeypatch.setattr(member_portal_lead, "parts", read("parts", {"serving": False, "kids": False, "team": []}))
     for _ in range(2):
         assert asyncio.run(mp._leads(BIZ, ME["id"], dict(BUSINESS), dict(ME), kept=True)) is False
@@ -268,6 +274,8 @@ def test_a_no_with_every_read_answered_is_kept(monkeypatch):
     monkeypatch.setattr(member_app_ui, "serve_mode", lambda: True)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: None)
     monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    import church_week
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     asked = []
     monkeypatch.setattr(member_portal_lead, "parts",
                         lambda *a: asked.append(1) or {"serving": False, "kids": False, "team": []})

@@ -171,8 +171,13 @@ def moment(*, mid: str, label: str, ring: str, bg: str, face: str, name: str, hr
 
 
 def row(moments: List[Dict[str, Any]]) -> str:
-    """The circles, the viewer and its script; '' with fewer than two."""
+    """The circles, the viewer and its script; '' with fewer than two.
+    With a leader's own circle (member_moments: several slides a person,
+    or the member's own circle to post from) the row is member_moments'."""
     ms = [m for m in moments if m][:MOST]
+    if any(m.get("slides") is not None or m.get("compose") for m in ms):
+        import member_moments
+        return member_moments.people_row(ms)
     if len(ms) < 2:
         return ""
     circles, slides, segs = [], [], []
