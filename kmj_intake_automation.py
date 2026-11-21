@@ -2216,6 +2216,17 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # The office's missing tells (2026-11-21, Love City's connection map): a
+    # closed count, a pay-back request, a room request and its answer, a
+    # leader's yes, a sermon draft, Sunday's missing count, an event with no
+    # flyer, each told once to whoever does that job (church_tells.sweep_tick;
+    # CHURCH_TELLS, read here on the worker too).
+    try:
+        import church_tells as _ctl
+        scheduler.add_job(g("church_tells_sweep", _ctl.sweep_tick), "interval", minutes=30,
+                          id="church_tells_sweep")
+    except Exception as e:
+        print(f"   [warn] church tells sweep not scheduled: {e}")
     # The leaders schedule (2026-11-18): an ask to be away, and its answer,
     # are told once; one nudge after three days; a waiting ask follows whoever
     # is over the asker now; a private reason is cleared 90 days after the
