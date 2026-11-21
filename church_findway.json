@@ -765,7 +765,7 @@
         {
          "id": "make-an-events-volunteer-list",
          "q": "Make an event’s volunteer list",
-         "a": "On the event’s card press Set up serving, or Roles if it has some, add each role with how many it needs and press Save roles. Add names at the bottom of the card with their serving role, and people can sign up for open spots on your events page when it is on and the event is public.",
+         "a": "On the event’s card press Set up serving, or Roles if it has some, add each role with how many it needs and press Save roles. Add names at the bottom of the card, and members sign up in the app, or on your events page when it is on, the event is public and the role has Anyone can sign up.",
          "words": [
           "event volunteer list",
           "volunteers for an event",
@@ -773,6 +773,74 @@
           "volunteer sign up sheet",
           "who is serving at the event",
           "serving roles for an event"
+         ]
+        },
+        {
+         "id": "ask-the-serving-teams-for-volunteers-for-an-event",
+         "q": "Ask the serving teams for volunteers for an event",
+         "a": "In Create event, under Volunteers, tick Our regular serving teams, then each place you need and how many. For an event you already have, press Volunteers and flyer on its card, then Ask the serving teams, and whoever schedules the teams answers on Who serves when.",
+         "words": [
+          "request volunteers for an event",
+          "greeters for an event",
+          "ushers for an event",
+          "parking for an event",
+          "event needs volunteers",
+          "volunteers from the teams",
+          "how many volunteers for an event"
+         ]
+        },
+        {
+         "id": "add-a-flyer-to-an-event",
+         "q": "Add a flyer to an event",
+         "a": "Press Volunteers and flyer on the event’s card, then Add a flyer, and upload a picture or pick one from Creative Studio (for the owner, an admin and whoever does the posts or the clips). Create event asks for one too, and the flyer shows wherever the event does.",
+         "words": [
+          "event flyer",
+          "picture for an event",
+          "thumbnail for an event",
+          "put a flyer on an event",
+          "change the flyer",
+          "take the flyer off",
+          "event image"
+         ]
+        },
+        {
+         "id": "add-special-volunteers-to-an-event",
+         "q": "Add special volunteers to an event",
+         "a": "In Create event, under Volunteers, tick Special volunteers for this event and add each role with how many it needs. Members sign up in the app, and a role with Anyone can sign up shows on your public events page too when the event is public.",
+         "words": [
+          "special volunteers",
+          "chaperones",
+          "event helpers",
+          "roles that are not a team",
+          "volunteer roles for one event",
+          "anyone can sign up"
+         ]
+        },
+        {
+         "id": "mark-an-event-role-as-working-with-kids",
+         "q": "Mark an event role as working with kids",
+         "a": "Tick Works with kids on the role, in Create event or after Set up serving or Roles on the event’s card. The app offers it only to people with a current background check and to teens of 13 to 17 as junior helpers, and it never shows on the public events page.",
+         "words": [
+          "kids role",
+          "role with children",
+          "needs a background check",
+          "junior helper",
+          "teen helper",
+          "youth volunteer for an event",
+          "works with kids"
+         ]
+        },
+        {
+         "id": "see-how-full-an-event-is",
+         "q": "See how full an event is",
+         "a": "Press Volunteers and flyer on the event’s card. It says how many were asked for and how many have said yes, with each team place and sign-up, and you can also ask Chief how full it is.",
+         "words": [
+          "how full is my event",
+          "how many volunteers said yes",
+          "volunteers so far",
+          "event volunteer count",
+          "open spots at an event",
+          "who said yes for the event"
          ]
         }
        ]
@@ -1173,6 +1241,30 @@
           "bible study volunteers",
           "event volunteer schedule",
           "not on sunday"
+         ]
+        },
+        {
+         "id": "answer-an-events-request-for-volunteers",
+         "q": "Answer an event’s request for volunteers",
+         "a": "Event requests sit at the top of Who serves when. Press Put it on the schedule to add the event with the places it asked for, Change the numbers first, or Can’t staff it with a note back to whoever asked.",
+         "words": [
+          "event requests",
+          "event asked for volunteers",
+          "approve an event request",
+          "say yes to an event",
+          "staff an event",
+          "events waiting for the teams"
+         ]
+        },
+        {
+         "id": "change-how-many-an-event-date-needs",
+         "q": "Change how many an event date needs",
+         "a": "Tap a spot on the event’s date and press Change its numbers, or press it on the event’s answered request. Set each place, untick the ones it doesn’t need, and press Save the numbers.",
+         "words": [
+          "more greeters for the event",
+          "fewer ushers for the event",
+          "change the numbers for an event",
+          "event date numbers"
          ]
         }
        ]
@@ -5365,6 +5457,32 @@
           "chief write a role",
           "responsibilities",
           "draft a role"
+         ]
+        },
+        {
+         "id": "give-someone-giving-access",
+         "q": "Give someone giving access",
+         "a": "Open their sheet on the Office logins tab, pick See, Work or Lead under Giving, tick Who gave or Bank and payouts if they need them, and press Save. Only the pastor gives it, with the password, and anyone else presses Ask Pastor: nothing opens until the pastor says yes.",
+         "words": [
+          "let the treasurer see giving",
+          "treasurer access",
+          "who can see giving",
+          "see who gave",
+          "bank access",
+          "giving permissions",
+          "let someone count the offering"
+         ]
+        },
+        {
+         "id": "answer-a-request-for-giving-access",
+         "q": "Answer a request for giving access",
+         "a": "On the Office logins tab, under Waiting for your yes, press Yes, open it and enter your password, or press No. A request nobody answers runs out after 7 days.",
+         "words": [
+          "approve giving access",
+          "someone asked for giving",
+          "waiting for my yes",
+          "giving request",
+          "say no to a request"
          ]
         },
         {

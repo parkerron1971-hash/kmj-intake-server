@@ -603,8 +603,8 @@ def test_the_switch(church, monkeypatch):
     assert c.as_("shapretta").get(f"/church/event-volunteers/{E_LOCK}?business_id={BIZ}").status_code == 200
     r = c.as_("shapretta").delete(f"/church/event-volunteers/{E_LOCK}/request?business_id={BIZ}")
     assert r.status_code == 200
-    # owner (the default): the platform owner's own church, or login.
-    monkeypatch.delenv("EVENT_VOLUNTEERS")
+    # owner (the default until 2026-11-21): the platform owner's own church, or login.
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "owner")
     assert evv.mode() == "owner"
     assert ask(c, "shapretta").status_code == 404
     assert status(c, "owner")["enabled"] is True
@@ -618,6 +618,35 @@ def test_the_switch(church, monkeypatch):
     monkeypatch.setenv("CHURCH_EVENT_VOLUNTEERS", "on")
     monkeypatch.setenv("EVENT_VOLUNTEERS", "yes please")
     assert evv.mode() == "off" and evv.open_for(BIZ) is False
+
+
+def test_unset_is_on_for_every_church_and_off_still_rolls_it_back(church, monkeypatch):
+    """On for every church since 2026-11-21 (Kevin: "switch on today"). With
+    neither switch set, a church that isn't the platform owner's asks, and
+    whoever schedules the teams answers, with nobody asking whose church it
+    is. EVENT_VOLUNTEERS=off, the rollback, closes it again."""
+    c = church
+    monkeypatch.delenv("EVENT_VOLUNTEERS", raising=False)
+    monkeypatch.delenv("CHURCH_EVENT_VOLUNTEERS", raising=False)
+    looked = []
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: looked.append(biz) or False)
+    assert evv.mode() == "on" and sd.mode() == "on"
+    assert evv.open_for(BIZ) is True and sd.open_for(BIZ) is True
+    assert status(c, "laquesha")["enabled"] is True and status(c, "shapretta")["can_ask"] is True
+    rid = asked(c, "shapretta")["request"]["id"]
+    assert c.as_("laquesha").get(f"/planning/requests?business_id={BIZ}").status_code == 200
+    assert answer(c, rid).status_code == 200
+    assert looked == [], "an unset switch is on: it never looks up the platform owner's church"
+    # The rollback: off closes asking, answering and the scheduler's list again.
+    monkeypatch.setenv("EVENT_VOLUNTEERS", "off")
+    assert evv.open_for(BIZ) is False
+    assert status(c, "laquesha")["enabled"] is False
+    assert ask(c, "shapretta", entry=E_OUT).status_code == 404
+    assert c.as_("laquesha").get(f"/planning/requests?business_id={BIZ}").status_code == 404
+    # Event dates' own switch closes it too (an ask's yes makes one).
+    monkeypatch.delenv("EVENT_VOLUNTEERS")
+    monkeypatch.setenv("CHURCH_EVENT_VOLUNTEERS", "off")
+    assert evv.open_for(BIZ) is False and status(c, "laquesha")["enabled"] is False
 
 
 def test_before_the_migration_nothing_selects_needs_and_nothing_breaks(church, monkeypatch):

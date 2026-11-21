@@ -184,6 +184,15 @@ ASKED = [
     ("where is the annual report", "make-the-annual-report"),
     ("pay someone back", "pay-someone-back"),
     ("Where do I pay Deacon Ray back", "pay-someone-back"),
+    # An event's volunteers and its flyer (2026-11-21, on for every church).
+    ("ask the teams for volunteers for our event", "ask-the-serving-teams-for-volunteers-for-an-event"),
+    ("add a flyer to the event", "add-a-flyer-to-an-event"),
+    ("event flyer", "add-a-flyer-to-an-event"),
+    ("how full is my event", "see-how-full-an-event-is"),
+    ("kids role", "mark-an-event-role-as-working-with-kids"),
+    ("chaperones", "add-special-volunteers-to-an-event"),
+    ("answer an event request", "answer-an-events-request-for-volunteers"),
+    ("change the numbers for an event", "change-how-many-an-event-date-needs"),
 ]
 
 

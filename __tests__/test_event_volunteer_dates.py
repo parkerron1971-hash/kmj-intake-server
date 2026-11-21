@@ -5,8 +5,9 @@ schedule greeters, ushers, parking, kids workers or hospitality for a
 Thursday outreach night, a Saturday event or a Wednesday Bible study.
 
 Pins:
-  * the switch (CHURCH_EVENT_VOLUNTEERS, owner when unset: the platform
-    owner's own church) and the migration: before either, nothing is offered
+  * the switch (CHURCH_EVENT_VOLUNTEERS, on when unset since 2026-11-21;
+    owner is the platform owner's own church) and the migration: before
+    either, nothing is offered
     and every route is a 404, never a 500; the schedule reads as before
   * who adds one: whoever changes the Volunteers' teams (Laquesha's
     serve_schedule, the owner, an Admin); ChurchSavvy's scheduler and a
@@ -188,8 +189,8 @@ def test_the_switch(church, monkeypatch):
     assert status(c)["event_dates"] is False and status(c, "owner")["event_dates"] is False
     assert add(c).status_code == 404
     assert c.as_("laquesha").get(f"/planning/events?business_id={BIZ}").status_code == 404
-    # owner (the default): the platform owner's own church.
-    monkeypatch.delenv("CHURCH_EVENT_VOLUNTEERS")
+    # owner (the default until 2026-11-21): the platform owner's own church.
+    monkeypatch.setenv("CHURCH_EVENT_VOLUNTEERS", "owner")
     assert sd.mode() == "owner"
     assert status(c, "owner")["event_dates"] is True, "the platform owner signed in is known at once"
     assert status(c)["event_dates"] is False and add(c).status_code == 404
@@ -199,6 +200,24 @@ def test_the_switch(church, monkeypatch):
     # A word the switch doesn't know is off, never on.
     monkeypatch.setenv("CHURCH_EVENT_VOLUNTEERS", "yes please")
     assert sd.mode() == "off" and status(c, "owner")["event_dates"] is False
+
+
+def test_unset_is_on_for_every_church_and_off_still_rolls_it_back(church, monkeypatch):
+    """On for every church since 2026-11-21, with EVENT_VOLUNTEERS (Kevin:
+    "switch on today"). Unset, whoever schedules the teams at a church that
+    isn't the platform owner's adds an event date, with nobody asking whose
+    church it is. off, the rollback, closes it again."""
+    c = church
+    monkeypatch.delenv("CHURCH_EVENT_VOLUNTEERS", raising=False)
+    looked = []
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: looked.append(biz) or False)
+    assert sd.mode() == "on" and sd.open_for(BIZ) is True
+    assert status(c)["event_dates"] is True, "Laquesha, at a church that isn't the platform owner's"
+    assert add(c).status_code == 200
+    assert looked == [], "an unset switch is on: it never looks up the platform owner's church"
+    monkeypatch.setenv("CHURCH_EVENT_VOLUNTEERS", "off")
+    assert status(c)["event_dates"] is False and status(c, "owner")["event_dates"] is False
+    assert c.as_("laquesha").get(f"/planning/events?business_id={BIZ}").status_code == 404
 
 
 def test_before_the_migration_nothing_is_offered_and_nothing_breaks(church, monkeypatch):

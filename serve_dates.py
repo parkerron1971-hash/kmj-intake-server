@@ -25,9 +25,10 @@
 # hides itself (ready() is False: Who serves when offers no event date and
 # its routes answer 404). Nothing is a 500.
 #
-# CHURCH_EVENT_VOLUNTEERS = off | owner | on (default owner): who may add an
-# event date. owner is the platform owner's own church (Love City), as
-# new_here does it (member_asks.platform_church). Event dates already made
+# CHURCH_EVENT_VOLUNTEERS = off | owner | on (default on, every church since
+# 2026-11-21, with EVENT_VOLUNTEERS): who may add an event date. owner is the
+# platform owner's own church (Love City), as new_here does it
+# (member_asks.platform_church). Event dates already made
 # stay on the schedule and in the member app whatever the switch says:
 # people were asked, and they still need to know.
 from __future__ import annotations
@@ -54,7 +55,7 @@ _FORCE: Optional[bool] = None
 # ─── the switch ──────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get(SWITCH) or "owner").strip().lower()
+    m = (os.environ.get(SWITCH) or "on").strip().lower()   # every church since 2026-11-21
     return m if m in ("off", "owner", "on") else "off"
 
 
