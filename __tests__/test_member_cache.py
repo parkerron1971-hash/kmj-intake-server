@@ -197,7 +197,6 @@ def _lead_reads(monkeypatch, roles, led):
     import church_follow_up as cfu
     import church_leader_tasks
     import church_schedule
-    import church_week
     import group_lead
     import member_app_ui
     calls = []
@@ -205,8 +204,9 @@ def _lead_reads(monkeypatch, roles, led):
     monkeypatch.setattr(group_lead, "led_groups", lambda b, m: calls.append("led") or led)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: calls.append("tasks") or None)
     monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
-    # My department (church_week.entry): left real, whether it reads (the
-    # platform church's owner) hangs on the env another test file left.
+    # A department's leader (church_week.entry, #2011) reads too: pinned, or
+    # whether it read and failed hangs on what other files left in place.
+    import church_week
     monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     monkeypatch.setattr(member_app_ui, "serve_mode", lambda: False)
     return calls
@@ -254,6 +254,8 @@ def test_a_no_behind_a_failed_later_read_is_never_kept(monkeypatch, step):
         return fn
     monkeypatch.setattr(church_leader_tasks, "section", read("tasks", None))
     monkeypatch.setattr(church_schedule, "section", read("schedule", None))
+    import church_week
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     monkeypatch.setattr(member_portal_lead, "parts", read("parts", {"serving": False, "kids": False, "team": []}))
     for _ in range(2):
         assert asyncio.run(mp._leads(BIZ, ME["id"], dict(BUSINESS), dict(ME), kept=True)) is False

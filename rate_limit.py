@@ -188,6 +188,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # per member: each one drawn is a picture made on the server (kept after),
     # and a sheet asks for one as it opens.
     "member_story": (int(os.environ.get("RL_MEMBER_STORY_PER_10MIN", "40")), 600),
+    # A leader's moment seen or loved (member_moments), per member: the
+    # viewer marks each moment seen once, so a Home of eight circles is eight;
+    # this stops a loop.
+    "moment_mark": (int(os.environ.get("RL_MOMENT_MARK_PER_10MIN", "120")), 600),
     # Joining a free class from its public page (academy_join.py) mails a
     # class link, so the same shape as member sign-in: per network
     # (generous: a church lobby is one address), then per business +

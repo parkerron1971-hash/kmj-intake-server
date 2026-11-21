@@ -332,7 +332,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 devo: Optional[Dict[str, Any]] = None, gnext: Optional[Dict[str, Any]] = None,
                 told_us: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None, dark: bool = False,
                 pastor: Optional[Dict[str, Any]] = None, posts: Optional[List[Dict[str, Any]]] = None,
-                gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None) -> str:
+                gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None,
+                leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
     the composer, then `news` (the feed, member_portal_news.home_block) and
@@ -350,7 +351,10 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     pastor (member_pastor.who, for someone new: Meet the pastor); `posts`
     Home's posts (church_news.home_view: a pastor's word for the moments)
     and `write` whether the member may write to its author
-    (news_and_reply). `cards` are the small cards at the foot (installing
+    (news_and_reply). `leaders` is what leaders' own moments are drawn
+    from (member_moments.home_data; None before its tables are there, and
+    then Home is as it was), `leaders_owner` the church owner's preview
+    (Take it down on anyone's moment). `cards` are the small cards at the foot (installing
     the app, phone alerts, Ask the church), each '' to leave it out. `dark`
     draws it dark whatever the member's look (member_lumen_look decides it
     for every page; nothing in the app passes it)."""
@@ -551,6 +555,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     church_face = (f'<span class="lm-mvlogo"><img src="{_e(logo)}" alt=""></span>' if logo
                    else mls.ring_initials(church))
     moments: List[Dict[str, Any]] = []
+    derived_who: Dict[str, str] = {}
     st = (devo or {}).get("st") or {}
     p_post = None if st.get("now") else mls.pastor_post(posts, now)
     if st.get("now"):
@@ -561,6 +566,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         line = (day.get("pull") or day.get("title") or dv_.get("title") or "").strip()
         verse = (day.get("scripture") or "").strip()
         sub = " · ".join(x for x in (verse, f"{dv_.get('title') or 'Devotional'}, day {n} of {of}") if x)
+        derived_who = {"name": author}
         if line:
             moments.append(mls.moment(
                 mid=f"dv:{dv_['id']}:{n}", label=mls.short_name(author) or "Devotional",
@@ -575,6 +581,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         own = ph.src(a) if ph.shown_to_members(a) else ""
         title, body = (p_post.get("title") or "").strip(), (p_post.get("body") or "").strip()
         posted = mls._at(p_post.get("created_at"))
+        derived_who = {"id": aid}
         reply = ((f"/my/messages/to/{aid}", f"Send {name.split()[0]} a note…") if (write or {}).get(aid)
                  else to_church)
         moments.append(mls.moment(
@@ -586,6 +593,34 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             line=mls.clip(title or body, 140), sub=mls.clip(body, 170) if title and body else "",
             action=lh.link_button(f"/my/news/{p_post['id']}", "Read", "lm-mvb"), reply=reply,
             love=mls.love_form(str(p_post["id"]), "love" in (p_post.get("my_rx") or []))))
+    # Leaders' own moments (member_moments): the member's own circle and the
+    # pastors' first, then the word above (unless it joined its pastor's
+    # circle), then the other leaders'. A moment's button is drawn from This
+    # week's own records, for this member.
+    can_post, lead_love = "", False
+    if leaders:
+        import member_moments as mmo
+
+        def lead_button(kind: str, ref: str) -> str:
+            if kind in ("service", "event"):
+                if svc and svc_o and str(svc_o.get("entry_id") or "") == ref:
+                    return service_act("lm-mvb")[0]
+                o = next((x for x in occ if str(x.get("entry_id") or "") == ref
+                          and 0 <= (_day(x["date"]) - day0).days < 7), None)
+                return event_act(o, "lm-mvb")[0] if o else ""
+            if kind == "gathering":
+                gid, _, gday = ref.partition("@")
+                gx = next((x for x in week_g if str(x["group"]["id"]) == gid and x["day"].isoformat() == gday), None)
+                return group_act(gx, "lm-mvb")[0] if gx else ""
+            return ""
+        derived = moments.pop() if moments else None
+        first_c, after_c, took = mmo.circles(
+            leaders, me=me, groups=groups, now=now, church=church, button=lead_button, derived=derived,
+            derived_who=derived_who, owner=leaders_owner,
+            owner_contact=str((biz.get("settings") or {}).get("church_owner_contact_id") or ""))
+        moments.extend(first_c + ([derived] if derived and not took else []) + after_c)
+        can_post = "" if mmo.own_showing(leaders, me) else mmo.home_rights(leaders, me, groups)
+        lead_love = any(not c.get("mine") and c.get("slides") for c in first_c + after_c)
     if svc and not samples.is_sample(svc_o or {}):
         d, t = svc["day"], svc.get("time")
         msg = next((s for s in (library or {}).get("sermons") or [] if str(s.get("preached_on") or "")[:10] == d.isoformat()
@@ -738,7 +773,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                         new=new)
     mine_pic = ph.src(me)
     face = f'<img src="{_e(mine_pic)}" alt="">' if mine_pic else _e(ui.initials(me.get("name")))
-    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{doors_html}{week_html}{after}'
+    tip = mmo.soft_card(can_post) if can_post else ""
+    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
            f'{lh.composer(face)}')
     # The rest of Home, below the feed: the asks to serve and the celebrations,
     # Also for you, what's coming after this week, Today (the verse, the
@@ -765,7 +801,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             f'{f"<div class=lm-cards>{foot}</div>" if foot else ""}')
     import member_portal_news as mpn
     import member_portal_celebrations as mcl
-    script = (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else "")
+    script = (mpn.RX_JS if news or lead_love else "") + (mcl.STRIP_JS if celebrate else "")
     style = ""
     if news or celebrate:
         style = f"<style>{mpn.NEWS_CSS}{mcl.CEL_CSS if celebrate else ''}</style>"

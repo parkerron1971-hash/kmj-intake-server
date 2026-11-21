@@ -1543,7 +1543,8 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # What's unread in Messages, for the header's one count (church
         # threads; never for a chat's or the live page's poll).
         import member_portal_threads as mpt
-        counted = "/feed" not in sub and not sub.startswith("/my/photo/")
+        counted = "/feed" not in sub and not sub.startswith("/my/photo/") and not (
+            sub.startswith("/my/moment/") and sub.endswith("/photo"))
         # The new look's bell (member_lumen.bell_dot), read alongside the rest
         # and only for someone who sees the new look.
         lumen_bell = counted and member_lumen.here()
@@ -1711,6 +1712,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             return Response(status_code=404, headers=_SECURE_HEADERS)
         return RedirectResponse(link, status_code=302,
                                 headers={**_SECURE_HEADERS, "Cache-Control": "private, max-age=600"})
+    # A leader's moment's photo (member_moments): for whoever may see it.
+    if sub.startswith("/my/moment/") and sub.endswith("/photo"):
+        import member_moments as mmo
+        return await mmo.photo(biz, me, sub[len("/my/moment/"):-len("/photo")])
     if sub == "/my/statement":
         import giving_statements
         gs = (biz.get("settings") or {}).get("giving") or {}
@@ -2058,6 +2063,17 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mlp.render_connect(biz, site, request, me, data, new_card=new_card or ""))
     # A member's post (member_posts): the new look's composer. The owner's
     # preview shows it (nothing saves) with the church's posting switch.
+    # A pastor's or a leader's own moment (member_moments): the composer, in
+    # the new look, for someone who may post, once its tables are there.
+    if sub == "/my/moment/new":
+        import member_lumen
+        import member_moments as mmo
+        if not member_lumen.page():
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        html, status = await mmo.serve(request, biz, site, me)
+        if status == 303:
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        return _page(html, status)
     if sub == "/my/post":
         import member_lumen
         if not member_lumen.page():
@@ -2114,8 +2130,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # their own "I prayed").
     import member_feed_more as mfm
     feed_fresh = str(request.query_params.get("done") or "") in mfm.FRESH_DONE
+    # Leaders' own moments (member_moments: the church's kept list, and this
+    # member's marks while someone else's shows; read fresh on the Home that
+    # follows their own post). Nothing before its tables are there.
+    import member_moments as mmo
+    moments_fresh = str(request.query_params.get("done") or "") in mmo.FRESH_DONE
     (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
-     told_us, feed_more) = await asyncio.gather(
+     told_us, feed_more, leaders) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
         else asyncio.to_thread(mpc.groups_for, biz["id"], me),
@@ -2142,7 +2163,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         # Messages, while something there is unread (member_portal_threads).
         _inbox_card(biz, me) if church_home else _nothing(),
         mlp.told_and_pastor(biz, me) if lumen_home and church_home else _nothing(),
-        mfm.gather(biz, me, fresh=feed_fresh) if lumen_home and church_home else _nothing())
+        mfm.gather(biz, me, fresh=feed_fresh) if lumen_home and church_home else _nothing(),
+        mmo.home_data(biz, me, preview=preview, fresh=moments_fresh) if lumen_home and church_home else _nothing())
     gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
     if lumen_home:
         told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
@@ -2200,14 +2222,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mlp.render_home(
             biz, site, me=me, occasions=occ, groups=groups, library=lib, live=live, bible=bible, where=where,
             plan_today=today, plan_done=done, devotional=devotional, checkin=checkin, serving=serving,
-            celebrate=celebrate, flash=mpc._flash(request) or mpr._flash(request),
+            celebrate=celebrate, flash=mpc._flash(request) or mpr._flash(request) or mmo.flash(request),
             news=news_html,
             news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
             cards=(mai.install_card(church_name), member_push.home_card(biz),
                    member_asks.home_row(await _ask_entry(biz, me))),
             ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
             devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
-            write=write))
+            write=write, leaders=leaders,
+            leaders_owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:"))))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,

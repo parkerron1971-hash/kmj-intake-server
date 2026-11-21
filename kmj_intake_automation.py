@@ -700,6 +700,10 @@ app.include_router(member_pastor_router)
 # BEFORE public_site_router.
 from member_posts import router as member_posts_router
 app.include_router(member_posts_router)
+# A pastor's or a leader's own moment (member_moments: /my/moment, its marks
+# and taking it down; the composer is member_portal's GET /my/moment/new).
+from member_moments import router as member_moments_router
+app.include_router(member_moments_router)
 # Share in the new look (member_lumen_share.py): the sheet's script
 # (GET /my/share.<hash>.js) and a story picture of the church's own content
 # (GET /my/story/<kind>/<id>.png). BEFORE public_site_router.
