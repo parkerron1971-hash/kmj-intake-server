@@ -614,3 +614,35 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
   ask the same person for both. Event dates made it likely (many spots, no
   Sundays-a-month cap), so `do_fill` now skips anyone already on that place at
   that service. Asking by hand is as before.
+
+#### S2, after review
+
+- **Taking a date off closes its ask.** `DELETE /planning/dates/{id}` cancels
+  the `on` ask that made it before the date comes off (if that can't be
+  written, nothing comes off), so the event may ask again. Nobody is told:
+  they did it.
+- **An ask is never on with no date for long, and never told so.** The
+  notices skip an `on` ask with no date. Every write after a date is made is
+  checked: the undo of a straight on, and the release of a yes, are logged
+  when they fail. A date that was made is never a 503: the link is logged and
+  left to the sweep. The sweep mends an ask left `on` with no date for more
+  than two minutes. It links the event's live date when there is one.
+  Otherwise an ask put straight on is cancelled (its asker was told it
+  failed), and an answered one waits again rather than being cancelled, so
+  the organizer's ask isn't lost to a database blip. Nobody is told of a mend.
+- **An unplanned Sunday keeps the usual times.** Sundays are planned a few at
+  a time, but event dates go 180 days out. On a Sunday with no service planned
+  yet, the two-hour rule uses the church's usual Sunday times: those of its
+  Sunday services from 8 weeks before today to 8 weeks after. With none, it
+  uses 10:30, the time Add the next five Sundays gives (no church setting
+  holds a service time). It applies on every path: a typed date, an ask,
+  straight on, a yes (refused before the claim, so the ask still waits), and
+  the list of events to pick from.
+- **Changing a date's numbers looks twice.** After the write it reads the
+  asks again. One for a spot past the new numbers that landed meanwhile puts
+  the numbers back, with the same 409.
+- **An event that asked can't go on another way.** Add an event date with an
+  entry that has a live ask is a 409: "This event already asked for
+  volunteers. Answer its ask on Who serves when instead."
+- **A yes for an event that is no longer coming up** says so by name: "The
+  Youth Lock-in isn't coming up in Services & Events anymore."

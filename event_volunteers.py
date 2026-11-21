@@ -734,17 +734,34 @@ def ask(entry_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_
     date_out = None
     if straight:
         try:
-            date_out = sp.make_date(biz, user, entry_id=eid, needs=needs)["date"]
+            date_out = sp.make_date(biz, user, entry_id=eid, needs=needs, gone=_gone(ent["title"]))["date"]
         except HTTPException:
-            # The date wasn't made: the ask comes back out, so there is never half of one.
-            sb_clients.sb_delete_as_service(f"/{TABLE}?id=eq.{_q(req['id'])}&business_id=eq.{_q(biz)}"
-                                            f"&status=eq.{ON}&service_id=is.null")
+            # The date wasn't made: the ask comes back out, so there is never
+            # half of one. If even that can't be written, the sweep closes it
+            # (repair), and no notice goes for an ask that is on with no date.
+            if not sb_clients.sb_delete_as_service(f"/{TABLE}?id=eq.{_q(req['id'])}&business_id=eq.{_q(biz)}"
+                                                   f"&status=eq.{ON}&service_id=is.null"):
+                print(f"[event-volunteers] {biz[:8]}: an ask whose date wasn't made didn't come back out", flush=True)
             raise
-        req = _saved(sb_clients.sb_patch_as_service(
-            f"/{TABLE}?id=eq.{_q(req['id'])}&business_id=eq.{_q(biz)}&select={FIELDS}",
-            {"service_id": date_out["id"]}))
+        req = _link(biz, req, date_out["id"])
     _after("tell_ask", church, req)
     return {"request": _request_out(req), "date": date_out}
+
+
+def _gone(title: Any) -> str:
+    return f"{The(title)} isn't coming up in Services & Events anymore."
+
+
+def _link(biz: str, req: Dict[str, Any], sid: str) -> Dict[str, Any]:
+    """The ask names the date it made. The date is made either way, so a
+    write that fails here is never a 503: it is said in the logs, and the
+    sweep links them (repair)."""
+    got = sb_clients.sb_patch_as_service(
+        f"/{TABLE}?id=eq.{_q(req['id'])}&business_id=eq.{_q(biz)}&select={FIELDS}", {"service_id": sid})
+    if isinstance(got, list) and got:
+        return got[0]
+    print(f"[event-volunteers] {biz[:8]}: an ask wasn't linked to the date it made; the sweep will", flush=True)
+    return {**req, "service_id": sid}
 
 
 def _mine_or_scheduler(me: Dict[str, Any], req: Dict[str, Any]) -> bool:
@@ -947,25 +964,32 @@ def answer(biz: str, user: AuthedUser, rid: str, body: Dict[str, Any]) -> Dict[s
     if ent["at"] is not None and ent["at"] <= now:
         _cancel(biz, req)
         raise HTTPException(409, f"{The(ent['title'])} has already happened.")
+    if ent["at"] is not None and sd.is_sunday(ent["at"]) and sp.during_sunday_service(biz, ent["at"], zone):
+        raise HTTPException(409, SUNDAY_CLASH)
     got = sb_clients.sb_patch_as_service(claim, {"status": ON, "needs": needs, **decided})
     if not isinstance(got, list):
         raise HTTPException(503, UNSAVED)
     if not got:
         raise HTTPException(409, _already(_request_row(biz, rid)))
     try:
-        date_out = sp.make_date(biz, user, entry_id=str(req["entry_id"]), needs=needs)["date"]
+        date_out = sp.make_date(biz, user, entry_id=str(req["entry_id"]), needs=needs, gone=_gone(ent["title"]))["date"]
     except HTTPException:
-        # No date: the ask waits again, as it was.
-        sb_clients.sb_patch_as_service(
+        # No date: the ask waits again, as it was. If even that can't be
+        # written, the sweep puts it back (repair); no notice goes meanwhile.
+        back = sb_clients.sb_patch_as_service(
             f"/{TABLE}?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&status=eq.{ON}&service_id=is.null"
-            f"&decided_at=eq.{_q(stamp)}&select=id",
-            {"status": WAITING, "needs": asked, "decided_by": None, "decided_by_name": "", "decided_at": None,
-             "decided_note": ""})
+            f"&decided_at=eq.{_q(stamp)}&select=id", _waiting_again(asked))
+        if not isinstance(back, list) or not back:
+            print(f"[event-volunteers] {biz[:8]}: an ask whose date wasn't made didn't go back to waiting", flush=True)
         raise
-    row = _saved(sb_clients.sb_patch_as_service(
-        f"/{TABLE}?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select={FIELDS}", {"service_id": date_out["id"]}))
+    row = _link(biz, got[0], date_out["id"])
     _after("tell_answer", church, row, before=asked)
     return {"request": _request_out(row), "date": date_out}
+
+
+def _waiting_again(needs: Dict[str, Any]) -> Dict[str, Any]:
+    return {"status": WAITING, "needs": needs, "decided_by": None, "decided_by_name": "", "decided_at": None,
+            "decided_note": "", "answer_told_at": None}
 
 
 def _already(req: Dict[str, Any]) -> str:
@@ -973,8 +997,20 @@ def _already(req: Dict[str, Any]) -> str:
     if st in (ON, DECLINED):
         return f"Already answered by {req.get('decided_by_name') or 'someone else'}."
     if st == WITHDRAWN:
-        return "That ask was taken back."
-    return "That ask is closed: the event went away or moved."
+        return "That ask was taken back. There's nothing to answer."
+    return "That ask is closed: the event went away or moved. There's nothing to answer."
+
+
+def close_for_date(biz: str, sid: str) -> bool:
+    """An event date comes off Who serves when (sunday_planning.drop_date):
+    the ask that made it is cancelled, so the event may ask again. Nobody is
+    told (they did it). False when that couldn't be written; True before the
+    migration (there is no ask)."""
+    if not ready():
+        return True
+    got = sb_clients.sb_patch_as_service(
+        f"/{TABLE}?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&status=eq.{ON}&select=id", {"status": CANCELLED})
+    return isinstance(got, list)
 
 
 def follow_needs(biz: str, sid: str, needs: Optional[Dict[str, int]], places: List[Dict[str, Any]]) -> None:
@@ -1150,6 +1186,8 @@ def tell_ask(church: Dict[str, Any], req: Dict[str, Any], *, now: Optional[datet
             return "closed"
         if req.get("told_at") or req.get("status") not in LIVE:
             return "none"
+        if req.get("status") == ON and not req.get("service_id"):
+            return "none"       # on with no date yet: a write still under way, or one the sweep mends first
         now = now or _now()
         at = _at(req.get("starts_at"))
         if at and at <= now:
@@ -1180,6 +1218,8 @@ def tell_answer(church: Dict[str, Any], req: Dict[str, Any], *, now: Optional[da
             return "closed"
         if req.get("answer_told_at") or req.get("status") not in (ON, DECLINED):
             return "none"
+        if req.get("status") == ON and not req.get("service_id"):
+            return "none"       # on with no date yet: nothing is on the schedule to say
         asker = str(req.get("asked_by") or "")
         if not asker or str(req.get("decided_by") or "") == asker:
             return _claimed(church, req, "answer_told_at", [], {}, "", now or _now())
@@ -1216,13 +1256,37 @@ def tell_withdrawn(church: Dict[str, Any], req: Dict[str, Any], *, by: str) -> s
         return "unsent"
 
 
+def repair(church: Dict[str, Any], req: Dict[str, Any]) -> str:
+    """An ask left on with no date (a write lost on the way, or a date that
+    couldn't be made and a write that couldn't undo it): linked to the
+    event's live date when it has one; else an ask put straight on is
+    cancelled (its asker was told it failed) and an answered one waits again.
+    Nobody is told. linked | cancelled | waiting | none | unsent."""
+    biz = str(church["id"])
+    if req.get("status") != ON or req.get("service_id"):
+        return "none"
+    guard = f"/{TABLE}?id=eq.{_q(req['id'])}&business_id=eq.{_q(biz)}&status=eq.{ON}&service_id=is.null&select=id"
+    try:
+        live = live_date(biz, str(req["entry_id"])) if req.get("entry_id") else None
+    except HTTPException:
+        return "unsent"
+    if live:
+        what, body = "linked", {"service_id": str(live["id"])}
+    elif str(req.get("decided_by") or "") == str(req.get("asked_by") or ""):
+        what, body = "cancelled", {"status": CANCELLED}
+    else:
+        what, body = "waiting", _waiting_again(req.get("needs") or {})
+    got = sb_clients.sb_patch_as_service(guard, body)
+    return what if isinstance(got, list) and got else "unsent"
+
+
 def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
-    """Every 15 minutes on the worker: the notices a write couldn't send
-    (quiet hours, a failed send, a replica that died) are told, once, from
-    the ledger. Quiet (not one read) with the switch off and before the
+    """Every 15 minutes on the worker: an ask left on with no date is mended
+    (repair), and the notices a write couldn't send (quiet hours, a failed
+    send, a replica that died) are told, once, from the ledger. Quiet (not one read) with the switch off and before the
     migration. A church that fails never stops the others. S3 adds following
     the event (spec 6.7) here."""
-    stats = {"churches": 0, "told": 0, "answers": 0, "held": 0, "unsent": 0}
+    stats = {"churches": 0, "told": 0, "answers": 0, "held": 0, "unsent": 0, "mended": 0}
     if mode() == "off" or not ready():
         return stats
     now = now or _now()
@@ -1232,11 +1296,13 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                                         f"&select={FIELDS}&order=created_at.asc&limit=500")
     answers = sb_clients.sb_get_as_service(f"/{TABLE}?status=in.({ON},{DECLINED})&answer_told_at=is.null"
                                            f"&decided_at=gte.{since}&select={FIELDS}&order=decided_at.asc&limit=500")
-    if not isinstance(asks, list) or not isinstance(answers, list):
+    stranded = sb_clients.sb_get_as_service(f"/{TABLE}?status=eq.{ON}&service_id=is.null&decided_at=lt.{_q(_iso(settle))}"
+                                            f"&select={FIELDS}&order=decided_at.asc&limit=200")
+    if not isinstance(asks, list) or not isinstance(answers, list) or not isinstance(stranded, list):
         print("[event-volunteers] the sweep couldn't read the untold asks; next time", flush=True)
         return stats
     work: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-    for kind, rows in (("asks", asks), ("answers", answers)):
+    for kind, rows in (("stranded", stranded), ("asks", asks), ("answers", answers)):
         for r in rows:
             work.setdefault(str(r.get("business_id")), {}).setdefault(kind, []).append(r)
     if not work:
@@ -1253,12 +1319,17 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
             continue
         stats["churches"] += 1
         try:
+            mended = set()
+            for r in todo.get("stranded", []):
+                if repair(church, r) in ("linked", "cancelled", "waiting"):
+                    stats["mended"] += 1
+                    mended.add(str(r["id"]))
             for kind, fn, at_key, told in (("asks", tell_ask, "created_at", "told"),
                                            ("answers", tell_answer, "decided_at", "answers")):
                 for r in todo.get(kind, []):
                     made = _at(r.get(at_key))
-                    if made and made > settle:
-                        continue        # the write's own notice goes first
+                    if (made and made > settle) or str(r["id"]) in mended:
+                        continue        # the write's own notice goes first; a mended ask, next time
                     got = fn(church, r, now=now)
                     key = told if got == "told" else got
                     if key in stats:

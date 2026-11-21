@@ -94,6 +94,8 @@ MAX_WEEKS = 8
 MAX_EVENT_DATES = 30        # event dates still to come at one church
 EVENT_AHEAD_DAYS = 180      # an event date this far ahead at most
 SUNDAY_HOURS = 2            # a Sunday event date starts at least this long from a Sunday service
+SUNDAY_TIME = "10:30"       # Add the next five Sundays' time when none is given
+USUAL_WEEKS = 8             # a church's usual Sunday times: its Sunday services this many weeks either side of today
 SUNDAY_CLASH = "That's during Sunday's service. Sunday services are already on Who serves when."
 TEEN_UNDER = 18
 FILLED_BY = "Chief, filling the month"
@@ -1088,7 +1090,7 @@ def add_sundays(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     count = body.get("count", 5)
     if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_WEEKS:
         raise HTTPException(400, f"Add 1 to {MAX_WEEKS} Sundays")
-    at = body.get("time") or "10:30"
+    at = body.get("time") or SUNDAY_TIME
     if not isinstance(at, str) or not _HHMM.match(at):
         raise HTTPException(400, "The time is like 10:30")
     zone, first, lo, hi = _window(biz, body.get("start"), count)
@@ -1142,12 +1144,36 @@ def _clashes(starts: datetime, services: Iterable[datetime]) -> bool:
     return any(abs(starts - at) < timedelta(hours=SUNDAY_HOURS) for at in services)
 
 
+def usual_sunday_times(biz: str, zone) -> List[time]:
+    """When this church's Sunday services usually start, for a Sunday that
+    isn't planned yet (Sundays are added a few at a time; event dates go
+    180 days out): the times of its Sunday services from USUAL_WEEKS before
+    today to USUAL_WEEKS after; with none, SUNDAY_TIME, the time Add the next
+    five Sundays gives them."""
+    today = _now().astimezone(zone).date()
+    lo = datetime.combine(today - timedelta(days=7 * USUAL_WEEKS), time(0), tzinfo=zone)
+    hi = datetime.combine(today + timedelta(days=7 * USUAL_WEEKS + 1), time(0), tzinfo=zone)
+    got = {at.astimezone(zone).time().replace(second=0, microsecond=0) for at in _sunday_services(biz, lo, hi)
+           if at.astimezone(zone).weekday() == 6}
+    hh, mm = (int(x) for x in SUNDAY_TIME.split(":"))
+    return sorted(got) or [time(hh, mm)]
+
+
+def _that_sunday(day: date, planned: List[datetime], zone, usual) -> List[datetime]:
+    """The Sunday services on this day: those planned, else the church's
+    usual times on it (`usual`: called once, only when needed)."""
+    mine = [at for at in planned if at.astimezone(zone).date() == day]
+    return mine or [datetime.combine(day, t, tzinfo=zone) for t in usual()]
+
+
 def during_sunday_service(biz: str, starts: datetime, zone) -> bool:
     """Whether a Sunday event date starting then would be during a Sunday
-    service that day (docs/EVENT_VOLUNTEERS.md 6.9)."""
+    service that day (docs/EVENT_VOLUNTEERS.md 6.9): one planned, or, with
+    that Sunday not planned yet, one at the church's usual time."""
     day = starts.astimezone(zone).date()
     lo = datetime.combine(day, time(0), tzinfo=zone)
-    return _clashes(starts, _sunday_services(biz, lo, lo + timedelta(days=1)))
+    return _clashes(starts, _that_sunday(day, _sunday_services(biz, lo, lo + timedelta(days=1)), zone,
+                                         lambda: usual_sunday_times(biz, zone)))
 
 
 def _upcoming_events(biz: str, zone, now: datetime, sundays: bool = False) -> List[Dict[str, Any]]:
@@ -1170,6 +1196,12 @@ def _upcoming_events(biz: str, zone, now: datetime, sundays: bool = False) -> Li
     today = now.date()
     last = today + timedelta(days=EVENT_AHEAD_DAYS)
     plans: Optional[List[datetime]] = None
+    usual: List[List[time]] = []
+
+    def usual_times() -> List[time]:
+        if not usual:
+            usual.append(usual_sunday_times(biz, zone))
+        return usual[0]
     ids = sorted(fields)
     out: List[Dict[str, Any]] = []
     for i in range(0, len(ids), 50):
@@ -1188,7 +1220,7 @@ def _upcoming_events(biz: str, zone, now: datetime, sundays: bool = False) -> Li
                 if plans is None:
                     lo = datetime.combine(today, time(0), tzinfo=zone)
                     plans = _sunday_services(biz, lo, lo + timedelta(days=EVENT_AHEAD_DAYS + 1))
-                if _clashes(at, plans):
+                if _clashes(at, _that_sunday(day, plans, zone, usual_times)):
                     continue
             out.append({"entry_id": str(e["id"]), "title": " ".join(str(data.get(f["title_field"]) or "").split())[:120]
                         or "An event", "day": day.isoformat(), "weekday": sd.weekday(day),
@@ -1233,6 +1265,11 @@ def add_date(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.get("business_id"))
     _dates_gate(biz, user)
     entry_id = _uuid(body.get("entry_id"), "event") if body.get("entry_id") else None
+    if entry_id:
+        import event_volunteers
+        if event_volunteers.ready() and event_volunteers.live_request(biz, entry_id):
+            raise HTTPException(409, "This event already asked for volunteers. Answer its ask on Who serves when "
+                                     "instead.")
     return make_date(biz, user, entry_id=entry_id, title=body.get("title"), day=body.get("day"),
                      at_time=body.get("time"), place=body.get("place"))
 
@@ -1261,7 +1298,8 @@ def _typed_entry(biz: str, title: str, starts: datetime, place: str) -> Optional
 
 
 def make_date(biz: str, user: AuthedUser, *, entry_id: Optional[str] = None, title: Any = None, day: Any = None,
-              at_time: Any = None, place: Any = None, needs: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+              at_time: Any = None, place: Any = None, needs: Optional[Dict[str, int]] = None,
+              gone: Optional[str] = None) -> Dict[str, Any]:
     """The one way an event date is made (docs/EVENT_VOLUNTEERS.md 6.3): Add
     an event date (POST /dates) and an event's ask for the serving teams
     (event_volunteers: a yes, or an ask put straight on), which passes its
@@ -1271,14 +1309,15 @@ def make_date(biz: str, user: AuthedUser, *, entry_id: Optional[str] = None, tit
     EVENT_VOLUNTEERS open, and never within SUNDAY_HOURS of a Sunday
     service. The caller gates who; this gates what. {date, event}: the
     event is the Services & Events entry a typed date made (6.8), else
-    None."""
+    None. `gone`: the words when the entry isn't coming up (an ask's own)."""
     zone = _zone(biz)
     now = _now().astimezone(zone)
     asks = _asks_open(biz, user)
     if entry_id:
         ev = next((e for e in _upcoming_events(biz, zone, now, sundays=asks) if e["entry_id"] == entry_id), None)
         if not ev:
-            raise HTTPException(404, "That event isn't coming up in Services & Events. Pick another, or type it in.")
+            raise HTTPException(404, gone or "That event isn't coming up in Services & Events. Pick another, or "
+                                             "type it in.")
         if ev["taken"]:
             raise HTTPException(409, "That event is already on Who serves when.")
         title, raw_day, at_time, place = ev["title"], ev["day"], at_time or ev["time"], ev["place"]
@@ -1353,6 +1392,11 @@ def drop_date(service_id: str, business_id: str, user: AuthedUser = Depends(requ
         raise HTTPException(404, "That event date isn't on Who serves when")
     if _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&select=id&limit=1"):
         raise HTTPException(409, "Someone was asked for this date. Take back its asks first, then take the date off.")
+    import event_volunteers
+    # The ask that made it is closed first: a date gone with its ask still on
+    # would leave the event unable to ask again or take it back.
+    if not event_volunteers.close_for_date(biz, sid):
+        raise HTTPException(503, "That didn't take the date off. Try again.")
     saved = sb_clients.sb_patch_as_service(
         f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&archived_at=is.null&select=id",
         {"archived_at": _now().isoformat()})
@@ -1423,17 +1467,25 @@ def set_needs(service_id: str, body: Dict[str, Any], user: AuthedUser = Depends(
     after = {"kind": sd.EVENT, "needs": needs}
     by_id = {p["id"]: p for p in places}
     order = {p["id"]: n for n, p in enumerate(places)}
-    held = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}"
-                 f"&select=id,position_id,slot,status,contact_id")
-    past: List[Dict[str, Any]] = []
-    for r in sorted(held, key=lambda r: (order.get(str(r["position_id"]), len(order)), int(r.get("slot") or 1))):
-        place = by_id.get(str(r["position_id"]))
-        if not place or int(r.get("slot") or 1) <= sd.needed(after, place):
-            continue
-        if r.get("status") in ("asked", "yes") and r.get("contact_id"):
-            raise HTTPException(409, f"Someone was asked for {place['name']} {int(r.get('slot') or 1)}. "
-                                     "Take that ask back first.")
-        past.append(r)
+
+    def beyond() -> Tuple[Optional[str], List[Dict[str, Any]]]:
+        """(the refusal for the first asked spot past the new numbers, the
+        open spots past them)."""
+        held = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}"
+                     f"&select=id,position_id,slot,status,contact_id")
+        open_: List[Dict[str, Any]] = []
+        for r in sorted(held, key=lambda r: (order.get(str(r["position_id"]), len(order)), int(r.get("slot") or 1))):
+            place = by_id.get(str(r["position_id"]))
+            if not place or int(r.get("slot") or 1) <= sd.needed(after, place):
+                continue
+            if r.get("status") in ("asked", "yes") and r.get("contact_id"):
+                return (f"Someone was asked for {place['name']} {int(r.get('slot') or 1)}. Take that ask back "
+                        "first."), open_
+            open_.append(r)
+        return None, open_
+    refused, past = beyond()
+    if refused:
+        raise HTTPException(409, refused)
     if past and not sb_clients.sb_delete_as_service(
             f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&id=in.({_ids(r['id'] for r in past)})"
             "&status=in.(offered,no)"):
@@ -1443,6 +1495,16 @@ def set_needs(service_id: str, body: Dict[str, Any], user: AuthedUser = Depends(
         {"needs": needs})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
+    # An ask for a spot past the new numbers that landed meanwhile: the
+    # numbers go back, and it is said as before.
+    refused, _ = beyond()
+    if refused:
+        back = sb_clients.sb_patch_as_service(
+            f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&kind=eq.{sd.EVENT}&select=id",
+            {"needs": svc.get("needs") if isinstance(svc.get("needs"), dict) else None})
+        if not isinstance(back, list) or not back:
+            print(f"[sunday_planning] {biz[:8]}: an event date's numbers weren't put back", flush=True)
+        raise HTTPException(409, refused)
     event_volunteers.follow_needs(biz, sid, needs, places)
     return {"service_id": sid, "needs": needs,
             "needed": {p["id"]: sd.needed(after, p) for p in places}}

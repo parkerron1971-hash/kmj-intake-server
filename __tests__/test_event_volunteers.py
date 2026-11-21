@@ -23,6 +23,7 @@ Pins, each one broken on purpose once to see its test go red:
 The readers of an event date's numbers (6.5) are test_event_volunteers_readers."""
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import uuid as uuidlib
@@ -120,7 +121,7 @@ def church(monkeypatch):
     db.t["worship_team"] = []
     db.t["custom_modules"] = [{"id": MOD, "business_id": BIZ, "name": "Services & Events", "archetype": "event_roster",
                                "is_active": True, "archetype_params": {}, "created_at": "2026-01-01T00:00:00+00:00"}]
-    db.t["module_entries"] = [{"id": i, "business_id": b, "module_id": MOD, "status": "active", "data": d,
+    db.t["module_entries"] = [{"id": i, "business_id": b, "module_id": MOD, "status": "active", "data": copy.deepcopy(d),
                                "created_at": NOW.isoformat()} for i, b, d in ENTRIES]
     db.t["event_volunteer_requests"] = []
     db.t["serve_notes"] = []
@@ -509,8 +510,16 @@ def test_two_yeses_at_once_make_one_event_date(church, monkeypatch):
 def test_a_yes_that_cant_make_the_date_leaves_the_ask_waiting(church):
     c = church
     rid = asked(c)["request"]["id"]
-    # Someone put it on Who serves when the November 17 way meanwhile.
-    assert c.as_("laquesha").post("/planning/dates", json={"business_id": BIZ, "entry_id": E_LOCK}).status_code == 200
+    # Add an event date won't put it on another way while it waits.
+    r = c.as_("laquesha").post("/planning/dates", json={"business_id": BIZ, "entry_id": E_LOCK})
+    assert r.status_code == 409 and r.json()["detail"] == ("This event already asked for volunteers. Answer its ask "
+                                                           "on Who serves when instead.")
+    assert event_dates(c) == []
+    # One made another way all the same (a date from before the ask's table).
+    c.db.t["worship_services"].append({"id": str(uuidlib.uuid4()), "business_id": BIZ, "title": "Youth Lock-in",
+                                       "starts_at": "2026-10-30T23:00:00+00:00", "kind": "event", "place": "",
+                                       "event_entry_id": E_LOCK, "archived_at": None, "is_template": False,
+                                       "items": []})
     r = answer(c, rid)
     assert r.status_code == 409 and r.json()["detail"] == "That event is already on Who serves when."
     row = rows(c)[0]
@@ -934,7 +943,7 @@ def test_notices_go_quiet_with_the_switch_and_for_a_sample_church(church, monkey
     real = sb_clients.sb_get_as_service
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: seen.append(path) or real(path))
     assert evv.sweep_tick(NOW + timedelta(minutes=30)) == {"churches": 0, "told": 0, "answers": 0, "held": 0,
-                                                            "unsent": 0}
+                                                            "unsent": 0, "mended": 0}
     assert seen == [], "not one read with the switch off"
     monkeypatch.setenv("EVENT_VOLUNTEERS", "on")
     import sample_church
@@ -949,3 +958,197 @@ def test_every_refusal_says_what_to_do_next(church):
     words.append(sp.SUNDAY_CLASH)
     for w in words:
         assert "—" not in w and not re.search(r"\b(request|entry|module|service_id|null|404|error)\b", w), w
+
+
+# ─── the review's fixes ──────────────────────────────────────────────
+
+
+def test_taking_the_date_off_closes_its_ask(church, monkeypatch):
+    c = church
+    sid = asked(c, "laquesha")["date"]["id"]
+    # The ask's row can't be closed: the date stays, and it is said plainly.
+    real = c.db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **k: None if path.startswith("/event_volunteer_requests") else real(path, body))
+    r = c.as_("laquesha").delete(f"/planning/dates/{sid}?business_id={BIZ}")
+    assert r.status_code == 503 and len(event_dates(c, E_LOCK)) == 1 and rows(c)[0]["status"] == "on"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    r = c.as_("laquesha").delete(f"/planning/dates/{sid}?business_id={BIZ}")
+    assert r.status_code == 200 and event_dates(c, E_LOCK) == []
+    assert rows(c)[0]["status"] == "cancelled", "never on with no date"
+    pic = c.as_("shapretta").get(f"/church/event-volunteers/{E_LOCK}?business_id={BIZ}").json()
+    assert pic["request"]["status"] == "cancelled" and pic["date"] is None
+    # The event may ask again, and nobody was told of the take-off.
+    assert c.told == [] and asked(c, "laquesha")["request"]["status"] == "on"
+
+
+def _thirty_dates(c):
+    for n in range(sp.MAX_EVENT_DATES):
+        c.db.t["worship_services"].append({"id": str(uuidlib.uuid4()), "business_id": BIZ, "title": f"Night {n}",
+                                           "starts_at": "2026-11-05T00:00:00+00:00", "kind": "event",
+                                           "archived_at": None, "is_template": False, "items": []})
+
+
+def test_straight_on_whose_undo_fails_is_mended_without_a_word(church, monkeypatch):
+    c = church
+    _thirty_dates(c)
+    real = c.db.delete
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service",
+                        lambda path: False if path.startswith("/event_volunteer_requests") else real(path))
+    r = ask(c, "owner")
+    assert r.status_code == 400 and "30 event dates" in r.json()["detail"]
+    assert [(x["status"], x["service_id"]) for x in rows(c)] == [("on", None)], "left on: the undo failed"
+    assert c.told == [], "no notice for an ask that is on with no date"
+    later = NOW + timedelta(minutes=5)
+    got = evv.sweep_tick(later)
+    assert got["mended"] == 1 and rows(c)[0]["status"] == "cancelled" and c.told == []
+    assert evv.sweep_tick(later + timedelta(minutes=15))["told"] == 0 and c.told == []
+
+
+def test_a_yes_whose_release_fails_waits_again_after_the_sweep(church, monkeypatch):
+    c = church
+    rid = asked(c)["request"]["id"]
+    c.told.clear()
+    _thirty_dates(c)
+    real = c.db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **k: None if body.get("status") == "waiting" else real(path, body))
+    r = answer(c, rid)
+    assert r.status_code == 400
+    assert (rows(c)[0]["status"], rows(c)[0]["service_id"]) == ("on", None)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    assert evv.tell_answer(evv._business(BIZ), rows(c)[0], now=NOW) == "none", "on with no date: nothing to say"
+    assert evv.tell_ask(evv._business(BIZ), {**rows(c)[0], "decided_by": rows(c)[0]["asked_by"], "told_at": None},
+                        now=NOW) == "none" and c.told == []
+    assert evv.sweep_tick(NOW + timedelta(minutes=5))["mended"] == 1
+    row = rows(c)[0]
+    assert (row["status"], row["decided_by"], row["needs"]) == ("waiting", None, {c.greeter: 2})
+    assert c.told == [], "the organizer is never told it went on"
+
+
+def test_a_date_made_is_never_a_503(church, monkeypatch):
+    c = church
+    real = c.db.patch
+
+    def no_link(path, body, **k):
+        return None if "service_id" in body and len(body) == 1 else real(path, body)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", no_link)
+    r = ask(c, "owner")
+    assert r.status_code == 200, r.text
+    sid = r.json()["date"]["id"]
+    assert r.json()["request"]["service_id"] == sid and len(event_dates(c, E_LOCK)) == 1
+    assert [t["uid"] for t in c.told] == ["u-laquesha"], "it is on: Laquesha hears so"
+    assert rows(c)[0]["service_id"] is None
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    assert evv.sweep_tick(NOW + timedelta(minutes=5))["mended"] == 1 and rows(c)[0]["service_id"] == sid
+    # The answer's yes the same way.
+    clear(c)
+    rid = asked(c, entry=E_OUT)["request"]["id"]
+    c.told.clear()
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", no_link)
+    r = answer(c, rid)
+    assert r.status_code == 200 and r.json()["date"]["id"] == event_dates(c, E_OUT)[0]["id"]
+    assert [t["uid"] for t in c.told] == ["u-shapretta"]
+
+
+def test_a_lost_answer_from_the_database_is_mended(church, monkeypatch):
+    c = church
+    real = c.db.post
+
+    def lost(path, body, prefer=None, **kw):
+        got = real(path, body, prefer, **kw)
+        return None if path.startswith("/event_volunteer_requests") else got
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lost)
+    r = ask(c, "owner")
+    assert r.status_code == 503 and [(x["status"], x["service_id"]) for x in rows(c)] == [("on", None)]
+    assert event_dates(c) == [] and c.told == []
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", real)
+    assert evv.sweep_tick(NOW + timedelta(minutes=5))["mended"] == 1 and rows(c)[0]["status"] == "cancelled"
+    assert asked(c, "owner")["request"]["status"] == "on", "the event may ask again"
+    # A yes whose claim came back lost: it waits again after the sweep.
+    clear(c)
+    rid = asked(c, entry=E_OUT)["request"]["id"]
+    c.told.clear()
+    real_patch = c.db.patch
+
+    def lost_claim(path, body, **k):
+        got = real_patch(path, body)
+        return None if body.get("status") == "on" else got
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lost_claim)
+    assert answer(c, rid).status_code == 503 and rows(c)[0]["status"] == "on"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real_patch)
+    assert evv.sweep_tick(NOW + timedelta(minutes=5))["mended"] == 1 and rows(c)[0]["status"] == "waiting"
+    assert c.told == []
+
+
+def test_an_unplanned_sunday_keeps_the_usual_service_times(church):
+    c = church
+
+    def add(day, at, title="Fellowship lunch"):
+        return c.as_("laquesha").post("/planning/dates", json={"business_id": BIZ, "title": title, "day": day,
+                                                                "time": at})
+    # Nov 15 isn't planned; the church's Sundays are at 10:30.
+    assert not [s for s in c.db.t["worship_services"] if s["starts_at"].startswith("2026-11-15")]
+    r = add("2026-11-15", "10:30")
+    assert r.status_code == 400 and r.json()["detail"] == sp.SUNDAY_CLASH
+    assert add("2026-11-15", "11:45").status_code == 400
+    assert add("2026-11-15", "15:00").status_code == 200
+    # From Services & Events, the ask, and straight on: the same rule.
+    unplanned = "e1000000-0000-4000-8000-000000000099"
+    c.db.t["module_entries"].append({"id": unplanned, "business_id": BIZ, "module_id": MOD, "status": "active",
+                                     "created_at": NOW.isoformat(),
+                                     "data": {"title": "Baptism class", "date": "2026-11-15T11:00"}})
+    got = [e["title"] for e in c.as_("laquesha").get(f"/planning/events?business_id={BIZ}").json()["events"]]
+    assert "Baptism class" not in got and "Fellowship dinner" in got
+    for who in ("shapretta", "laquesha"):
+        r = ask(c, who, entry=unplanned)
+        assert r.status_code == 400 and r.json()["detail"] == sp.SUNDAY_CLASH, who
+    # The usual times are the church's own: a 9 AM church refuses 9:30, not 11:30.
+    for s in c.db.t["worship_services"]:
+        if s.get("kind") != "event":
+            local = datetime.fromisoformat(s["starts_at"]).astimezone(ZONE).replace(hour=9, minute=0)
+            s["starts_at"] = local.astimezone(timezone.utc).isoformat()
+    assert [t.strftime("%H:%M") for t in sp.usual_sunday_times(BIZ, ZONE)] == ["09:00"]
+    assert add("2026-11-22", "09:30", "Choir").status_code == 400
+    assert add("2026-11-22", "11:30", "Choir").status_code == 200
+    # With no Sunday at all, Add the next five Sundays' 10:30.
+    for s in c.db.t["worship_services"]:
+        if s.get("kind") != "event":
+            s["archived_at"] = NOW.isoformat()
+    assert [t.strftime("%H:%M") for t in sp.usual_sunday_times(BIZ, ZONE)] == ["10:30"]
+    assert add("2026-11-29", "11:00", "Hymn sing").status_code == 400
+    assert add("2026-11-29", "13:00", "Hymn sing").status_code == 200
+
+
+def test_the_answer_sees_the_sunday_rule_and_says_its_own_words(church):
+    c = church
+    rid = asked(c)["request"]["id"]
+    entry = next(e for e in c.db.t["module_entries"] if e["id"] == E_LOCK)
+    entry["data"]["date"] = "2026-11-15T10:45"
+    r = answer(c, rid)
+    assert r.status_code == 409 and r.json()["detail"] == sp.SUNDAY_CLASH and rows(c)[0]["status"] == "waiting"
+    entry["data"]["date"] = "2027-06-05T18:00"
+    r = answer(c, rid)
+    assert r.status_code == 404
+    assert r.json()["detail"] == "The Youth Lock-in isn't coming up in Services & Events anymore."
+    assert rows(c)[0]["status"] == "waiting" and event_dates(c) == []
+
+
+def test_an_ask_that_lands_while_the_numbers_change(church, monkeypatch):
+    c = church
+    sid = asked(c, "laquesha", needs={c.greeter: 1, c.usher: 2})["date"]["id"]
+    real = c.db.patch
+
+    def racing(path, body, **k):
+        if path.startswith("/worship_services") and body.get("needs") == {c.greeter: 1, c.usher: 1}:
+            # Someone asked Ana for Usher 2 between the check and the write.
+            c.db.t["serve_assignments"].append({"id": str(uuidlib.uuid4()), "business_id": BIZ, "service_id": sid,
+                                                "position_id": c.usher, "slot": 2, "contact_id": ANA,
+                                                "status": "asked", "notified_at": None, "note": "", "swap_to": None})
+        return real(path, body)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", racing)
+    r = c.as_("laquesha").put(f"/planning/dates/{sid}/needs",
+                              json={"business_id": BIZ, "needs": {c.greeter: 1, c.usher: 1}})
+    assert r.status_code == 409 and r.json()["detail"] == "Someone was asked for Usher 2. Take that ask back first."
+    assert event_dates(c, E_LOCK)[0]["needs"] == {c.greeter: 1, c.usher: 2}, "the numbers go back"
+    assert rows(c)[0]["needs"] == {c.greeter: 1, c.usher: 2}

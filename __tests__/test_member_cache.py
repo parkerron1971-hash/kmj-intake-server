@@ -197,6 +197,7 @@ def _lead_reads(monkeypatch, roles, led):
     import church_follow_up as cfu
     import church_leader_tasks
     import church_schedule
+    import church_week
     import group_lead
     import member_app_ui
     calls = []
@@ -204,6 +205,9 @@ def _lead_reads(monkeypatch, roles, led):
     monkeypatch.setattr(group_lead, "led_groups", lambda b, m: calls.append("led") or led)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: calls.append("tasks") or None)
     monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    # My department (church_week.entry): left real, whether it reads (the
+    # platform church's owner) hangs on the env another test file left.
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     monkeypatch.setattr(member_app_ui, "serve_mode", lambda: False)
     return calls
 
@@ -268,6 +272,8 @@ def test_a_no_with_every_read_answered_is_kept(monkeypatch):
     monkeypatch.setattr(member_app_ui, "serve_mode", lambda: True)
     monkeypatch.setattr(church_leader_tasks, "section", lambda biz, m: None)
     monkeypatch.setattr(church_schedule, "section", lambda biz, m: None)
+    import church_week
+    monkeypatch.setattr(church_week, "entry", lambda biz, m: False)
     asked = []
     monkeypatch.setattr(member_portal_lead, "parts",
                         lambda *a: asked.append(1) or {"serving": False, "kids": False, "team": []})

@@ -20,6 +20,7 @@ decisions:
   - "S2: straight on and a yes both claim the ask's row before the date is made (sunday_planning.make_date, the one way), and let it go if the date can't be; two asks or two yeses at once make one date"
   - "S2: notices go to the serve_schedule Managers (the owner when none) and the organizer through church_schedule_tell.to_login, claimed once in told_at / answer_told_at, held through quiet hours, retried by the 15-minute sweep; no office bell (it can't say whether it went)"
   - "S2: fixed a bug on the way: Fill the month could ask one person for two spots of one place at one service (busy() leaves the place's own spots out); do_fill now skips them"
+  - "S2 after review: taking a date off cancels its ask; an ask left on with no date is never told and the sweep mends it (linked, cancelled, or waiting again); an unplanned Sunday keeps the church's usual Sunday times; a date's numbers are checked again after the write; an event with an ask can't go on another way"
   - "S2: the rest of the S2 calls are in docs/EVENT_VOLUNTEERS.md section 11"
 related: [2026-11-17-event-volunteer-dates.md, 2026-11-17-events-volunteer-list.md, 2026-11-11-light-table-step2.md, 2026-11-18-church-schedule.md]
 ---
