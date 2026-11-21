@@ -38,7 +38,8 @@ def sermon(i, **k):
 # ── 1. video links ───────────────────────────────────────────────────
 
 @pytest.mark.parametrize("url,src", [
-    ("https://www.youtube.com/watch?v=abc123XYZ&t=10", "https://www.youtube-nocookie.com/embed/abc123XYZ"),
+    ("https://www.youtube.com/watch?v=abc123XYZ&t=10", "https://www.youtube-nocookie.com/embed/abc123XYZ?start=10"),
+    ("https://www.youtube.com/watch?v=abc123XYZ", "https://www.youtube-nocookie.com/embed/abc123XYZ"),
     ("https://youtu.be/abc123XYZ?si=x", "https://www.youtube-nocookie.com/embed/abc123XYZ"),
     ("https://www.youtube.com/live/abc123XYZ", "https://www.youtube-nocookie.com/embed/abc123XYZ"),
     ("https://youtube.com/shorts/abc123XYZ", "https://www.youtube-nocookie.com/embed/abc123XYZ"),
