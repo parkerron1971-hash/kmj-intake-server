@@ -27,7 +27,8 @@ prefers-color-scheme: dark query. The Bible reader keeps its warm night
 and Watch its cinema black, each a narrower rule over this one.
 
 THE PIECES. The top bar of a main tab (logo and name; the bell, the message
-bubble with the unread count, the profile picture: Look 5.1's order), a
+bubble with the unread count, the profile picture: Look 5.1's order; Watch,
+Connect and the Bible draw their own top there instead, as the mock does), a
 pushed page's plain back bar, the tab bar (Look 5.1: Home · Watch · Connect ·
 Bible · Give, flat, with a hairline on top), and the small blocks the pages
 are made of.
@@ -310,6 +311,10 @@ body.lm{--lm-raise:var(--bg);--lm-mint:#DCF0EA;--lm-mint-ink:#0b4a40;--lm-live:#
 .lm .mb-top-t{font:650 15px/1.2 var(--mb-ui);}
 /* a main tab keeps its logo and name at the top: no title slides in over them */
 .lm.lm-tab .mb-top-t{display:none;}
+/* a main tab with its own top in place of the church's bar (Look 5.1: Watch's and Connect's large title and its one
+   button, the Bible's segmented control) */
+.lm .mb-top.lm-own{min-height:60px;}
+.lm .mb-top.lm-own h1{margin:0;font:800 30px/1 var(--mb-ui);letter-spacing:-.028em;color:var(--fg);}
 
 /* the page */
 .lm .mp-shell{padding:0 20px 40px;}

@@ -61,12 +61,52 @@ def _section(html, hid):
 # ─── Connect: the page ───────────────────────────────────────────────
 
 
+def test_connect_s_bar_has_the_bubble_with_the_count_and_reads_nothing_more(church, fake, monkeypatch):  # noqa: F811
+    """Connect's own bar (Look 5.1): the title and the message bubble with
+    the unread count the church bar showed (member_portal_threads.BADGE,
+    already read for the page); drawing it reads nothing."""
+    import member_alerts
+    # The note lights the bell too, and its dot is kept 45 s per member: forget it after, for the next test.
+    monkeypatch.setattr(member_alerts, "_DOT", None)
+    fake.note(contact_id=None, kind="announcements", title="Grace Fellowship", body="See you Sunday")
+    c = _client(fake, monkeypatch)
+    c.get("/my/connect")                                                    # warm what's kept
+    fake.gets.clear()
+    html = c.get("/my/connect").text
+    top = html[html.index('<header class="mb-top lm-own lm-own-connect">'):html.index("</header>")]
+    n = int(re.search(r'aria-label="Messages, (\d+) new"', top).group(1))
+    assert n >= 1 and f'<span class="lm-cnt">{n}</span>' in top
+    assert top.index('<h1 class="lm-ctt">Connect</h1>') < top.index('<span class="mb-top-right"><a class="lm-icb')
+    # Home's church bar shows the same count from the same read.
+    c.get("/my")
+    fake.gets.clear()
+    home = c.get("/my").text
+    bar = home[home.index('<header class="mb-top">'):home.index("</header>")]
+    assert f'aria-label="Messages, {n} new"' in bar
+    # The bar reads nothing of its own: drawing it touches no table.
+    fake.gets.clear()
+    tok = mpt.BADGE.set(3)
+    try:
+        assert 'aria-label="Messages, 3 new"' in lc.top(fake.biz[tct.BIZ]) and not fake.gets
+    finally:
+        mpt.BADGE.reset(tok)
+    # Without Messages, no bubble: just the title.
+    monkeypatch.setattr("member_portal_messaging.inbox_on", lambda biz: False)
+    bare = c.get("/my/connect").text
+    assert '<header class="mb-top lm-own lm-own-connect"><h1 class="lm-ctt">Connect</h1></header>' in bare
+
+
 def test_connect_title_groups_and_more(church, fake, monkeypatch):  # noqa: F811
     fake.add("groups", id=tct.GROUP, business_id=tct.BIZ, name="Young Adults", active=True, kind="small_group",
              meets="Thursdays, 7:00 PM", location="The Johnsons' home", join_mode="ask")
     fake.add("group_members", group_id=tct.GROUP, business_id=tct.BIZ, contact_id=tct.ANA, role="member")
     html = _client(fake, monkeypatch).get("/my/connect").text
-    assert '<h1 class="lm-ctt">Connect</h1><p class="lm-ctsub">Your people at Grace Fellowship</p>' in html
+    # The title is the bar at the top (Look 5.1: no church bar over Connect); who it's about opens the page.
+    top = html[html.index('<header class="mb-top lm-own lm-own-connect">'):html.index("</header>")]
+    assert top.startswith('<header class="mb-top lm-own lm-own-connect"><h1 class="lm-ctt">Connect</h1>')
+    assert "lm-brand" not in top and "/my/notifications" not in top and "mb-avatar" not in top
+    assert html.count('<header class="mb-top') == 1
+    assert '<div class="lm-cx"><p class="lm-ctsub">Your people at Grace Fellowship</p>' in html
     groups = _section(html, "lm-grp-h")
     assert 'href="/my/groups">Find a group</a>' in groups
     assert '<a class="lm-grow" href="/my/groups/' in groups and "<b>Young Adults</b>" in groups

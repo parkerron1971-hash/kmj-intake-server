@@ -10,9 +10,10 @@ member_portal_reading, member_bible_marks). Who sees it: member_lumen.py
 
 Look 5.1 (Kevin, 2026-11-20: "when someone click bible the bible should
 open directly with devotional tabs at the top"): the Bible tab opens
-straight into reading. Its top is a sticky segmented control, Read ·
+straight into reading. Its top bar is a segmented control, Read ·
 Devotional · Plans · Saved, with a search button beside it and a small dot
-on Devotional while today's day of the devotional on top isn't read yet.
+on Devotional while today's day of the devotional on top isn't read yet;
+there is no church bar over it (as the mock draws it).
 Every tab is a real address, so it works without script and the back
 button stays sane (with script, switching tabs replaces the page in the
 history instead of stacking it):
@@ -382,8 +383,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
     head = (f'<h1 class="lm-chap"><span class="mp-sr">{_e(name)} {ch}</span><b aria-hidden="true">{ch}</b>'
             f'<span aria-hidden="true">{_e(book)}</span></h1>')
     first = f'<p class="lm-rlead">{_e(lead)}</p>' if lead else ""
-    body = f"""{seg("read", dot, prog=True)}
-{bar}
+    body = f"""{bar}
 {panel}
 {note}
 {first}
@@ -397,7 +397,8 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None,
 {sheet}
 <script type="application/json" id="bb-marks">{data}</script>"""
     return _shell(biz, site, f"{name} {ch}", body, tab="bible", who=me, lumen_reader=True,
-                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS + READ_JS + SEG_JS)
+                  script=(mpb.READER_JS if editable else "") + READER_MORE_JS + READ_JS + SEG_JS,
+                  lumen_top=seg("read", dot, prog=True))
 
 
 def moon_button(day: str, night_bg: str, night: Optional[bool]) -> str:
@@ -572,9 +573,10 @@ def devo_unread(sts) -> bool:
 
 def seg(active: str, dot: bool, *, prog: bool = False) -> str:
     """The segmented control on top of every Bible tab, and the search
-    button. The dot on Devotional says today's day isn't read; it isn't
+    button: the page's top bar (_shell's lumen_top, in place of the church's
+    bar). The dot on Devotional says today's day isn't read; it isn't
     shown on the Devotional tab itself. `prog`: the reader's line of how
-    far you've read rides on its lower edge."""
+    far you've read rides on the bar's lower edge."""
     import member_lumen_ui as lm
     links = []
     for key, label, href in TABS:
@@ -589,9 +591,11 @@ def seg(active: str, dot: bool, *, prog: bool = False) -> str:
             f'{lm.ic("search", 22)}</a>{line}</div>')
 
 
-def _shell_tab(biz, site, me, title: str, body: str, script: str = "") -> str:
+def _shell_tab(biz, site, me, title: str, active: str, dot: bool, body: str, script: str = "") -> str:
+    """A Bible tab's page: its segmented control (seg) is the bar at the top,
+    in place of the church's bar (Look 5.1)."""
     from member_portal import _shell
-    return _shell(biz, site, title, body, tab="bible", who=me, script=script + SEG_JS)
+    return _shell(biz, site, title, body, tab="bible", who=me, script=script + SEG_JS, lumen_top=seg(active, dot))
 
 
 def _plain(html_text: str) -> str:
@@ -741,8 +745,8 @@ def render_devotional(biz, site, me, tr: str, sts, *, dot: bool = False, preview
     parts.append(vod(tr))
     if sts:
         parts.append(more_devotionals(biz, site, sts, shown["id"] if shown else None))
-    body = seg("devotional", dot) + '<h1 class="mp-sr">Devotional</h1>' + "".join(p for p in parts if p)
-    return _shell_tab(biz, site, me, "Devotional", body, script)
+    body = '<h1 class="mp-sr">Devotional</h1>' + "".join(p for p in parts if p)
+    return _shell_tab(biz, site, me, "Devotional", "devotional", dot, body, script)
 
 
 # ─── Plans ───────────────────────────────────────────────────────────
@@ -831,7 +835,7 @@ def render_plans_tab(biz, site, me, tr: str, mine: Optional[Dict[str, date]], ch
                      f'<div class="lm-pstarts">{"".join(starts)}</div></section>')
     parts.append('<p class="lm-bmore"><a class="lm-more" href="/my/bible/plans">Plans &amp; devotionals'
                  f'{lm.ic("chevron", 15)}</a></p>')
-    return _shell_tab(biz, site, me, "Plans", seg("plans", dot) + '<h1 class="mp-sr">Reading plans</h1>' + "".join(parts))
+    return _shell_tab(biz, site, me, "Plans", "plans", dot, '<h1 class="mp-sr">Reading plans</h1>' + "".join(parts))
 
 
 @lru_cache(maxsize=None)
@@ -854,15 +858,14 @@ def render_saved(biz, site, me, tr: str, marks: Optional[Sequence[Dict[str, Any]
     import member_lumen_ui as lm
     import member_portal_bible as mpb
     today = today or date.today()
-    head = seg("saved", dot)
     if preview:
-        return _shell_tab(biz, site, me, "Saved", head + '<p class="lm-quiet lm-btabmsg">Highlights and notes are private to '
+        return _shell_tab(biz, site, me, "Saved", "saved", dot, '<p class="lm-quiet lm-btabmsg">Highlights and notes are private to '
                           'each member, so a preview doesn\'t show them.</p>')
     if marks is None:
-        return _shell_tab(biz, site, me, "Saved", head + '<p class="mp-err lm-btabmsg" role="alert">Your highlights and notes '
+        return _shell_tab(biz, site, me, "Saved", "saved", dot, '<p class="mp-err lm-btabmsg" role="alert">Your highlights and notes '
                           'couldn\'t load just now. They\'re still saved.</p>')
     if not marks:
-        return _shell_tab(biz, site, me, "Saved", head + (
+        return _shell_tab(biz, site, me, "Saved", "saved", dot, (
             '<div class="lm-saved0"><p class="lm-saved0-t">Nothing saved yet</p><p class="lm-quiet">Tap any verse while you '
             'read to highlight it, add a private note, or save it. It shows up here.</p>'
             '<a class="lm-btn sm" href="/my/bible">Start reading</a></div>'))
@@ -890,9 +893,9 @@ def render_saved(biz, site, me, tr: str, marks: Optional[Sequence[Dict[str, Any]
                     + f'<small>{_e(meta)}</small></span></a></li>')
     more = (f'<p class="lm-bmore"><a class="lm-more" href="/my/bible/notes">Every highlight and note'
             f'{lm.ic("chevron", 15)}</a></p>')
-    body = (f'{head}<h1 class="mp-sr">Saved</h1><ul class="lm-hls">{"".join(rows)}</ul>{more}'
+    body = (f'<h1 class="mp-sr">Saved</h1><ul class="lm-hls">{"".join(rows)}</ul>{more}'
             f'<p class="lm-bpriv">Only you can see these.</p>')
-    return _shell_tab(biz, site, me, "Saved", body)
+    return _shell_tab(biz, site, me, "Saved", "saved", dot, body)
 
 
 # ─── Search ──────────────────────────────────────────────────────────
@@ -909,21 +912,18 @@ def render_find(biz, site, me, tr: str, *, query: str = "", places=None, missed:
            '<p class="mp-err" role="alert">That\'s a lot of searching at once. Wait a minute, then try again.</p>'
            if slow else "")
     recent = mpb._chips(places or [])
-    body = (f'{seg("search", dot)}<h1 class="mp-sr">Search the Bible</h1>{field(query, autofocus=not query)}{err}'
+    body = (f'<h1 class="mp-sr">Search the Bible</h1>{field(query, autofocus=not query)}{err}'
             + (f'<section aria-labelledby="lm-recent-h">{lm.section("Recently read", hid="lm-recent-h")}{recent}</section>'
                if recent else "")
             + f'<section aria-labelledby="lm-books-h">{lm.section("Books", hid="lm-books-h")}{BOOKS}</section>{_src(tr)}')
-    return _shell_tab(biz, site, me, "Search", body)
+    return _shell_tab(biz, site, me, "Search", "search", dot, body)
 
 
 # The tabs' own script: switching tabs replaces the page in the history (the
 # back button leaves the Bible instead of walking back through its tabs;
-# tapping the tab you're on goes back to the top), and the segmented control
-# sits under whatever top bar the page has.
+# tapping the tab you're on goes back to the top). The segmented control is
+# the page's top bar, so it needs no placing.
 SEG_JS = r"""<script>(function(){var s=document.querySelector('.lm-bseg');if(!s)return;
-var t=document.querySelector('.mb-top');
-function place(){s.style.top=(t?Math.round(t.getBoundingClientRect().height):0)+'px';}
-place();window.addEventListener('resize',place);
 s.addEventListener('click',function(e){var a=e.target.closest?e.target.closest('a.lm-bsg,a.lm-bfind'):null;
  if(!a||e.defaultPrevented||e.button||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;e.preventDefault();
  if(a.getAttribute('aria-current')==='page'){var q=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1255,11 +1255,12 @@ body.lm .lm-src{margin:28px 0 0;font:500 12px/1.4 var(--mb-ui);color:var(--fg3);
 /* a devotional's day keeps the bar's middle (member_lumen_devotional) */
 body.lm .mb-top.lm-mid .mb-top-right{flex:1;justify-content:flex-end;}
 body.lm .lm-barmid{flex:none;}
-/* the Bible tab (Look 5.1): the segmented control on top, under the bar; the search button beside it */
+/* the Bible tab (Look 5.1): the segmented control is the bar at the top, no church bar over it; the search button
+   beside it; a hairline under it */
 body.lm{--lm-wk:#10261C;--lm-wk-ink:#BDE3C2;}
-body.lm .lm-bseg{position:sticky;top:max(62px,calc(52px + env(safe-area-inset-top,0px)));z-index:12;display:flex;align-items:center;gap:6px;
-  margin:0 -20px;padding:8px 8px 10px 20px;background:var(--bg);box-shadow:0 1px 0 var(--lm-line);}
-body.lm.lm-tab .mp-shell>.lm-bseg{animation:none;}
+body.lm .mb-top.lm-own-bible{min-height:0;padding-top:calc(8px + env(safe-area-inset-top,0px));padding-bottom:10px;
+  padding-right:max(8px,env(safe-area-inset-right,0px));box-shadow:0 1px 0 var(--lm-line);}
+body.lm .lm-bseg{flex:1;min-width:0;display:flex;align-items:center;gap:6px;}
 body.lm .lm-bsegs{flex:1;display:flex;padding:3px;border-radius:14px;background:var(--s1);}
 body.lm .lm-bsg{flex:1 1 0;height:36px;padding:0 8px;border-radius:11px;display:flex;align-items:center;justify-content:center;gap:6px;
   color:var(--fg2);font:650 14px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;-webkit-tap-highlight-color:transparent;}

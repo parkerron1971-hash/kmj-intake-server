@@ -887,7 +887,7 @@ def render_connect(biz: Dict[str, Any], site, request, me: Dict[str, Any], data:
     used: set = set()
     groups = data.get("groups")
     now = church_now(biz)
-    parts = [lc.title(church), mpc._flash(request, data.get("occasions"))]
+    parts = [lc.sub(church), mpc._flash(request, data.get("occasions"))]
     mine = (groups or {}).get("mine") or []
     if groups is None:
         parts.append('<p class="mp-err" role="alert" style="margin-top:24px">Your groups couldn\'t load just now. '
@@ -918,4 +918,4 @@ def render_connect(biz: Dict[str, Any], site, request, me: Dict[str, Any], data:
     parts.append(lc.more_rows(biz, pastor=data.get("pastor"), week_events=lc.week_count(data.get("occasions"), now.date()),
                               directory=directory))
     body = f'<div class="lm-cx">{"".join(p for p in parts if p)}</div>'
-    return _shell(biz, site, "Connect", body, tab="connect", who=me)
+    return _shell(biz, site, "Connect", body, tab="connect", who=me, lumen_top=lc.top(biz))
