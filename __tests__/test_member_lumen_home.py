@@ -179,10 +179,10 @@ def test_the_sentence_says_only_what_the_records_say(church, fake, monkeypatch):
     line = html[html.index('<p class=lm-line4>'):]
     line = line[:line.index("</p>")]
     n = (sun - TODAY).days
-    soon = "tomorrow" if n == 1 else f"in {n} days"
-    assert _text(line).strip() == (f"Young Adults is tonight at 7 at The Johnsons' home. Sunday is {soon}, "
+    soon = "tomorrow at 10:30" if n == 1 else f"in {n} days"                # the service's time, tomorrow
+    assert _text(line).strip() == (f"Young Adults is tonight at 7 at The Johnsons' home. Sunday is {soon} , "
                                    f"and you're on Greeters at 9:45 .")
-    assert "<b>tonight at 7</b>" in line and "<b>on Greeters at 9:45</b>" in line
+    assert "<b>tonight at 7</b>" in line and "<b>on Greeters at 9:45</b>" in line and f"<b>{soon}</b>" in line
     assert "lm-chip" not in line                                             # no chips in sentences
 
 

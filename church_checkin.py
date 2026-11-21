@@ -311,7 +311,9 @@ def marks(biz_id: str, entry_id: str, ids: List[str]) -> Optional[Dict[str, Dict
 def card(biz: Dict[str, Any], me: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
     """What the member sees.
         {"state": "off"}                  check-in isn't on at this church
-        {"state": "closed", "w": …}       not open yet (or the room is missing)
+        {"state": "closed", "w", "settings"}  not open yet (or the room is missing):
+                                          the settings ride along (the service's
+                                          name for the new look's Home), no read more
         {"state": "open", "w", "occasion", "family", "marks"}
         {"state": "error"}                something couldn't be read"""
     st = settings(biz)
@@ -321,7 +323,7 @@ def card(biz: Dict[str, Any], me: Dict[str, Any], now: Optional[datetime] = None
         return {"state": "off"}
     w = window(st, now)
     if not w["open"]:
-        return {"state": "closed", "w": w}
+        return {"state": "closed", "w": w, "settings": st}
     occ = ensure_occasion(str(biz["id"]), st, w["day"])
     if not occ:
         return {"state": "error"}

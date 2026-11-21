@@ -2150,7 +2150,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_moments as mmo
     moments_fresh = str(request.query_params.get("done") or "") in mmo.FRESH_DONE
     (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
-     told_us, feed_more, leaders, klass) = await asyncio.gather(
+     told_us, feed_more, leaders, klass, streams) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
         else asyncio.to_thread(mpc.groups_for, biz["id"], me),
@@ -2181,7 +2181,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         mmo.home_data(biz, me, preview=preview, fresh=moments_fresh) if lumen_home and church_home else _nothing(),
         # The class the member is in and hasn't finished, for the new look's
         # moments (member_portal_lumen.my_class: kept two minutes).
-        asyncio.to_thread(mlp.my_class, biz, me) if lumen_home and church_home and not preview else _nothing())
+        asyncio.to_thread(mlp.my_class, biz, me) if lumen_home and church_home and not preview else _nothing(),
+        # Whether the church streams, for Sunday's Watch live (member_portal_lumen
+        # .streams: kept ten minutes per church).
+        asyncio.to_thread(mlp.streams, biz) if lumen_home and church_home else _nothing())
     gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
     if lumen_home:
         told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
@@ -2247,7 +2250,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
             devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
             write=write, leaders=leaders,
-            leaders_owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:")), klass=klass))
+            leaders_owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:")), klass=klass,
+            streams=bool(streams) or bool(live)))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request, occ) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,

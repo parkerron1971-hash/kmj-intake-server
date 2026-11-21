@@ -12,8 +12,11 @@ church's newest message while it's new, the member's groups, the class
 they're in (my_class, kept), the church's events, each opening a
 full-screen viewer);
 the greeting by the church's clock and one sentence from the records (Look
-4.1's, unchanged); the four doors (Prayer · Events · Serve · Kids, each with a
-line from the records); This week, horizontal cards for the service, each of
+4.1's, with the service's time and, at a quiet church, what's ready to
+watch and what's coming); the four doors (Prayer · Events · Serve · Kids or
+Give, each with a line from the records); This week, horizontal cards for
+the service (a pass: I'll be there, Watch live where the church streams,
+streams() kept, Calendar where the office set the time), each of
 the member's groups' next gathering and the church's events this week, each
 with its own action (check-in on the day, someone new's Your path, the group
 RSVP, I'm coming, Sign up); the composer (Share a praise or a prayer); then
@@ -331,6 +334,42 @@ def my_class(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]
     return out
 
 
+# Whether the church streams (Sunday's Watch live), kept STREAMS_SECONDS per
+# church: member_cache, as may_write.
+STREAMS_SECONDS = 600.0
+_STREAMS = None
+
+
+def streams(biz: Dict[str, Any]) -> Optional[bool]:
+    """Whether the church has gone live in the app (live_sessions: the
+    office's Go live and the stream relay both open one), the sign that its
+    services can be watched live there: one row asked for, kept
+    STREAMS_SECONDS per church. None when the read failed (Watch live is left
+    out, nothing is kept). Home adds the church being live right now (its
+    own live read) to this."""
+    global _STREAMS
+    import member_cache
+    import sb_clients
+    if _STREAMS is None:
+        _STREAMS = member_cache.Kept("home_streams", STREAMS_SECONDS)
+    bid = str(biz.get("id") or "")
+    if not bid:
+        return None
+    hit, got = _STREAMS.get(bid)
+    if hit:
+        return bool(got)
+    try:
+        rows = sb_clients.sb_get_as_service(f"/live_sessions?business_id=eq.{quote(bid, safe='')}&select=id&limit=1")
+    except Exception:  # noqa: BLE001 — Watch live is left out
+        logger.warning("home: whether the church streams skipped", exc_info=True)
+        return None
+    if not isinstance(rows, list):
+        return None
+    ok = bool(rows)
+    _STREAMS.put(bid, ok, tag=bid)
+    return ok
+
+
 async def news_and_reply(biz: Dict[str, Any], me: Dict[str, Any], feed_kw: Dict[str, Any], *, preview: bool = False):
     """Home's news read (church_news.home_view) and, for the new Home's
     pastor's moment, whether the member may write to the pastor who posted
@@ -387,7 +426,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 pastor: Optional[Dict[str, Any]] = None, posts: Optional[List[Dict[str, Any]]] = None,
                 gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None,
                 leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False,
-                klass: Optional[Dict[str, Any]] = None) -> str:
+                klass: Optional[Dict[str, Any]] = None, streams: bool = False) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
     the composer, then `news` (the feed, member_portal_news.home_block) and
@@ -476,7 +515,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                                   "I'll be there", cls)
         return main, (lh.said_no() if mine == "no" else lh.going(n_going, mine == "going"))
 
-    def event_act(o: Dict[str, Any], cls: str) -> Tuple[str, str]:
+    def event_act(o: Dict[str, Any], cls: str, coming: str = "I'm coming") -> Tuple[str, str]:
         answer, count, mine = _answer(o), int(o.get("attending") or 0), o.get("mine") or {}
         if answer:
             return lh.done(answer, cls), lh.going(count, True)
@@ -488,7 +527,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         if o.get("full"):
             return f'<span class="{cls} q">Full</span>', ""
         main = lh.post_button("/my/rsvp", {"entry_id": str(o.get("entry_id") or ""), "back": "/my", "action": "coming"},
-                              "I'm coming", cls)
+                              coming, cls)
         return main, (lh.said_no() if mine.get("status") == "no" else lh.going(count, False))
 
     # The church's next service this week: its calendar entry (for its name,
@@ -502,8 +541,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             (x for x in occ if _day(x["date"]) == service["day"] and title and (x.get("title") or "") == title), None)
         svc = dict(service, title=title)
 
-    def service_act(cls: str) -> Tuple[str, str, str]:
-        """(the button, the count, a note) for the service."""
+    def service_act(cls: str, coming: str = "I'm coming") -> Tuple[str, str, str]:
+        """(the button, the count, a note) for the service. `coming`: the
+        calendar entry's RSVP button's words."""
         d = svc["day"]
         if ck_open and ((ck or {}).get("w") or {}).get("day") == d:
             marks, fam = ck.get("marks") or {}, ck.get("family") or []
@@ -524,7 +564,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         if new and first and first["day"] == d:
             return lh.link_button("/my/new", "Your path", cls), "", ""
         if svc_o:
-            main, cnt = event_act(svc_o, cls)
+            main, cnt = event_act(svc_o, cls, coming)
             return main, cnt, ""
         return "", "", ""
 
@@ -537,12 +577,28 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         firsts = new and first and first["day"] == d
         kicker = ("Your first Sunday" + (f" · {lh.clock(t)}" if t else "")) if firsts else lh.when(d, t, now)[0]
         art, pin = spot("home", "welcome", fallback=photos.hero(pool))
-        main, cnt, note = service_act("lm-wkb")
+        # Sunday as a pass (Kevin's Home plan, 2026-11-21): the record's own
+        # answer (the calendar entry's RSVP as I'll be there, check-in on the
+        # day), Watch live where the church streams (the live page), and
+        # Calendar where the office set the service's day and time (Watch's
+        # own .ics: member_lumen_watch.service_ics), each only where its
+        # route is there.
+        main, cnt, note = service_act("lm-wkb", "I'll be there")
+        on_day = d == day0
+        watch = (lh.icon_link("/my/live", "live", "Watch live") if streams and (live or not (ck_open and on_day))
+                 else "")
+        cal = (lh.icon_link("/my/sermons/live.ics", "calendar", "Calendar", download=True, aria="Add to calendar")
+               if svc.get("from") == "checkin" and ((ck or {}).get("settings") or {}).get("saved") and not on_day
+               else "")
         place = (svc_o or {}).get("location") or svc.get("where") or ""
+        if streams:
+            place = f"{place} · or watch live in the app" if place else "In person, or watch live in the app"
+        n_days = (d - day0).days
+        chip = "Today" if n_days == 0 else "Tomorrow" if n_days == 1 else f"{d:%A}"
         href = "/my/here?from=home" if ck_open and not ck_err and not (ck or {}).get("marks") else "/my/events"
-        items.append(((d, t or _time(23, 59), 0), lh.week_card(
-            art, href=href, day=d, kicker=_e(kicker), title=svc["title"] or church, place=place, count=cnt,
-            action=main, note=note, pin=pin)))
+        items.append(((d, t or _time(23, 59), 0), lh.pass_card(
+            art, href=href, day=d, chip=chip, kicker=_e(kicker), title=svc["title"] or church, place=place, count=cnt,
+            buttons=(main, watch, cal), note=note, pin=pin)))
         if svc_o:
             week_eids.add(str(svc_o.get("entry_id") or ""))
     for gx in week_g:
@@ -578,9 +634,13 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     # ── the doors: Prayer · Events · Serve · Kids, each with its line ──
     pn, pgroups = mpt.prayer_new(counts)
     doors = [lh.door(f"/my/inbox/group/{pgroups[0]}", "hands", "Prayer", f"{pn} new", new=True) if pn else
-             lh.door("/my/connect#lm-pray-h", "hands", "Prayer", "Ask for prayer")]
-    n_events = sum(1 for o in occ if 0 <= (_day(o["date"]) - day0).days < 7)
-    doors.append(lh.door("/my/events", "calendar", "Events", f"{n_events} this week" if n_events else "Calendar"))
+             lh.door("/my/connect#lm-pray-h", "hands", "Prayer", "Ask or pray")]
+    # What's coming up: the calendar's upcoming occasions (the list Events
+    # shows) and this week's service when it isn't on the calendar. A failed
+    # calendar read says no number.
+    n_events = (sum(1 for o in occ if _day(o["date"]) >= day0) + (1 if svc and not svc_o else 0)
+                if occasions is not None else 0)
+    doors.append(lh.door("/my/events", "calendar", "Events", f"{n_events} coming up" if n_events else "Calendar"))
     if ssv.on():
         si = serving_info or {}
         soon = None
@@ -590,10 +650,16 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 at = (c.get("service") or {}).get("at")
                 soon = (d, lh.parse_hm(c.get("call_time")) or (at.time() if isinstance(at, datetime) else None))
                 break
+        # The teams the member can see (theirs and those open to join),
+        # from Home's groups read; none when that read failed.
+        n_teams = sum(1 for g in ((groups or {}).get("mine") or []) + ((groups or {}).get("open") or [])
+                      if g.get("kind") == mpc.GROUP_KINDS["team"])
         if soon:
             line = f"{soon[0]:%a} {lh.leaf_time(soon[1])}".strip()
         elif si.get("asks"):
             line = f"{len(si['asks'])} to answer"
+        elif n_teams:
+            line = f"{n_teams} team{'' if n_teams == 1 else 's'}"
         else:
             line = "Your teams" if si.get("teams") else "Ways to serve"
         mine_sv = bool(si.get("coming") or si.get("asks") or si.get("teams"))
@@ -604,6 +670,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         doors.append(lh.door("/my/space?to=kids", "smile", "Kids",
                              "Check-in open" if ck_open else ("Your kids" if ctx.get("kids_parent") else "Your rooms"),
                              new=ck_open))
+    # Give, while the church takes gifts in the app, as the fourth door; with
+    # Kids already the fourth, Give stays in the tab bar only.
+    from giving_router import giving_is_active
+    if len(doors) < 4 and giving_is_active(biz):
+        doors.append(lh.door("/my/give", "heart", "Give", "Give online"))
     doors_html = lh.doors(doors)
 
     # ── the moments: the pastor, Sunday, the groups, the events (member_lumen_stories) ──
@@ -845,7 +916,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     # gathering, the church's next service, and where the member serves.
     name = first_name(me.get("name") or "")
     said = lh.pick(live=None, ck=None, gnext=gnext, occasions=occ, first=None, now=now)
-    hello = lh.greeting(name, now, lh.line(said, service=service, serving=serving_info, new=new, first=first, now=now),
+    import member_feed_more as mfm
+    hello = lh.greeting(name, now, lh.line(said, service=service, serving=serving_info, new=new, first=first, now=now,
+                                           message=mfm.message_of(library, day0), occasions=occ),
                         new=new)
     mine_pic = ph.src(me)
     face = f'<img src="{_e(mine_pic)}" alt="">' if mine_pic else _e(ui.initials(me.get("name")))
