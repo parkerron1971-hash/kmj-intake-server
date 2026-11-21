@@ -2,7 +2,7 @@
 title: The treasurer hears when a count closes and when someone asks to be paid back
 date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
-asked: "yes go with the plan and make those small fixes as well" (the missing tells on Love City's connection map: the money ones)
+asked: "yes go with the plan and make those small fixes as well (the money tells on Love City's connection map)"
 status: in progress
 prs: [kmj-intake-server (this PR; merges after #2038)]
 migrations: []
