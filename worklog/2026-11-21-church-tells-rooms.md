@@ -4,7 +4,7 @@ date: 2026-11-21
 agent: Claude Code (Claude Opus 5.5)
 asked: "fix the missing tells on the connection map"
 status: shipped
-prs: [kmj-intake-server#2038]
+prs: [kmj-intake-server#2038, kmj-intake-server#2041]
 migrations: []
 left_undone: ["CHURCH_TELLS switch-on for every church (church_tells.py, default owner)"]
 decisions: ["a member-app room ask is left to member_asks, which already phones the rooms holders: only rows an office login booked (booked_by not null) are told", "a weekly repeat is one tell, keyed by its series", "an expired background check counts as on file; only none on file is told", "under-18s are skipped: checks are for adults (church_serving's teen)", "no booking notes or decider's reason in any line"]
