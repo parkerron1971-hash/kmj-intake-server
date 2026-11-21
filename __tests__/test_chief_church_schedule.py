@@ -816,6 +816,19 @@ def week_of(db, monkeypatch):
     away(db, "n042", "2026-11-21", "2026-11-23")
 
 
+def test_chief_says_a_check_that_ran_out_in_the_weeks_own_words(db, monkeypatch):
+    """Kevin, 2026-11-21: The week flags a check that ran out too; Chief
+    reads the row's own words and Look at first's line, as the page does."""
+    week_of(db, monkeypatch)
+    next(c for c in db.t["contacts"] if c["id"] == db.who[HOPE]["n041"])["metadata"] = {
+        "serving": {"check_on": "2020-03-01"}}
+    said = ok(run(db, "kira", "serving_week", week="2026-11-22", department="Kids"))
+    assert "- Sunday 10:30 AM: Nursery: Lila Penn, Check overdue (" in said
+    assert ("Kids: Lila Penn's background check is overdue. Lila's background check ran out on Mar 1, 2022. "
+            "Lila is on for Sunday.") in said
+    assert "Can't serve with kids yet" not in said and said.startswith("Volunteers' week, Nov 22 to 28: 1 on, ")
+
+
 def test_the_week_is_only_for_whoever_may_read_its_page_and_hours_only_where_allowed(db, monkeypatch):
     week_of(db, monkeypatch)
     import church_week as cw

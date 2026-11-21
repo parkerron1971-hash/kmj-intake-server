@@ -3,10 +3,12 @@
 
 Pins, each one broken on purpose once to see it go red:
   * a kids role is offered in the member app (both looks) only to someone
-    with a current background check, through church_serving.cleared (the rule
-    The week reads for "Can't serve with kids yet"); anyone else reads "Needs
-    a background check. Ask the office." and a signup the page didn't offer
-    is refused; a full role says "Chaperones just filled up."
+    with a current background check, or a teen of 13 to 17 as a junior helper
+    (Kevin, 2026-11-21, "yes and yes"), through church_serving.cleared (on
+    the checks_of The week reads); anyone else (an overdue check, none, a
+    child under 13) reads "Needs a background check. Ask the office." and a
+    signup the page didn't offer is refused; a full role says "Chaperones
+    just filled up."
   * the public page shows only roles open to everyone (no `open` key: as
     before) and never a kids role; its signup refuses a hidden one
   * a special helper's yes on a past event this year counts as Events, for
@@ -77,6 +79,12 @@ def check(c, cid=JO, on=None):
                                     "background_check_on": on or (date.today() - timedelta(days=60)).isoformat()})
 
 
+def aged(c, years, cid=JO):
+    """This person's birthdate, half a year past their `years`th birthday."""
+    next(p for p in c.db.t["contacts"] if p["id"] == cid)["birthdate"] = (
+        date.today() - timedelta(days=int((years + 0.5) * 365.25))).isoformat()
+
+
 def occasion(c, me=ME):
     return next(o for o in mpc.upcoming_for(BIZ, me) if o["entry_id"] == E_KIDS)
 
@@ -104,16 +112,66 @@ def test_a_kids_role_is_offered_only_with_a_current_check(roles):
                                                    "role": "chap"}
 
 
-@pytest.mark.parametrize("how", ["ran out", "under 18", "none"])
+@pytest.mark.parametrize("how", ["ran out", "under 13", "none"])
 def test_a_check_that_isnt_current_offers_nothing(roles, how):
+    """An adult whose check ran out, a child of 10 (even with a check
+    recorded), and no check at all: not offered, and refused."""
     c = roles
     if how == "ran out":
         check(c, on=(date.today() - timedelta(days=3 * 366)).isoformat())
-    elif how == "under 18":
+        aged(c, 40)
+    elif how == "under 13":
         check(c)
-        next(p for p in c.db.t["contacts"] if p["id"] == JO)["birthdate"] = (date.today() - timedelta(days=16 * 365)).isoformat()
+        aged(c, 10)
     assert cs.cleared(BIZ, [JO]) == set()
+    o = occasion(c)
+    assert next(r for r in o["roles"] if r["id"] == "chap")["offer"] is False
     assert mpc.member_rsvp(BIZ, ME, E_KIDS, "serve", "chap") == (False, "kids")
+    assert kids_entry(c)["data"]["signups"] == []
+
+
+def test_a_teen_of_15_helps_on_a_kids_role_as_a_junior_helper(roles, monkeypatch):
+    """Kevin, 2026-11-21, "yes and yes": checks are for adults, so a teen of
+    13 to 17 is offered a kids role with no check of their own, in both looks,
+    and the server's own re-check lets the signup through."""
+    c = roles
+    aged(c, 15)
+    assert cs.checks_of(c.db.t["businesses"][0], [JO], date.today())[JO]["status"] == "teen"
+    assert cs.cleared(BIZ, [JO]) == {JO}
+    o = occasion(c)
+    assert next(r for r in o["roles"] if r["id"] == "chap")["offer"] is True
+    for html in (mpc.occasion_card(o, "/my/events"), mpc._lumen_occasion(o)):
+        assert 'value="chap"' in html and "Needs a background check" not in html
+    client = _member_client(c, monkeypatch)
+    r = client.post("/my/rsvp", data={"entry_id": E_KIDS, "action": "serve", "role": "chap", "back": "/my/events"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    assert kids_entry(c)["data"]["signups"] == [{"name": "Jo Park", "status": "yes", "contact_id": JO,
+                                                 "via": "member", "role": "chap"}]
+
+
+def test_a_child_of_10_is_refused_on_the_servers_own_re_check(roles, monkeypatch):
+    """A post the page never offered (a child of 10) is refused, whatever
+    was posted."""
+    c = roles
+    aged(c, 10)
+    client = _member_client(c, monkeypatch)
+    r = client.post("/my/rsvp", data={"entry_id": E_KIDS, "action": "serve", "role": "chap", "back": "/my/events"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/my/events?err=kids"
+    assert kids_entry(c)["data"]["signups"] == []
+
+
+@pytest.mark.parametrize("age, want", [(None, "child"), (0, "child"), (12, "child"), (13, "junior"), (17, "junior")])
+def test_a_teen_is_a_junior_helper_from_13(age, want):
+    """kids_status reads checks_of's age: 13 to 17 is a junior helper, under
+    13 a child; a teen row with no age (it can't happen: teen needs one) is
+    never let through."""
+    row = {"status": "teen", "age": age}
+    assert cs.kids_status(row) == want
+    assert (cs.kids_status(row) in cs.KIDS_ROLE_OK) is (want == "junior")
+    assert cs.kids_status(None) == "none" and cs.kids_status({"status": "overdue", "age": 40}) == "overdue"
+    assert "overdue" not in cs.KIDS_ROLE_OK and "blocked" not in cs.KIDS_ROLE_OK
 
 
 def test_the_check_is_the_weeks_own_rule(roles, monkeypatch):
@@ -440,18 +498,21 @@ def test_the_public_page_marks_its_sign_ups(roles, monkeypatch):
 # ─── the office's picture says why ───────────────────────────────────
 
 
-@pytest.mark.parametrize("how, words", [("ok", None), ("overdue", "Check overdue"), ("none", "No check on file"),
-                                        ("teen", "Under 18")])
-def test_the_event_page_says_why_a_kids_helper_isnt_cleared(church, how, words):
+@pytest.mark.parametrize("how, checked, words", [
+    ("ok", True, None), ("overdue", False, "Check overdue"), ("none", False, "No check on file"),
+    ("teen", True, None),                   # 15, no check: a junior helper (Kevin, 2026-11-21)
+    ("child", False, "Under 13"),           # 10, even with a check recorded
+])
+def test_the_event_page_says_why_a_kids_helper_isnt_cleared(church, how, checked, words):
     c = church
     from test_event_volunteers import E_LOCK as LOCK
     c.db.t["space_leaders"] = []
-    if how in ("ok", "overdue", "teen"):
+    if how in ("ok", "overdue", "child"):
         on = date.today() - timedelta(days=60 if how != "overdue" else 3 * 366)
         c.db.t["space_leaders"].append({"business_id": BIZ, "contact_id": ANA, "space": "kids",
                                         "background_check_on": on.isoformat()})
-    if how == "teen":
-        next(p for p in c.db.t["contacts"] if p["id"] == ANA)["birthdate"] = (date.today() - timedelta(days=16 * 365)).isoformat()
+    if how in ("teen", "child"):
+        aged(c, 15 if how == "teen" else 10, cid=ANA)
     pic = c.as_("owner").get(f"/church/event-volunteers/{LOCK}?business_id={BIZ}").json()
     ana = next(p for s in pic["special"] if s["role_id"] == "chap" for p in s["people"])
-    assert (ana["checked"], ana["check"]) == (how == "ok", words)
+    assert (ana["checked"], ana["check"]) == (checked, words)

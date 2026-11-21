@@ -10,7 +10,7 @@ left_undone:
   - "Kevin applies supabase/APPLY-2026-11-21-event-volunteers.sql; until then every S2 route answers 404 (the status says ready: false) and no read selects worship_services.needs"
   - "S4 office frontend: call POST /church/event-volunteers/{entry_id}/changed after every event save; the flyer step (PUT/DELETE .../flyer, multipart or {artwork_id}); show event_moved on Who serves when; hold data._flyer to flyer_of's rule before showing it; keep `via` on signups it saves; RolesEditor's two ticks (kids, open); the three questions in New event, the event's Volunteers band (GET /church/event-volunteers/{entry_id}), Event requests on Who serves when and The week (requests_waiting, GET /planning/requests, the answer), the schedule's per-service `needed`, flyer thumbs"
   - "S5 Chief: teams and flyer on create/update_module_entry, how full is my event; roles it makes write `open` explicitly"
-  - "For Kevin (raised separately): teens and kids roles, and The week's overdue-check flag"
+  - "For Kevin (raised separately): teens and kids roles, and The week's overdue-check flag (he said \"yes and yes\" 2026-11-21: built in 2026-11-21-kids-roles-teens-overdue.md)"
   - "Switch-on PR on a Thursday: EVENT_VOLUNTEERS=on AND CHURCH_EVENT_VOLUNTEERS=on (the first opens only where the second is), What's New, Help Center re-export"
 decisions:
   - "Kevin's five calls as recommended: one-tap yes from whoever schedules the teams (straight on when that's the asker); teams start unticked at their Sunday number; special roles sign up in the app, public only when opened, kids roles check-only; special helpers earn hours; office logins only for now"

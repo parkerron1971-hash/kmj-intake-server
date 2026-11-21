@@ -24,8 +24,9 @@ What it shows, top to bottom:
   look .............. short plain lines, most urgent first: a department
                       short on a day (and, for someone away, how many of the
                       team are free then), someone who hasn't answered, and
-                      someone who can't serve with kids yet; or one line
-                      saying nothing needs a look
+                      someone on a kids place who can't serve with kids yet
+                      (no check on record) or whose check ran out; or one
+                      line saying nothing needs a look
   departments ....... one card a department, the church's own order (the
                       leaders map's departments, church_schedule_limits.
                       _department_teams: one of its groups, or a Serve option
@@ -116,6 +117,15 @@ IDS_PER_READ = 100
 STATES = ("on", "no_answer", "open", "away", "cant_serve_kids")
 STATE_WORDS = {"on": "On", "no_answer": "No answer yet", "open": "Open", "away": "Away",
                "cant_serve_kids": "Can't serve with kids yet"}
+# Who on a kids place The week flags, by church_serving.checks_of: no check on
+# record (`blocked`) and, since Kevin's "yes and yes" (2026-11-21), a check that
+# ran out (`overdue`). Both are the one state `cant_serve_kids`, so every reader
+# of a row's state (the office page's chip, the counts, Look at first's order,
+# My department's "The office is handling this place", Chief) treats them
+# alike; which one it is rides on the row as `check_status`, and an overdue
+# check's words are its own.
+FLAGGED_CHECKS = ("blocked", "overdue")
+CHECK_OVERDUE = "Check overdue"
 OPEN_PLACE = "Open place"
 IN_CHURCHSAVVY = "The worship team fills this in ChurchSavvy."
 UNREAD = "The week couldn't be read just now. Try again."
@@ -253,6 +263,16 @@ def _part_of_day(at: datetime) -> str:
 
 def _short(d: date) -> str:
     return f"{d.strftime('%b')} {d.day}"
+
+
+def _ran_out_on(due: Any, today: date) -> str:
+    """" on Mar 1", or " on Mar 1, 2025" in another year; "" when the day
+    isn't known."""
+    try:
+        d = date.fromisoformat(str(due or ""))
+    except ValueError:
+        return ""
+    return f" on {_short(d)}" + (f", {d.year}" if d.year != today.year else "")
 
 
 def _hours_words(minutes: int) -> str:
@@ -586,12 +606,14 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
                     state = "open" if not cid else "away" if is_away(cid, svc["day"]) else \
                         "on" if r["status"] == "yes" else "no_answer"
                     slots.append({"svc": svc, "team": t, "place": p, "slot": slot, "cid": cid, "state": state,
-                                  "asked": r.get("asked_at") if cid else None, "status": r["status"] if cid else None})
+                                  "asked": r.get("asked_at") if cid else None, "status": r["status"] if cid else None,
+                                  "check": None, "check_due": None})
 
     # Who can't serve with kids yet: only for those who read who's cleared,
     # only the week's people on a Kids & youth team's place at a service
     # still to come (a past day is what happened), by church_serving's own
-    # rule: no check on record and on the schedule with kids or youth.
+    # rule: no check on record and on the schedule with kids or youth, or a
+    # check that ran out (FLAGGED_CHECKS). Under 18 is never flagged.
     if me["checks"]:
         import church_serving
         try:
@@ -608,8 +630,9 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
                 raise HTTPException(503, UNREAD)
             raise
         for s in with_kids:
-            if (status.get(s["cid"]) or {}).get("status") == "blocked":
-                s["state"] = "cant_serve_kids"
+            c = status.get(s["cid"]) or {}
+            if c.get("status") in FLAGGED_CHECKS:
+                s["state"], s["check"], s["check_due"] = "cant_serve_kids", c["status"], c.get("due")
 
     shown_people = {s["cid"] for s in slots if s["cid"]}
     minutes: Optional[Dict[str, int]] = None
@@ -662,7 +685,10 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
                 "place": s["place"]["name"], "slot": s["slot"],
                 "person": {"contact_id": cid, "name": names.get(cid, "Someone")} if cid else None,
                 "who": names.get(cid, "Someone") if cid else OPEN_PLACE,
-                "state": s["state"], "state_words": STATE_WORDS[s["state"]],
+                "state": s["state"],
+                "state_words": CHECK_OVERDUE if s["check"] == "overdue" else STATE_WORDS[s["state"]],
+                # Why a kids place is flagged: `blocked` (no check on record) or `overdue`; else null.
+                "check_status": s["check"],
                 "minutes": mins, "hours_words": _hours_words(mins) if mins is not None else None,
                 "find": ({"group_id": t["group_id"], "service_id": svc["id"], "day": svc["day"]}
                          if short and upcoming and t["owner"] == VOLUNTEERS else None),
@@ -697,7 +723,8 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
                                   **({"flyer": svc.get("flyer")} if svc["kind"] == sd.EVENT else {})})
             if svc["at"] <= now:
                 continue
-            # Look at first: short, by door; who hasn't answered; who can't serve with kids yet.
+            # Look at first: short, by door; who hasn't answered; who can't serve with kids yet
+            # (no check on record, or one that ran out).
             for door in DOORS:
                 gaps = [s for s in here if s["team"]["owner"] == door and s["state"] in ("open", "away")]
                 if not gaps:
@@ -735,9 +762,14 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
                     who = names.get(s["cid"], "Someone")
                     first_name = _first(who)
                     on_for = f"is on for {when(svc)}" if s["status"] == "yes" else f"was asked for {when(svc)}"
+                    if s["check"] == "overdue":
+                        title = f"{name}: {who}'s background check is overdue."
+                        why = f"{first_name}'s background check ran out{_ran_out_on(s['check_due'], today)}."
+                    else:
+                        title = f"{name}: {who} can't serve with kids yet."
+                        why = f"{first_name}'s background check isn't on record."
                     look.append(((svc["at"], rank["cant_serve_kids"], DOORS.index(s["team"]["owner"]), n, i), {
-                        "kind": "cant_serve_kids", "title": f"{name}: {who} can't serve with kids yet.",
-                        "details": [f"{first_name}'s background check isn't on record. {first_name} {on_for}."],
+                        "kind": "cant_serve_kids", "title": title, "details": [f"{why} {first_name} {on_for}."],
                         "service_id": svc["id"], "day": svc["day"], "find": None}))
         doors = {t["owner"] for t in c["teams"]}
         out_cards.append({
@@ -951,8 +983,9 @@ def _days_words(spans: Iterable[Tuple[str, str]]) -> str:
 
 
 def _phone_row(r: Dict[str, Any], numbered: bool) -> Dict[str, Any]:
-    """One place on the phone: no hours, and "can't serve with kids yet" is
-    "The office is handling this place" (call 3). Find someone is on an open
+    """One place on the phone: no hours, and "can't serve with kids yet" (no
+    check on record, or one that ran out) is "The office is handling this
+    place" (call 3), never why. Find someone is on an open
     place only (the mock's): someone away keeps their place until they are
     taken off it, which a leader can't do to a yes (sunday_leading), so the
     button would only be refused."""

@@ -140,8 +140,8 @@ DONE = {
 ERRORS = {
     "full": "That one is full now.",
     "role": "That role was just filled, or isn't on this event any more.",
-    # A role that works with kids, for someone without a current background
-    # check (docs/EVENT_VOLUNTEERS.md 6.10): the page never offered it.
+    # A role that works with kids, for someone church_serving.cleared doesn't
+    # clear (docs/EVENT_VOLUNTEERS.md 6.10): the page never offered it.
     "kids": "Needs a background check. Ask the office.",
     # A role that filled up while the page was open: "{label} just filled
     # up." when the label came with it (flash_html), else these words.
@@ -319,8 +319,8 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
     # occasions can_see lets this person see are here.
     out = er.build_occasions(mods, by_mod, include=lambda data, f: can_see(data, f, me), business_id=str(business_id))
     # A role that works with kids is offered only to someone with a current
-    # background check (church_serving.cleared, the rule The week reads for
-    # "Can't serve with kids yet"); asked once, and only when there is one.
+    # background check, or a teen of 13 to 17 as a junior helper
+    # (church_serving.cleared); asked once, and only when there is one.
     if any(r.get("kids") for o in out for r in o.get("roles") or []):
         checked = kids_cleared(business_id, me)
         for o in out:
@@ -345,8 +345,9 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
 
 def kids_cleared(business_id: str, me: Dict[str, Any]) -> bool:
     """Whether this person may take a role that works with kids: a current
-    background check by church_serving's one rule. A check that can't be
-    read is a no (the role says to ask the office), never a yes."""
+    background check, or a junior helper of 13 to 17, by church_serving's one
+    rule (cleared). A check that can't be read is a no (the role says to ask
+    the office), never a yes."""
     try:
         import church_serving
         return str(me["id"]) in church_serving.cleared(business_id, [str(me["id"])])
