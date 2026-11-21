@@ -512,6 +512,12 @@ app.include_router(worship_sermons_router)
 # SUNDAY_PLANNING=off|owner|on (default owner) until Kevin turns it on.
 from sunday_planning import router as sunday_planning_router
 app.include_router(sunday_planning_router)
+# An event's volunteers (/church/event-volunteers/*; event_volunteers.py,
+# docs/EVENT_VOLUNTEERS.md): an event in Services & Events asks the serving
+# teams for its own numbers, and whoever schedules them says yes on Who serves
+# when. EVENT_VOLUNTEERS=off|owner|on (default owner). BEFORE public_site_router.
+from event_volunteers import router as event_volunteers_router
+app.include_router(event_volunteers_router)
 # Its order of service: when each item starts, and a note for each team.
 from sunday_order import router as sunday_order_router
 app.include_router(sunday_order_router)
@@ -2330,6 +2336,18 @@ async def startup():
                           minutes=15, id="serving_alerts")
     except Exception as e:
         print(f"   [warn] serving alerts not scheduled: {e}")
+    # An event's volunteers (2026-11-21): an ask for the serving teams, and its
+    # answer, told once each from the ask's own ledger when the write couldn't
+    # (quiet hours, a send that failed) (event_volunteers.sweep_tick;
+    # EVENT_VOLUNTEERS, read here on the worker too). Nothing is read while the
+    # switch is off, and before supabase/APPLY-2026-11-21-event-volunteers.sql
+    # only whether its column and table are there.
+    try:
+        import event_volunteers as _event_volunteers
+        scheduler.add_job(g("event_volunteers_sweep", _event_volunteers.sweep_tick), "interval",
+                          minutes=15, id="event_volunteers_sweep")
+    except Exception as e:
+        print(f"   [warn] event volunteers sweep not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).

@@ -393,7 +393,9 @@ def _services(b: str, zone, first: date) -> List[Dict[str, Any]]:
         event = sd.is_event(r)
         out.append({"id": str(r["id"]), "at": at, "day": at.date().isoformat(), "weekday": sd.weekday(at),
                     "time": at.strftime("%H:%M"), "kind": sd.EVENT if event else sd.SERVICE,
-                    "title": _plain(r.get("title")) or ("An event" if event else "Sunday service")})
+                    "title": _plain(r.get("title")) or ("An event" if event else "Sunday service"),
+                    # An event date's own numbers for the Volunteers' places (serve_dates.needed).
+                    "needs": r["needs"] if event and isinstance(r.get("needs"), dict) else None})
     out.sort(key=lambda s: (s["at"], s["id"]))
     return out
 
@@ -575,7 +577,7 @@ def week(me: Dict[str, Any], start: Any = None, *, person: Optional[str] = None,
             if not sp.serves(svc, t):
                 continue
             for p in places.get(t["group_id"], []):
-                for slot in range(1, p["needed"] + 1):
+                for slot in range(1, sd.needed(svc, p) + 1):
                     r = holder.get((svc["id"], p["id"], slot))
                     cid = str(r["contact_id"]) if r and r.get("status") in ("asked", "yes") and r.get("contact_id") else None
                     state = "open" if not cid else "away" if is_away(cid, svc["day"]) else \
@@ -1069,4 +1071,6 @@ def week_status(business_id: str, user: AuthedUser = Depends(require_user)):
 def week_read(business_id: str, start: Optional[str] = None, user: AuthedUser = Depends(require_user)):
     """One week of every department's volunteers, read only."""
     me = _reader(business_id, user)
-    return week(me, start)
+    import event_volunteers
+    # Events' asks for the serving teams still waiting: The week's band.
+    return {**week(me, start), "requests_waiting": event_volunteers.waiting_count(str(me["biz"]["id"]), user)}

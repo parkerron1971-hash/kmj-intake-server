@@ -433,24 +433,29 @@ def sunday_spots(ctx: Ctx, day: date) -> Optional[tuple]:
     planned that day (plans: the calendar's own read). None when nothing is
     planned that day or the teams have no places."""
     def read() -> Optional[tuple]:
-        return _volunteer_spots(ctx, [p["id"] for p in plans(ctx) if p["day"] == day])
+        return _volunteer_spots(ctx, [{"id": p["id"]} for p in plans(ctx) if p["day"] == day])
     return ctx.once(("spots", day), read)
 
 
-def _volunteer_spots(ctx: Ctx, services: List[str]) -> Optional[tuple]:
+def _volunteer_spots(ctx: Ctx, services: List[Dict[str, Any]]) -> Optional[tuple]:
     """(places with a yes, places) on the volunteers' teams at these
-    services; None with no services or no places."""
+    services ({id, needs?}: how many each place needs at each is
+    serve_dates.needed's, an event date's own numbers when it has them);
+    None with no services or no places."""
+    import serve_dates as sd
     if not services:
         return None
-    places = {str(p["id"]): max(1, int(p.get("needed") or 1)) for p in _volunteer_places(ctx)}
+    places = [{**p, "id": str(p["id"]), "needed": max(1, int(p.get("needed") or 1))} for p in _volunteer_places(ctx)]
     if not places:
         return None
+    need = {(str(s["id"]), p["id"]): sd.needed(s, p) for s in services for p in places}
     rows = ctx.rows(f"/serve_assignments?business_id=eq.{_q(ctx.b)}"
-                    f"&service_id=in.({','.join(_q(s) for s in services)})&status=eq.yes"
+                    f"&service_id=in.({','.join(_q(s['id']) for s in services)})&status=eq.yes"
                     "&select=service_id,position_id,slot&limit=5000")
     yes = {(str(r.get("service_id")), str(r.get("position_id")), int(r.get("slot") or 1)) for r in rows
-           if str(r.get("position_id")) in places and int(r.get("slot") or 1) <= places[str(r.get("position_id"))]}
-    return len(yes), len(services) * sum(places.values())
+           if int(r.get("slot") or 1) <= need.get((str(r.get("service_id")), str(r.get("position_id"))), 0)}
+    total = sum(need.values())
+    return (len(yes), total) if total else None
 
 
 def event_dates(ctx: Ctx) -> List[Dict[str, Any]]:
@@ -466,10 +471,11 @@ def event_dates(ctx: Ctx) -> List[Dict[str, Any]]:
         out = []
         for r in ctx.rows(f"/worship_services?business_id=eq.{_q(ctx.b)}&archived_at=is.null&is_template=eq.false"
                           f"&kind=eq.{sd.EVENT}&starts_at=gte.{_q(lo.isoformat())}&starts_at=lt.{_q(hi.isoformat())}"
-                          "&select=id,title,starts_at&order=starts_at.asc&limit=200"):
+                          f"&select=id,title,starts_at{sd.fields()}&order=starts_at.asc&limit=200"):
             day = _local_day(r.get("starts_at"), ctx.tz)
             if day:
-                out.append({"id": str(r["id"]), "day": day, "title": " ".join(str(r.get("title") or "").split())})
+                out.append({"id": str(r["id"]), "day": day, "title": " ".join(str(r.get("title") or "").split()),
+                            "kind": sd.EVENT, "needs": r.get("needs") if isinstance(r.get("needs"), dict) else None})
         return out
     return ctx.once("event_dates", read)
 
@@ -482,7 +488,7 @@ def _event_lines(ctx: Ctx, monday: date) -> List[str]:
         week = [e for e in event_dates(ctx) if monday <= e["day"] <= monday + timedelta(days=6)]
         out = []
         for e in week:
-            got = ctx.once(("event_spots", e["id"]), lambda e=e: _volunteer_spots(ctx, [e["id"]]))
+            got = ctx.once(("event_spots", e["id"]), lambda e=e: _volunteer_spots(ctx, [e]))
             if got:
                 out.append(f"{got[0]} of {got[1]} for {_day_name(e['day'])}'s {e['title'] or 'event'}")
         return out

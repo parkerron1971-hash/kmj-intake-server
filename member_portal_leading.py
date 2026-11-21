@@ -47,6 +47,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+import serve_dates as sd
 import sunday_leading as sl
 
 logger = logging.getLogger("member_portal_leading")
@@ -245,7 +246,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], team
     cur = next((s for s in services if s["id"] == day), services[0])
 
     def open_count(s: Dict[str, Any]) -> int:
-        return sum(1 for p in team["places"] for k in range(1, (p["needed"] or 1) + 1)
+        return sum(1 for p in team["places"] for k in range(1, sd.needed(s, p) + 1)
                    if _state(by_spot.get((s["id"], p["id"], k)))["k"] in ("open", "no", "team"))
 
     days = "".join(
@@ -264,11 +265,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], team
                     + (_form("/my/lead/sundays/unfill", {"team": gid, "ids": ids}, "Take them back") if ids else "") + "</div>")
     rows = []
     for p in team["places"]:
-        for k in range(1, (p["needed"] or 1) + 1):
+        for k in range(1, sd.needed(cur, p) + 1):
             a = by_spot.get((cur["id"], p["id"], k))
             st = _state(a, notes=theirs)
             key = f'{p["id"]}:{k}'
-            name = p["name"] + (f" {k}" if (p["needed"] or 1) > 1 else "")
+            name = p["name"] + (f" {k}" if sd.needed(cur, p) > 1 else "")
             if st["k"] in ("open", "team"):
                 av = '<span class="sv-av open" aria-hidden="true">+</span>'
             else:

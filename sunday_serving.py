@@ -272,7 +272,8 @@ def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
     others = sp._people(biz_id, [r.get("contact_id") for r in board.rows])
     with_ = []
     for p in team["places"]:
-        for slot in range(1, (p["needed"] or 1) + 1):
+        # How many this place needs that day (serve_dates.needed: an event date's own numbers).
+        for slot in range(1, sd.needed(svc, p) + 1):
             if p["id"] == pid and slot == int(row.get("slot") or 1):
                 continue
             h = board.holder(sid, p["id"], slot)

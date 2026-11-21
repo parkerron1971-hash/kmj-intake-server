@@ -118,6 +118,8 @@ TICKS = {
     "news_reach": "news_reach:sweep_tick",
     "ministry_reminders": "worship_ministries:sweep_tick",
     "serving_alerts": "sunday_serving_alerts:sweep_tick",
+    # An event's volunteers: its notices ask sample_church.skip for each church before anything is told.
+    "event_volunteers_sweep": "event_volunteers:sweep_tick",
     "academy_class_reminders": "academy_reminders:sweep_tick",
     "academy_class_nights": "academy_class_nights:sweep_tick",
     "lead_response_reconcile": "lead_response:reconcile_tick",

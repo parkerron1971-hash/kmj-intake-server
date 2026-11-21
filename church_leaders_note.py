@@ -254,15 +254,16 @@ def _plans(biz_id: str, lo: datetime, hi: datetime, tz) -> List[Dict[str, Any]]:
     rows = _need(f"/worship_services?business_id=eq.{_q(biz_id)}&archived_at=is.null&is_template=eq.false"
                  f"{serve_dates.plans_only()}"
                  f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lt.{_q(_iso(hi))}"
-                 "&select=id,title,starts_at&order=starts_at.asc&limit=100")
+                 f"&select=id,title,starts_at{serve_dates.fields()}&order=starts_at.asc&limit=100")
     out = []
     for r in rows:
         d = _at(r.get("starts_at"))
         if not d:
             continue
         local = d.astimezone(tz)
+        # needs: an event date's own numbers (never one here: plans_only), read by serve_dates.needed.
         out.append({**_item(local.date(), local, r.get("title") or "Sunday service", kind="service"),
-                    "id": str(r["id"])})
+                    "id": str(r["id"]), "needs": r.get("needs")})
     return out
 
 
@@ -432,6 +433,7 @@ def _sunday_places(biz_id: str, plans: List[Dict[str, Any]]) -> List[Dict[str, A
     sunday_planning's: a serving team with turns, its group active."""
     if not plans:
         return []
+    import serve_dates
     serve = _need(f"/serve_teams?business_id=eq.{_q(biz_id)}&select=group_id,sort&limit=100")
     if not serve:
         return []
@@ -453,7 +455,7 @@ def _sunday_places(biz_id: str, plans: List[Dict[str, Any]]) -> List[Dict[str, A
         open_by: Dict[str, Dict[str, int]] = {}
         waiting = total = 0
         for place in sorted(places, key=lambda x: (order.get(str(x["group_id"]), 99), int(x.get("sort") or 0))):
-            for slot in range(1, int(place.get("needed") or 1) + 1):
+            for slot in range(1, serve_dates.needed(p, {**place, "id": str(place["id"])}) + 1):
                 status = held.get((p["id"], str(place["id"]), slot))
                 if status is None or status in ("offered", "no"):
                     team = open_by.setdefault(str(place["group_id"]), {})
