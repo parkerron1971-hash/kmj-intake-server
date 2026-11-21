@@ -156,6 +156,13 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_code_email_minute": (1, 60),
     "member_code_email_day": (int(os.environ.get("RL_MEMBER_CODE_EMAIL_PER_DAY", "12")), 86400),
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
+    # "New here? Join" (member_join.py): someone not on file asks for a
+    # code. Per network (generous: a whole room may join on one Wi-Fi on a
+    # Sunday), then per church per day: codes sent to addresses the church
+    # doesn't have, and records made once a code comes back right.
+    "member_join_ip": (int(os.environ.get("RL_MEMBER_JOIN_PER_HOUR", "200")), 3600),
+    "member_join_sent_day": (int(os.environ.get("RL_MEMBER_JOIN_SENT_PER_DAY", "300")), 86400),
+    "member_join_made_day": (int(os.environ.get("RL_MEMBER_JOIN_MADE_PER_DAY", "300")), 86400),
     # A phone's page timing (member_stopwatch.py): one beacon a page, and a
     # church's wifi is one network on a Sunday. Dropped ones are only fewer
     # samples; this stops a loop or a script.
