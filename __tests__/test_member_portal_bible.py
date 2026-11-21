@@ -99,6 +99,12 @@ def test_kjv_italics_and_paragraphs_and_web_lines():
     assert "The LORD <i>is</i> my shepherd" in kjv and "¶" not in kjv and "[" not in kjv
     web = mpb.chapter_html("PSA", 23, "web")
     assert 'class="bb-text bb-lines"' in web and web.count("<p>") == 6 and "Yahweh is my shepherd" in web
+    # lines: every translation a verse to a line (the new look's reader); the default is unchanged
+    assert '<div class="bb-text">' in kjv and kjv.count("<p>") < 6
+    lined = mpb.chapter_html("PSA", 23, "kjv", lines=True)
+    assert lined.startswith('<div class="bb-text bb-lines">') and lined.count("<p>") == 6
+    assert lined.replace(' bb-lines', '').replace("</p><p>", " ") == kjv.replace("</p><p>", " ")
+    assert mpb.chapter_html("PSA", 23, "web", lines=True) == web
 
 
 def test_a_sermons_scripture_opens_in_the_bible_and_reads_on_the_page():

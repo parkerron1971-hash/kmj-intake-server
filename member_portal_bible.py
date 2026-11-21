@@ -90,17 +90,20 @@ def _marked(v: int, rng: Optional[Tuple[int, int]]) -> bool:
 
 
 def chapter_html(code: str, ch: int, tr: str, rng: Optional[Tuple[int, int]] = None,
-                 only: Optional[Tuple[int, int]] = None, marks: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
+                 only: Optional[Tuple[int, int]] = None, marks: Optional[Dict[int, Dict[str, Any]]] = None,
+                 lines: bool = False) -> str:
     """A chapter as text. KJV keeps its ¶ paragraphs; the others, which carry
-    none, set a verse to a line. `rng` marks verses; `only` limits to them.
-    `marks` (the reader): each verse is something to tap, in its highlight
-    colour, with a mark where it has a note."""
+    none, set a verse to a line. `lines` sets every translation a verse to a
+    line (the new look's reader, Look 5.1). `rng` marks verses; `only`
+    limits to them. `marks` (the reader): each verse is something to tap, in
+    its highlight colour, with a mark where it has a note."""
     verses = bt.chapter(code, ch, tr) or []
+    by_line = lines or tr not in bt.PARAGRAPHS
     paras: List[List[str]] = [[]]
     for v, text in verses:
         if only and not only[0] <= v <= only[1]:
             continue
-        if paras[-1] and (tr not in bt.PARAGRAPHS or text.lstrip().startswith("¶")):
+        if paras[-1] and (by_line or text.lstrip().startswith("¶")):
             paras.append([])
         num = f'<sup class="bb-n" id="v{v}">{v}</sup>'
         body = _verse_html(text, tr)
@@ -113,7 +116,7 @@ def chapter_html(code: str, ch: int, tr: str, rng: Optional[Tuple[int, int]] = N
             paras[-1].append(f'<mark class="bb-hl">{body}</mark>' if _marked(v, rng) else body)
             continue
         paras[-1].append(f'<mark class="bb-hl">{num}{body}</mark>' if _marked(v, rng) else f"{num}{body}")
-    cls = "bb-text" + (" bb-lines" if tr not in bt.PARAGRAPHS else "")
+    cls = "bb-text" + (" bb-lines" if by_line else "")
     return f'<div class="{cls}">' + "".join(f"<p>{' '.join(p)}</p>" for p in paras if p) + "</div>"
 
 

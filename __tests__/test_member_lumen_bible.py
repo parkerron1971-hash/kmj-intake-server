@@ -198,6 +198,34 @@ def test_the_reader_is_the_read_tab(bible, fake, monkeypatch):  # noqa: F811
     assert "lm-chnav" not in on and "lm-mid" not in on
 
 
+def test_the_reader_sets_a_verse_to_a_line(bible, fake, monkeypatch):  # noqa: F811
+    """Look 5.1: each verse starts its own line (its number, its words, the
+    next verse on a new line), in every translation, KJV too; the book's
+    name is the label (the Bible data carries no longer titles). Today's
+    reader keeps KJV's ¶ paragraphs."""
+    import bible_text as bt
+    import member_lumen_bible as mlb
+    c = _client(fake, monkeypatch)
+    on = c.get("/my/bible/john/1").text
+    text = on[on.index('<div class="bb-text'):]
+    text = text[:text.index("</div>")]
+    n = len(bt.chapter("JOH", 1, "kjv"))
+    assert text.startswith('<div class="bb-text bb-lines">') and text.count("<p>") == n == 51
+    paras = re.findall(r"<p>(.*?)</p>", text)
+    assert all(len(re.findall(r'<span class="bb-v[^"]*" data-v="', p)) == 1 for p in paras)
+    assert [re.search(r'data-v="(\d+)"', p).group(1) for p in paras] == [str(v) for v in range(1, n + 1)]
+    assert '<span aria-hidden="true">John</span>' in on and "Gospel" not in on
+    assert "body.lm .lm-read .bb-text p{margin:0;}" in mlb.CSS
+    # the owner's preview (no marks to tap) and a passage with verses marked: still a verse to a line
+    import member_portal_bible as mpb
+    plain = mpb.chapter_html("PSA", 23, "kjv", (1, 3), lines=True)
+    assert plain.count("<p>") == 6 and plain.count('<mark class="bb-hl">') == 3 and "bb-lines" in plain
+    # off: today's reader, KJV in its paragraphs
+    monkeypatch.setenv("MEMBER_LUMEN", "off")
+    off = c.get("/my/bible/john/1").text
+    assert '<div class="bb-text">' in off and off.count("<p>") < n
+
+
 def test_the_preview_reader_keeps_the_translation_without_aa(bible, fake, monkeypatch):  # noqa: F811
     fake.down.add("bible_marks")
     html = _client(fake, monkeypatch).get("/my/bible/john/1").text
