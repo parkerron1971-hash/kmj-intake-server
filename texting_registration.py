@@ -847,6 +847,14 @@ CHURCH_UPDATES = {
     "campaign_pending": ("{name} is verified",
                          "Next, the phone companies review how {name} texts its people. That usually takes about "
                          "2 weeks."),
+    # remind_tick: a week with a number and no registration. Churches only
+    # (UPDATES has no line for it), so a business is never told this.
+    "reminder": ("Put {name}'s name on its texts",
+                 "{name} has had its own texting number for a week. The phone companies ask each church to "
+                 "register in its own name before it texts its people. Until then, its texts go out under "
+                 "Solutionist's name and important news goes by email instead of text. It takes a few minutes: "
+                 "open Operate, Text, the gear, then Your name on texts. Have your EIN ready. Your number stays "
+                 "the same."),
 }
 
 
@@ -1217,6 +1225,86 @@ async def sweep_tick() -> Dict[str, Any]:
         except Exception as e:
             logger.warning("texting sweep failed for %s: %s", str(r.get("business_id"))[:8], e)
     return {"checked": len(rows), "moved": moved}
+
+
+# ── the week-one reminder ─────────────────────────────────────────────
+# Kevin, 2026-11-22: "yes add the reminder after a week". A church that got
+# a number a week ago and still hasn't sent its registration: its owner is
+# told once (in the app, by push and by email), outside quiet hours. The
+# number never stops working; the reminder is all that happens. Stamped in
+# businesses.settings[REMINDED_KEY] BEFORE telling, so a later sweep can't
+# tell twice. Off: TEXTING_REGISTRATION_REMINDER=off.
+
+REMIND_AFTER_DAYS = 7
+REMINDED_KEY = "texting_registration_reminded"
+
+
+def _remind_on() -> bool:
+    return (os.environ.get("TEXTING_REGISTRATION_REMINDER") or "on").strip().lower() != "off"
+
+
+def _due_for_reminder(business: Dict[str, Any], row: Optional[Dict[str, Any]], now: datetime) -> bool:
+    """A church, open to register, not a sample, not reminded, not sent, and
+    not inside its quiet hours."""
+    bid = str(business.get("id") or "")
+    if not bid or not is_church(business) or not is_open(bid, church=True):
+        return False
+    settings = business.get("settings") if isinstance(business.get("settings"), dict) else {}
+    if settings.get(REMINDED_KEY) or is_sent(row):
+        return False
+    try:
+        import sample_church
+        if sample_church.skip(business):
+            return False
+    except Exception:  # noqa: BLE001 — a sample check that can't run tells nobody
+        return False
+    try:
+        import member_push
+        if member_push.quiet_hour(business, now):
+            return False
+    except Exception:  # noqa: BLE001 — a clock nobody could read never holds it back
+        pass
+    return True
+
+
+async def remind_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Hourly: each church a week past getting its number with no
+    registration sent, told once. One church's failure never stops the rest."""
+    from urllib.parse import quote
+    stats = {"checked": 0, "told": 0, "failed": 0}
+    if not _remind_on():
+        return {**stats, "off": True}
+    now = now or _now()
+    cutoff = (now - timedelta(days=REMIND_AFTER_DAYS)).isoformat()
+    try:
+        lines = await asyncio.to_thread(
+            _read, f"/sms_numbers?status=eq.active&account_sid=is.null"
+                   f"&purchased_at=lt.{quote(cutoff, safe='')}&select=business_id&limit=500")
+    except RuntimeError:
+        return {**stats, "read": False}
+    import business_settings
+    for bid in sorted({str(r.get("business_id")) for r in lines if r.get("business_id")}):
+        stats["checked"] += 1
+        try:
+            got = await asyncio.to_thread(
+                _read, f"/businesses?id=eq.{bid}&select=id,name,type,settings,owner_id&limit=1")
+            if not got:
+                continue
+            business = got[0]
+            row = await asyncio.to_thread(registration, bid)
+            if not _due_for_reminder(business, row, now):
+                continue
+            if await asyncio.to_thread(business_settings.merge, bid, {REMINDED_KEY: now.isoformat()}) is None:
+                stats["failed"] += 1       # not stamped: tried again next hour, never told twice
+                continue
+            if any((await _tell_owner(business, "reminder")).values()):
+                stats["told"] += 1
+            else:
+                stats["failed"] += 1
+        except Exception as e:  # noqa: BLE001
+            stats["failed"] += 1
+            logger.warning("texting reminder failed for %s: %s", bid[:8], e)
+    return stats
 
 
 # ── the public pages (public_site serves them on the business's site) ──

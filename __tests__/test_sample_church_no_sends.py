@@ -163,6 +163,7 @@ TICKS = {
     "journeys_tick": "outreach_journeys:journeys_tick",
     "referral_tick": "refer_a_friend:rewards_tick",
     "texting_registration_sweep": "texting_registration:sweep_tick",
+    "texting_registration_reminder": "texting_registration:remind_tick",
     "platform_watchdog": "platform_watchdog:watchdog_tick",
     "trusted_proposals": "rules_router:trusted_sweep_tick",
     "balance_sweep": "balance_sweep:sweep_tick",

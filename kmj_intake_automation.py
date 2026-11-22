@@ -2740,6 +2740,10 @@ async def startup():
         import texting_registration as _texting_reg
         scheduler.add_job(g("texting_registration_sweep", _texting_reg.sweep_tick),
                           "interval", minutes=15, id="texting_registration_sweep")
+        # A church a week past getting its number with no registration sent:
+        # its owner told once (2026-11-22; TEXTING_REGISTRATION_REMINDER=off).
+        scheduler.add_job(g("texting_registration_reminder", _texting_reg.remind_tick),
+                          "interval", hours=1, id="texting_registration_reminder")
     except Exception as e:
         print(f"   [warn] texting registration sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
