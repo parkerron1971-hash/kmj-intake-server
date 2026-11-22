@@ -325,13 +325,18 @@ def test_the_ink_sweeps_and_rests_when_motion_is_reduced():
 
 
 def test_plans_and_devotionals(bible, fake, monkeypatch):  # noqa: F811
-    html = _client(fake, monkeypatch).get("/my/bible/plans").text
+    # the old page's front door is the Plans tab now (member_lumen_plans); the church's whole list stays
+    c = _client(fake, monkeypatch)
+    for path in ("/my/bible/plans", "/my/bible/plans?show=all", "/my/bible/plans?show=reading"):
+        r = c.get(path, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/my/bible?tab=plans", path
+    html = c.get("/my/bible/plans?show=church").text
     assert "Plans &amp; <em>devotionals</em>" in html
-    assert re.search(r'<nav class="lm-chips" aria-label="Show"><a href="/my/bible/plans\?show=all" aria-current=page>', html)
+    assert re.search(r'<a href="/my/bible/plans\?show=church" aria-current=page>', html)
     assert "This week at Grace Fellowship" in html and "Read day 3" in html
     assert "Psalms at Night" in html
-    assert html.count('action="/my/bible/plans/start"') == 3                         # the plans she hasn't started
-    assert "Yours" in html and "Catch up" in html
+    yours = c.get("/my/bible/plans?show=yours")
+    assert yours.status_code == 200 and "Yours" in yours.text                          # a member's own list stays too
 
 
 def test_a_reading_plan_is_under_the_bible(bible, fake, monkeypatch):  # noqa: F811
