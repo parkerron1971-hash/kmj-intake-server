@@ -193,7 +193,7 @@ async def list_pictures(business_id: str, user: AuthedUser = Depends(require_use
     import member_app_pictures as mapic
     import member_portal_church as mpc
     import member_portal_sermons as mps
-    biz, _ = await asyncio.to_thread(_who, business_id, user)
+    biz, _ = _who(business_id, user)  # the owner, or a named editor with a login (refuses otherwise)
     site = await asyncio.to_thread(_site, biz)
     occ, groups, devs, lib = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], NOBODY),
@@ -230,7 +230,7 @@ async def _still(business_id: str, vid: str) -> Optional[bytes]:
 @router.post("/member-portal/{business_id}/pictures")
 async def save_picture(business_id: str, request: Request, user: AuthedUser = Depends(require_user)):
     import member_app_pictures as mapic
-    biz, who = await asyncio.to_thread(_who, business_id, user)
+    biz, who = _who(business_id, user)
     try:
         form = await request.form()
     except Exception:
@@ -258,7 +258,7 @@ async def save_picture(business_id: str, request: Request, user: AuthedUser = De
 @router.post("/member-portal/{business_id}/pictures/remove")
 async def remove_picture(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     import member_app_pictures as mapic
-    biz, who = await asyncio.to_thread(_who, business_id, user)
+    biz, who = _who(business_id, user)
     key = str((body or {}).get("key") or "")
     if not mapic.KEY_RE.fullmatch(key):
         raise HTTPException(400, mapic.ERRORS["error"])
