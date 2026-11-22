@@ -16,6 +16,7 @@ decisions:
   - "The logo sits inside the maskable safe zone (the middle 80% circle, with 8% air). A see-through logo that stands less than 1.8:1 off its background is drawn in white or near-black."
   - "The in-app opening screen is two pseudo-elements on <html> (the background plus /my/opening-mark.png, and 'POWERED BY / Solutionist' as CSS text). A head script adds the class only in display-mode standalone, once per launch (sessionStorage). It lifts after about a second, or at load, and always by 2.5 s. With reduced motion there's no fade. Without script, nothing covers the page."
   - "The manifest gets maskable icons, background_color = the background and short_name only when the church chose them."
+  - "The review's three notes, fixed: the icon upload sits behind the same per-caller limit as the app's pictures (429); the addresses' ?v= tag also covers a new uploaded icon and the app colour behind it; a failed picture read is never kept (tried again next time), what's drawn without it goes out no-store, and a photo background that can't be read isn't saved (503)."
   - "An uploaded icon is checked like the app's pictures (type, 12 MB, square within 2%, at least 1024, the small model's check)."
 related: [2026-11-22-member-page-colour-pictures.md]
 ---

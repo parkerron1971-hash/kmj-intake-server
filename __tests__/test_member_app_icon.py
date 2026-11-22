@@ -36,6 +36,7 @@ def pictures(monkeypatch):
     monkeypatch.setattr(mic, "_kept", lambda url, bid, at, hour: got.get(url))
     for f in (mic._icon, mic._startup, mic._mark_png):
         f.cache_clear()
+    mic._KEPT.clear()
     return got
 
 
@@ -75,6 +76,9 @@ def test_an_unreadable_logo_falls_back_to_the_initials(pictures):
     pictures[LOGO_URL] = b"<svg></svg>"
     png = mai.icon_png(_biz({"source": "logo", "background": "black", "at": "t2"}), None, 192)
     assert Image.open(io.BytesIO(png)).size == (192, 192)
+    pictures.pop(LOGO_URL)                                         # storage didn't answer: a stand-in, not kept
+    r = mai.serve_asset(_biz({"source": "logo", "background": "black", "at": "t2b"}), None, "/my/icon-192.png")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
 
 
 def test_an_uploaded_icon_and_a_photo_background(pictures):
@@ -98,7 +102,7 @@ def test_the_opening_screens_and_the_page():
     assert mai.serve_asset(biz, None, "/my/startup-1171x2532.png") is None
     assert mai.serve_asset(biz, None, "/my/opening-mark.png").status_code == 200
     head = mai.head_tags(biz, {})
-    v = mic.version(mic.choice(biz))
+    v = mic.tag(biz, mic.choice(biz), pal)
     assert head.count('rel="apple-touch-startup-image"') == len(mic.DEVICES)
     assert f'href="/my/icon-180.png?v={v}"' in head and 'content="Cedar St"' in head
     assert "(display-mode: standalone)" in head and "sessionStorage" in head and "prefers-reduced-motion" in head
@@ -212,3 +216,37 @@ def test_an_uploaded_square_icon_is_checked_kept_and_can_be_chosen(monkeypatch):
     with pytest.raises(mp.HTTPException) as e:
         asyncio.run(mp.upload_app_icon("b1", _upload_req(_png((1024, 1024), clear=False)), type(owner)(id="x", email=None)))
     assert e.value.status_code == 403
+
+
+def test_a_new_upload_or_app_colour_is_a_new_address_and_a_failed_read_isnt_kept(pictures, monkeypatch):
+    up = "https://x.supabase.co/storage/v1/object/public/business-assets/b1/icon.png"
+    c = {"source": "logo", "background": "colour", "at": "t9"}
+    a, b = _biz(c), _biz(c, app_icon_upload=up)
+    pal = ui.palette(a, {})
+    assert mic.tag(a, mic.choice(a), pal) != mic.tag(b, mic.choice(b), pal)              # a new upload
+    teal = _biz(c, app_colour="#1f7a8c")
+    assert mic.tag(a, mic.choice(a), pal) != mic.tag(teal, mic.choice(teal), ui.palette(teal, {}))   # a new app colour
+    reads = []
+    monkeypatch.setattr(mic, "_kept", lambda url, bid, at, hour: reads.append(url) or None)
+    assert mic._bytes(LOGO_URL, "b1", "t9") is None and mic._bytes(LOGO_URL, "b1", "t9") is None
+    assert len(reads) == 2                                                               # tried again
+
+
+def test_the_icon_upload_is_rate_limited(monkeypatch):
+    import asyncio
+    import member_portal as mp
+    import rate_limit
+    stored, owner = _settings(monkeypatch)
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda *a: False)
+    with pytest.raises(mp.HTTPException) as e:
+        asyncio.run(mp.upload_app_icon("b1", _upload_req(_png((1024, 1024), clear=False)), owner))
+    assert e.value.status_code == 429
+
+
+def test_a_photo_background_that_cant_be_read_isnt_saved(monkeypatch, pictures):
+    import member_portal as mp
+    stored, owner = _settings(monkeypatch)
+    pictures.pop(PHOTO)
+    with pytest.raises(mp.HTTPException) as e:
+        mp.patch_member_portal_config("b1", {"app_icon": {"source": "logo", "background": "photo", "photo": PHOTO}}, owner)
+    assert e.value.status_code == 503 and "app_icon" not in stored["settings"]["member_portal"]

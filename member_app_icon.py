@@ -48,6 +48,7 @@ import hashlib
 import io
 import logging
 import re
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -129,8 +130,15 @@ def logo_url(biz: Dict[str, Any]) -> str:
 
 
 def version(c: Dict[str, str]) -> str:
-    """A short tag for a choice, in every address its pictures are at."""
+    """A short tag for a choice."""
     return hashlib.sha256(repr(sorted(c.items())).encode()).hexdigest()[:10]
+
+
+def tag(biz: Dict[str, Any], c: Dict[str, str], pal: Dict[str, Any]) -> str:
+    """The tag in every address the pictures are at: the choice, plus what
+    they're drawn from that can change without a new choice (a new uploaded
+    icon, the app colour behind it), so phones fetch the new picture."""
+    return version({**c, "upload": upload_url(biz), "drawn_on": ground(biz, c, pal)})
 
 
 def ground(biz: Dict[str, Any], c: Dict[str, str], pal: Dict[str, Any]) -> str:
@@ -148,15 +156,32 @@ def ground(biz: Dict[str, Any], c: Dict[str, str], pal: Dict[str, Any]) -> str:
 # ─── drawing ─────────────────────────────────────────────────────────
 
 
+# (url, church, the choice's "at", the hour) -> the picture's bytes. Only a
+# read that worked is kept: a failed one is tried again next time.
+_KEPT: "OrderedDict[Tuple[str, str, str, int], bytes]" = OrderedDict()
+KEPT_MAX = 32
+
+
 def _bytes(url: str, business_id: str, at: str = "") -> Optional[bytes]:
     """A picture of the church's own, read at most once an hour per server
     copy for each choice (its "at" is in the key)."""
     import time
-    return _kept(url, business_id, at, int(time.time() // 3600)) if url else None
+    if not url:
+        return None
+    key = (url, business_id, at, int(time.time() // 3600))
+    if key in _KEPT:
+        _KEPT.move_to_end(key)
+        return _KEPT[key]
+    got = _kept(url, business_id, at, key[3])
+    if got:
+        _KEPT[key] = got
+        while len(_KEPT) > KEPT_MAX:
+            _KEPT.popitem(last=False)
+    return got
 
 
-@lru_cache(maxsize=32)
 def _kept(url: str, business_id: str, at: str, hour: int) -> Optional[bytes]:
+    """The read itself (tests replace this)."""
     import member_lumen_share as msh
     return msh.picture_bytes(url, business_id)
 
@@ -332,6 +357,18 @@ def _inputs(biz: Dict[str, Any], c: Dict[str, str]) -> Tuple[Optional[bytes], Op
     return logo, photo, up
 
 
+def complete(biz: Dict[str, Any]) -> bool:
+    """Whether every picture the choice is drawn from could be read just now
+    (else what's drawn is a stand-in, and isn't kept by phones for a day)."""
+    c = choice(biz)
+    if not c:
+        return True
+    logo, photo, up = _inputs(biz, c)
+    return ((c["source"] != "logo" or not logo_url(biz) or logo is not None)
+            and (c["background"] != "photo" or photo is not None)
+            and (c["source"] != "upload" or up is not None))
+
+
 def icon_png(biz: Dict[str, Any], pal: Dict[str, Any], size: int) -> Optional[bytes]:
     """The church's chosen icon at `size`, or None (no choice: today's)."""
     c = choice(biz)
@@ -388,7 +425,7 @@ def head_tags(biz: Dict[str, Any], pal: Dict[str, Any]) -> str:
     c = choice(biz)
     if not c:
         return ""
-    v = version(c)
+    v = tag(biz, c, pal)
     links = "".join(
         f'<link rel="apple-touch-startup-image" href="/my/startup-{w * r}x{h * r}.png?v={v}" '
         f'media="(device-width: {w}px) and (device-height: {h}px) and (-webkit-device-pixel-ratio: {r}) '
@@ -440,7 +477,7 @@ def manifest_overrides(biz: Dict[str, Any], pal: Dict[str, Any]) -> Dict[str, An
         out["short_name"] = name
     if not c:
         return out
-    v = version(c)
+    v = tag(biz, c, pal)
     out["background_color"] = ground(biz, c, pal)
     out["icons"] = ([{"src": f"/my/icon-{s}.png?v={v}", "sizes": f"{s}x{s}", "type": "image/png", "purpose": "any"}
                      for s in (192, 512)]

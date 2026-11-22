@@ -2816,7 +2816,11 @@ async def upload_app_icon(business_id: str, request: Request, user: AuthedUser =
     import member_cache
     import member_photos as ph
     from business_sites_helpers import ensure_business_site
+    import rate_limit
     biz = await asyncio.to_thread(_require_owner, business_id, user)
+    # The model check costs money: the same per-caller limit as the app's pictures.
+    if not rate_limit.allow_strict("member_action", f"{biz['id']}|app-icon|{user.id}"):
+        raise HTTPException(429, mapic.ERRORS["slow"])
     try:
         form = await request.form()
     except Exception:
@@ -2970,8 +2974,12 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         if icon_choice is None:
             raise HTTPException(400, "That icon can't be used. Add a logo in Brand Studio or upload a square icon, "
                                      "and choose a background.")
-        icon_choice["ground"] = (mic.photo_ground(mic._bytes(icon_choice["photo"], str(biz["id"]), "save"))
-                                 if icon_choice["background"] == "photo" else "")
+        icon_choice["ground"] = ""
+        if icon_choice["background"] == "photo":
+            raw = mic._bytes(icon_choice["photo"], str(biz["id"]), "save")
+            if not raw:
+                raise HTTPException(503, "That photo couldn't be read just now. Please try again, or choose another.")
+            icon_choice["ground"] = mic.photo_ground(raw)
         icon_choice["at"] = datetime.now(timezone.utc).isoformat()
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
             or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None

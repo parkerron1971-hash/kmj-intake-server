@@ -224,10 +224,13 @@ def serve_asset(biz: Dict[str, Any], site: Optional[Dict[str, Any]], path: str) 
         return Response(SW_JS, media_type="text/javascript",
                         headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/my",
                                  "X-Content-Type-Options": "nosniff"})
+    import member_app_icon as mic
+    # A stand-in (a picture of the church's couldn't be read just now) is
+    # never kept by a phone for a day.
+    keep = _CACHE_A_DAY if mic.complete(biz) else {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     for s in ICON_SIZES:
         if path == f"/my/icon-{s}.png":
-            return Response(icon_png(biz, site, s), media_type="image/png", headers=_CACHE_A_DAY)
-    import member_app_icon as mic
+            return Response(icon_png(biz, site, s), media_type="image/png", headers=keep)
     size = mic.startup_size(path)
     if size or path == "/my/opening-mark.png":
         pal, _ = _colours(biz, site)
@@ -239,7 +242,7 @@ def serve_asset(biz: Dict[str, Any], site: Optional[Dict[str, Any]], path: str) 
         if not got:
             return Response(status_code=404, headers={"Cache-Control": "no-store"})
         tag = '"' + hashlib.sha256(got).hexdigest()[:20] + '"'
-        return Response(got, media_type="image/png", headers={**_CACHE_A_DAY, "ETag": tag})
+        return Response(got, media_type="image/png", headers={**keep, "ETag": tag})
     return None
 
 
@@ -271,11 +274,12 @@ def head_tags(biz: Dict[str, Any], theme: Optional[Dict[str, Any]] = None) -> st
     import member_app_icon as mic
     c = mic.choice(biz)
     short = escape(mic.short(biz) or short_name(biz.get("name") or ""), quote=True)
-    touch = f"/my/icon-180.png?v={mic.version(c)}" if c else "/my/icon-180.png"
-    extra = ""
+    touch, extra = "/my/icon-180.png", ""
     if c:
         import member_app_ui as ui
-        extra = mic.head_tags(biz, ui.palette(biz, theme or {}))
+        pal = ui.palette(biz, theme or {})
+        touch = f"/my/icon-180.png?v={mic.tag(biz, c, pal)}"
+        extra = mic.head_tags(biz, pal)
     return ('<link rel="manifest" href="/my/manifest.webmanifest">'
             f'<link rel="apple-touch-icon" href="{touch}">'
             '<meta name="mobile-web-app-capable" content="yes">'
