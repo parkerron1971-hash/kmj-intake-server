@@ -186,6 +186,22 @@ def test_the_tab_says_who_she_reads_it_with_and_the_day_sends_the_question(group
 def sweep(groups, fake, monkeypatch):  # noqa: F811
     import business_marketing
     import push_notifications as pn
+    import sb_clients
+    # the shared fake knows limit but not offset (PostgREST's paging): slice for it here
+    real_get = fake.get
+
+    def paged(path, **kw):
+        import re as _re
+        m = _re.search(r"&offset=(\d+)", path)
+        if not m:
+            return real_get(path, **kw)
+        lim = _re.search(r"&limit=(\d+)", path)
+        rows = real_get(path.replace(m.group(0), "").replace(lim.group(0), "") if lim else path.replace(m.group(0), ""), **kw)
+        if rows is None:
+            return None
+        start = int(m.group(1))
+        return rows[start:start + int(lim.group(1))] if lim else rows[start:]
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", paged)
     sent = []
     monkeypatch.setattr(business_marketing, "business_tz", lambda row: ZoneInfo("UTC"))
     monkeypatch.setattr(pn, "_send_one", lambda s, payload, table=None: sent.append((s["id"], payload)) or True)
@@ -265,3 +281,25 @@ def test_no_reminder_for_a_devotional_thats_gone(sweep, fake):  # noqa: F811
     fake.add("member_plan_prefs", business_id=tct.BIZ, contact_id=tct.ANA,
              plan="devotional:00000000-0000-4000-8000-0000000009ff", group_id=None, remind_at="07:00:00", reminded_on=None)
     assert mpp.remind_tick(_at(7, 10)) == {"due": 1, "sent": 0} and not sweep
+
+
+def test_no_phones_read_means_no_claim(sweep, fake, monkeypatch):  # noqa: F811
+    import member_plan_prefs as mpp
+    fake.down.add("member_push_subscriptions")
+    assert mpp.remind_tick(_at(19, 30))["sent"] == 0
+    assert fake.t["member_plan_prefs"][0]["reminded_on"] is None                         # still due: tried again
+    fake.down.discard("member_push_subscriptions")
+    assert mpp.remind_tick(_at(19, 45))["sent"] == 1
+
+
+def test_the_sweep_reads_every_page_of_rows(sweep, fake, monkeypatch):  # noqa: F811
+    import member_plan_prefs as mpp
+    monkeypatch.setattr(mpp, "SWEEP_PAGE", 1)
+    fake.add("member_plan_prefs", business_id=tct.BIZ, contact_id=tct.ANA, plan=f"devotional:{D1}", group_id=None,
+             remind_at="19:30:00", reminded_on=None)
+    pages = []
+    real = mpp._read
+    monkeypatch.setattr(mpp, "_read", lambda path: pages.append(path) or real(path))
+    got = mpp.remind_tick(_at(19, 30))
+    assert got["due"] == 2 and got["sent"] == 2
+    assert [p for p in pages if "offset=0" in p] and [p for p in pages if "offset=1" in p]

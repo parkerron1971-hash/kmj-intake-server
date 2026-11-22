@@ -63,6 +63,9 @@ GROUP_SECONDS = 60.0
 TABLE = "member_plan_prefs"
 # How long after its time a reminder may still go (a late tick, a busy loop).
 LATE_MINUTES = 45
+# The sweep reads the rows with a time a page at a time, in a fixed order.
+SWEEP_PAGE = 1000
+SWEEP_PAGES = 50
 _PLAN = re.compile(r"(reading:[a-z0-9-]{1,40}|devotional:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 _AT = re.compile(r"([01][0-9]|2[0-3]):(00|15|30|45)")
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -441,8 +444,18 @@ def _remind_tick(now: datetime, out: Dict[str, int]) -> Dict[str, int]:
     import sample_church
     if (os.environ.get("PLAN_REMINDERS") or "on").strip().lower() == "off" or not member_push.ready():
         return out
-    rows = _read(f"/{TABLE}?remind_at=not.is.null&select=business_id,contact_id,plan,remind_at,reminded_on&limit=5000")
-    if not isinstance(rows, list) or not rows:
+    rows: List[Dict[str, Any]] = []
+    for page in range(SWEEP_PAGES):
+        got = _read(f"/{TABLE}?remind_at=not.is.null&select=business_id,contact_id,plan,remind_at,reminded_on"
+                    f"&order=business_id,contact_id,plan&limit={SWEEP_PAGE}&offset={page * SWEEP_PAGE}")
+        if not isinstance(got, list):
+            if not rows:
+                return out
+            break
+        rows += got
+        if len(got) < SWEEP_PAGE:
+            break
+    if not rows:
         return out
     by_church: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
@@ -477,12 +490,15 @@ def _remind_tick(now: datetime, out: Dict[str, int]) -> Dict[str, int]:
             day = _today_day(bid, cid, plan, starts.get(plan), today, devs)
             if not day or _silenced(business, cid) is not False:
                 continue
+            # The phones first: a failed read (None) is not "no phones", and the day isn't claimed for it.
+            subs = sb_clients.sb_get_as_service(
+                f"/member_push_subscriptions?business_id=eq.{_q(bid)}&contact_id=eq.{_q(cid)}"
+                "&select=id,contact_id,endpoint,subscription&limit=20")
+            if not isinstance(subs, list) or not subs:
+                continue
             if not _claim(bid, cid, plan, today):
                 continue
             n, title, name, url = day
-            subs = sb_clients.sb_get_as_service(
-                f"/member_push_subscriptions?business_id=eq.{_q(bid)}&contact_id=eq.{_q(cid)}"
-                "&select=id,contact_id,endpoint,subscription&limit=20") or []
             payload = {"title": (business.get("name") or "Your church")[:member_push.TITLE_MAX],
                        "body": f"Day {n} of {title} is ready: {name}"[:member_push.BODY_MAX],
                        "url": url, "tag": f"plan-{plan}"[:60]}
