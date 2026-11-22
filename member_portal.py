@@ -1467,7 +1467,15 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
             f'<button class="lm-txtbtn" type="submit">Sign out</button></form></div>')
     import member_lumen_look as mll
     look = mll.control(mll.here(), palette_for(biz, site)["bg"])
-    return _shell(biz, site, "Me", you + giving + look + life, tab="me", who=me, script=script + mll.script())
+    # Putting the app on the home screen and turning on phone alerts: the
+    # cards that were at the foot of Home (Kevin's Home plan, 2026-11-21,
+    # moved them here). Each shows itself only where it can help
+    # (member_app_install, member_push).
+    import member_app_install as mai
+    install = (f'<div class="lm-cards">{mai.install_card((biz.get("name") or "").strip() or "Your church")}'
+               f'{member_push.home_card(biz)}</div>')
+    return _shell(biz, site, "Me", you + giving + look + install + life, tab="me", who=me,
+                  script=script + mll.script())
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
@@ -2176,7 +2184,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         else asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
         asyncio.to_thread(lr.current, biz["id"]),
-        asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today else _nothing(),
+        asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today and not lumen_home else _nothing(),
         # Today's devotional, and a reading plan of the member's own when
         # the church has none running (member_portal_devotionals).
         mpd.home_extras(biz, me, preview=preview, church_reading=bool(today), info=devo_info),
@@ -2237,7 +2245,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
                                    "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n"),
-                                   "extras": feed_more, "library": lib}
+                                   "extras": feed_more, "library": lib, "newest": False}
                                   if lumen_home else {}))
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
@@ -2248,11 +2256,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         # Home in the new look (member_portal_lumen): the same reads, laid out
         # as approved; the news block is titled What's happening.
         import member_portal_lumen as mlp
-        import member_app_install as mai
-        import member_push
         import member_app_ui as _ui
         edit = can_picture and request.query_params.get("edit") == "pictures"
-        church_name = (biz.get("name") or "").strip() or "Your church"
         editbar = ""
         if edit:
             editbar = (f'<div class="mb-editbar" role="status"><span class="mb-editbar-ic">{_ui.icon("camera", 18)}</span>'
@@ -2265,8 +2270,6 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             celebrate=celebrate, flash=mpc._flash(request, occ) or mpr._flash(request) or mmo.flash(request),
             news=news_html,
             news_n=mpn.home_bell(news), edit=edit, editbar=editbar,
-            cards=(mai.install_card(church_name), member_push.home_card(biz),
-                   member_asks.home_row(await _ask_entry(biz, me))),
             ck=ck, ck_err=bool(mpk.ERRS.get(str(request.query_params.get("ck") or ""))), serving_info=serving_info,
             devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
             write=write, leaders=leaders,

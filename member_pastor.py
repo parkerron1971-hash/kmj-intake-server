@@ -26,9 +26,10 @@ checks (same site, signed in, may_edit, the per-person limit), written to
 this church's row only. A named member's words are checked first
 (msg_screen), as every member's words are; the owner's are the church's.
 
-WHERE. Home's Also for you, for someone new (they told the church it's their
-first time): YOUR PASTOR, the name, the title (member_portal_lumen.render_home;
-the tile is member_lumen_home.tile). Connect, for everyone: one quiet row by
+WHERE. Home, for someone new (they told the church it's their first time):
+"Meet <name>", "Your pastor · <title>", a row under the church's newest
+message (member_lumen_feed.church_cards; Also for you, where it was a tile,
+left Home with Kevin's Home plan, 2026-11-21). Connect, for everyone: one quiet row by
 Directory and News. Its own page, /my/pastor: the picture, YOUR PASTOR, the
 name in the serif, the title, the note, and Send a message when member
 messages lets this member write to them (/my/messages/to/<id>, the same
@@ -193,13 +194,6 @@ def spot_default(p: Dict[str, Any]) -> Dict[str, str]:
             "swatch": f'<span class="lm-pown" aria-hidden="true">{inner}</span>',
             "title": "Use their own photo" if own else "Use their initials",
             "line": "Their profile photo in the app" if own else "Until they add a profile photo in the app"}
-
-
-def tile(biz: Dict[str, Any], p: Dict[str, Any], *, href: str, edit: bool = False) -> str:
-    """Home's Also for you tile: the picture with the wave badge, YOUR
-    PASTOR, the name, the title (member_lumen_home.tile)."""
-    import member_lumen_home as lh
-    return lh.tile(href, _art(biz, p), "wave", "Your pastor", p.get("name") or "", p.get("title") or "", pin=edit)
 
 
 def row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
@@ -382,10 +376,9 @@ async def save_note_route(request: Request):
 
 
 CSS = Template("""
-/* Meet the pastor (member_pastor): Home's tile picture, Connect's face, the page */
+/* Meet the pastor (member_pastor): Connect's face, the page (Home's row: member_lumen_feed) */
 .lm .lm-pini{display:grid;place-items:center;background:var(--lm-tint-12);color:var(--acc);}
 .lm .lm-pini b{font-family:var(--mb-serif);font-weight:var(--lm-dw,400);font-size:40px;line-height:1;letter-spacing:-.02em;}
-.lm .lm-t4a .mb-ph.lm-pph img{object-position:50% 25%;}
 .lm .lm-pface{overflow:hidden;background:var(--lm-tint-12);}
 .lm .lm-pface>*{width:100%;height:100%;border-radius:50%;}
 .lm .lm-pface .mb-ph img{width:100%;height:100%;object-fit:cover;object-position:50% 25%;}

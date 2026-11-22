@@ -304,7 +304,8 @@ def test_a_poster_with_no_news_yet_sees_where_it_goes(church, monkeypatch):
     feed = _feed(_client(church, monkeypatch).get("/my").text)
     assert 'href="/my/news/write"' in feed and "Post the church&#x27;s first news" in feed
     church.t["church_news_posters"].clear()
-    assert "lm-feed" not in _client(church, monkeypatch).get("/my").text          # a member: nothing
+    html = _client(church, monkeypatch).get("/my").text                          # a member: no way to post
+    assert "Post the church&#x27;s first news" not in html and 'href="/my/news/write"' not in html
 
 
 # ─── a comment from Home ─────────────────────────────────────────────

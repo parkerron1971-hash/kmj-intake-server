@@ -202,8 +202,9 @@ def _library(monkeypatch, days=2, **extra):
 
 def test_the_newest_message_rides_while_it_is_new(church, monkeypatch):
     _library(monkeypatch)
-    feed = _feed(_client(church, monkeypatch).get("/my").text)
-    card = _art(feed, f"msg-{S1}")
+    html = _client(church, monkeypatch).get("/my").text
+    card = _art(html, f"msg-{S1}")                    # after the posts, among the church's own cards
+    assert card in html[html.index('<section class="lm-feed lf-church"'):]
     assert "New message · " in card and "Light Has Come · Part 2 of 2" in card and ">Hope Has a Name</a></h3>" in card
     assert "Pastor James · Isaiah 9:6" in card
     # No player here: the picture opens the message's page, whose player the
@@ -220,9 +221,10 @@ def test_the_newest_message_rides_while_it_is_new(church, monkeypatch):
 
 def test_no_message_when_it_is_old_a_sample_or_already_carried(church, monkeypatch):
     _library(monkeypatch, days=9)
-    assert "lf-pmsg" not in _client(church, monkeypatch).get("/my").text
+    card = _art(_client(church, monkeypatch).get("/my").text, f"msg-{S1}")     # no longer new: the latest message
+    assert "Latest message · " in card and "New message" not in card
     _library(monkeypatch, sample=True)
-    assert "lf-pmsg" not in _client(church, monkeypatch).get("/my").text
+    assert f'id="msg-{S1}"' not in _client(church, monkeypatch).get("/my").text     # a sample never; the real one after it is the latest
     _library(monkeypatch)
     _post(church, "old1", kind="message", title="This week's message", attach={"sermon": S1}, created_at=_ago(minutes=5))
     church.t["sermons"].append({"id": S1, "business_id": tct.BIZ, "title": "Hope Has a Name", "speaker": "Pastor James",

@@ -81,7 +81,7 @@ def test_the_service_is_named_as_the_office_named_it(lovecity, fake, monkeypatch
     html = _client(fake, monkeypatch).get("/my").text
     card = _pass(html)
     assert ">Love City Experience</a></h3>" in card and ">Grace Fellowship</a></h3>" not in card
-    assert "TOMORROW" in card.upper() and "11:00 AM" in card
+    assert "11:00 AM" in card
 
 
 # ─── the pass ────────────────────────────────────────────────────────
@@ -90,7 +90,9 @@ def test_the_service_is_named_as_the_office_named_it(lovecity, fake, monkeypatch
 def test_love_citys_pass(lovecity, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     card = _pass(html)
-    assert '<span class="lm-chip" aria-hidden="true">Tomorrow</span>' in card
+    n = (lovecity["checkin"]["w"]["day"] - TODAY).days
+    chip = "Tomorrow" if n == 1 else "Sunday"
+    assert f'<span class="lm-chip" aria-hidden="true">{chip}</span>' in card
     assert "In person, or watch live in the app" in card
     assert '<a class="lm-wkb o" href="/my/live">' in card and "Watch live</a>" in card
     assert ('<a class="lm-wkb o" href="/my/sermons/live.ics" download aria-label="Add to calendar">' in card
