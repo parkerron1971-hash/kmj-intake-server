@@ -163,7 +163,10 @@ def test_every_other_page_is_what_it_was(church, fake, monkeypatch, path):  # no
     message with something to play is byte for byte the page switched off."""
     on = _get(fake, monkeypatch, path, "on")
     off = _get(fake, monkeypatch, path, "off")
-    assert on == off
+    # Watch's state carries the server's clock in whole seconds ("now":
+    # member_lumen_watch), which can tick between the two loads.
+    stamp = re.compile(r'"now":\d+')
+    assert stamp.sub('"now":0', on) == stamp.sub('"now":0', off)
 
 
 def test_the_same_reads_on_and_off(church, fake, monkeypatch):  # noqa: F811

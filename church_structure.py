@@ -485,8 +485,17 @@ class _Jobs:
         return self._add(_job_row(job, custom=bool(job.get("custom")), exists=True,
                                   called=also_called(self.tkey, key) if key in church_areas.LANES else None))
 
-    def preset(self, key: str) -> Dict[str, Any]:
-        return self.existing(self.by_key[key])
+    def has_preset(self, key: str) -> bool:
+        """Whether this church sees the ready-made job (church_job_defs.uses_presets)."""
+        return key in church_areas.LANES and key in self.by_key
+
+    def preset(self, key: str, label: Optional[str] = None) -> Dict[str, Any]:
+        """The ready-made job; at a church that doesn't use the five, a job of
+        its own made from it (by the church's own title when one was said)."""
+        if self.has_preset(key):
+            return self.existing(self.by_key[key])
+        spec = next(j for j in cj.presets() if j["key"] == key)
+        return self.proposed({**spec, "key": None, "custom": True, "label": _plain(label) or spec["label"]})
 
     def proposed(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         """A job the church would make. One it already has by that title is
@@ -586,7 +595,8 @@ def _person(raw: Dict[str, Any], jobs: _Jobs, money: Dict[str, Any], by_kind: st
            "title": title or None, "user_id": None, "contact_id": None, "no_login": False}
 
     if treasurer:
-        job = jobs.preset("treasurer")
+        job = jobs.preset("treasurer", None if jobs.has_preset("treasurer") or not title
+                          or not _TREASURER.search(title) else title)
         for line in admin_notes:
             _note(notes, line)
         if role_in and role_in != "admin":
@@ -689,8 +699,11 @@ def _job_for(title: str, does: str, areas_in: List[str], duties_in: List[str], r
                              "this job holds none of it.")
             return job, f"“{title}” reads as one of your {BODY_JOBS[body]['label'].lower()}s."
         if _OFFICE_TITLE.search(title):
-            job = jobs.preset("office_leadership")
-            return job, f"A {title} runs the office, which is what {job['label']} is."
+            if jobs.has_preset("office_leadership"):
+                job = jobs.preset("office_leadership")
+                return job, f"A {title} runs the office, which is what {job['label']} is."
+            job = jobs.preset("office_leadership", title)
+            return job, f"A {title} runs the office: a job your church would make, with the office's work."
         guess = church_areas.guess_area(said)
         found = [] if duties_in else _duties_in(said)
         areas = list(areas_in)
@@ -720,7 +733,7 @@ def _job_for(title: str, does: str, areas_in: List[str], duties_in: List[str], r
     # A ready-made job only when what they need really is that job: its areas and its duties, exactly.
     if role == "manager":
         for key, lane in church_areas.LANES.items():
-            if (lane["role"] == "manager" and set(areas) == set(lane["areas"] or [])
+            if (jobs.has_preset(key) and lane["role"] == "manager" and set(areas) == set(lane["areas"] or [])
                     and set(duties) == set(cd.STARTER.get(key) or [])):
                 job = jobs.preset(key)
                 return job, f"What they do is {job['label']}, the ready-made job, exactly."
@@ -879,8 +892,11 @@ def make(business: Dict[str, Any], ch: co.Church, by: str, by_kind: str, answers
     # Whoever is over the office goes by the church's own title for them when one was said.
     if spec["exec"] and not any(_EXEC_TITLE.search(_plain(p.get("title"))) for p in a["people"]):
         jobs.proposed(EXEC_JOB)
+    # The shape's ready-made jobs, at a church that uses them; any other
+    # church gets a job only where one of its people needs one.
     for key in spec["jobs"]:
-        jobs.preset(key)
+        if jobs.has_preset(key):
+            jobs.preset(key)
     # The bodies the church named; the shape's own (a board) only when it named none. Elders lead an
     # elder-led church whatever else was named.
     named = a["bodies"]

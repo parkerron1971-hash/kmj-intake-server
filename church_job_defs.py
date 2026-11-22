@@ -42,6 +42,7 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote
@@ -122,6 +123,58 @@ def _shape(row: Dict[str, Any]) -> Dict[str, Any]:
             "duties": [k for k in cd.CATALOG if k in (row.get("duties") or [])], "custom": True}
 
 
+# ─── Who sees the five starting jobs ─────────────────────────────────
+# The five were written from Love City's own office (Kevin, 2026-11-21: "I am
+# with Elevation of Grace and they are looking at the same roles that we have
+# made for our church. this is a problem"). They stay for a church that uses
+# them: the platform owner's own church, or any church with a login invited
+# in one. Every other church starts from its own jobs only (made by hand, or
+# by Chief's setup questions in church_structure). CHURCH_STARTING_JOBS=on
+# shows them to every church again, as before.
+USES_SECONDS = 60
+_USES_CACHE: Dict[str, tuple] = {}
+
+
+def presets_mode() -> str:
+    m = (os.environ.get("CHURCH_STARTING_JOBS") or "used").strip().lower()
+    return m if m in ("used", "on") else "used"
+
+
+def uses_presets(business_id: Any) -> bool:
+    """Whether this church sees the five starting jobs. A read that fails is
+    a yes (the list as it always was), and isn't kept."""
+    if presets_mode() == "on":
+        return True
+    bid = str(business_id or "")
+    if not bid:
+        return True
+    hit = _USES_CACHE.get(bid)
+    if hit and time.monotonic() - hit[0] < USES_SECONDS:
+        return hit[1]
+    import church_areas
+    try:
+        import member_asks
+        if member_asks.platform_church(bid):
+            _USES_CACHE[bid] = (time.monotonic(), True)
+            return True
+        rows = sb_clients.sb_get_as_service(
+            f"/business_users?business_id=eq.{_q(bid)}&lane=in.({','.join(church_areas.LANES)})"
+            "&status=in.(invited,active)&select=id&limit=1")
+    except Exception:  # noqa: BLE001 — a job list never fails a page
+        logger.warning("church jobs: starting-jobs read failed (business %s)", bid[:8], exc_info=True)
+        return True
+    if not isinstance(rows, list):
+        return True
+    used = bool(rows)
+    _USES_CACHE[bid] = (time.monotonic(), used)
+    return used
+
+
+def presets_for(business_id: Any) -> List[Dict[str, Any]]:
+    """The five starting jobs, for a church that uses them; [] otherwise."""
+    return presets() if uses_presets(business_id) else []
+
+
 def presets() -> List[Dict[str, Any]]:
     """The five starting jobs: the office's lanes and each lane's starter duties."""
     import church_areas
@@ -137,19 +190,21 @@ def customs(business_id: Any) -> List[Dict[str, Any]]:
 
 
 def jobs(business_id: Any) -> List[Dict[str, Any]]:
-    """The presets, then this church's own. Never raises."""
-    return presets() + customs(business_id)
+    """The presets (for a church that uses them), then this church's own.
+    Never raises."""
+    return presets_for(business_id) + customs(business_id)
 
 
 def find(business_id: Any, key: Any, *, gone: bool = False) -> Optional[Dict[str, Any]]:
-    """One job by its key: a preset, or one of the church's own. With `gone`,
-    a removed one too (a login that held it keeps its title)."""
+    """One job by its key: a preset (for a church that uses them), or one of
+    the church's own. With `gone`, a removed one too, and a preset whatever
+    the church (a login that held it keeps its title)."""
     key = str(key or "")
     if not key:
         return None
     hit = next((j for j in presets() if j["key"] == key), None)
     if hit:
-        return hit
+        return hit if gone or uses_presets(business_id) else None
     rows = [r for r in (_rows(business_id) or []) if str(r.get("key")) == key]
     live = [r for r in rows if not r.get("deleted_at")]
     pick = live[0] if live else (rows[-1] if rows and gone else None)
@@ -394,7 +449,7 @@ def create(business: Dict[str, Any], body: Dict[str, Any], by: str, by_role: str
     live = [r for r in rows if not r.get("deleted_at")]
     if len(live) >= MAX_JOBS:
         raise HTTPException(400, f"A church keeps up to {MAX_JOBS} jobs of its own. Remove one first.")
-    names = {_plain(r.get("label")).casefold() for r in live} | {j["label"].casefold() for j in presets()}
+    names = {_plain(r.get("label")).casefold() for r in live} | {j["label"].casefold() for j in presets_for(biz)}
     if fields["label"].casefold() in names:
         raise HTTPException(409, f"There is already a job called {fields['label']}. Change that one, or pick "
                                  "another title.")
@@ -427,7 +482,7 @@ def update(business: Dict[str, Any], key: str, body: Dict[str, Any], by: str, by
         raise HTTPException(403, OWNER_ONLY_ADMIN)
     fields = clean(body, by_role)
     others = {_plain(r.get("label")).casefold() for r in rows if not r.get("deleted_at") and r is not row}
-    if fields["label"].casefold() in others | {j["label"].casefold() for j in presets()}:
+    if fields["label"].casefold() in others | {j["label"].casefold() for j in presets_for(biz)}:
         raise HTTPException(409, f"There is already a job called {fields['label']}. Pick another title.")
     saved = sb_clients.sb_patch_as_service(
         f"/{TABLE}?business_id=eq.{_q(biz)}&key=eq.{_q(row['key'])}&deleted_at=is.null",

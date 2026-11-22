@@ -272,7 +272,7 @@ def _lane_label(biz: str, user_id: str, role: str, areas: Any) -> Optional[str]:
         except Exception:  # noqa: BLE001 — my-role never fails for a label
             pass
     if key not in church_areas.LANES:
-        key = church_areas.lane_of(role, areas if isinstance(areas, list) else None)
+        key = church_areas.lane_of(role, areas if isinstance(areas, list) else None, biz)
     return church_areas.LANES[key]["label"] if key in church_areas.LANES else None
 
 
@@ -462,7 +462,7 @@ def validate_invite(token: str) -> Dict[str, Any]:
     import church_areas
     import office_door
     lane = inv.get("lane") if inv.get("lane") in church_areas.LANES else church_areas.lane_of(
-        inv.get("role"), inv.get("areas") if isinstance(inv.get("areas"), list) else None)
+        inv.get("role"), inv.get("areas") if isinstance(inv.get("areas"), list) else None, inv.get("business_id"))
     church = office_door.church_by_business(inv.get("business_id"))
     own_job = None
     if inv.get("lane") and inv.get("lane") not in church_areas.LANES:

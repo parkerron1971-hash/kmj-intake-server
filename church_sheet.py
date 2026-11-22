@@ -271,7 +271,7 @@ def _job(ch: co.Church, target: str, picked: Optional[List[str]]) -> Dict[str, A
         label = cj.label_of(ch.b, key)
         if label:
             return {"key": key, "label": label, "custom": key not in church_areas.LANES}
-    key = church_areas.lane_of(seat.get("role"), picked)
+    key = church_areas.lane_of(seat.get("role"), picked, ch.b)
     return {"key": key, "label": church_areas.LANES[key]["label"] if key else None, "custom": False}
 
 
@@ -595,7 +595,7 @@ def effect(business: Dict[str, Any], ch: co.Church, target: str, *, level: Any =
     lane_then = lane_now
     if job is not keep or areas is not keep:
         lane_then = church_areas.lane_after(role_then, lane_now, stored_areas, areas=areas, job=job,
-                                            own=church_areas.own_job(ch.b, lane_now))
+                                            own=church_areas.own_job(ch.b, lane_now), business_id=ch.b)
     shown_then = None if role_then in church_areas.KEEPS_ALL else _shown(picked_then, guess)
     moved_then = dict(ch.moved)
     for key, to in (moves or {}).items():
