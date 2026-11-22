@@ -58,6 +58,10 @@ os.environ.setdefault("SAMPLE_CHURCH_SEED", "off")
 # My week's texts count (church_my_week.texts_fact) reads on a thread too:
 # off here, and its own tests turn it on with the count faked.
 os.environ.setdefault("MY_WEEK_TEXT_COUNT", "off")
+# The five starting jobs (church_job_defs.uses_presets) show only at a
+# church that uses them; the suites written before that read them at every
+# fake church, so they are "on" here. test_church_starting_jobs sets "used".
+os.environ.setdefault("CHURCH_STARTING_JOBS", "on")
 
 # Billing is enforced by the code's default since 2026-11-17 (it had been on
 # in production through Railway for months). Most tests were written while
@@ -188,6 +192,16 @@ def _event_dates_columns_pinned():
 # them "not there yet", so no serving read selects `needs` and every other
 # suite reads as before that migration. The event volunteers' tests set
 # _FORCE = True.
+@pytest.fixture(autouse=True)
+def _fresh_starting_jobs():
+    try:
+        import church_job_defs as _cj
+        _cj._USES_CACHE.clear()
+    except Exception:  # pragma: no cover
+        pass
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _event_volunteers_pinned():
     try:

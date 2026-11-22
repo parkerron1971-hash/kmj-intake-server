@@ -387,6 +387,7 @@ def _logins(biz: Dict[str, Any], answers: Dict[str, Any], files: List[Dict[str, 
     import billing_limits
     import business_users_router as bur
     import church_areas
+    import church_job_defs
     biz_id = str(biz["id"])
     seats = {_plain(s.get("invited_email")).lower() for s in _rows(
         f"/business_users?business_id=eq.{_q(biz_id)}&status=in.(invited,active)&select=invited_email&limit=300")}
@@ -417,7 +418,12 @@ def _logins(biz: Dict[str, Any], answers: Dict[str, Any], files: List[Dict[str, 
         if room is not None and room <= 0:
             steps.append(_step(CANT, f"Invite {who}", f"The plan's {cap['limit']} office logins are all taken."))
             continue
-        lane = church_areas.lane(key)
+        if church_job_defs.uses_presets(biz_id):
+            lane = church_areas.lane(key)
+        else:
+            # A church that doesn't use the five starting jobs: a Manager login in the one area the words point to.
+            lane = {"key": None, "label": church_areas.AREAS[guess[0]]["label"], "role": "manager",
+                    "areas": [guess[0]]}
         step = _step(WILL, f"Invite {who} ({email}) to {lane['label']}. An email goes to them.",
                      f"From “{looks}”.")
         if do:

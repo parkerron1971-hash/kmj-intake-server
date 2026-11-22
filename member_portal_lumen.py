@@ -286,6 +286,73 @@ def streams(biz: Dict[str, Any]) -> Optional[bool]:
     return ok
 
 
+# What waits for the church's owner (Home's desk strip), kept DESK_SECONDS
+# per church: member_cache, as may_write.
+DESK_SECONDS = 60.0
+_DESK = None
+GOOD_DAYS = 30           # news_share's office list shows waiting good news this long
+DESK_MOST = 60           # each count is read up to this; at it, the strip says "60+"
+
+
+def is_owner(biz: Dict[str, Any], me: Dict[str, Any], preview_owner: bool = False) -> bool:
+    """The church's owner on Home: their preview, or their own member record
+    (settings.church_owner_contact_id, as member_moments.may_take_down). No
+    read."""
+    if preview_owner:
+        return True
+    pick = str(((biz or {}).get("settings") or {}).get("church_owner_contact_id") or "")
+    return bool(pick) and pick == str((me or {}).get("id") or "")
+
+
+def desk_counts(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What waits for the owner (Kevin's Home plan, 2026-11-21: "1 good news
+    post is waiting"), the counts the office's News room lists as Waiting for
+    you: good news members shared for the whole church, waiting to be posted
+    (news_share, the last GOOD_DAYS days as its list shows them), members'
+    group posts the check held (member_posts.held_posts), and comments the
+    check held (church_news). Three small reads, each filtered in the query
+    with its own window of DESK_MOST (a count that reaches it is "60+": the
+    `*_more` flags), kept DESK_SECONDS per church; None when any failed (the
+    counts are left out)."""
+    global _DESK
+    import member_cache
+    import sb_clients
+    from datetime import timedelta, timezone
+    if _DESK is None:
+        _DESK = member_cache.Kept("home_desk", DESK_SECONDS)
+    bid = str((biz or {}).get("id") or "")
+    if not bid:
+        return None
+    hit, got = _DESK.get(bid)
+    if hit:
+        return got
+    b = quote(bid, safe="")
+    # A UTC "Z" time: a "+00:00" in the address would read as a space.
+    since = (datetime.now(timezone.utc) - timedelta(days=GOOD_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    member = f"/church_posts?business_id=eq.{b}&source=eq.member&status=eq.waiting&removed_at=is.null"
+    try:
+        good = sb_clients.sb_get_as_service(
+            f"{member}&group_id=is.null&created_at=gte.{since}&select=id,created_at&order=created_at.desc"
+            f"&limit={DESK_MOST}")
+        group = sb_clients.sb_get_as_service(
+            f"{member}&group_id=not.is.null&select=id,attach&order=created_at.desc&limit={DESK_MOST}")
+        held = sb_clients.sb_get_as_service(
+            f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id&limit={DESK_MOST}")
+    except Exception:  # noqa: BLE001 — the counts are left out
+        logger.warning("home: the desk's counts skipped", exc_info=True)
+        return None
+    if not isinstance(good, list) or not isinstance(group, list) or not isinstance(held, list):
+        return None
+    # A member's group post waits only while the check holds it (member_posts).
+    held_posts = [r for r in group if isinstance(r.get("attach"), dict) and r["attach"].get("held")]
+    out = {"good": len(good), "good_more": len(good) >= DESK_MOST,
+           "good_at": str(good[0].get("created_at") or "") if good else "",
+           "held_posts": len(held_posts), "held_comments": len(held),
+           "held_more": len(group) >= DESK_MOST or len(held) >= DESK_MOST}
+    _DESK.put(bid, out, tag=bid)
+    return out
+
+
 async def news_and_reply(biz: Dict[str, Any], me: Dict[str, Any], feed_kw: Dict[str, Any], *, preview: bool = False):
     """Home's news read (church_news.home_view) and, for the new Home's
     pastor's moment, whether the member may write to the pastor who posted
@@ -342,7 +409,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 pastor: Optional[Dict[str, Any]] = None, posts: Optional[List[Dict[str, Any]]] = None,
                 gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None,
                 leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False,
-                klass: Optional[Dict[str, Any]] = None, streams: bool = False) -> str:
+                klass: Optional[Dict[str, Any]] = None, streams: bool = False,
+                desk: Optional[Dict[str, Any]] = None, desk_post: bool = False, owner: bool = False) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
     the composer, then `news` (the feed, member_portal_news.home_block), the
@@ -359,7 +427,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     what a brand-new person told the church (told()); `pastor` the church's
     pastor (member_pastor.who, for someone new: Meet the pastor, a row
     among the church's cards); `klass` the class the member is in
-    (my_class); `streams` whether the church streams (streams()); `posts`
+    (my_class); `streams` whether the church streams (streams()); `owner`
+    the church's owner (is_owner), who alone gets the desk strip: `desk` what
+    waits (desk_counts; None when it couldn't be read) and `desk_post`
+    whether they may post the church's first news (church_news.can_post,
+    read only when no news reaches them); `posts`
     Home's posts (church_news.home_view: a pastor's word for the moments)
     and `write` whether the member may write to its author
     (news_and_reply). `leaders` is what leaders' own moments are drawn
@@ -754,8 +826,16 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     # The asks to serve and the celebrations (each wants an answer) after
     # This week, then the composer and the feed.
     under = "".join(x for x in (serving, celebrate) if x)
+    # The owner's desk (Kevin's Home plan, 2026-11-21): what waits for them
+    # in the office's News room, and the church's first news.
+    desk_html = ""
+    if owner:
+        import app_base
+        desk_html = lh.desk(desk, church=church, short=mpc._short_name(church) or church,
+                            office=f"{app_base.app_base_url()}/?nav=operate:news", now=now,
+                            first_news=desk_post and posts == [], quiet=posts == [])
     top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
-           f'{f"<div class=lm-cards>{under}</div>" if under else ""}{lh.composer(face)}')
+           f'{f"<div class=lm-cards>{under}</div>" if under else ""}{desk_html}{lh.composer(face)}')
     # The feed (`news`: the church's and the groups' posts), then the
     # church's own cards (Kevin's Home plan, 2026-11-21: its newest message,
     # Pick up where you left off and the class, its events after this week,

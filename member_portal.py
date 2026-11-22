@@ -2177,8 +2177,11 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # follows their own post). Nothing before its tables are there.
     import member_moments as mmo
     moments_fresh = str(request.query_params.get("done") or "") in mmo.FRESH_DONE
+    # The church's owner (their preview or their own member record) gets
+    # the new look's desk strip on Home (member_portal_lumen.is_owner: no read).
+    home_owner = lumen_home and mlp.is_owner(biz, me, str(mapic.may_edit(sess, biz) or "").startswith("owner:"))
     (occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks, inbox,
-     told_us, feed_more, leaders, klass, streams) = await asyncio.gather(
+     told_us, feed_more, leaders, klass, streams, desk) = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mlp.groups_and_next, biz, me, fresh=fresh) if lumen_home
         else asyncio.to_thread(mpc.groups_for, biz["id"], me),
@@ -2212,7 +2215,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(mlp.my_class, biz, me) if lumen_home and church_home and not preview else _nothing(),
         # Whether the church streams, for Sunday's Watch live (member_portal_lumen
         # .streams: kept ten minutes per church).
-        asyncio.to_thread(mlp.streams, biz) if lumen_home and church_home else _nothing())
+        asyncio.to_thread(mlp.streams, biz) if lumen_home and church_home else _nothing(),
+        # What waits for the church's owner, for their desk strip
+        # (member_portal_lumen.desk_counts: kept a minute; the owner only).
+        asyncio.to_thread(mlp.desk_counts, biz) if home_owner and church_home else _nothing())
     gnext, serving_info, ck, pastor, week_g, write = None, None, None, None, [], {}
     if lumen_home:
         told_us, pastor = told_us if isinstance(told_us, tuple) else (told_us, None)
@@ -2242,7 +2248,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_posts, news_n = news if news else (None, 0)
     # No news reaches me yet: if I post, Home shows where it will go.
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
-    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights,
+    # The owner's way to post the first news moves into their desk strip
+    # (the feed keeps it when the strip's counts couldn't be read).
+    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), None if home_owner and desk is not None else rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
                                    "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n"),
                                    "extras": feed_more, "library": lib, "newest": False}
@@ -2274,7 +2282,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             devo=devo_info, gnext=gnext, told_us=told_us, pastor=pastor, posts=news_posts, gatherings=week_g,
             write=write, leaders=leaders,
             leaders_owner=bool(str(mapic.may_edit(sess, biz) or "").startswith("owner:")), klass=klass,
-            streams=bool(streams) or bool(live)))
+            streams=bool(streams) or bool(live), owner=home_owner, desk=desk,
+            desk_post=bool((rights or {}).get("church"))))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request, occ) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
