@@ -327,6 +327,7 @@ def test_deleting_takes_the_members_own_starts_and_its_listen_files(monkeypatch)
         assert dv.delete_devotional(DEV_ID, BIZ["id"], user) == {"ok": True}
     assert deleted[0].startswith("/devotionals?id=eq." + DEV_ID)
     assert "member_plan_starts" in deleted[1] and "devotional%3A" + DEV_ID in deleted[1]
+    assert "member_plan_prefs" in deleted[2] and "devotional%3A" + DEV_ID in deleted[2]
     assert forgot == [DEV_ID]
 
 

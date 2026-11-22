@@ -148,7 +148,8 @@ def _foot(steps: List[str], cur: str, base: str, back_href: str, last_html: str)
 
 def render_day(biz: Dict[str, Any], site, me: Dict[str, Any], dev: Dict[str, Any], n: int, st: Dict[str, Any],
                mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False, night: Optional[bool] = False,
-               step: str = "", today: Optional[date] = None, flash: str = "") -> str:
+               step: str = "", today: Optional[date] = None, flash: str = "",
+               with_g: Optional[Dict[str, Any]] = None) -> str:
     """A church devotional's day in steps. `mine` is the member's own day
     (done, ticks, journal); None = it couldn't load, so nothing can save.
     `listen`: the church's reading voice can be made (else the phone's)."""
@@ -214,7 +215,12 @@ def render_day(biz: Dict[str, Any], site, me: Dict[str, Any], dev: Dict[str, Any
                    f'<span class="lm-dy-saved" role="status" data-saved></span></p>')
     # the last step: the group's question, the checklist, Mark done
     together = (day.get("together") or "").strip()
-    group = (f'<div class="lm-dy-tog"><p class="lm-dy-k">For your group</p><p>{_e(together)}</p></div>' if together else "")
+    send = ""
+    if together and with_g and live:
+        import member_plan_prefs as mpp
+        send = mpp.send_button(with_g, together)
+    group = (f'<div class="lm-dy-tog"><p class="lm-dy-k">For your group</p><p>{_e(together)}</p>{send}</div>'
+             if together else "")
     checks = set(mine.get("checks") or [])
     practices = dev.get("practices") or []
     check = ""
@@ -500,6 +506,9 @@ body.lm .lm-dy-priv{display:flex;align-items:center;gap:6px;margin:10px 0 0;font
 body.lm .lm-dy-saved{margin-left:auto;}
 body.lm .lm-dy-tog{display:grid;gap:6px;margin-top:20px;padding:14px;border-radius:16px;background:var(--s1);}
 body.lm .lm-dy-tog p:last-child{margin:0;font:500 15.5px/1.45 var(--mb-ui);color:var(--fg);}
+body.lm .lm-dy-send{justify-self:start;display:inline-flex;align-items:center;gap:7px;margin-top:6px;padding:9px 14px;border-radius:999px;
+  background:var(--acc-fill);color:var(--on-acc);text-decoration:none;font:650 13.5px/1 var(--mb-ui);}
+body.lm .lm-dy-send:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 body.lm .lm-dy-check{margin:22px 0 0;padding:0;border:0;}
 body.lm .lm-dy-check legend{display:flex;justify-content:space-between;width:100%;padding:0;}
 body.lm .lm-dy-check legend span{color:var(--fg2);letter-spacing:0;text-transform:none;font-weight:600;}

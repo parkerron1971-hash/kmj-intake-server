@@ -547,7 +547,7 @@ if(sh)sh.addEventListener('click',function(){var t=sh.getAttribute('data-text');
 
 def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any],
                mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False, night: bool = False,
-               step: str = "", flash: str = "") -> str:
+               step: str = "", flash: str = "", with_g: Optional[Dict[str, Any]] = None) -> str:
     """A devotional's day (approved board 11). `mine` is the member's own
     day (done, ticks, journal); None = it couldn't load, so nothing on the
     page can save. `night` (the member's night reading, the Bible reader's
@@ -557,7 +557,7 @@ def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any],
         # The new look's day, one step at a time (member_lumen_plan_day: Plans, screen 3).
         import member_lumen_plan_day as mlpd
         return mlpd.render_day(biz, site, me, dev, n, st, mine, tr=tr, listen=listen, night=night, step=step,
-                               flash=flash)
+                               flash=flash, with_g=with_g)
     import member_app_photos as photos
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -832,18 +832,35 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     if len(parts) == 1:
         import member_portal_church as mpc
         if member_lumen.page():
-            # The new look's plan page (member_lumen_plans), on the same reads.
+            # The new look's plan page (member_lumen_plans), on the same reads,
+            # and the member's own choices (member_plan_prefs, kept).
             import member_lumen_plans as mlp
-            return mlp.render_devotional(biz, site, request, me, dev, st), 200
+            prefs = await asyncio.to_thread(_choices, biz, me, request, f"devotional:{dev['id']}", preview)
+            return mlp.render_devotional(biz, site, request, me, dev, st, prefs=prefs), 200
         return render_devotional(biz, site, me, dev, st, flash=mpc._flash(request)), 200
     if not parts[1].isdigit() or not 1 <= int(parts[1]) <= st["count"] or int(parts[1]) > st["upto"]:
         return RedirectResponse(_href(dev), status_code=303, headers=_SECURE_HEADERS)
     n = int(parts[1])
     import devotional_voice as dvv
     import member_portal_reading as mpr
+    with_g = None
+    if member_lumen.page() and not preview:
+        got = await asyncio.to_thread(_choices, biz, me, request, f"devotional:{dev['id']}", preview)
+        with_g = got[2] if got else None
     return render_day(biz, site, me, dev, n, st, None if days is None and not preview else (days or {}).get(n, {}),
                       tr=tr, listen=dvv.can_speak(), night=_reader_night(),
-                      step=str(request.query_params.get("step") or ""), flash=mpr._flash(request)), 200
+                      step=str(request.query_params.get("step") or ""), flash=mpr._flash(request), with_g=with_g), 200
+
+
+def _choices(biz, me, request, plan: str, preview: bool):
+    """The member's read-with and reminder for a plan (member_plan_prefs),
+    or None (its table isn't there yet, or a read failed): never stops a page."""
+    try:
+        import member_plan_prefs as mpp
+        return mpp.choices(biz, me, request, plan, preview=preview)
+    except Exception:  # noqa: BLE001
+        logger.warning("plans: the member's choices skipped", exc_info=True)
+        return None
 
 
 def _reader_night():

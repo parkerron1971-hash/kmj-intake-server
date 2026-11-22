@@ -726,6 +726,9 @@ from member_portal_devotionals import router as member_portal_devotionals_router
 app.include_router(member_portal_devotionals_router)
 from devotional_voice import router as devotional_voice_router
 app.include_router(devotional_voice_router)
+# Read a plan with your group, and a reminder at your hour (member_plan_prefs.py).
+from member_plan_prefs import router as member_plan_prefs_router
+app.include_router(member_plan_prefs_router)
 from devotionals import router as devotionals_router
 app.include_router(devotionals_router)
 # The devotional a day at a time, before sign-in (devotional_daily.py):
@@ -2840,6 +2843,16 @@ async def startup():
                           misfire_grace_time=240, coalesce=True, id="devotional_daily_morning")
     except Exception as e:
         print(f"   [warn] devotional evening texts not scheduled: {e}")
+
+    # Plan reminders (member_plan_prefs.py): a member's own reminder for a
+    # plan, at the quarter hour they picked on the church's clock, once a day,
+    # never in quiet hours. On the clock, every quarter hour; PLAN_REMINDERS=off stops it.
+    try:
+        import member_plan_prefs as _plan_prefs
+        scheduler.add_job(g("plan_reminders", _plan_prefs.remind_tick), "cron", minute="0,15,30,45",
+                          misfire_grace_time=240, coalesce=True, id="plan_reminders")
+    except Exception as e:
+        print(f"   [warn] plan reminders not scheduled: {e}")
 
     # The sample church's daily cleanup (sample_church.py, BE-3): deletes the
     # samples whose home now pays or is gone, the ones a deploy left
