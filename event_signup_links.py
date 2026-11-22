@@ -698,8 +698,9 @@ async def public_signup(slug: str, body: Dict[str, Any], request: Request) -> Di
 # ─── the office ──────────────────────────────────────────────────────
 
 def _office(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
-    import event_volunteers as evv
-    me = evv._login(business_id, user)
+    # A named import, so the ownership sweep follows the gate.
+    from event_volunteers import _login
+    me = _login(business_id, user)
     if not open_here(me["biz"]):
         raise HTTPException(404, "Not Found")
     return me
