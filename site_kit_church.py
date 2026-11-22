@@ -21,6 +21,8 @@ from site_kit import (DAYS, _clock, _opt, _raw, board_object, dock, e, footer, h
 def _ctas(d, w, second_label="", second_target="") -> str:
     cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
     label = str(second_label or "").rstrip(" ↓→>").strip()
+    if cta and label.lower() == str(w["action_label"]).strip().lower():
+        label = ""                      # the same words never sit side by side as a button and a link
     second = f'<a class="k-link" href="#{e(second_target)}">{e(label)} &darr;</a>' if label and second_target else ""
     return f'<div class="k-ctas">{cta}{second}</div>' if cta or second else ""
 
@@ -51,7 +53,9 @@ def hero_poster(d, w) -> str:
         pic = ""
         if i < len(insets):
             pic = f' <span class="sxo-pw-pic"><img src="{e(insets[i])}" alt="" width="600" height="400"></span>'
-        out.append(f'<span class="sxo-pw-line">{txt}{pic}</span>')
+        # a short line stays on one line with its photo; a long one may wrap, never run off the page
+        wrap = " is-wrap" if len(str(line)) + (4 if pic else 0) > 18 else ""
+        out.append(f'<span class="sxo-pw-line{wrap}"><bdi data-kit-edit>{txt}</bdi>{pic}</span>')
     ghost = _raw("span", "k-ghost r", e(h.get("ghost") or ""), hidden=True)
     return (f'<section class="k-hero k-hero-poster" id="top">{ghost}<div class="k-wrap">'
             f'{_opt("p", "k-eyebrow", h.get("eyebrow"))}'
@@ -374,7 +378,8 @@ CSS = r"""
 .k-hero-poster{min-height:0;display:block;padding:120px 0 clamp(64px,8vw,104px)}
 .k-hero-poster .sxo-pwords h1{font-family:var(--k-display);font-weight:var(--k-dw);text-transform:var(--k-case);
   font-size:clamp(3rem,min(10.5cqi,10rem),10rem);line-height:var(--k-lh1);letter-spacing:-.01em;margin:0}
-@media (min-width:900px){.k-hero-poster .sxo-pw-line{white-space:nowrap}}
+@media (min-width:900px){.k-hero-poster .sxo-pw-line{white-space:nowrap}
+.k-hero-poster .sxo-pw-line.is-wrap{white-space:normal;text-wrap:balance}}
 .k-hero-poster .sxo-pwords em{font-style:normal;color:var(--k-accent)}
 .k-hero-poster .sxo-pw-pic{width:1.45em;height:.78em;border-radius:.4em}
 .k-poster-foot{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:clamp(24px,5vw,72px);align-items:start;
@@ -467,7 +472,8 @@ CSS = r"""
 .k-story .sxo-pola img{border-radius:calc(var(--k-r)/2)}
 /* MINISTRIES */
 .k-min-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:0;border-top:1px solid var(--k-line)}
-.k-min{padding:clamp(22px,2.6vw,32px) clamp(4px,1.4vw,20px) clamp(26px,3vw,36px) 0;border-bottom:1px solid var(--k-line);display:grid;gap:8px;align-content:start}
+.k-min{padding:clamp(22px,2.6vw,32px) clamp(4px,1.4vw,20px) clamp(26px,3vw,36px) 0;border-bottom:1px solid var(--k-line);display:grid;grid-template-columns:minmax(0,1fr);gap:8px;align-content:start;min-width:0}
+.k-min .k-meta{white-space:normal;line-height:1.5}
 .k-min-n{font:500 12px/1 var(--k-label);letter-spacing:.14em;color:var(--k-accent)}
 .k-min-p{margin:4px 0 0;color:var(--k-muted);max-width:44ch}
 /* EVENTS */

@@ -38,10 +38,10 @@
    {"label": "Visit", "sub": "", "target": "visit"}
   ],
   "gatherings": [
-   {"day": 6, "time": "09:00", "label": "Sunday worship"},
-   {"day": 6, "time": "11:00", "label": "Sunday worship"},
-   {"day": 2, "time": "19:00", "label": "Bible study"},
-   {"day": 4, "time": "19:00", "label": "Youth night"}
+   {"day": 0, "time": "09:00", "label": "Sunday worship"},
+   {"day": 0, "time": "11:00", "label": "Sunday worship"},
+   {"day": 3, "time": "19:00", "label": "Bible study"},
+   {"day": 5, "time": "19:00", "label": "Youth night"}
   ],
   "hero": {"eyebrow": "A church for the whole neighborhood", "lines": ["Come as you are.", "Stay for the family."], "accent_word": "family", "subhead": "Sundays at 9:00 and 11:00, in the room or online. Kids and youth every week.", "board_title": "This week", "secondary": "Plan a visit", "secondary_target": "visit"},
   "times": {"eyebrow": "Every week", "headline": "When we gather", "strip_label": "", "note": "The 11:00 is streamed for anyone who can't be in the room."},
