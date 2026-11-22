@@ -499,6 +499,9 @@ def _rewrite_nav_for_preview(html: str, slug: str,
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
+# Where a hand-built Events page wants the live "Coming up" section
+# (events_rsvp_router.render_events_section).
+_EVENTS_MARKER = "<!--solutionist:events-->"
 _ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store", "/texting-terms", "/texting-privacy", "/texts")
 
 
@@ -6180,6 +6183,40 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
+async def _events_section(client, biz_id: Optional[str], slug: str) -> str:
+    """The "Coming up" section for a hand-built site's Events page (its
+    _EVENTS_MARKER): the hosted events page's cards under the same gate
+    (events_rsvp_router.events_public_is_active). "" when the gate is shut,
+    nothing public is coming up, or a read fails: the page then reads as it
+    was written."""
+    try:
+        from events_rsvp_router import (MAX_ENTRIES_PER_MODULE, build_occasions,
+                                        events_public_is_active, render_events_section)
+        biz_rows = await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+        if not biz_rows:
+            return ""
+        business = biz_rows[0]
+        modules = await _sb_service(
+            client,
+            f"/custom_modules?business_id=eq.{biz_id}&archetype=eq.event_roster&is_active=eq.true"
+            f"&select=id,name,archetype_params&limit=50") or []
+        if not events_public_is_active(business, modules):
+            return ""
+        entries_by_module = {}
+        for mod in modules:
+            entries_by_module[str(mod["id"])] = await _sb_service(
+                client,
+                f"/module_entries?module_id=eq.{mod['id']}&status=eq.active"
+                f"&select=id,module_id,data&order=created_at.desc&limit={MAX_ENTRIES_PER_MODULE}") or []
+        occasions = build_occasions(modules, entries_by_module, business_id=str(biz_id))
+        import church_event_signups
+        occasions = await asyncio.to_thread(church_event_signups.annotate, str(biz_id), occasions)
+        return render_events_section(business, occasions, slug, api_origin=_EMBED_ORIGIN)
+    except Exception as e:  # noqa: BLE001 - the page always renders as written
+        print(f"[public_site] events section for {str(biz_id)[:8]} skipped: {e!r}", flush=True)
+        return ""
+
+
 async def _serve_events_page(client, biz_id: Optional[str], slug: str, *, query: str = "") -> HTMLResponse:
     """Public event RSVP — render the events page at
     https://<slug>.mysolutionist.app/events (mirrors _serve_give_page).
@@ -7170,13 +7207,16 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
         manual_page = (secondary_pages(_cfg).get(normalized_path[1:])
                        if _is_manual_source(_cfg) else None)
         if manual_page:
+            live = _EVENTS_MARKER in manual_page
+            if live:
+                manual_page = manual_page.replace(_EVENTS_MARKER, await _events_section(client, biz_id, slug), 1)
             html = await _augment_html(
                 client, biz_id, slug, manual_page,
                 custom_domain=_cfg.get("custom_domain"), page_path=normalized_path, manual=True)
             return HTMLResponse(
                 content=html, media_type="text/html",
                 headers={"X-Solutionist-Source": "manual-site",
-                         **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+                         **(_PUBLIC_SITE_NO_STORE_HEADERS if live else _PUBLIC_SITE_EDGE_CACHE_HEADERS)})
         if normalized_path == "/book":
             return await _serve_booking_page(client, biz_id, slug)
         # Online giving — /give serves the hosted give page (same
@@ -7390,13 +7430,16 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
         manual_page = (secondary_pages(_cfg).get(_norm[1:])
                        if _is_manual_source(_cfg) else None)
         if manual_page:
+            live = _EVENTS_MARKER in manual_page
+            if live:
+                manual_page = manual_page.replace(_EVENTS_MARKER, await _events_section(client, biz_id, slug), 1)
             html = await _augment_html(
                 client, biz_id, slug, manual_page,
                 custom_domain=domain, page_path=_norm, manual=True)
             return HTMLResponse(
                 content=html, media_type="text/html",
                 headers={"X-Solutionist-Source": "manual-site",
-                         **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+                         **(_PUBLIC_SITE_NO_STORE_HEADERS if live else _PUBLIC_SITE_EDGE_CACHE_HEADERS)})
         if _norm == "/academy" or _norm.startswith("/academy/"):
             return await _serve_academy(client, biz_id, _norm, standalone=False)
         # Online giving works on custom domains too — a church that

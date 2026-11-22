@@ -538,3 +538,27 @@ def test_visible_to_member_rules():
     assert not er.visible_to_member(d, "c3", "signups")
     assert not er.visible_to_member({**d, "_visibility": "private"}, "c1", "signups")
     assert er.visible_to_member({"signups": []}, "c3", "signups")
+
+
+def test_a_hand_built_events_page_gets_the_live_coming_up_section():
+    # Kevin 2026-11-22: "the event page on website doesn't show our events".
+    # A hand-built site's Events page carries EVENTS_MARKER; the server fills
+    # it with the hosted page's own cards and sign-up forms.
+    from datetime import date
+    entries = {MOD: [{"id": "e1", "module_id": MOD,
+                      "data": {"title": "Harvest <Supper>", "date": "2099-06-01", "signups": [],
+                               "_roles": [{"id": "grill", "label": "Grill", "needed": 2},
+                                          {"id": "kids", "label": "Nursery", "needed": 1, "kids": True}]}}]}
+    occ = er.build_occasions(_mods(), entries, today=date(2099, 5, 20))
+    biz = {"id": "b", "name": "Grace Fellowship", "settings": {}}
+    out = er.render_events_section(biz, occ, "grace", api_origin="https://api.test")
+    assert 'class="ev-embed"' in out and "Coming up" in out
+    assert "Harvest &lt;Supper&gt;" in out and "<Supper>" not in out
+    assert 'data-entry="e1"' in out and "/public/events/" in out
+    assert "Grill" in out and "Nursery" not in out, "a kids role never shows on a public page"
+    assert er.render_events_section(biz, [], "grace", api_origin="https://api.test") == ""
+    # The hosted page still carries the very same sign-up script.
+    page = er.render_events_page(biz, occ, "https://grace.mysolutionist.app/events", "grace",
+                                 api_origin="https://api.test")
+    assert er._rsvp_script("https://api.test", "grace") in page
+    assert er.EVENTS_MARKER == "<!--solutionist:events-->"
