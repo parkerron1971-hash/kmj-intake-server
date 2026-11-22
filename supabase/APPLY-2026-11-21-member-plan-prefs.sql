@@ -13,7 +13,10 @@
 -- signed-in member themselves.
 --   plan         the plan, named as member_plan_starts names it:
 --                "reading:<key>" (a reading plan or a topic plan) or
---                "devotional:<id>" (a church devotional)
+--                "devotional:<id>" (a church devotional). Like member_plan_starts
+--                it is a name, not a foreign key: deleting a devotional removes
+--                its rows here in the same step as its starts (devotionals.py),
+--                and the reminder sweep skips a devotional that isn't there
 --   group_id     the group they read it with; null = on their own. A group
 --                that is deleted lets the choice go (on delete set null)
 --   remind_at    the time of day to be reminded, on the church's clock, on a
