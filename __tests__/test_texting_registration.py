@@ -494,3 +494,14 @@ def test_who_can_send_is_a_switch():
         os.environ["TEXTING_REGISTRATION_OPEN"] = raw
         assert tr.is_open(BIZ) is expect, raw
     os.environ.pop("TEXTING_REGISTRATION_OPEN", None)
+
+
+def test_churches_opens_every_church_and_no_business(monkeypatch):
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", "churches")
+    assert tr.is_open(BIZ, church=True)
+    assert not tr.is_open(BIZ), "a business stays closed"
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", f"churches, {BIZ}")
+    assert tr.is_open(BIZ), "an id still opens its business"
+    assert tr.is_open("another-church", church=True)
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    assert not tr.is_open("another-church", church=True), "ids alone open only themselves"

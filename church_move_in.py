@@ -441,7 +441,7 @@ def _texting_live(biz_id: str) -> Dict[str, Any]:
     """Where the church's texting registration stands. Never raises: a
     registration that couldn't be read is status None (not known)."""
     import texting_registration as tr
-    open_ = tr.is_open(biz_id)
+    open_ = tr.is_open(biz_id, church=True)
     try:
         row = tr.registration(biz_id)
     except Exception:  # noqa: BLE001
@@ -1056,7 +1056,7 @@ def platform_move_ins(owner: AuthedUser = Depends(require_owner)):
 
     def total(bid: str) -> int:
         # Texting is on a church's list only where it shows there (_shows).
-        return len(ITEMS) - (0 if tr.is_open(bid) or bid in begun else 1)
+        return len(ITEMS) - (0 if tr.is_open(bid, church=True) or bid in begun else 1)
 
     return {"churches": [{"name": "A church", **b, "total": total(b["business_id"])} for b in by.values()]}
 
