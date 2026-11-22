@@ -805,7 +805,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 {meta}
-{mai.head_tags(biz)}
+{mai.head_tags(biz, theme)}
 <title>{_e(title)} — {_e(name)}</title>
 {fonts}
 <style>{css_vars(theme)}</style>
@@ -1543,8 +1543,9 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     # Installing the page as an app (member_app_install.py): the manifest,
     # icons, service worker and offline page need no sign-in.
     import member_app_install as mai
-    if sub in mai.ASSETS:
-        return mai.serve_asset(biz, site, sub)
+    if mai.is_asset(sub):
+        # Drawn off the event loop: an opening screen is a large picture.
+        return await asyncio.to_thread(mai.serve_asset, biz, site, sub)
     if sub == "/my/offline":
         return _page(mai.render_offline(biz, site))
     sess = await asyncio.to_thread(_session_for, request, church)
@@ -2699,6 +2700,10 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
         # (it wears the brand's); the brand's colour it would wear, and every
         # colour the brand kit has to pick from.
         **_colour_payload(biz, site),
+        # The app's icon and opening screen (member_app_icon, 2026-11-22):
+        # the church's choice or None (its initials), the name under the
+        # icon, and what the office's previews are drawn from.
+        **_icon_payload(biz, site),
         "pictures": len(portal_settings(biz.get("settings")).get("pictures") or {}),
         # Tabs your members see (member_app_ui.church_tabs, 2026-10-27): the
         # church's bar in order, every tab it can pick, and how many fit.
@@ -2717,6 +2722,12 @@ def _colour_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
             "brand_colours": ui.brand_colours(biz, theme),
             # The new look's highlight: the church's pick, or None (the app's gold).
             "app_highlight": ui.app_highlight(biz), "highlight_default": ui.FAMILY["gold"]["fill"]}
+
+
+def _icon_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]:
+    import member_app_icon as mic
+    import member_app_pictures as mapic
+    return mic.office_payload(biz, mapic.library(biz, site))
 
 
 def _fonts_payload(biz: Dict[str, Any], user: Optional[AuthedUser]) -> Dict[str, Any]:
@@ -2792,6 +2803,62 @@ def get_member_portal_config(business_id: str, user: AuthedUser = Depends(requir
     return _config_payload(biz, site, user)
 
 
+@router.post("/member-portal/{business_id}/app-icon")
+async def upload_app_icon(business_id: str, request: Request, user: AuthedUser = Depends(require_user)):
+    """Owner only. multipart {photo}: the church's own square icon for the
+    member app (member_app_icon.prepare_icon: a JPG, PNG or WebP under
+    12 MB, square, at least 1024 on a side), checked by the same small model
+    as the app's pictures, kept in the public business-assets bucket, and
+    saved as settings.member_portal.app_icon_upload. Choosing it (app_icon
+    source "upload") is the PATCH's. Answers the page's payload."""
+    import member_app_icon as mic
+    import member_app_pictures as mapic
+    import member_cache
+    import member_photos as ph
+    from business_sites_helpers import ensure_business_site
+    import rate_limit
+    biz = await asyncio.to_thread(_require_owner, business_id, user)
+    # The model check costs money: the same per-caller limit as the app's pictures.
+    if not rate_limit.allow_strict("member_action", f"{biz['id']}|app-icon|{user.id}"):
+        raise HTTPException(429, mapic.ERRORS["slow"])
+    try:
+        form = await request.form()
+    except Exception:
+        raise HTTPException(400, "That file didn't arrive. Please try again.")
+    upload = form.get("photo")
+    raw = await upload.read(mapic.MAX_BYTES + 1) if hasattr(upload, "read") else b""
+    try:
+        png = await asyncio.to_thread(mic.prepare_icon, raw)
+    except ph.PhotoError:
+        raise HTTPException(400, "Choose a square PNG, JPG or WebP, at least 1024 × 1024 and under 12 MB.")
+    try:
+        verdict = await ph.screen(biz["id"], png, policy=mapic.POLICY, question="Is this picture ok for the church's app?",
+                                  task="member_app_picture_screen")
+    except ph.ScreenUnavailable:
+        raise HTTPException(503, mapic.ERRORS["busy"])
+    if verdict != "ok":
+        raise HTTPException(400, mapic.ERRORS["no"])
+    url = await asyncio.to_thread(mic.store_icon, biz["id"], png)
+    if not url:
+        raise HTTPException(503, "That didn't save. Please try again.")
+    fresh = await asyncio.to_thread(sb_clients.sb_get_as_service,
+                                    f"/businesses?id=eq.{quote(str(business_id), safe='')}&select=settings&limit=1")
+    if not isinstance(fresh, list) or not fresh:
+        raise HTTPException(503, "That didn't save. Please try again.")
+    settings = dict(fresh[0].get("settings") or {})
+    cfg = dict(portal_settings(settings))
+    cfg["app_icon_upload"] = url
+    settings["member_portal"] = cfg
+    saved = await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                    f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
+    if not saved:
+        raise HTTPException(503, "That didn't save. Please try again.")
+    member_cache.forget_church(business_id)
+    biz = {**biz, "settings": settings}
+    site, _ = await asyncio.to_thread(ensure_business_site, biz)
+    return await asyncio.to_thread(_config_payload, biz, site, user)
+
+
 @router.post("/member-portal/{business_id}/preview")
 def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Owner only. Body: { contact_id, next?: "pictures" }. A one-time,
@@ -2830,6 +2897,9 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     colours?: "family"|"church", photo_editors?: [contact id],
     app_colour?: "#rrggbb" | "" | null (the app's own colour; ""/null: the brand's),
     app_highlight?: "#rrggbb" | "" | null (the new look's highlight; ""/null: the app's gold),
+    app_icon?: {source: "logo"|"upload", background: "colour"|"black"|"white"|"photo", photo?} | null
+               (member_app_icon; null: the initials icon again),
+    app_short_name?: str (the name under the icon, <= 12; "": the church's name, shortened),
     tabs?: [tab key] | null, fonts?: "a"|"b"|"c" }
     (the kinds are member_push.KINDS;
     tiles are checked by member_portal_church.clean_tiles; tabs by
@@ -2879,6 +2949,10 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     if "notifications" in body:
         import member_push
         switches = member_push.clean_switches(body.get("notifications"))
+    if "app_short_name" in body and not isinstance(body.get("app_short_name"), (str, type(None))):
+        raise HTTPException(400, "app_short_name must be text")
+    if "app_icon" in body and not (body.get("app_icon") is None or isinstance(body.get("app_icon"), dict)):
+        raise HTTPException(400, "app_icon must be a choice or null")
     fonts_key = None
     if "fonts" in body:
         import member_lumen_fonts
@@ -2892,10 +2966,25 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             raise HTTPException(400, "tabs must be a list of tabs")
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
+    icon_choice = None
+    if isinstance(body.get("app_icon"), dict):
+        import member_app_icon as mic
+        import member_app_pictures as mapic
+        icon_choice = mic.clean_choice(body["app_icon"], biz, mapic.library(biz, site))
+        if icon_choice is None:
+            raise HTTPException(400, "That icon can't be used. Add a logo in Brand Studio or upload a square icon, "
+                                     "and choose a background.")
+        icon_choice["ground"] = ""
+        if icon_choice["background"] == "photo":
+            raw = mic._bytes(icon_choice["photo"], str(biz["id"]), "save")
+            if not raw:
+                raise HTTPException(503, "That photo couldn't be read just now. Please try again, or choose another.")
+            icon_choice["ground"] = mic.photo_ground(raw)
+        icon_choice["at"] = datetime.now(timezone.utc).isoformat()
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
             or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None
             or "tabs" in body or fonts_key is not None or "app_colour" in body
-            or "app_highlight" in body):
+            or "app_highlight" in body or "app_icon" in body or "app_short_name" in body):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -2940,6 +3029,18 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                     cfg.pop(field, None)
         if fonts_key is not None:
             cfg["fonts"] = fonts_key
+        if "app_icon" in body:
+            if icon_choice is not None:
+                cfg["app_icon"] = icon_choice
+            else:
+                cfg.pop("app_icon", None)
+        if "app_short_name" in body:
+            import member_app_icon as mic
+            name = mic.clean_short(body.get("app_short_name"))
+            if name:
+                cfg["app_short_name"] = name
+            else:
+                cfg.pop("app_short_name", None)
         if "tabs" in body:
             # The directory is a tab only while the church has it on.
             if tab_keys is not None and "directory" in tab_keys:
