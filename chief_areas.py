@@ -304,7 +304,7 @@ def _read_scope(business_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     if not isinstance(areas, list):
         return None
     areas = [a for a in church_areas.AREA_ORDER if a in areas]
-    scope = {"areas": areas, "role": role, "lane": church_areas.lane_of(role, areas)}
+    scope = {"areas": areas, "role": role, "lane": church_areas.lane_of(role, areas, business_id)}
     # The giving tick: what the owner ticked on this login's sheet. With
     # "who gave" the login's Chief reads Giving & money whole; without it
     # the money verbs are let through to their own gates (the books, the

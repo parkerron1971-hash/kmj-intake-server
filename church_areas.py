@@ -405,11 +405,13 @@ LANES: Dict[str, Dict[str, Any]] = {
 
 def lanes_view(business_id: Any = None) -> List[Dict[str, Any]]:
     """The office's lanes; with a church, its own jobs after them
-    (church_job_defs: `custom` true), so an invite can carry one."""
+    (church_job_defs: `custom` true), so an invite can carry one. A church
+    that doesn't use the five starting jobs (church_job_defs.uses_presets)
+    gets its own jobs only."""
+    import church_job_defs as cj
     out = [{"key": k, "label": v["label"], "role": v["role"], "areas": v["areas"], "does": v["does"]}
-           for k, v in LANES.items()]
+           for k, v in LANES.items()] if not business_id or cj.uses_presets(business_id) else []
     if business_id:
-        import church_job_defs as cj
         out += [{"key": j["key"], "label": j["label"], "role": j["role"], "areas": j["areas"], "does": j["does"],
                  "custom": True} for j in cj.customs(business_id)]
     return out
@@ -417,8 +419,9 @@ def lanes_view(business_id: Any = None) -> List[Dict[str, Any]]:
 
 def lane(key: Any, business_id: Any = None) -> Dict[str, Any]:
     """One lane by its key, or with a church one of its own jobs; 400 for
-    any other."""
-    if isinstance(key, str) and key in LANES:
+    any other. With a church, a lane only when it uses the five starting jobs."""
+    import church_job_defs as cj
+    if isinstance(key, str) and key in LANES and (not business_id or cj.uses_presets(business_id)):
         return {"key": key, **LANES[key]}
     if isinstance(key, str) and business_id:
         import church_job_defs as cj
@@ -429,11 +432,16 @@ def lane(key: Any, business_id: Any = None) -> Dict[str, Any]:
     raise HTTPException(400, "Pick one of the office's lanes")
 
 
-def lane_of(role: Optional[str], areas: Optional[List[str]]) -> Optional[str]:
+def lane_of(role: Optional[str], areas: Optional[List[str]], business_id: Any = None) -> Optional[str]:
     """The lane a Manager-type login's picked areas are exactly, if any.
-    An admin keeps everything, so no lane names one."""
+    An admin keeps everything, so no lane names one. With a church that
+    doesn't use the five starting jobs, never one of them."""
     if role in KEEPS_ALL or not areas:
         return None
+    if business_id:
+        import church_job_defs as cj
+        if not cj.uses_presets(business_id):
+            return None
     for k, v in LANES.items():
         if v["areas"] and sorted(v["areas"]) == sorted(areas):
             return k
@@ -850,7 +858,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
                        "name": next((p["name"] for p in people.values() if email and p["email"] == email), ""),
                        "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g], **view,
                        "lane": (s.get("lane") if s.get("lane") in own_jobs else
-                                lane_of(s.get("role"), view["areas"]) if view["by"] == "picked" else None)})
+                                lane_of(s.get("role"), view["areas"], biz) if view["by"] == "picked" else None)})
     rank = {"admin": 0, "manager": 1, "member": 2, "viewer": 3}
     logins.sort(key=lambda x: (rank.get(x["role"], 9), (x["name"] or x["email"]).lower()))
 
@@ -982,7 +990,9 @@ def place_login(body: Dict[str, Any], request: Request = None,
     areas = body.get("areas")
     picked = None
     if body.get("lane") is not None:
-        picked = lane(body.get("lane"))
+        picked = lane(body.get("lane"), biz)
+        if picked.get("custom"):
+            raise HTTPException(400, "Pick the job from the person's sheet.")
         if picked["role"] != "manager":
             raise HTTPException(400, f"The {picked['label']}'s lane is an Admin login. Invite them as the "
                                      f"{picked['label']} from Logins & areas.")
@@ -1024,7 +1034,7 @@ def own_job(biz: Any, key: Any) -> bool:
 
 
 def lane_after(role: Optional[str], stored: Any, stored_areas: Any, *, areas: Any = KEEP, job: Any = KEEP,
-               own: bool = False) -> Optional[str]:
+               own: bool = False, business_id: Any = None) -> Optional[str]:
     """The job a login is left with by one write of set_login, worked out
     without writing (a person's sheet asks it first, to see what a change
     would give). A job named is the job. No job named (`job` None): the
@@ -1034,7 +1044,7 @@ def lane_after(role: Optional[str], stored: Any, stored_areas: Any, *, areas: An
     if job is not KEEP and job:
         return str(job)
     now = stored_areas if areas is KEEP else areas
-    spelled = lane_of(role, now if isinstance(now, list) else None)
+    spelled = lane_of(role, now if isinstance(now, list) else None, business_id)
     if job is KEEP and own:
         return str(stored)
     return spelled
@@ -1078,7 +1088,7 @@ def set_login(biz: str, uid: str, role: Optional[str], *, areas: Any = KEEP, job
         if not isinstance(got, list) or not got:
             raise HTTPException(503, "That didn't save. Try again.")
         fields["lane"] = lane_after(role, got[0].get("lane"), got[0].get("areas"), areas=areas, job=job,
-                                    own=own_job(biz, got[0].get("lane")))
+                                    own=own_job(biz, got[0].get("lane")), business_id=biz)
     if fields.get("role") == "viewer":
         # A Viewer login only Sees giving (church_money_ticks). Its tick is
         # lowered BEFORE the level, so moving it back up later never brings
