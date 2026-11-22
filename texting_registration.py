@@ -54,7 +54,9 @@ twilio_sms follows sms_numbers.account_sid for sending, webhooks and release.
 
   OPEN. TEXTING_REGISTRATION_OPEN: unset = nobody can send yet (our primary
   profile must be "ISV Reseller or Partner" first, ticket #29903903), `*` =
-  every business, or a comma list of business ids (the pilot).
+  every business, `churches` = every church (Kevin, 2026-11-22: "turn on for
+  every church"), or a comma list of business ids (the pilot). `churches` and
+  ids mix: `churches,<id>` is every church plus that one business.
 """
 from __future__ import annotations
 
@@ -599,12 +601,14 @@ def about_for(business_id: str, business: Optional[Dict[str, Any]] = None) -> Op
     return from_about(business_identity.get_identity(business_id, business))
 
 
-def is_open(business_id: str) -> bool:
-    """Whether this business can send its registration (see OPEN above)."""
+def is_open(business_id: str, *, church: bool = False) -> bool:
+    """Whether this business can send its registration (see OPEN above).
+    `church` says the business is a church, for the `churches` switch."""
     raw = (os.environ.get("TEXTING_REGISTRATION_OPEN") or "").strip()
     if raw == "*":
         return True
-    return str(business_id) in {x.strip() for x in raw.split(",") if x.strip()}
+    names = {x.strip() for x in raw.split(",") if x.strip()}
+    return (church and "churches" in names) or str(business_id) in names
 
 
 def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], origin: Optional[str],
@@ -711,7 +715,7 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
     status = (row or {}).get("status") or "not_started"
     checks = readiness(business, answers=answers, origin=origin, bookable=bookable,
                        ein_on_file=bool(ein) if ein_known else None)
-    open_ = is_open(bid)
+    open_ = is_open(bid, church=church)
     ready = all(c["ok"] is True for c in checks)
     twilio = (row or {}).get("twilio") or {}
     rejected = bool(twilio.get("rejected_after_review"))
