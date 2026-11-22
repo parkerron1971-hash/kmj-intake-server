@@ -95,7 +95,9 @@ def _who(business_id: str, user: AuthedUser) -> Tuple[Dict[str, Any], str]:
     if email and ids:
         people = sb_clients.sb_get_as_service(
             f"/contacts?business_id=eq.{_q(business_id)}&id=in.({','.join(_q(i) for i in ids)})&select=id,email")
-        for p in people if isinstance(people, list) else []:
+        if not isinstance(people, list):
+            raise HTTPException(503, "Pictures couldn't load just now. Please try again.")
+        for p in people:
             if str(p.get("email") or "").strip().lower() == email:
                 return biz, f"member:{p['id']}"
     raise HTTPException(403, "Only the owner and the people named to change pictures can change the app's pictures.")

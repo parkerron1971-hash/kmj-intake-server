@@ -62,6 +62,13 @@ def test_the_highlight_is_the_new_looks_gold_and_only_when_chosen(monkeypatch):
     assert ui.contrast(pal["gold_lit"], "#000000") >= 4.5                            # reads on black
     assert {k: v for k, v in pal.items() if not k.startswith("gold")} ==         {k: v for k, v in base.items() if not k.startswith("gold")}                   # nothing else moves
     assert ui.palette(hi, {}, "youth") == ui.palette(plain, {}, "youth")
+    # The golds written into the new look's sheets follow it too, and only when it's chosen.
+    assert ui.highlight_css(plain, "church", True) == "" and ui.highlight_css(hi, "church", False) == ""
+    assert ui.highlight_css(hi, "youth", True) == ""
+    extra = ui.highlight_css(hi, "church", True)
+    assert ".lm-page .lbl" in extra and ".lm-pl-streak" in extra and ".lm-pl-dots i.now" in extra
+    assert "body.lm.lm-dark:has(.lm-read)" in extra and "body.lm.lm-auto:has(.lm-read)" in extra
+    assert "#FFE1A6" not in extra and "#8A5A00" not in extra
 
 
 def test_brand_studio_the_website_and_flyers_keep_the_brand():
@@ -172,6 +179,11 @@ def test_the_owner_and_the_named_people_with_an_office_login_may(office):
     with pytest.raises(HTTPException) as e:                       # a login, not named
         mpo._who(BIZ, stranger)
     assert e.value.status_code == 403
+    office["contacts"] = None                                    # the records didn't load: try again, not "no"
+    with pytest.raises(HTTPException) as e:
+        mpo._who(BIZ, media)
+    assert e.value.status_code == 503
+    office["contacts"] = [{"id": ED, "email": "Media@Example.test"}]
     office["biz"] = _biz({"photo_editors": []})
     with pytest.raises(HTTPException) as e:
         mpo._who(BIZ, media)

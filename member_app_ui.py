@@ -2333,7 +2333,30 @@ def head(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *, d
             out += f"<style>{sg.css(biz, theme)}</style>"
         if lumen:
             import member_lumen_ui
-            out += f"<style>{member_lumen_ui.css()}</style>"
+            out += f"<style>{member_lumen_ui.css()}{highlight_css(biz, space, lumen)}</style>"
         return out
     links = "".join(f'<link rel="stylesheet" href="{sheet_url(n)}">' for n in _sheets_for(space, door, lumen))
-    return links + f"<style>{colours(biz, theme, space, door=door, lumen=lumen)}</style>"
+    return links + f"<style>{colours(biz, theme, space, door=door, lumen=lumen)}{highlight_css(biz, space, lumen)}</style>"
+
+
+def highlight_css(biz: Dict[str, Any], space: str = "church", lumen: bool = False) -> str:
+    """The new look's golds that are written into its sheets rather than
+    read from --gold (the verse of the day's label on its ivory page, a
+    plan's kicker, day dots and days in a row over its picture, the Bible
+    reader's night paper), in the church's highlight. '' when it hasn't
+    picked one, so a page without one is the same page."""
+    hi = app_highlight(biz) if lumen and space == "church" else None
+    if not hi:
+        return ""
+    h, _l, s = _hls(hi)
+    paper = _readable_on(hi, "#F7F0E1", False)
+    pale = _readable_on(_hex(h, 0.84, min(s, 0.9)), "#1a1a1a", True, 7)
+    night = _readable_on(hi, "#100E0B", True)
+    ring, ring_ok = _rgba(pale, 0.3), _rgba(pale, 0.45)
+    dark = (f"body.lm.lm-dark:has(.lm-read),body.lm.lm-dark:has(.lm-dd){{--gold:{night};--gold-ink:{night};"
+            f"--lm-gold:{night};--lm-gold-9:{_rgba(night, 0.15)};}}")
+    return (f"body.lm .lm-page .lbl{{color:{paper};}}"
+            f"body.lm .lm-pl-k,body.lm .lm-pl-streak,body.lm .lm-pp-tt small:first-child{{color:{pale};}}"
+            f"body.lm .lm-pl-dots i.now{{box-shadow:inset 0 0 0 1.5px {pale},0 0 0 3px {ring};}}"
+            f"body.lm .lm-pl-dots i.ok.now{{box-shadow:0 0 0 3px {ring_ok};}}"
+            + dark + "@media (prefers-color-scheme:dark){" + dark.replace(".lm-dark", ".lm-auto") + "}")
