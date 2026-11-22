@@ -618,7 +618,7 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
                open_: bool, rights: Optional[Dict[str, Any]] = None, *, title: str = "From the church",
                more: str = "All news", me: Optional[Dict[str, Any]] = None, site=None,
                new_n: Optional[int] = None, total: Optional[int] = None, extras: Optional[Dict[str, Any]] = None,
-               library: Optional[Dict[str, Any]] = None) -> str:
+               library: Optional[Dict[str, Any]] = None, newest: bool = True) -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
     never says "nothing yet"), except to someone who posts (`rights`,
@@ -630,13 +630,14 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
     church's pictures, `new_n` how many are new, `total` how many posts See
     all posts opens; Look 5.1: `extras` the member's groups' posts and
     prayer requests, member_feed_more.gather, and `library` Home's sermon
-    library, for the newest message)."""
+    library, for the newest message; `newest` False when Home draws the
+    newest message itself, among the church's own cards)."""
     import member_app_ui as ui
     import member_lumen
     if member_lumen.page():
         import member_lumen_feed
         return member_lumen_feed.home_feed(biz, site, posts, occ, open_, rights, me=me, new_n=new_n, total=total,
-                                           extras=extras, library=library)
+                                           extras=extras, library=library, newest=newest)
     if not posts:
         return home_first(biz, rights, heading=title) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]

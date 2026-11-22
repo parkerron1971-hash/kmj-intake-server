@@ -19,17 +19,18 @@ the service (a pass: I'll be there, Watch live where the church streams,
 streams() kept, Calendar where the office set the time), each of
 the member's groups' next gathering and the church's events this week, each
 with its own action (check-in on the day, someone new's Your path, the group
-RSVP, I'm coming, Sign up); the composer (Share a praise or a prayer); then
-the feed (the news block, member_portal_news.home_block) and the rest of Home
-below it: the asks to serve and the celebrations, Also for you (two picture
-tiles: the devotional, prayer, serving, the latest message, groups to join,
-and Meet the pastor for someone new: member_pastor), Coming up after this
-week, Today (the verse of the day on the ivory card, the reading plan or
-where they left off), the latest message, the church's own tiles, the groups
-not in This week, prayer, and installing the app, phone alerts and Ask the
-church at the foot. What's a tile isn't repeated. The Messages card is gone:
-the bubble at the top carries the count. (Look 4.1's Up next card became
-This week.)
+RSVP, I'm coming, Sign up); the asks to serve and the celebrations (each
+wants an answer); the composer (Share a praise or a prayer); then the feed
+(the news block, member_portal_news.home_block: the church's and the groups'
+posts) and, after it, the church's own cards (Kevin's Home plan, 2026-11-21:
+its newest message with Meet the pastor for someone new, Pick up where you
+left off and the member's class under it, its events after this week, the
+verse of the day: member_lumen_feed.church_cards), the church's own tiles,
+and "You're all caught up". Nothing below it: Also for you, Coming up,
+Today, the message tile, Your group, prayer and the foot cards are gone
+(installing the app is on Me, as are notifications and Ask the church). The
+Messages card is gone too: the bubble at the top carries the count. (Look
+4.1's Up next card became This week.)
 
 CONNECT (/my/connect), the people hub, "Look 5.1" (Kevin, 2026-11-20; the
 pieces are member_lumen_connect): your groups (each with its next gathering
@@ -75,28 +76,6 @@ def _answer(o: Dict[str, Any]) -> str:
 # ─── Home ────────────────────────────────────────────────────────────
 
 
-def coming_rows(occasions: Optional[List[Dict[str, Any]]], skip: Any = "", top: int = 3) -> str:
-    """What's next after This week, as rows: the date, what, where or their
-    answer. `skip`: an entry id, or a set of them, already shown above."""
-    import member_lumen_ui as lm
-    if isinstance(skip, str):
-        skips = {skip} if skip else set()
-    else:
-        skips = {str(s) for s in skip or ()}
-    rows = []
-    for o in occasions or []:
-        d = _day(o.get("date") or "")
-        if not d or str(o.get("entry_id")) in skips:
-            continue
-        answer = _answer(o)
-        sub = o.get("location") or o.get("date_label") or ""
-        tag = f'<span class="lm-wtag">{_e(answer)}</span>' if answer else ""
-        rows.append(lm.row("/my/events", lm.date_box(d), o.get("title") or "", sub, extra=tag))
-        if len(rows) == top:
-            break
-    return "".join(rows)
-
-
 def verse_page(bible: str) -> str:
     """The verse of the day on the ivory card; '' when none can be read."""
     import bible_text as bt
@@ -107,51 +86,6 @@ def verse_page(bible: str) -> str:
     return (f'<a class="lm-page" href="{_e(v["href"])}"><span class="lbl">Verse of the day</span><q>{v["html"]}</q>'
             f'<span class="ref"><span>{_e(v["label"])} · {_e(bt.TRANSLATIONS[bible]["short"])}</span>'
             f'<span>Read the chapter ›</span></span></a>')
-
-
-def reading_row(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
-    """Today's reading under the verse: the plan's ring, the chapters, and the
-    round button that marks it read (member_portal_reading's form)."""
-    import member_app_samples as samples
-    import member_app_ui as ui
-    import member_portal_reading as mpr
-    import reading_plans as rp
-    if not today:
-        return ""
-    day, of = int(today["day"]), max(1, int(today["of"]))
-    read = bool(done) and today["day"] in done
-    arc = round(119.4 * min(day, of) / of, 1)
-    ring = (f'<span class="lm-ring" aria-hidden="true"><svg viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" '
-            f'stroke="var(--s2)" stroke-width="3.5"/><circle cx="23" cy="23" r="19" fill="none" stroke="var(--gold)" '
-            f'stroke-width="3.5" stroke-linecap="round" stroke-dasharray="{arc} 120"/></svg><b>{day}</b></span>')
-    tag = ui.sample_tag() if samples.is_sample(today) else ""
-    own = mpr._own_key(today)
-    if read:
-        tick = f'<span class="lm-circle done" role="img" aria-label="Read today">{ui.icon("check", 18)}</span>'
-    else:
-        tick = (f'<form method="post" action="/my/reading"><input type="hidden" name="day" value="{day}">'
-                f'<input type="hidden" name="read" value="yes"><input type="hidden" name="back" value="/my">'
-                + (f'<input type="hidden" name="plan" value="{_e(own)}">' if own in rp.PLANS else "")
-                + f'<button class="lm-circle" type="submit" aria-label="Mark today&#x27;s reading as read">'
-                f'{ui.icon("check", 18)}</button></form>')
-    return (f'<div class="lm-prow"><a href="{_e(today["href"])}">{ring}<span style="flex:1;min-width:0">'
-            f'<span class="lm-kicker" style="color:var(--lm-gold)">Reading plan · day {day} of {of}{tag}</span>'
-            f'<b>{_e(today["label"])}</b><span class="m">{_e(today["title"])}</span></span></a>{tick}</div>')
-
-
-def continue_row(where: Optional[Tuple[str, int]], bible: str) -> str:
-    """With no plan running: keep reading where they stopped, or John 1."""
-    import bible_text as bt
-    import member_lumen_ui as lm
-    import member_portal_bible as mpb
-    code, ch = where if where else ("JOH", 1)
-    title = f"Keep reading {mpb.where_label(code, ch)}" if where else "Start with John 1"
-    sub = (f"Pick up where you stopped · {bt.TRANSLATIONS[bible]['short']}" if where
-           else "A good first book. About five minutes a chapter.")
-    kick = "Keep reading" if where else "Start here"
-    return (f'<a class="lm-prow" href="/my/bible/{bt.slug(code)}/{ch}">{lm.round_icon("book", "var(--lm-gold)")}'
-            f'<span style="flex:1;min-width:0"><span class="lm-kicker" style="color:var(--lm-gold)">{kick}</span>'
-            f'<b>{_e(title)}</b><span class="m">{_e(sub)}</span></span>{lm.ic("chevron", 18)}</a>')
 
 
 def message_tile(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, site=None, pool=None, used=None,
@@ -178,24 +112,6 @@ def message_tile(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, site=Non
             f'{hint}<a class="lm-tile" href="/my/sermons/{_e(s["id"])}"><span class="img">{mps._art(lib, s, pal, site, pool, used, yt="wide")}'
             f'<span class="lm-playdot">{lm.ic("playfill", 18)}</span>{ui.sample_tag() if sample else ""}</span>'
             f'<span class="tt" id="lm-msg-h">{_e(s.get("title"))}</span><span class="tm">{_e(sub)}</span></a></section>')
-
-
-def group_rows(groups: Optional[Dict[str, List[Dict[str, Any]]]], top: int = 2) -> str:
-    """Your group: the groups you're in, when they meet next."""
-    import member_app_ui as ui
-    import member_lumen_ui as lm
-    rows = []
-    for g in (groups or {}).get("mine", [])[:top]:
-        href = f"/my/groups/live/{g['live']['id']}" if g.get("live") else f"/my/groups/{g['id']}"
-        sub = ("Meeting now" if g.get("live") else
-               " · ".join(x for x in (g.get("meets") or "", g.get("location") or "") if x))
-        if g.get("role") == "leader" and not g.get("live"):
-            sub = " · ".join(x for x in ("You lead", sub) if x)
-        mini = f'<span class="lm-gmini" aria-hidden="true">{_e(ui.initials(g.get("name")))}</span>'
-        rows.append(lm.row(href, mini, g.get("name") or "", sub, cls="lm-pray" if not rows else "lm-wrow"))
-    if not rows:
-        return ""
-    return f'<section aria-labelledby="lm-grp-h">{lm.section("Your group" if len(rows) == 1 else "Your groups", hid="lm-grp-h")}{"".join(rows)}</section>'
 
 
 def prayer_row(title: str = "How can we pray for you?") -> str:
@@ -429,36 +345,37 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 klass: Optional[Dict[str, Any]] = None, streams: bool = False) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
-    the composer, then `news` (the feed, member_portal_news.home_block) and
-    the rest of Home below it.
+    the composer, then `news` (the feed, member_portal_news.home_block), the
+    church's own cards (member_lumen_feed.church_cards) and the end.
 
     `checkin` is the check-in card (member_portal_checkin.lumen_card) and
     `ck` what it was drawn from (church_checkin.card); `ck_err` a check-in
     that didn't go through (?ck=): the full card follows This week then.
     `serving` and `celebrate` are the asks to serve and the celebrations,
-    under the feed; `serving_info` My serving (sunday_serving.home); `devo`
+    above the composer; `serving_info` My serving (sunday_serving.home); `devo`
     today's devotional (member_portal_devotionals.home_extras' info);
     `gatherings` each of the member's groups' next gathering this week
     (next_gatherings; `gnext`, the first, when only it is given); `told_us`
     what a brand-new person told the church (told()); `pastor` the church's
-    pastor (member_pastor.who, for someone new: Meet the pastor); `posts`
+    pastor (member_pastor.who, for someone new: Meet the pastor, a row
+    among the church's cards); `klass` the class the member is in
+    (my_class); `streams` whether the church streams (streams()); `posts`
     Home's posts (church_news.home_view: a pastor's word for the moments)
     and `write` whether the member may write to its author
     (news_and_reply). `leaders` is what leaders' own moments are drawn
     from (member_moments.home_data; None before its tables are there, and
     then Home is as it was), `leaders_owner` the church owner's preview
-    (Take it down on anyone's moment). `cards` are the small cards at the foot (installing
-    the app, phone alerts, Ask the church), each '' to leave it out. `dark`
+    (Take it down on anyone's moment). `cards`, `devotional`, `plan_today`,
+    `plan_done` and `where` are no longer drawn (the older look's sections
+    left Home). `dark`
     draws it dark whatever the member's look (member_lumen_look decides it
     for every page; nothing in the app passes it)."""
     import member_app_photos as photos
-    import member_app_pictures as mapic
     import member_app_samples as samples
     import member_app_ui as ui
     import member_lumen_home as lh
     import member_lumen_share as msh
     import member_lumen_stories as mls
-    import member_lumen_ui as lm
     import member_photos as ph
     import member_portal_church as mpc
     import member_portal_messaging as mpm
@@ -467,10 +384,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_spaces as msp
     import sunday_serving as ssv
     from datetime import time as _time, timedelta
-    from member_portal import _shell, first_name, palette_for, portal_settings
+    from member_portal import _shell, first_name, portal_settings
     from public_form_theme import resolve_theme
-    from sermons_public import day_label
-    pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
     used: set = set()
     now = now or church_now(biz)
@@ -571,7 +486,6 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     # ── This week: the service, each group's next gathering, the church's events ──
     items: List[Tuple[Tuple[Any, ...], str]] = []
     week_eids: set = set()
-    week_gids: set = set()
     if svc:
         d, t = svc["day"], svc.get("time")
         firsts = new and first and first["day"] == d
@@ -609,7 +523,6 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             art, href=f"/my/groups/{g['id']}", day=d, kicker=_e(lh.when(d, t, now)[0]), title=g.get("name") or "",
             place=g.get("location") or (g.get("sched") or {}).get("meet_address") or "", count=cnt, action=main,
             pin=pin)))
-        week_gids.add(str(g["id"]))
     week_occ = []
     for o in occ:
         d = _day(o["date"])
@@ -827,91 +740,6 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
             if msh.event_shareable(biz, o) else ""))
     stories_html = mls.row(moments)
 
-    # Also for you: two picture tiles, by the day and the person.
-    shown: List[str] = []
-
-    def to_spot(key: str, href: str) -> str:
-        return f"/my/pictures/spot?key={quote(key, safe=':')}&amp;back=home" if edit else _e(href)
-
-    def t_devo() -> str:
-        if not devo or not (devo.get("st") or {}).get("now"):
-            return ""
-        d, st_, day = devo["dev"], devo["st"], devo.get("day") or {}
-        n, of = int(st_["now"]), max(1, int(st_["count"] or 1))
-        key = f"devotional:{d['id']}"
-        pic, lk = photos.choose(biz, key, pool, title=d.get("title") or "", look="church", used=used)
-        shown.append("devo")
-        return lh.tile(to_spot(key, devo["href"]), ui.picture(pic, lk, "word"), "book",
-                       f"Devotional · {devo.get('minutes') or 1} min", day.get("title") or d.get("title") or "",
-                       f"{d.get('title') or 'Devotional'} · day {n} of {of}" + (" · done" if n in st_.get("done", ()) else ""),
-                       day_leaf=n, progress=round(100 * n / of), pin=edit)
-
-    def t_prayer() -> str:
-        pic, lk = photos.choose(biz, "prayer", pool, words=mapic.PRAYER_WORDS, look="colour", used=used)
-        shown.append("prayer")
-        return lh.tile(to_spot("prayer", "/my/prayer"), ui.picture(pic, lk, "prayer"), "flame", "Prayer",
-                       "How can we pray for you?", "It goes privately to the pastors.", pin=edit)
-
-    def t_serving(today_only: bool) -> str:
-        for c in (serving_info or {}).get("coming") or []:
-            d = _day((c.get("service") or {}).get("day"))
-            if not d or (d != day0 if today_only else not 0 <= (d - day0).days < 7):
-                continue
-            import member_portal_serving as mpsv
-            at = (c.get("service") or {}).get("at")
-            t = lh.parse_hm(c.get("call_time")) or (at.time() if isinstance(at, datetime) else None)
-            key = f"group:{c['group_id']}" if c.get("group_id") else ""
-            pic, lk = (photos.choose(biz, key, pool, title=c.get("team") or "", look="colour", used=used) if key else ("", ""))
-            when_ = ("" if d == day0 else f"{d:%a} ") + (lh.hm(t) if t else "")
-            meta = ", ".join(x for x in (c.get("place") or "", f"with {mpsv._names(c['with'])}" if c.get("with") else "") if x)
-            return lh.tile(to_spot(key, "/my/serving") if key else "/my/serving", ui.picture(pic, lk, "serve"), "wave",
-                           f"Serving · {when_}".strip(" ·"), c.get("team") or "Serving", meta, pin=edit and bool(key))
-        return ""
-
-    def t_message() -> str:
-        if not library or not library.get("sermons"):
-            return ""
-        s = library["sermons"][0]
-        d = _day(s.get("preached_on") or "")
-        label = ("Today's message" if d == day0 else
-                 "Last Sunday" if d and 0 <= (day0 - d).days <= 7 and d.weekday() == 6 else "Latest message")
-        meta = " · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x) or day_label(s.get("preached_on"))
-        shown.append("message")
-        return lh.tile(f"/my/sermons/{_e(s['id'])}", mps._art(library, s, pal, site, pool, used, yt="wide"), "playfill",
-                       label,
-                       s.get("title") or "", meta, tag=ui.sample_tag() if samples.is_sample(s) else "")
-
-    def t_pastor() -> str:
-        # Meet the pastor (member_pastor): someone new, at a church with someone in the senior role.
-        if not pastor or not pastor.get("id"):
-            return ""
-        import member_pastor
-        return member_pastor.tile(biz, pastor, href=to_spot("pastor", "/my/pastor"), edit=edit)
-
-    def t_groups() -> str:
-        open_ = [g for g in (groups or {}).get("open") or [] if g.get("name")]
-        if not open_:
-            return ""
-        g = open_[0]
-        key = f"group:{g['id']}"
-        pic, lk = photos.choose(biz, key, pool, title=g.get("name") or "", look="colour", used=used)
-        return lh.tile(to_spot(key, "/my/groups"), ui.picture(pic, lk, "groups"), "people", "Find your people",
-                       "Groups to join", " · ".join(x["name"] for x in open_[:3]), pin=edit)
-
-    if new:
-        order = [t_groups, t_pastor, t_prayer, t_devo, t_message]
-    elif service and service["day"] == day0:
-        order = [lambda: t_serving(True), t_message, t_devo, t_prayer]
-    else:
-        order = [t_devo, t_prayer, lambda: t_serving(False), t_message]
-    tiles_html: List[str] = []
-    for fn in order:
-        if len(tiles_html) == 2:
-            break
-        got = fn()
-        if got:
-            tiles_html.append(got)
-
     # The greeting and its sentence (Look 4.1's, unchanged): it names the next
     # gathering, the church's next service, and where the member serves.
     name = first_name(me.get("name") or "")
@@ -923,31 +751,31 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     mine_pic = ph.src(me)
     face = f'<img src="{_e(mine_pic)}" alt="">' if mine_pic else _e(ui.initials(me.get("name")))
     tip = mmo.soft_card(can_post) if can_post else ""
-    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
-           f'{lh.composer(face)}')
-    # The rest of Home, below the feed: the asks to serve and the celebrations,
-    # Also for you, what's coming after this week, Today (the verse, the
-    # reading plan, the devotional unless it's a tile), the latest message
-    # unless it's a tile, the church's own tiles (when it saved some), the
-    # groups not in This week, prayer unless it's a tile, and the small cards
-    # at the foot.
+    # The asks to serve and the celebrations (each wants an answer) after
+    # This week, then the composer and the feed.
     under = "".join(x for x in (serving, celebrate) if x)
-    rows = coming_rows(occ, skip=week_eids)
-    coming = (f'<section aria-labelledby="lm-cu-h">{lm.section("Coming up", "/my/events", "All events", hid="lm-cu-h")}'
-              f'<div class="lm-list">{rows}</div></section>' if rows else "")
-    reading = reading_row(plan_today, plan_done) or continue_row(where, bible)
-    devo_row = devotional if "devo" not in shown else ""
-    today_html = (f'<section aria-labelledby="lm-today-h">{lm.section("Today", "/my/bible/plans", "Plans", hid="lm-today-h")}'
-                  f'{verse_page(bible)}{reading}{f"<div class=lm-today-more>{devo_row}</div>" if devo_row else ""}</section>')
-    message = "" if "message" in shown else message_tile(library, pal, site=site, pool=pool, used=used, today=day0)
+    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
+           f'{f"<div class=lm-cards>{under}</div>" if under else ""}{lh.composer(face)}')
+    # The feed (`news`: the church's and the groups' posts), then the
+    # church's own cards (Kevin's Home plan, 2026-11-21: its newest message,
+    # Pick up where you left off and the class, its events after this week,
+    # the verse of the day: member_lumen_feed.church_cards), the church's own
+    # tiles when it saved some, and "You're all caught up". Nothing below it:
+    # the older look's sections are gone (Also for you, Coming up, Today,
+    # the message tile, Your group, prayer, and the foot cards: installing
+    # the app is on Me, as are notifications and Ask the church).
+    import member_lumen_feed as mlf
+    shown_msgs = {str((p_.get("sermon") or {}).get("id") or "") for p_ in posts or []}
+    church_cards = mlf.church_cards(biz, site, me=me, library=library, occasions=occ, klass=klass, bible=bible,
+                                    today=day0, shown=shown_msgs, pool=pool, used=used,
+                                    label="New message" if mfm.message_of(library, day0) else "Latest message",
+                                    pastor=pastor if new else None)
     saved = mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles"))
     own_tiles = mpc.home_tiles(biz, site, pool, used, edit=edit) if saved else ""
-    rest_groups = {"mine": [g for g in (groups or {}).get("mine") or [] if str(g.get("id")) not in week_gids]}
-    prayer = "" if "prayer" in shown else prayer_row()
-    foot = "".join(c for c in cards if c)
-    body = (f'{top}{news}{f"<div class=lm-cards>{under}</div>" if under else ""}{lh.also(tiles_html)}{coming}'
-            f'{today_html}{message}{own_tiles}{group_rows(rest_groups)}{prayer}'
-            f'{f"<div class=lm-cards>{foot}</div>" if foot else ""}')
+    # "You're all caught up" ends the feed, unless the feed already said it
+    # (between what's new and what's been seen), or the news couldn't be read.
+    ending = posts is not None and 'class="lf-done"' not in news
+    body = f'{top}{news}{mlf.church_block(biz, church_cards, tiles=own_tiles, ending=ending)}'
     import member_portal_news as mpn
     import member_portal_celebrations as mcl
     script = (mpn.RX_JS if news or lead_love else "") + (mcl.STRIP_JS if celebrate else "")

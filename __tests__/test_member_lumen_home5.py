@@ -125,7 +125,8 @@ def test_share_only_on_the_churchs_own(church, fake, monkeypatch):  # noqa: F811
     html = _client(fake, monkeypatch).get("/my").text
     ids, slides = _moments(html)
     sv, gr, devo = slides[ids[1]], slides[ids[2]], slides[ids[0]]
-    assert "/my/share." not in html                                          # no share control: no sheet script
+    # The only share control on this Home is the verse of the day's (the feed's church cards).
+    assert re.findall(r'class="lm-share[^"]*"', html) == ['class="lm-share lf-vsh"']
     assert "lm-share" not in sv + gr + devo         # no public page: the service off the public events page, a
     assert "nw-rxf" not in sv + gr + devo           # group's gathering, a devotional; Love is a post's reaction only
     # The service on the public events page: shared as that event (contract 1, member_lumen_share).

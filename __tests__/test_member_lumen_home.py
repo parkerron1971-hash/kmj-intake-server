@@ -296,9 +296,9 @@ def test_the_sooner_event_is_featured_with_im_coming(church, fake, monkeypatch):
     assert cards.index(food) == 0                                            # tomorrow comes first
     assert '<p class="lm-wkk">Tomorrow · 9:00 AM</p>' in food and "<b>12</b> going" in food
     assert 'action="/my/rsvp"' in food and 'name="back" value="/my"' in food and "I&#x27;m coming" in food
-    coming = html[html.index('id="lm-cu-h"'):]
-    assert "Food Drive" not in coming[:coming.index("</section>")]           # not twice
-    assert "Prayer Night" in coming                                          # past this week: a row
+    church_cards = html[html.index('<section class="lm-feed lf-church"'):]
+    assert "Food Drive" not in church_cards                                  # not twice
+    assert 'aria-label="Event: Prayer Night"' in church_cards               # past this week: an event card
 
 
 def test_sunday_morning_carries_check_in(church, fake, monkeypatch):  # noqa: F811
@@ -356,8 +356,7 @@ def test_someone_new_sees_their_first_sunday(church, fake, monkeypatch):  # noqa
     up = _week(html)
     assert '<p class="lm-wkk">Your first Sunday · 10:30 AM</p>' in up and "Sunday Worship" in up
     assert '<a class="lm-wkb" href="/my/new">Your path</a>' in up
-    also = html[html.index('class="lm-also"'):]
-    assert "Find your people" in also and "Groups to join" in also and "Women of Grace" in also
+    assert 'class="lm-also"' not in html                                     # Also for you is gone (Connect has groups)
     # Someone who's been coming a while: not new.
     church["told"] = {"at": (EVENING - timedelta(days=1)).isoformat(), "first_time": False}
     for kept in (mim._TOLD, mim._NOT_YET):
@@ -368,7 +367,9 @@ def test_someone_new_sees_their_first_sunday(church, fake, monkeypatch):  # noqa
 # ─── Also for you ────────────────────────────────────────────────────
 
 
-def test_the_tiles_devotional_and_prayer(church, fake, monkeypatch):  # noqa: F811
+def test_also_for_you_and_today_are_gone(church, fake, monkeypatch):  # noqa: F811
+    # Kevin's Home plan (2026-11-21): the devotional is a moment, prayer a
+    # door, the verse a card in the feed, the plan in Bible.
     import devotionals as dv
     dev = {"id": "00000000-0000-4000-8000-0000000009d1", "title": "Rooted", "day_count": 21, "status": "published",
            "starts_on": TODAY - timedelta(days=3), "kind": ""}
@@ -380,19 +381,11 @@ def test_the_tiles_devotional_and_prayer(church, fake, monkeypatch):  # noqa: F8
         f"devotional:{dev['id']}": {"url": "https://example.org/trees.jpg", "look": "colour"},
         "prayer": {"url": "https://example.org/pray.jpg", "look": "colour"}}
     html = _client(fake, monkeypatch).get("/my").text
-    also = html[html.index('<section class="lm-also"'):]
-    also = also[:also.index("</section>")]
-    tiles = re.findall(r'<a class="lm-t4" href="([^"]+)">(.*?)</a>', also, re.S)
-    assert [h for h, _ in tiles] == [f"/my/bible/plans/{dev['id']}/4", "/my/prayer"]
-    devo, pray = tiles[0][1], tiles[1][1]
-    assert 'src="https://example.org/trees.jpg"' in devo and '<small>DAY</small><b>4</b>' in devo
-    assert "Devotional · 6 min" in devo and "Planted by the Water" in devo and "Rooted · day 4 of 21" in devo
-    assert '<i style="width:19%">' in devo                                   # the progress line
-    assert 'src="https://example.org/pray.jpg"' in pray and "How can we pray for you?" in pray
-    assert 'class="lm-bdg"' in devo and 'class="lm-bdg"' in pray
-    # Neither repeats below: no devotional row under Today, no prayer row.
-    rest = html[html.index('id="lm-today-h"'):]
-    assert "dv-trow" not in rest and 'class="lm-pray" href="/my/prayer"' not in rest
+    for gone in ('class="lm-also"', 'class="lm-t4"', 'id="lm-today-h"', 'id="lm-cu-h"', "dv-trow",
+                 'class="lm-pray" href="/my/prayer"', "How can we pray for you?"):
+        assert gone not in html, gone
+    assert f'data-mo="dv:{dev["id"]}:4"' in html                             # the devotional: a moment
+    assert 'class="lm-page lf-vod"' in html and "Verse of the day" in html   # the verse: a card in the feed
 
 
 def test_edit_mode_puts_change_on_every_picture(church, fake, monkeypatch):  # noqa: F811
@@ -402,8 +395,6 @@ def test_edit_mode_puts_change_on_every_picture(church, fake, monkeypatch):  # n
     assert "Changing pictures" in html
     up = _week(html)
     assert f'<a class="mb-pin" href="/my/pictures/spot?key=group:{tct.GROUP}&amp;back=home">' in up
-    also = html[html.index('<section class="lm-also"'):]
-    assert 'href="/my/pictures/spot?key=prayer&amp;back=home"' in also and 'class="mb-pin" aria-hidden="true"' in also
     # Not in edit mode: no Change anywhere.
     assert "mb-pin" not in _main(_client(fake, monkeypatch).get("/my").text)
 
@@ -436,16 +427,20 @@ def test_nothing_on_home_is_lost(church, fake, monkeypatch):  # noqa: F811
         "comment_count": 0}], 1))
     html = _client(fake, monkeypatch).get("/my").text
     main = _main(html)
-    news = 'class="lm-feed"' if 'class="lm-feed"' in main else 'id="nw-home-h"'   # the news block (the feed's own)
-    order = [main.index(s) for s in ('class="lm-brief"', 'class="lm-doors"', 'id="lm-wk-h"', 'class="lm-hcp"', news,
-                                     'class="lm-also"', 'id="lm-cu-h"', 'id="lm-today-h"', "Verse of the day",
-                                     "Food pantry", "Choir")]
+    # Kevin's Home plan (2026-11-21): the posts, then the church's own cards
+    # (the message, the events after this week, the verse), the church's own
+    # tiles, and "You're all caught up". Nothing below it.
+    order = [main.index(s) for s in ('class="lm-brief"', 'class="lm-doors"', 'id="lm-wk-h"', 'class="lm-hcp"',
+                                     '<section class="lm-feed"', "Food Drive Saturday",
+                                     '<section class="lm-feed lf-church"', 'id="msg-00000000-0000-4000-8000-000000000601"',
+                                     'aria-label="Event: Prayer Night"', "Verse of the day", "Food pantry",
+                                     "You&#x27;re all caught up")]
     assert order == sorted(order)
-    also = main[main.index('class="lm-also"'):main.index('id="lm-cu-h"')]
-    assert "Hope Has a Name" in also and "How can we pray for you?" in also  # the message and prayer are tiles
-    assert "Prayer Night" in main[main.index('id="lm-cu-h"'):]               # Coming up
-    assert ">Young Adults<" not in main[main.index('id="lm-today-h"'):]      # a group in This week isn't repeated
-    assert "Put Grace Fellowship on your home screen" in main or "Ask the church" in main   # the foot cards
+    end = main[main.index("You&#x27;re all caught up"):]
+    assert "<section" not in end and "<article" not in end and "lm-cards" not in end    # nothing below it
+    for gone in ('class="lm-also"', 'id="lm-cu-h"', 'id="lm-today-h"', 'id="lm-grp-h"', ">Choir<",
+                 "on your home screen", "Get notified"):
+        assert gone not in main, gone
 
 
 # ─── reads and the sheet ─────────────────────────────────────────────
