@@ -611,6 +611,11 @@ def delete_devotional(devotional_id: str, business_id: str, user: AuthedUser = D
     # plans they started on their own, and its Listen files, go now.
     sb_clients.sb_delete_as_service(
         f"/member_plan_starts?business_id=eq.{_q(biz)}&plan=eq.{_q('devotional:' + dev_id)}")
+    # And who they read it with and their reminder for it (member_plan_prefs:
+    # nothing there until its APPLY file runs; rows a failure leaves behind,
+    # the reminder sweep skips).
+    sb_clients.sb_delete_as_service(
+        f"/member_plan_prefs?business_id=eq.{_q(biz)}&plan=eq.{_q('devotional:' + dev_id)}")
     import devotional_voice as dv
     dv.forget(current)
     return {"ok": True}

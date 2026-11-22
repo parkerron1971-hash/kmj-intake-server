@@ -491,6 +491,17 @@ def shelf(mine: Optional[Dict[str, date]], church_today: Optional[Dict[str, Any]
             f'<div class="lm-pl-rail">{"".join(out)}</div></section>')
 
 
+def _together(biz: Dict[str, Any], me: Dict[str, Any], request: Any, c: Dict[str, Any]) -> str:
+    """The line under Continue: the group the member reads it with, and how
+    many of them do (member_plan_prefs; kept reads)."""
+    import member_plan_prefs as mpp
+    plan = f"devotional:{c['dev']['id']}" if c["kind"] == "devotional" else f"reading:{c['plan']['key']}"
+    got = mpp.choices(biz, me, request, plan)
+    if not got or not got[2]:
+        return ""
+    return mpp.together_line(biz, plan, got[2], mpp.reading_with(biz["id"], got[2]["id"], plan))
+
+
 # ─── the tab ─────────────────────────────────────────────────────────
 
 
@@ -538,12 +549,18 @@ async def tab(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any], *, ke
         except Exception:  # noqa: BLE001
             ticks = None
     pool = photos.photos(biz, site)
+    together = ""
+    if c and c["kind"] in ("devotional", "own") and not preview:
+        try:
+            together = await asyncio.to_thread(_together, biz, me, request, c)
+        except Exception:  # noqa: BLE001  (left out)
+            together = ""
     parts: List[str] = ['<h1 class="mp-sr">Plans</h1>']
     if mine is None:
         parts.append('<p class="mp-err lm-btabmsg" role="alert">Your plans couldn\'t load just now. Please try again in a '
                      'moment.</p>')
     if c:
-        parts.append(hero(biz, site, c, ticks=ticks, pool=pool, today=today))
+        parts.append(hero(biz, site, c, ticks=ticks, pool=pool, today=today) + together)
     if sts is not None and devs is not None and mine is not None:
         parts.append(covers(biz, site, sts, pool))
     parts.append(topics(mine, today))
@@ -612,7 +629,7 @@ def _day_row(key: str, n: int, plan: Optional[Dict[str, Any]], done: set, upto: 
 
 def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key: str,
                 started: Optional[date], done: Optional[set], *, tr: str = "kjv", preview: bool = False,
-                failed: bool = False, today: Optional[date] = None) -> str:
+                failed: bool = False, today: Optional[date] = None, prefs=None) -> str:
     """A reading plan's or a topic plan's page (screen 2). `started` None:
     not started; `done` the days read of this run (None: couldn't be read);
     `failed`: whether they started it couldn't be read."""
@@ -676,17 +693,27 @@ def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key
     body = (f'<a class="mb-back" href="/my/bible?tab=plans">{ui.icon("back", 16)}Plans</a>'
             f'{_cover(key, m, tr)}<p class="lm-pp-about">{_e(m["about"])}</p>'
             f'{mpr._flash(request)}' + (f'<div class="lm-pp-acts">{acts}</div>' if acts else "") + note
+            + _prefs_rows(biz, f"reading:{key}", prefs, started=bool(plan) and not failed)
             + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
             f'<ol class="lm-pp-days">{rows}</ol>{more}</section>{stop}')
     return _shell(biz, site, m["title"], body, tab="bible", who=me)
 
 
 def _own_flash(request: Any) -> str:
-    """The notices of this page's own forms (Start over; a day's form sent
-    for a day not open yet)."""
+    """The notices of this page's own forms (Start over, read with, remind;
+    a day's form sent for a day not open yet)."""
     import member_portal_reading as mpr
     q = request.query_params
-    return mpr._flash(request) if q.get("done") in ("over",) or q.get("err") == "day" else ""
+    return mpr._flash(request) if q.get("done") in ("over", "with", "remind", "remind_off") or q.get("err") == "day" else ""
+
+
+def _prefs_rows(biz: Dict[str, Any], plan: str, prefs, *, started: bool) -> str:
+    """Remind me and who you read with (member_plan_prefs); '' until its
+    table is there, or when a read failed."""
+    if not prefs:
+        return ""
+    import member_plan_prefs as mpp
+    return mpp.rows_html(biz, plan, prefs, started=started)
 
 
 def over(plan: str, words: str) -> str:
@@ -704,7 +731,7 @@ def _dev_minutes(dev: Dict[str, Any]) -> int:
 
 
 def render_devotional(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], dev: Dict[str, Any],
-                      st: Dict[str, Any], *, today: Optional[date] = None) -> str:
+                      st: Dict[str, Any], *, today: Optional[date] = None, prefs=None) -> str:
     """A church devotional's page (screen 2): its cover (the church's
     picture for it in the church's colour, or a cover of that colour), the
     church and what kind of devotional, how many days and about how long a
@@ -778,6 +805,7 @@ def render_devotional(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any
     page = (f'<a class="mb-back" href="/my/bible?tab=plans">{ui.icon("back", 16)}Plans</a>{top}'
             + (f'<div class="lm-pp-about">{about}</div>' if about else "")
             + (_own_flash(request) or mpc._flash(request)) + (f'<div class="lm-pp-acts">{acts}</div>' if acts else "") + note
+            + _prefs_rows(biz, f"devotional:{dev['id']}", prefs, started=k not in ("new", "upcoming"))
             + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
             f'<ol class="lm-pp-days">{"".join(rows)}</ol></section>')
     return _shell(biz, site, title, page, tab="bible", who=me)
@@ -825,7 +853,15 @@ async def plan_page(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any],
     done = None
     if plan:
         done = await asyncio.to_thread(read_days, bid, cid, plan, ver, preview)
-    html = render_plan(biz, site, request, me, key, started, done, tr=tr, preview=preview, failed=mine is None)
+    prefs = None
+    if mine is not None:
+        import member_plan_prefs as mpp
+        try:
+            prefs = await asyncio.to_thread(mpp.choices, biz, me, request, f"reading:{key}", preview=preview)
+        except Exception:  # noqa: BLE001  (the rows are left out)
+            prefs = None
+    html = render_plan(biz, site, request, me, key, started, done, tr=tr, preview=preview, failed=mine is None,
+                       prefs=prefs)
     return html, (503 if mine is None or (plan and done is None) else 200)
 
 
@@ -932,6 +968,25 @@ body.lm .lm-pp-over[open]>summary{background:var(--s1);}
 body.lm .lm-pp-over>p{margin:12px 0 0;font:500 13.5px/1.45 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-pp-over>form{margin:10px 0 0;}
 body.lm .lm-pp-over>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+body.lm .lm-pp-opt{display:flex;align-items:center;gap:10px;margin-top:16px;padding:12px 14px;border-radius:16px;background:var(--s1);}
+body.lm .lm-pp-optt{flex:1;min-width:0;display:grid;gap:2px;}
+body.lm .lm-pp-optt b{font:650 15px/1.25 var(--mb-ui);color:var(--fg);}
+body.lm .lm-pp-optt small{font:500 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
+body.lm .lm-pp-opt select{height:36px;max-width:112px;padding:0 8px;border:0;border-radius:10px;background:var(--bg);color:var(--fg);
+  box-shadow:inset 0 0 0 1px var(--lm-line);font:600 14px/1 var(--mb-ui);}
+body.lm .lm-pp-with{margin-top:14px;}
+body.lm .lm-pp-wk{margin:0;font:700 10.5px/1.3 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg2);}
+body.lm .lm-pp-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+body.lm .lm-pp-chips button{padding:8px 13px;border:0;border-radius:999px;background:none;box-shadow:inset 0 0 0 1px var(--lm-line);
+  color:var(--fg);font:650 13px/1 var(--mb-ui);cursor:pointer;}
+body.lm .lm-pp-chips button[aria-pressed=true]{background:var(--fg);color:var(--bg);box-shadow:none;}
+body.lm .lm-pp-chips button:focus-visible,body.lm .lm-pp-opt select:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+body.lm .lm-pl-tog{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px 14px;border-radius:16px;
+  box-shadow:inset 0 0 0 1px var(--lm-line);color:var(--fg);text-decoration:none;}
+body.lm .lm-pl-tog>.lm-ic{flex:none;color:var(--acc);}
+body.lm .lm-pl-tog span{display:grid;gap:2px;}
+body.lm .lm-pl-tog b{font:650 14px/1.3 var(--mb-ui);}
+body.lm .lm-pl-tog small{font:500 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-pp-fine{margin:12px 0 0;font:500 13px/1.4 var(--mb-ui);color:var(--fg2);}
 body.lm .lm-pp-fin{display:flex;align-items:center;gap:12px;margin-top:16px;padding:14px;border-radius:18px;background:var(--lm-tint);}
 body.lm .lm-pp-fin b{display:block;font:700 15px/1.25 var(--mb-ui);}

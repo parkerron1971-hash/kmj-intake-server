@@ -264,4 +264,7 @@ def _fresh_member_cache():
     _mlp = _sys.modules.get("member_lumen_plans")
     if _mlp is not None:
         _mlp.forget_everything()
+    _mpp = _sys.modules.get("member_plan_prefs")
+    if _mpp is not None:
+        _mpp.forget_everything()
     yield

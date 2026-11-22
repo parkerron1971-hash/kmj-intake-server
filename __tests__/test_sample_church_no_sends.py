@@ -176,6 +176,9 @@ TICKS = {
     "sample_follow_up": "lifecycle_emails:sample_follow_up_tick",
     "devotional_daily_texts": "devotional_daily:sweep_tick",
     "devotional_daily_morning": "devotional_daily:morning_tick",
+    # A member's own plan reminder (member_plan_prefs): a sample church is skipped
+    # (sample_church.skip) before any of its members is claimed or told.
+    "plan_reminders": "member_plan_prefs:remind_tick",
     "sample_church_cleanup": "sample_church:cleanup_tick",
     # Not business-scoped: the platform's own database readings and weekly
     # verdict; its church count already leaves samples out (is_sample).
