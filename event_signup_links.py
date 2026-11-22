@@ -5,7 +5,7 @@ up with a link if there don't have the church app. can we fix this issue?",
 then "yes to both" on the mock (artifact HmdpXJJNgzKefxW5qoAF5e) with its picks.
 
 Every Services & Events entry gets one link, https://<slug>.mysolutionist.app
-/e/<code>. Whoever opens it sees that one event and signs up with a name and a
+/e/<entry_id>.<code>. Whoever opens it sees that one event and signs up with a name and a
 phone number or an email, no app, no sign-in. The sign-up lands on the event as
 a normal signup with via "link", and earns serving hours only once the office
 says who it is (church_serving.event_credits).
@@ -15,8 +15,9 @@ _link = {n, at}; the code is the first 26 base32 characters of
 HMAC-SHA256(derive_key("event-signup-link", business), "<entry>|<n>"). Reading
 the entry (every seat can) gives the nonce, never the code; writing a nonce
 only makes a new link, which the server still hands only to office logins.
-Make a new link writes a new nonce, and the old code matches nothing. A code is
-checked against every live link of the church with hmac.compare_digest.
+Make a new link writes a new nonce, and the old code matches nothing. The
+entry id in the link isn't secret, the code is: one row is read by its id and
+its code compared with hmac.compare_digest.
 
     GET    /church/event-links/status?business_id=                    {enabled, can_change}
     GET    /church/event-links/{entry_id}?business_id=                the link (made if missing), its sign-ups
@@ -24,19 +25,24 @@ checked against every live link of the church with hmac.compare_digest.
     POST   /church/event-links/{entry_id}/signups/{sid}/confirm       {business_id, contact_id}
     POST   /church/event-links/{entry_id}/signups/{sid}/add           {business_id}: add to Members, then confirm
     DELETE /church/event-links/{entry_id}/signups/{sid}?business_id=  take the sign-up off
-    POST   /public/event-link/{slug}                                  {code, name, reach, role?, website?}
-    (page) https://<church host>/e/<code>                             public_site -> serve_page()
+    POST   /public/event-link                                         {code, name, reach, role?, website?}
+    (page) https://<church host>/e/<entry_id>.<code>                  public_site -> serve_page()
 
 WHO. The office routes: require_user, then event_volunteers._login (an office
 login of a church whose teams have owners, the church checked independently
 of RLS), then the switch, then the event is this church's. A Viewer reads a
 link already made and nothing else. The public routes are unauthenticated by
-design: the public RSVP's rate limit first, a honeypot, and every way of not
-taking sign-ups is the same 404.
+design: per-address rate limits first (the page and the sign-up), a honeypot,
+caps on how many sign-ups and emails an event and a church take in an hour
+(rate_limit.allow_strict, shared across replicas, and the event's own
+sign-ups), every way of not taking sign-ups the same 404, and the same answer
+whether or not someone was already on the list.
 
-THE SWITCH. EVENT_SIGNUP_LINKS = off | owner | on, owner when unset (the
+THE SWITCH. EVENT_SIGNUP_LINKS = off | owner | on, on when unset (every church:
+Kevin, 2026-11-22, "switch it on for everyone when it's done"; owner is the
 platform owner's own church, member_asks.platform_church, never by who is
-signed in), and only where EVENT_VOLUNTEERS is open (event_volunteers.open_for).
+signed in; off rolls back), and only where EVENT_VOLUNTEERS is open
+(event_volunteers.open_for).
 Only print(..., flush=True) reaches the logs, prefixed [event-links].
 """
 from __future__ import annotations
@@ -66,17 +72,21 @@ router = APIRouter(tags=["church"])
 SWITCH = "EVENT_SIGNUP_LINKS"
 PURPOSE = "event-signup-link"
 CODE_LEN = 26
-CODE_RE = re.compile(r"[a-z2-7]{26}")
+TOKEN_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([a-z2-7]{26})")
 NONCE_RE = re.compile(r"[0-9a-f]{32}")
 SID_RE = re.compile(r"[0-9a-f]{16}")
 PHONE_DIGITS = (7, 15)
 NAME_MAX = 120
 TRIES = 5
 MAX_HINTS = 25          # Members lookups one read of the sign-ups makes at most
+EVENT_HOURLY = 30       # link sign-ups one event takes in an hour
+EVENT_TOTAL = 500       # link sign-ups one event takes at all
+# A church's link sign-ups and confirmation emails an hour, and one address's
+# page reads a minute, are rate_limit buckets: event_link_church,
+# event_link_mail, event_link_page.
 
 NOT_TAKING = "This event isn't taking sign-ups."
 NOT_READY = "Sign-up links aren't ready here yet."
-KIDS = "Ask the office about this one."
 NO_NAME = "Please tell us your name."
 NO_REACH = "Add a phone number or an email so the church can reach you."
 BAD_EMAIL = "That email doesn't look right."
@@ -89,6 +99,11 @@ NOT_MEMBER = "They aren't on this church's Members."
 UNSAVED = "That didn't save. Try again."
 BUSY = "Someone else was saving this event at the same moment. Try again."
 ROLL_ONLY = "Adding people to Members is for People & care and the Office."
+CONFIRM_ONLY = "Saying who someone is belongs to People & care and the Office."
+CAPPED = "This event isn't taking more sign-ups right now. Contact the church."
+SLOW_DOWN = "Too many tries. Please wait a minute and try again."
+WARNING = {"private": "Anyone you send this link to can sign up, even for a church-only event.",
+           "invite": "Anyone you send this link to can sign up, even for an invite-only event."}
 
 
 def _log(msg: str) -> None:
@@ -116,7 +131,7 @@ def _rows(path: str) -> List[Dict[str, Any]]:
 # ─── the switch ──────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get(SWITCH) or "owner").strip().lower()
+    m = (os.environ.get(SWITCH) or "on").strip().lower()      # every church since 2026-11-22
     return m if m in ("off", "owner", "on") else "off"
 
 
@@ -170,41 +185,59 @@ def new_link() -> Dict[str, str]:
     return {"n": secrets.token_hex(16), "at": _now().isoformat()}
 
 
-def clean_code(raw: Any) -> Optional[str]:
-    s = str(raw or "").strip().lower()
-    return s if CODE_RE.fullmatch(s) else None
+def clean_token(raw: Any) -> Optional[Tuple[str, str]]:
+    """(entry_id, code) from "<entry_id>.<code>", or None for anything else."""
+    m = TOKEN_RE.fullmatch(str(raw or "").strip().lower())
+    return (m.group(1), m.group(2)) if m else None
 
 
-def link_url(slug: str, code: str) -> str:
+def token_for(business_id: str, entry_id: str, nonce: str, key: Optional[bytes] = None) -> str:
+    return f"{entry_id}.{code_for(business_id, entry_id, nonce, key)}"
+
+
+def link_url(slug: str, token: str) -> str:
     from business_sites_helpers import PUBLIC_DOMAIN
-    return f"https://{slug}.{PUBLIC_DOMAIN}/e/{code}"
+    return f"https://{slug}.{PUBLIC_DOMAIN}/e/{token}"
 
 
-def _modules(biz: str) -> Dict[str, Dict[str, Any]]:
-    return {str(m["id"]): m for m in _rows(
-        f"/custom_modules?business_id=eq.{_q(biz)}&archetype=eq.event_roster&is_active=eq.true"
-        "&select=id,archetype_params,is_active&limit=50")}
-
-
-def find_by_code(biz: str, code: str) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
-    """(entry, its room) whose live link is this code, or None. Every
-    candidate is compared in constant time, with no early exit."""
+def find_by_token(token: Tuple[str, str], biz: Optional[str] = None) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """(entry, its room) whose live link this is, or None. One row, read by
+    its id (and its church, when the host says which): the id isn't secret,
+    the code is, and it is compared with hmac.compare_digest."""
+    eid, code = token
+    rows = _rows(f"/module_entries?id=eq.{_q(eid)}" + (f"&business_id=eq.{_q(biz)}" if biz else "")
+                 + "&status=eq.active&select=id,business_id,module_id,status,data,updated_at&limit=1")
+    if not rows:
+        return None
+    e = rows[0]
+    owner = str(e.get("business_id") or "")
+    lk = link_of(e.get("data"))
+    if lk is None or not owner or (biz and owner != str(biz)):
+        return None
     try:
-        key = _key(biz)
+        key = _key(owner)
     except RuntimeError:
         return None
-    mods = _modules(biz)
-    hit = None
-    import events_rsvp_router as er
-    for mid in mods:
-        for e in _rows(f"/module_entries?business_id=eq.{_q(biz)}&module_id=eq.{_q(mid)}&status=eq.active"
-                       f"&select=id,module_id,status,data,updated_at&limit={er.MAX_ENTRIES_PER_MODULE}"):
-            lk = link_of(e.get("data"))
-            if lk is None:
-                continue
-            if hmac.compare_digest(code_for(biz, str(e["id"]), lk["n"], key), code) and hit is None:
-                hit = (e, mods[mid])
-    return hit
+    if not hmac.compare_digest(code_for(owner, eid, lk["n"], key), code):
+        return None
+    mods = _rows(f"/custom_modules?id=eq.{_q(e.get('module_id'))}&business_id=eq.{_q(owner)}"
+                 "&archetype=eq.event_roster&is_active=eq.true&select=id,archetype_params,is_active&limit=1")
+    return (e, mods[0]) if mods else None
+
+
+def church_row(business_id: Any) -> Optional[Dict[str, Any]]:
+    """The business, when it is a church (church_follow_up.is_church); None
+    otherwise. Links are a church's: another kind of site keeps its own /e/."""
+    try:
+        import sunday_planning as sp
+        biz = sp._uuid(business_id)
+    except HTTPException:
+        return None
+    rows = _rows(f"/businesses?id=eq.{_q(biz)}&select=id,name,type,settings&limit=1")
+    if not rows:
+        return None
+    import church_follow_up
+    return rows[0] if church_follow_up.is_church(rows[0]) else None
 
 
 # ─── reading and writing the event ───────────────────────────────────
@@ -271,9 +304,7 @@ def event_view(biz: str, e: Dict[str, Any], mod: Dict[str, Any], now: Optional[d
     roles = []
     for r in ent["roles"]:
         if er.kids_role(r):
-            roles.append({"id": str(r["id"]), "raw": r["id"], "label": _plain(r.get("label"), 80) or "A role",
-                          "kids": True})
-            continue
+            continue                    # never by link: a shared link is as good as public (spec 6.10)
         fill = er.role_fill(r, signups)
         roles.append({"id": str(r["id"]), "raw": r["id"], "label": _plain(fill["label"], 80) or "A role", "kids": False,
                       "needed": fill["needed"], "left": max(0, fill["needed"] - fill["filled"]),
@@ -290,28 +321,20 @@ def event_view(biz: str, e: Dict[str, Any], mod: Dict[str, Any], now: Optional[d
             "visibility": er.occasion_visibility(data)}
 
 
-def page_state(biz_id: Any, code_raw: Any) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """(the church, the event's view) for a link, the view None for every way
-    of not taking sign-ups, alike."""
-    try:
-        import sunday_planning as sp
-        biz = sp._uuid(biz_id)
-    except HTTPException:
-        return None, None
-    rows = _rows(f"/businesses?id=eq.{_q(biz)}&select=id,name,type,settings&limit=1")
-    church = rows[0] if rows else None
-    if church is None:
-        return None, None
-    code = clean_code(code_raw)
-    if code is None:
-        return church, None
+def page_state(church: Dict[str, Any], token_raw: Any) -> Optional[Dict[str, Any]]:
+    """The event's view for a link at this church, or None for every way of
+    not taking sign-ups, alike."""
+    biz = str(church["id"])
+    token = clean_token(token_raw)
+    if token is None:
+        return None
     import sample_church
     if sample_church.is_sample(biz) or not open_here(biz):
-        return church, None
-    hit = find_by_code(biz, code)
+        return None
+    hit = find_by_token(token, biz)
     if hit is None:
-        return church, None
-    return church, event_view(biz, hit[0], hit[1])
+        return None
+    return event_view(biz, hit[0], hit[1])
 
 
 # ─── the page (pure) ─────────────────────────────────────────────────
@@ -405,10 +428,6 @@ def render_closed(church: Optional[Dict[str, Any]], site: Optional[Dict[str, Any
 def _role_rows(view: Dict[str, Any]) -> Tuple[str, int]:
     rows, open_n = [], 0
     for r in view["roles"]:
-        if r["kids"]:
-            rows.append(f'<div class="sl-role sl-off"><span class="sl-label">{_e(r["label"])}</span>'
-                        f'<span class="sl-left">{_e(KIDS)}</span></div>')
-            continue
         if r["full"]:
             rows.append(f'<div class="sl-role sl-off"><span class="sl-label">{_e(r["label"])}</span>'
                         '<span class="sl-left">Full</span></div>')
@@ -426,7 +445,7 @@ def _role_rows(view: Dict[str, Any]) -> Tuple[str, int]:
 
 SCRIPT = """
 (function(){
-  var API = %(api)s, SLUG = %(slug)s, CODE = %(code)s, WHEN = %(when)s, PLACE = %(place)s;
+  var API = %(api)s, CODE = %(code)s, WHEN = %(when)s, PLACE = %(place)s;
   var form = document.getElementById('sl-form');
   if (!form) return;
   var msg = form.querySelector('.sl-msg'), go = form.querySelector('.sl-go');
@@ -441,7 +460,7 @@ SCRIPT = """
     if (!name) { say(%(no_name)s); return; }
     if (!reach) { say(%(no_reach)s); return; }
     go.disabled = true;
-    fetch(API + '/public/event-link/' + encodeURIComponent(SLUG), {
+    fetch(API + '/public/event-link', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({code: CODE, name: name, reach: reach, role: pick.value || undefined,
                             website: form.querySelector('[name=website]').value})
@@ -454,7 +473,7 @@ SCRIPT = """
           p.textContent = [res.j.role || pick.getAttribute('data-label') || 'Coming', res.j.when || WHEN, res.j.place || PLACE]
             .filter(function(x){ return x; }).join(' · ');
           done.appendChild(p);
-          if (res.j.emailed) { var m = document.createElement('p'); m.textContent = 'We sent the details to ' + reach + '.'; done.appendChild(m); }
+          if (reach.indexOf('@') > 0) { var m = document.createElement('p'); m.textContent = 'The details go to ' + reach + '.'; done.appendChild(m); }
           var n = document.createElement('p'); n.textContent = 'The church will be in touch if anything changes.'; done.appendChild(n);
           form.replaceWith(done); done.setAttribute('tabindex', '-1'); done.focus();
           return;
@@ -468,7 +487,7 @@ SCRIPT = """
 
 
 def render_page(church: Dict[str, Any], site: Optional[Dict[str, Any]], view: Dict[str, Any], code: str,
-                *, api_origin: str, slug: str) -> str:
+                *, api_origin: str) -> str:
     """The link's page: the one event, and the sign-up. Counts only, never
     anyone's name."""
     title = view["title"]
@@ -506,7 +525,7 @@ def render_page(church: Dict[str, Any], site: Optional[Dict[str, Any]], view: Di
         form = (f'<div class="sl-form"><fieldset><legend class="sl-ask">How would you like to help?</legend>{rows}'
                 '</fieldset><p class="sl-note">Everything is full just now. Ask the church if you would still '
                 'like to help.</p></div>')
-    script = SCRIPT % {"api": json.dumps(api_origin), "slug": json.dumps(slug), "code": json.dumps(code),
+    script = SCRIPT % {"api": json.dumps(api_origin), "code": json.dumps(code),
                        "when": json.dumps(view["when"]), "place": json.dumps(view["place"]),
                        "no_name": json.dumps(NO_NAME), "no_reach": json.dumps(NO_REACH)}
     script = script.replace("</", "<\\/")
@@ -515,19 +534,29 @@ def render_page(church: Dict[str, Any], site: Optional[Dict[str, Any]], view: Di
             f"{form}{FOOT}</main><script>{script}</script></body></html>")
 
 
-async def serve_page(biz_id: Any, slug: str, code_raw: Any, *, api_origin: str, headers: Dict[str, str]) -> HTMLResponse:
-    """GET https://<church host>/e/<code> (public_site routes it here)."""
-    church, view = await asyncio.to_thread(page_state, biz_id, code_raw)
-    site = None
-    if church is not None:
-        from public_form_theme import SITE_SELECT
-        got = await asyncio.to_thread(
-            _rows, f"/business_sites?business_id=eq.{_q(church['id'])}&status=eq.published&select={SITE_SELECT}&limit=1")
-        site = got[0] if got else None
+def render_slow(church: Dict[str, Any], site: Optional[Dict[str, Any]] = None) -> str:
+    head, theme = _head(_plain(church.get("name"), 120) or "Sign up", church, site)
+    return (f'{head}<body><main class="sl-shell">{_church_line(church, theme)}'
+            f'<h1 class="sl-title">{_e(SLOW_DOWN)}</h1>{FOOT}</main></body></html>')
+
+
+async def serve_page(church: Dict[str, Any], token_raw: Any, *, ip: str, api_origin: str,
+                     headers: Dict[str, str]) -> HTMLResponse:
+    """GET https://<church host>/e/<entry_id>.<code> (public_site routes it
+    here for a church). The address's own limit first, then one row."""
+    from public_form_theme import SITE_SELECT
     hdrs = {**headers, **PAGE_HEADERS}
+    import rate_limit
+    if not rate_limit.allow("event_link_page", ip or "unknown"):
+        return HTMLResponse(render_slow(church), status_code=429, media_type="text/html", headers=hdrs)
+    view = await asyncio.to_thread(page_state, church, token_raw)
+    got = await asyncio.to_thread(
+        _rows, f"/business_sites?business_id=eq.{_q(church['id'])}&status=eq.published&select={SITE_SELECT}&limit=1")
+    site = got[0] if got else None
     if view is None:
         return HTMLResponse(render_closed(church, site), status_code=404, media_type="text/html", headers=hdrs)
-    return HTMLResponse(render_page(church, site, view, clean_code(code_raw) or "", api_origin=api_origin, slug=slug),
+    token = clean_token(token_raw)
+    return HTMLResponse(render_page(church, site, view, f"{token[0]}.{token[1]}" if token else "", api_origin=api_origin),
                         media_type="text/html", headers=hdrs)
 
 
@@ -566,38 +595,53 @@ def _public_key(biz: str, eid: str, email: str) -> str:
     return hashlib.sha256(f"{biz}:{eid}:{email}".encode()).hexdigest()
 
 
-def _church_by_slug(slug: str) -> Optional[Dict[str, Any]]:
-    sites = _rows(f"/business_sites?slug=eq.{_q(slug)}&order=updated_at.desc&limit=1&select=business_id,slug")
-    if not sites:
-        return None
-    rows = _rows(f"/businesses?id=eq.{_q(sites[0]['business_id'])}&select=id,name,type,settings&limit=1")
-    return rows[0] if rows else None
+def _hour_ago() -> datetime:
+    return _now() - timedelta(hours=1)
 
 
-def signup(slug: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """The sign-up after the rate limit: checks, the write, and what the page
-    and the email say. Raises the plain words."""
+def _capped(signups: List[Dict[str, Any]]) -> bool:
+    """The event's own cap, from its own sign-ups (durable, every replica
+    reads the same): EVENT_HOURLY by link in the last hour, EVENT_TOTAL at all."""
+    mine = [s for s in signups if s.get("via") == "link"]
+    if len(mine) >= EVENT_TOTAL:
+        return True
+    since = _hour_ago()
+    recent = 0
+    for s in mine:
+        try:
+            at = datetime.fromisoformat(str(s.get("at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is not None and at >= since:
+            recent += 1
+    return recent >= EVENT_HOURLY
+
+
+def signup(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The sign-up after the address's limit: checks, the write, and what the
+    page and the email say. Raises the plain words. The answer is the same
+    whether this person was new or already on the list."""
     name = _plain(body.get("name"), NAME_MAX)
     if not name:
         raise HTTPException(400, NO_NAME)
     kind, reach = clean_reach(body.get("reach"))
     role_id = _plain(body.get("role"), 80) or None
-    code = clean_code(body.get("code"))
-    if code is None:
+    token = clean_token(body.get("code"))
+    if token is None:
         raise HTTPException(404, NOT_TAKING)
-    church = _church_by_slug(_plain(slug, 120))
-    if church is None:
-        raise HTTPException(404, NOT_TAKING)
-    biz = str(church["id"])
-    import sample_church
-    if sample_church.is_sample(biz) or not open_here(biz):
-        raise HTTPException(404, NOT_TAKING)
-    hit = find_by_code(biz, code)
+    # The church is the event's own: the code is keyed to it, so the host
+    # (a subdomain, the church's own domain) never has to say which.
+    hit = find_by_token(token)
     if hit is None:
         raise HTTPException(404, NOT_TAKING)
     entry, mod = hit
-    eid = str(entry["id"])
+    biz, eid = str(entry["business_id"]), str(entry["id"])
+    church = church_row(biz)
+    import sample_church
+    if church is None or sample_church.is_sample(biz) or not open_here(biz):
+        raise HTTPException(404, NOT_TAKING)
     import events_rsvp_router as er
+    import rate_limit
     sid = secrets.token_hex(8)
     key = _key(biz)
 
@@ -605,7 +649,7 @@ def signup(slug: str, body: Dict[str, Any]) -> Dict[str, Any]:
         # The event as it is now, through the same checks as the page.
         lk = link_of(data)
         if (lk is None or row.get("status") != "active"
-                or not hmac.compare_digest(code_for(biz, eid, lk["n"], key), code)):
+                or not hmac.compare_digest(code_for(biz, eid, lk["n"], key), token[1])):
             raise HTTPException(404, NOT_TAKING)
         view = event_view(biz, {**row, "data": data}, mod)
         if view is None:
@@ -614,11 +658,11 @@ def signup(slug: str, body: Dict[str, Any]) -> Dict[str, Any]:
         signups = er.read_signups(data, field)
         label, role = "Coming", None
         if role_id:
+            # A kids role is never on the page: posted anyway, it is a role
+            # that isn't there.
             role = next((r for r in view["roles"] if r["id"] == role_id), None)
             if role is None:
                 raise HTTPException(400, NO_ROLE)
-            if role["kids"]:
-                raise HTTPException(403, KIDS)
             if role["full"]:
                 raise HTTPException(409, FULL if view["full"] else f"{role['label']} just filled up.")
             label = role["label"]
@@ -626,6 +670,8 @@ def signup(slug: str, body: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(409, TAKES_SIGNUPS)
         elif view["full"]:
             raise HTTPException(409, FULL)
+        if _capped(signups):
+            raise HTTPException(429, CAPPED)
         said = {"role": label, "when": view["when"], "place": view["place"], "title": view["title"]}
         keys = data.get("_registration_keys") if isinstance(data.get("_registration_keys"), dict) else {}
         if any(s.get("via") == "link" and s.get(kind) == reach and (s.get("status") or "yes") == "yes"
@@ -637,16 +683,20 @@ def signup(slug: str, body: Dict[str, Any]) -> Dict[str, Any]:
         data[field] = (data.get(field) if isinstance(data.get(field), list) else []) + [new]
         return said
 
+    # The church's own hourly cap, shared across replicas (fail-closed).
+    if not rate_limit.allow_strict("event_link_church", biz):
+        raise HTTPException(429, CAPPED)
     try:
         _, said, _ = _change(biz, eid, write)
     except _Already as a:
-        return {"ok": True, **{k: a.said[k] for k in ("role", "when", "place")}, "emailed": False, "_mail": None}
+        # Already on the list: nothing written, no email, and the same answer.
+        return {"ok": True, **{k: a.said[k] for k in ("role", "when", "place")}, "_mail": None}
     mail = None
-    if kind == "email":
+    if kind == "email" and rate_limit.allow_strict("event_link_mail", biz):
         mail = {"biz": biz, "church": _plain(church.get("name"), 120), "to": reach, "name": name, "said": said,
                 "key": f"evlink-{eid}-{sid}"}
-    _log(f"signed up biz={biz[:8]} entry={eid[:8]} via=link role={'yes' if role_id else 'no'}")
-    return {"ok": True, **{k: said[k] for k in ("role", "when", "place")}, "emailed": mail is not None, "_mail": mail}
+    _log(f"signed up biz={biz[:8]} entry={eid[:8]} via=link role={'yes' if role_id else 'no'} mail={'yes' if mail else 'no'}")
+    return {"ok": True, **{k: said[k] for k in ("role", "when", "place")}, "_mail": mail}
 
 
 class _Already(Exception):
@@ -667,28 +717,44 @@ def email_words(m: Dict[str, Any]) -> Tuple[str, str]:
     return f"You're on the list for {s['title']}", body
 
 
+_TASKS: set = set()     # emails on their way: held, so none is collected half-sent
+
+
 def _mail(m: Dict[str, Any]) -> None:
     """Through the church's own sender (church_event_signups._send_email:
     send_via_resend from the church's name, its suppression list, the sample
     church's refusal), once: the idempotency key is the sign-up's."""
     import church_event_signups as ces
     subject, body = email_words(m)
-    ces._run(ces._send_email(m["biz"], m["to"], m["name"], subject, body, m["key"]))
+    coro = ces._send_email(m["biz"], m["to"], m["name"], subject, body, m["key"])
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    try:
+        if loop:
+            task = loop.create_task(coro)
+            _TASKS.add(task)
+            task.add_done_callback(_TASKS.discard)
+        else:
+            asyncio.run(coro)
+    except Exception as e:  # noqa: BLE001 — the sign-up stands without its email
+        _log(f"email not started: {e}")
 
 
-@router.post("/public/event-link/{slug}")
-async def public_signup(slug: str, body: Dict[str, Any], request: Request) -> Dict[str, Any]:
+@router.post("/public/event-link")
+async def public_signup(body: Dict[str, Any], request: Request) -> Dict[str, Any]:
     """Anonymous: one person signs up through an event's link."""
     # Rate limit FIRST, before any read or write: the public RSVP's own.
     import events_rsvp_router as er
     from rate_limit import trusted_client_ip
     if not er._check_rsvp_rate(trusted_client_ip(request)):
-        raise HTTPException(429, "Too many tries. Please wait a minute and try again.")
+        raise HTTPException(429, SLOW_DOWN)
     body = body if isinstance(body, dict) else {}
     if str(body.get("website") or "").strip():
         # The honeypot: the ordinary answer, nothing written or sent.
-        return {"ok": True, "role": "", "when": "", "place": "", "emailed": False}
-    out = await asyncio.to_thread(signup, slug, body)
+        return {"ok": True, "role": "", "when": "", "place": ""}
+    out = await asyncio.to_thread(signup, body)
     m = out.pop("_mail", None)
     if m:
         _mail(m)
@@ -704,6 +770,19 @@ def _office(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     if not open_here(me["biz"]):
         raise HTTPException(404, "Not Found")
     return me
+
+
+def _reads_roll(me: Dict[str, Any]) -> bool:
+    """Whether this login reads Members as the roll does (church_roll: a
+    Manager and up, its switch open, the People & care or Office areas): a
+    sign-up's phone, email and Members hint, and confirming who it is."""
+    if me["role"] not in ("owner", "admin", "manager"):
+        return False
+    try:
+        import church_roll as cr
+        return bool(cr.open_to(me["user"]) and cr._areas_ok(me["biz"], me["uid"], me["role"]))
+    except HTTPException:
+        return False                    # areas that couldn't be read: no
 
 
 def _writer(me: Dict[str, Any]) -> None:
@@ -762,11 +841,11 @@ def _maybe(biz: str, s: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 
 def link_signups(me: Dict[str, Any], ent: Dict[str, Any], mod: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The event's sign-ups by link, for the office. Phone and email only for
-    a login that isn't a Viewer."""
+    """The event's sign-ups by link, for the office. Phone, email and the
+    Members hint only for a login that reads Members (_reads_roll)."""
     import events_rsvp_router as er
     labels = {str(r.get("id")): _plain(r.get("label"), 80) for r in ent["roles"]}
-    reads = me["role"] != "viewer"
+    reads = _reads_roll(me)
     hints = MAX_HINTS
     out = []
     for s in er.read_signups(ent["data"], _signups_field(mod)):
@@ -801,7 +880,7 @@ def _link_out(me: Dict[str, Any], ent: Dict[str, Any], data: Dict[str, Any], slu
     url = None
     if lk and slug:
         try:
-            url = link_url(slug, code_for(me["biz"], ent["entry_id"], lk["n"]))
+            url = link_url(slug, token_for(me["biz"], ent["entry_id"], lk["n"]))
         except RuntimeError:
             raise HTTPException(503, NOT_READY)
     vis = er.occasion_visibility(data)
@@ -810,6 +889,8 @@ def _link_out(me: Dict[str, Any], ent: Dict[str, Any], data: Dict[str, Any], slu
         from business_sites_helpers import PUBLIC_DOMAIN
         page = f"https://{slug}.{PUBLIC_DOMAIN}/events?event={_q(ent['entry_id'])}"
     return {"enabled": True, "url": url, "made_at": lk["at"] if lk else None, "visibility": vis, "page_url": page,
+            # A church-only or invite event's link is as open as whoever it is sent to.
+            "warning": WARNING.get(vis),
             "can_change": me["role"] != "viewer",
             # Whether the link takes sign-ups now (the page's own rule).
             "taking": event_view(me["biz"], {"id": ent["entry_id"], "status": "active" if ent["active"] else "archived",
@@ -922,6 +1003,8 @@ def confirm(entry_id: str, sid: str, body: Dict[str, Any], user: AuthedUser = De
     body = body if isinstance(body, dict) else {}
     me = _office(body.get("business_id"), user)
     _writer(me)
+    if not _reads_roll(me):
+        raise HTTPException(403, CONFIRM_ONLY)
     ent = _entry(me, entry_id)
     mod = _module_of(me, ent)
     s = _sid(sid)
@@ -939,8 +1022,7 @@ def add_to_members(entry_id: str, sid: str, body: Dict[str, Any], user: AuthedUs
     _writer(me)
     import church_roll as cr
     import church_roll_edit as cre
-    if (not cre.open_to(user) or me["role"] not in ("owner", "admin", "manager")
-            or not cr._areas_ok(me["biz"], me["uid"], me["role"])):
+    if not cre.open_to(user) or not _reads_roll(me) or not cr._areas_ok(me["biz"], me["uid"], me["role"]):
         raise HTTPException(403, ROLL_ONLY)
     ent = _entry(me, entry_id)
     mod = _module_of(me, ent)

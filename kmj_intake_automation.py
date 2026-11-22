@@ -518,9 +518,9 @@ app.include_router(sunday_planning_router)
 # when. EVENT_VOLUNTEERS=off|owner|on (default owner). BEFORE public_site_router.
 from event_volunteers import router as event_volunteers_router
 app.include_router(event_volunteers_router)
-# An event's sign-up link (/church/event-links/*, POST /public/event-link/{slug};
+# An event's sign-up link (/church/event-links/*, POST /public/event-link;
 # the page itself is public_site's /e/<code>; event_signup_links.py,
-# docs/EVENT_SIGNUP_LINKS.md). EVENT_SIGNUP_LINKS=off|owner|on (default owner).
+# docs/EVENT_SIGNUP_LINKS.md). EVENT_SIGNUP_LINKS=off|owner|on (default on).
 # BEFORE public_site_router.
 from event_signup_links import router as event_signup_links_router
 app.include_router(event_signup_links_router)

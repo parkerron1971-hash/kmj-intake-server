@@ -24,6 +24,7 @@ will wire the helpers into every page footer.
 """
 
 import asyncio
+import contextvars
 import html as _html
 import inspect
 import json
@@ -6253,13 +6254,22 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str, *, query:
     )
 
 
-async def _serve_event_link(biz_id: Optional[str], slug: str, code: str) -> HTMLResponse:
-    """An event's sign-up link, https://<church host>/e/<code>
+# The visitor's address for the request being served (set by the site
+# entry points that have the request): the sign-up link's page limits by it.
+_VISITOR_IP: "contextvars.ContextVar[str]" = contextvars.ContextVar("public_site_visitor_ip", default="")
+
+
+async def _serve_event_link(biz_id: Optional[str], token: str) -> Optional[HTMLResponse]:
+    """An event's sign-up link, https://<church host>/e/<entry>.<code>
     (docs/EVENT_SIGNUP_LINKS.md): the one event and its sign-up, or the one
-    "not taking sign-ups" page (404) for every way it can't. Live state:
-    no-store, noindex, and the code never leaves in a Referer."""
+    "not taking sign-ups" page (404) for every way it can't. A church's only:
+    None for any other business, whose site keeps its own /e/ pages. Live
+    state: no-store, noindex, and the code never leaves in a Referer."""
     import event_signup_links
-    return await event_signup_links.serve_page(biz_id, slug, code, api_origin=_EMBED_ORIGIN,
+    church = await asyncio.to_thread(event_signup_links.church_row, biz_id)
+    if church is None:
+        return None
+    return await event_signup_links.serve_page(church, token, ip=_VISITOR_IP.get(), api_origin=_EMBED_ORIGIN,
                                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
@@ -7128,10 +7138,13 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
         site = sites[0]
         biz_id = site.get("business_id")
 
-        # An event's sign-up link (/e/<code>; event_signup_links.py). Before
-        # the offline and coming-soon checks: it is a sign-up, not the website.
+        # An event's sign-up link (/e/<entry>.<code>; event_signup_links.py),
+        # a church's only. Before the offline and coming-soon checks: it is a
+        # sign-up, not the website.
         if (path.rstrip("/") or "/").startswith("/e/"):
-            return await _serve_event_link(biz_id, slug, path.rstrip("/")[3:])
+            _link = await _serve_event_link(biz_id, path.rstrip("/")[3:])
+            if _link is not None:
+                return _link
 
         # Practitioner took the public site down to work on it. Editor
         # preview (/public/site/{slug}) is unaffected — only the public
@@ -7357,7 +7370,9 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
 
         # An event's sign-up link on the church's own domain too.
         if (path.rstrip("/") or "/").startswith("/e/"):
-            return await _serve_event_link(biz_id, slug, path.rstrip("/")[3:])
+            _link = await _serve_event_link(biz_id, path.rstrip("/")[3:])
+            if _link is not None:
+                return _link
 
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
@@ -7906,6 +7921,8 @@ async def _site_response_or_none(request: Request, *, charge_page_views: bool = 
     alone.
     """
     path = "/" + (request.url.path or "").lstrip("/")
+    import rate_limit
+    _VISITOR_IP.set(rate_limit.trusted_client_ip(request) or "")
     # ChurchSavvy's own domain is neither the platform nor a practitioner's
     # site: it answers with ChurchSavvy's website (churchsavvy_site.py).
     import churchsavvy_site
@@ -8396,6 +8413,8 @@ async def subdomain_catch_all(request: Request, path: str):
     # Normalize: FastAPI strips the leading slash from path:path, but the
     # downstream renderer expects /about, /services, etc.
     request_path = "/" + (path or "")
+    import rate_limit
+    _VISITOR_IP.set(rate_limit.trusted_client_ip(request) or "")
 
     # ChurchSavvy's own domain: its website, and nothing of a church's.
     import churchsavvy_site

@@ -215,6 +215,12 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # family's few tries and no more; reading an offer or a receipt is looser.
     "event_signup": (int(os.environ.get("RL_EVENT_SIGNUP_PER_10MIN", "12")), 600),
     "event_signup_read": (int(os.environ.get("RL_EVENT_SIGNUP_READ_PER_10MIN", "60")), 600),
+    # An event's sign-up link (event_signup_links.py): one address's page
+    # reads a minute; a church's link sign-ups and confirmation emails an
+    # hour (allow_strict: shared across replicas, fail-closed).
+    "event_link_page": (int(os.environ.get("RL_EVENT_LINK_PAGE_PER_MIN", "60")), 60),
+    "event_link_church": (int(os.environ.get("RL_EVENT_LINK_CHURCH_PER_HOUR", "100")), 3600),
+    "event_link_mail": (int(os.environ.get("RL_EVENT_LINK_MAIL_PER_HOUR", "60")), 3600),
     "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
     "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
     # Dev Desk relay: strict shared windows; screen cadence also uses a DB lock.

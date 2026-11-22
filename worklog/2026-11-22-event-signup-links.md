@@ -3,12 +3,11 @@ title: An event's sign-up link for people without the church app (server)
 date: 2026-11-22
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-22: "when the event is made there is no way for someone to sign up with a link if there don''t have the church app. can we fix this issue?", then "yes to both" on the mock https://claude.ai/artifact/HmdpXJJNgzKefxW5qoAF5e (its four picks), and earlier "yes to both" to an Events line on the Serving page and a field for an event''s helper time'
-status: in review
+status: in review (switch on for every church on merge)
 prs: ["kmj-intake-server (this PR, the server)", "solutionist-studio (the office's link card, by-link sign-ups, the Serving page's Events column and Helpers serve about: after this merges)"]
 migrations: []
 left_undone:
   - "The office app (FE PR): the Sign-up link card on the event page and in the saved note (Copy, QR code, Make a new link), the by-link badge with That's someone on Members / Add to Members / Remove, the Serving page's Events column, and Helpers serve about writing _serve_minutes"
-  - "Switch-on: EVENT_SIGNUP_LINKS defaults to owner (Kevin's own church); on for every church is its own call"
   - "Texts: no confirmation text; a phone typed on the page isn't consent to texts (spec 7, 9)"
 decisions:
   - "Kevin's four picks as in the mock: every non-kids role by link (the public page still honours open: false), hours only once the office confirms, a page and an email to confirm, the Serving page's Events and helper time"
@@ -19,6 +18,8 @@ decisions:
   - "Sign-ups by link carry sid, via link and the typed phone (E.164) or email; contact_id is never set from typed data. Confirm sets a person of this church; Add to Members goes through the roll's own add (a guest who found us at an event) behind the roll's gate"
   - "The email goes through church_event_signups._send_email (the church's sender) once, keyed evlink-{entry}-{sid}; Resend is a flat cost, nothing metered per send"
   - "church_serving.event_credits counts a link sign-up only with confirmed true; My serving gains event_minutes (the Serving page had events and event_minutes already)"
+  - "Review of #2069 (same PR): the link names its event (/e/<entry_id>.<code>), so one row is read and no church's history hides its newest events (the scan had PostgREST's 200 cap); the page has a per-address limit; a repeat answers exactly like a new sign-up; caps: 30 an event an hour, 500 an event, 100 a church an hour, 60 emails a church an hour (rate_limit.allow_strict, shared); phone, email, the Members hint and Confirm follow the roll's own read rule; kids roles never show on the page; a warning for church-only and invite links; /e/ claimed only for churches; the sign-up resolves the church from the event, so a domain-only church works; the email task is held until sent; the office routes' gate is a named import, which the ownership sweep follows"
+  - "Switch-on (same PR): Kevin, 2026-11-22, \"switch it on for everyone when it's done… this has to be done\": EVENT_SIGNUP_LINKS defaults to on; EVENT_SIGNUP_LINKS=off rolls back"
 related: [2026-11-21-event-volunteers.md, 2026-10-27-church-event-signups.md]
 ---
 Before building I read both repos' event-volunteers logs (the server's

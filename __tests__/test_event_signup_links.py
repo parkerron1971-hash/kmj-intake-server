@@ -26,8 +26,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -71,6 +73,9 @@ def links(church, monkeypatch):
     db = c.db
     monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", SECRET)
     monkeypatch.setenv("EVENT_SIGNUP_LINKS", "on")
+    monkeypatch.setenv("RATE_LIMIT_SHARED", "off")
+    import rate_limit
+    rate_limit._buckets.clear()
     db.t["business_sites"] = [{"id": "s1", "business_id": BIZ, "slug": SLUG, "status": "published",
                                "html_content": "", "site_config": {}, "updated_at": NOW.isoformat()}]
     db.t.setdefault("events", [])
@@ -104,6 +109,18 @@ def links(church, monkeypatch):
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
     db.patch = patch
+    # PostgREST's limit, which the fake database ignores.
+    plain_get = db.get
+
+    def get(path, **k):
+        got = plain_get(path, **k)
+        m = re.search(r"[?&]limit=(\d+)", path)
+        return got[:int(m.group(1))] if m and isinstance(got, list) else got
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    db.get = get
+    # Who reads Members as the roll does: the owner, an Admin and Laquesha.
+    import church_roll
+    monkeypatch.setattr(church_roll, "_areas_ok", lambda b, uid, role: role in ("owner", "admin") or uid == "u-laquesha")
     monkeypatch.setattr(sample_church, "is_sample", lambda b: False)
     er._rsvp_rate.clear()
     mails = []
@@ -134,17 +151,24 @@ def link(L, eid, who="owner"):
 
 
 def code_of(L, eid):
-    return link(L, eid)["url"].rsplit("/", 1)[1]
+    """The link's token, <entry_id>.<code>, as the office was given it."""
+    return link(L, eid)["url"].rsplit("/e/", 1)[1]
 
 
-def page(code, biz=BIZ):
-    got = asyncio.run(esl.serve_page(biz, SLUG, code, api_origin="https://api.test", headers={"Cache-Control": "no-store"}))
+def page(code, biz=BIZ, ip="203.0.113.7"):
+    church = esl.church_row(biz)
+    got = asyncio.run(esl.serve_page(church, code, ip=ip, api_origin="https://api.test",
+                                     headers={"Cache-Control": "no-store"}))
     return got.status_code, got.body.decode(), dict(got.headers)
 
 
 def sign(L, code, **kw):
     body = {"code": code, "name": "Dee Carter", "reach": "(616) 555-0142", **kw}
-    return L.client.post(f"/public/event-link/{SLUG}", json=body)
+    return L.client.post("/public/event-link", json=body)
+
+
+def mac_of(token):
+    return token.split(".", 1)[1]
 
 
 # ─── the code ────────────────────────────────────────────────────────
@@ -152,14 +176,16 @@ def sign(L, code, **kw):
 def test_a_link_is_a_long_keyed_code_never_stored(links):
     L = links
     out = link(L, E_PRIV)
-    assert out["url"].startswith(f"https://{SLUG}.mysolutionist.app/e/")
-    code = out["url"].rsplit("/", 1)[1]
-    assert esl.CODE_RE.fullmatch(code) and len(code) == 26, "130 bits, a-z2-7"
+    assert out["url"].startswith(f"https://{SLUG}.mysolutionist.app/e/{E_PRIV}.")
+    token = out["url"].rsplit("/e/", 1)[1]
+    assert esl.clean_token(token) == (E_PRIV, mac_of(token))
+    code = mac_of(token)
+    assert re.fullmatch(r"[a-z2-7]{26}", code), "130 bits, a-z2-7"
     data = row(L, E_PRIV)["data"]
     assert esl.link_of(data) and code not in json.dumps(data), "the row holds the nonce, never the code"
     assert code not in E_PRIV.replace("-", "")
     n = data["_link"]["n"]
-    other = code_of(L, E_INV)
+    other = mac_of(code_of(L, E_INV))
     assert other != code, "another event, another code"
     assert esl.code_for(BIZ, E_PRIV, n) == code
     os.environ["CUSTOMER_TOKEN_SECRET"] = "another-root"
@@ -180,15 +206,15 @@ def test_a_new_link_voids_the_old_one(links):
     assert page(old)[0] == 200
     r = L.as_("admin").post(f"/church/event-links/{E_PRIV}/new", json={"business_id": BIZ})
     assert r.status_code == 200, r.text
-    new = r.json()["url"].rsplit("/", 1)[1]
+    new = r.json()["url"].rsplit("/e/", 1)[1]
     assert new != old and r.json()["data"]["_link"] == row(L, E_PRIV)["data"]["_link"]
     assert page(old)[0] == 404 and sign(L, old).status_code == 404
     assert page(new)[0] == 200 and sign(L, new).status_code == 200
 
 
-def test_every_candidate_is_compared_in_constant_time(links, monkeypatch):
+def test_the_code_is_compared_in_constant_time(links, monkeypatch):
     L = links
-    codes = [code_of(L, e) for e in (E_PUB, E_PRIV, E_INV)]
+    token = code_of(L, E_PUB)
     seen = []
     real = hmac.compare_digest
 
@@ -196,23 +222,44 @@ def test_every_candidate_is_compared_in_constant_time(links, monkeypatch):
         seen.append((a, b))
         return real(a, b)
     monkeypatch.setattr(esl.hmac, "compare_digest", spy)
-    assert esl.find_by_code(BIZ, codes[0])[0]["id"] == E_PUB
-    assert len(seen) == 3 and {a for a, _ in seen} == set(codes), "every live link, no early exit"
+    assert esl.find_by_token(esl.clean_token(token))[0]["id"] == E_PUB
+    assert esl.find_by_token((E_PUB, "a" * 26)) is None
+    assert [b for _, b in seen] == [mac_of(token), "a" * 26], "every code through compare_digest"
+
+
+def test_one_row_is_read_however_many_events_the_church_has(links, monkeypatch):
+    """The link names its event: a church with years of events (more than one
+    read's 200) finds its newest one's link."""
+    L = links
+    token = code_of(L, E_PRIV)
+    older = [_entry(f"e8000000-0000-4000-8000-{n:012d}", {"title": f"Old {n}", "date": "2025-01-01T10:00",
+                                                          "_link": esl.new_link()}) for n in range(300)]
+    i = next(k for k, e in enumerate(L.db.t["module_entries"]) if e["id"] == E_PRIV)
+    L.db.t["module_entries"][i:i] = older            # 300 events ahead of it
+    reads = []
+    import sb_clients
+    plain = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p, **k: reads.append(p) or plain(p, **k))
+    assert page(token)[0] == 200 and sign(L, token).status_code == 200
+    entry_reads = [r for r in reads if r.startswith("/module_entries")]
+    assert entry_reads and all(f"id=eq.{E_PRIV}" in r for r in entry_reads), "only its own row"
 
 
 def test_a_wrong_code_is_the_same_404_as_a_missing_past_or_archived_event(links, monkeypatch):
     L = links
     code = code_of(L, E_PRIV)
-    wrong = ("a" * 26, "short", "A" * 30, "", code[:-1] + ("b" if code[-1] != "b" else "c"))
+    mac = mac_of(code)
+    wrong = (f"{E_PRIV}.{'a' * 26}", "short", "a" * 26, "", f"{E_PRIV}.{mac[:-1]}{'b' if mac[-1] != 'b' else 'c'}",
+             f"{E_INV}.{mac}", f"{E_THEIRS}.{mac}", f"e9999999-0000-4000-8000-000000000000.{mac}")
     pages = {page(w)[1] for w in wrong}
     statuses = {page(w)[0] for w in wrong}
     # The archived event, and a past one, with real links of their own.
     gone = row(L, E_GONE)
     gone["data"]["_link"] = esl.new_link()
-    gone_code = esl.code_for(BIZ, E_GONE, gone["data"]["_link"]["n"])
+    gone_code = esl.token_for(BIZ, E_GONE, gone["data"]["_link"]["n"])
     past = row(L, E_PAST)
     past["data"]["_link"] = esl.new_link()
-    past_code = esl.code_for(BIZ, E_PAST, past["data"]["_link"]["n"])
+    past_code = esl.token_for(BIZ, E_PAST, past["data"]["_link"]["n"])
     for c in (gone_code, past_code):
         s, html, _ = page(c)
         statuses.add(s)
@@ -285,14 +332,14 @@ def test_the_page_is_noindex_shows_counts_and_never_names(links):
 
 # ─── signing up ──────────────────────────────────────────────────────
 
-def test_a_kids_role_is_refused_whatever_is_posted(links):
+def test_a_kids_role_is_never_on_the_page_and_refused_whatever_is_posted(links):
     L = links
     code = code_of(L, E_PUB)
     s, html, _ = page(code)
-    assert esl._e(esl.KIDS) in html and 'value="cabin"' not in html, "shown, never offered"
+    assert "Cabin leaders" not in html and 'value="cabin"' not in html, "a shared link is as good as public"
     before = copy.deepcopy(row(L, E_PUB)["data"]["signups"])
     r = sign(L, code, role="cabin")
-    assert (r.status_code, r.json()["detail"]) == (403, esl.KIDS)
+    assert (r.status_code, r.json()["detail"]) == (400, esl.NO_ROLE), "the same as a role that isn't there"
     assert row(L, E_PUB)["data"]["signups"] == before and not L.mails
 
 
@@ -333,7 +380,7 @@ def test_a_sign_up_is_via_link_and_never_a_contact_from_what_was_typed(links):
     r = sign(L, code_of(L, E_PRIV), name="Ana Cruz", reach="Ana@Example.org", role="drive")
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "role": "Drivers", "when": "Thursday, November 5 · 6:30 PM",
-                        "place": "The hall", "emailed": True}
+                        "place": "The hall"}
     s = row(L, E_PRIV)["data"]["signups"][-1]
     assert s["via"] == "link" and s["email"] == "ana@example.org" and s["role"] == "drive"
     assert "contact_id" not in s and esl.SID_RE.fullmatch(s["sid"])
@@ -345,19 +392,26 @@ def test_a_sign_up_is_via_link_and_never_a_contact_from_what_was_typed(links):
 def test_the_email_goes_once_and_only_when_one_was_given(links):
     L = links
     code = code_of(L, E_PRIV)
-    assert sign(L, code, reach="dee@example.org", role="kitchen").status_code == 200
+    first = sign(L, code, reach="dee@example.org", role="drive")
     r = sign(L, code, reach="DEE@example.org", role="drive")
-    assert r.status_code == 200 and r.json()["emailed"] is False, "already on the list: the same answer"
-    assert len(row(L, E_PRIV)["data"]["signups"]) == 1, "nothing written twice"
-    assert len(L.mails) == 1
+    assert r.status_code == first.status_code == 200 and r.json() == first.json(), \
+        "already on the list: the same answer, so nobody learns who signed up"
+    import hashlib as _h
+    row(L, E_PRIV)["data"]["_registration_keys"] = {_h.sha256(f"{BIZ}:{E_PRIV}:sam@example.org".encode()).hexdigest(): True}
+    a = sign(L, code, reach="sam@example.org", role="drive", name="Sam Roe")
+    b = sign(L, code, reach="kim@example.org", role="drive", name="Kim Lo")
+    assert a.status_code == b.status_code and a.json() == b.json(), "a public registration reads the same as a new one"
+    assert len(row(L, E_PRIV)["data"]["signups"]) == 2, "Dee once, Kim; nothing written twice"
+    assert [m["to"] for m in L.mails] == ["dee@example.org", "kim@example.org"]
+    del row(L, E_PRIV)["data"]["_registration_keys"]
     m = L.mails[0]
     sid = row(L, E_PRIV)["data"]["signups"][0]["sid"]
     assert m["to"] == "dee@example.org" and m["key"] == f"evlink-{E_PRIV}-{sid}" and m["biz"] == BIZ
     subject, body = esl.email_words(m)
     assert subject == "You're on the list for Leaders dinner"
-    assert "Kitchen crew · Thursday, November 5 · 6:30 PM · The hall" in body and "Love City Church" in body
+    assert "Drivers · Thursday, November 5 · 6:30 PM · The hall" in body and "Love City Church" in body
     assert sign(L, code, reach="(616) 555-0142", name="Pat Doe").status_code == 200
-    assert len(L.mails) == 1, "a phone gets no email, and no text (spec 7)"
+    assert len(L.mails) == 2, "a phone gets no email, and no text (spec 7)"
 
 
 def test_the_church_sender_is_the_one_used(monkeypatch):
@@ -428,7 +482,9 @@ def test_the_switch_off_owner_and_on(links, monkeypatch):
     assert L.as_("owner").get(f"/church/event-links/{E_PRIV}", params={"business_id": BIZ}).status_code == 404
     assert L.as_("owner").get("/church/event-links/status", params={"business_id": BIZ}).json()["enabled"] is False
     monkeypatch.delenv("EVENT_SIGNUP_LINKS")
-    assert esl.mode() == "owner", "owner when unset"
+    assert esl.mode() == "on", "on when unset: every church (Kevin, 2026-11-22)"
+    assert page(code)[0] == 200
+    monkeypatch.setenv("EVENT_SIGNUP_LINKS", "owner")
     assert page(code)[0] == 404, "owner: not the platform owner's church"
     assert L.as_("owner").get("/church/event-links/status", params={"business_id": BIZ}).json()["enabled"] is False, \
         "owner means the church, never who is signed in"
@@ -451,7 +507,7 @@ def test_no_key_is_a_503_and_never_a_link(links, monkeypatch):
     r = L.as_("owner").get(f"/church/event-links/{E_PRIV}", params={"business_id": BIZ})
     assert (r.status_code, r.json()["detail"]) == (503, esl.NOT_READY)
     assert "_link" not in row(L, E_PRIV)["data"]
-    assert page("a" * 26)[0] == 404
+    assert page(f"{E_PRIV}.{'a' * 26}")[0] == 404
 
 
 # ─── the office ──────────────────────────────────────────────────────
@@ -490,7 +546,7 @@ def _signed(L, eid=E_PRIV, **kw):
     return row(L, eid)["data"]["signups"][-1]["sid"]
 
 
-def test_the_office_sees_link_sign_ups_with_reach_only_past_a_viewer(links):
+def test_the_office_sees_reach_only_where_it_reads_members(links):
     L = links
     next(p for p in L.db.t["contacts"] if p["id"] == ANA)["phone"] = "+16165550142"
     sid = _signed(L, name="Ana Cruz", role="kitchen")
@@ -498,8 +554,12 @@ def test_the_office_sees_link_sign_ups_with_reach_only_past_a_viewer(links):
     assert got == [{"sid": sid, "name": "Ana Cruz", "role_id": "kitchen", "role": "Kitchen crew",
                     "at": got[0]["at"], "confirmed": False, "phone": "+16165550142",
                     "maybe": {"contact_id": ANA, "name": "Ana Cruz"}}]
-    seen = link(L, E_PRIV, "viewer")["signups"][0]
-    assert "phone" not in seen and "maybe" not in seen and seen["name"] == "Ana Cruz"
+    for who in ("viewer", "shapretta"):
+        seen = link(L, E_PRIV, who)["signups"][0]
+        assert "phone" not in seen and "maybe" not in seen and seen["name"] == "Ana Cruz", who
+    r = L.as_("shapretta").post(f"/church/event-links/{E_PRIV}/signups/{sid}/confirm",
+                                json={"business_id": BIZ, "contact_id": ANA})
+    assert (r.status_code, r.json()["detail"]) == (403, esl.CONFIRM_ONLY), "confirming follows the same rule"
 
 
 def test_confirm_only_with_this_churchs_person(links):
@@ -591,7 +651,7 @@ def test_no_hours_until_the_office_confirms(hours, monkeypatch):
 def test_the_pages_speak_in_the_voice(links):
     import brand_voice
     L = links
-    for html in (page(code_of(L, E_PUB))[1], page("a" * 26)[1]):
+    for html in (page(code_of(L, E_PUB))[1], page(f"{E_PUB}.{'a' * 26}")[1]):
         assert not list(brand_voice.offenses(html))
         assert "GitHub" not in html and "Claude" not in html
 
@@ -612,15 +672,113 @@ def test_the_church_host_serves_the_link_even_with_the_site_offline(links, monke
     got = asyncio.run(serve)
     assert got.status_code == 200 and "Leaders dinner" in got.body.decode()
     assert got.headers["cache-control"].startswith("no-store") and got.headers["x-robots-tag"] == "noindex, nofollow"
-    wrong = (public_site._serve_site_by_slug(SLUG, "/e/" + "a" * 26) if door == "slug"
-             else public_site._serve_site_by_custom_domain("lovecity.org", "/e/" + "a" * 26))
+    bad = f"/e/{E_PRIV}.{'a' * 26}"
+    wrong = (public_site._serve_site_by_slug(SLUG, bad) if door == "slug"
+             else public_site._serve_site_by_custom_domain("lovecity.org", bad))
     assert asyncio.run(wrong).status_code == 404
+    # Another kind of business keeps its own /e/ pages: the link isn't claimed.
+    L.db.t["businesses"][0]["type"] = "coach"
+    other = (public_site._serve_site_by_slug(SLUG, f"/e/{code}") if door == "slug"
+             else public_site._serve_site_by_custom_domain("lovecity.org", f"/e/{code}"))
+    assert "Leaders dinner" not in asyncio.run(other).body.decode()
 
 
 def test_the_app_mounts_the_routes_before_the_catch_all():
     import kmj_intake_automation
     paths = [getattr(r, "path", "") for r in kmj_intake_automation.app.routes]
-    for p in ("/public/event-link/{slug}", "/church/event-links/status", "/church/event-links/{entry_id}",
+    for p in ("/public/event-link", "/church/event-links/status", "/church/event-links/{entry_id}",
               "/church/event-links/{entry_id}/signups/{sid}/confirm"):
         assert p in paths and paths.index(p) < paths.index("/{path:path}"), p
     assert paths.index("/church/event-links/status") < paths.index("/church/event-links/{entry_id}")
+
+
+# ─── the review's fixes ──────────────────────────────────────────────
+
+def test_the_page_has_its_own_limit_per_address(links, monkeypatch):
+    import rate_limit
+    L = links
+    token = code_of(L, E_PRIV)
+    monkeypatch.setitem(rate_limit._LIMITS, "event_link_page", (2, 60))
+    assert [page(token, ip="198.51.100.1")[0] for _ in range(3)] == [200, 200, 429]
+    assert page(token, ip="198.51.100.2")[0] == 200, "another address is its own"
+
+
+def test_an_event_takes_so_many_sign_ups_an_hour_and_at_all(links, monkeypatch):
+    L = links
+    token = code_of(L, E_PRIV)
+    now = datetime.now(timezone.utc)
+    sig = lambda n, at: {"sid": f"{n:016x}", "name": f"P {n}", "status": "yes", "via": "link",
+                         "email": f"p{n}@example.org", "at": at.isoformat()}
+    data = row(L, E_PRIV)["data"]
+    data["signups"] = [sig(n, now - timedelta(hours=2)) for n in range(40)]
+    monkeypatch.setattr(er, "_check_rsvp_rate", lambda ip: True)
+    assert sign(L, token, reach="new@example.org").status_code == 200, "older ones don't count this hour"
+    data = row(L, E_PRIV)["data"]
+    data["signups"] += [sig(100 + n, now - timedelta(minutes=5)) for n in range(esl.EVENT_HOURLY)]
+    r = sign(L, token, reach="late@example.org")
+    assert (r.status_code, r.json()["detail"]) == (429, esl.CAPPED) and not any(m["to"] == "late@example.org" for m in L.mails)
+    data["signups"] = [sig(n, now - timedelta(days=1)) for n in range(esl.EVENT_TOTAL)]
+    r = sign(L, token, reach="more@example.org")
+    assert (r.status_code, r.json()["detail"]) == (429, esl.CAPPED), "and so many at all"
+
+
+def test_a_church_takes_so_many_sign_ups_and_emails_an_hour(links, monkeypatch):
+    import rate_limit
+    L = links
+    monkeypatch.setitem(rate_limit._LIMITS, "event_link_church", (3, 3600))
+    monkeypatch.setitem(rate_limit._LIMITS, "event_link_mail", (1, 3600))
+    a, b = code_of(L, E_PRIV), code_of(L, E_INV)
+    assert sign(L, a, reach="one@example.org").status_code == 200
+    assert sign(L, b, reach="two@example.org").status_code == 200
+    assert [m["to"] for m in L.mails] == ["one@example.org"], "one email an hour here; the sign-up still stands"
+    assert sign(L, a, reach="three@example.org").status_code == 200
+    r = sign(L, b, reach="four@example.org")
+    assert (r.status_code, r.json()["detail"]) == (429, esl.CAPPED), "the church's cap, across its events"
+
+
+def test_the_sign_up_needs_no_slug_its_link_names_the_church(links):
+    """A church on its own domain with no subdomain row still takes sign-ups:
+    the church is the event's own."""
+    L = links
+    token = code_of(L, E_PRIV)
+    L.db.t["business_sites"] = []
+    assert sign(L, token).status_code == 200
+    s, html, _ = page(token)
+    assert "/public/event-link'" in html and SLUG not in html.split("<script>", 1)[1]
+
+
+def test_a_church_only_link_carries_a_warning(links):
+    L = links
+    assert link(L, E_PRIV)["warning"] == "Anyone you send this link to can sign up, even for a church-only event."
+    assert link(L, E_INV)["warning"] == "Anyone you send this link to can sign up, even for an invite-only event."
+    assert link(L, E_PUB)["warning"] is None
+
+
+def test_an_email_on_its_way_is_held_until_it_is_sent(monkeypatch):
+    import church_event_signups as ces
+    held = []
+
+    async def send(biz, to, name, subject, body, key):
+        held.append(len(esl._TASKS))
+    monkeypatch.setattr(ces, "_send_email", send)
+
+    async def go():
+        REAL_MAIL({"biz": BIZ, "church": "Love City Church", "to": "dee@example.org", "name": "Dee", "key": "k",
+                   "said": {"role": "Coming", "when": "Thursday", "place": "", "title": "Leaders dinner"}})
+        assert len(esl._TASKS) == 1, "kept, so it isn't collected half-sent"
+        await asyncio.sleep(0.01)
+    asyncio.run(go())
+    assert held == [1] and not esl._TASKS
+
+
+def test_another_churchs_link_never_opens_on_this_churchs_site(links):
+    L = links
+    theirs = row(L, E_THEIRS)
+    L.db.t["custom_modules"].append({"id": "57575757-5757-4575-8575-575757575757", "business_id": OTHER,
+                                     "archetype": "event_roster", "is_active": True, "archetype_params": {}})
+    theirs["module_id"] = "57575757-5757-4575-8575-575757575757"
+    theirs["data"]["_link"] = esl.new_link()
+    token = esl.token_for(OTHER, E_THEIRS, theirs["data"]["_link"]["n"])
+    assert esl.find_by_token(esl.clean_token(token))[0]["id"] == E_THEIRS, "a real link of theirs"
+    assert page(token, biz=BIZ)[0] == 404
+    assert esl.page_state(esl.church_row(BIZ), token) is None, "never under this church's name"

@@ -51,7 +51,7 @@ link is never stored anywhere:
 ```
 key  = customer_token.derive_key("event-signup-link", business_id)   # HKDF from CUSTOMER_TOKEN_SECRET
 code = base32(HMAC-SHA256(key, "<entry_id>|<n>")) lowercased, first 26 characters   (130 bits)
-link = https://<slug>.mysolutionist.app/e/<code>
+link = https://<slug>.mysolutionist.app/e/<entry_id>.<code>
 ```
 
 - **Unguessable**: 130 bits from a keyed hash.
@@ -62,10 +62,14 @@ link = https://<slug>.mysolutionist.app/e/<code>
 - **Every read validates it**: `n` must be exactly 32 lowercase hex characters
   and `at` a string; anything else is no link (the office's Get makes a fresh
   one).
-- **Checking a code**: the code's shape first (26 of `a-z2-7`, else a 404 with
-  no read). Then each active entry of the church's active events rooms that
-  carries a valid `_link` has its code worked out and compared with
-  `hmac.compare_digest`, every one of them, with no early exit.
+- **The entry id is in the link; the code is the secret.** Checking one: the
+  token's shape first (a lowercase UUID, a dot, 26 of `a-z2-7`, else a 404
+  with no read), then that one row (active, and the host's church when the
+  page is asked), its room (active, an events room), and its code worked out
+  and compared with `hmac.compare_digest`. One read whatever the church's
+  size: the first build scanned every event with PostgREST's 200-row cap,
+  so a church with a long history lost its newest events' links (review of
+  #2069).
 
 **Why the entry's data and not a server-only table.** Office logins read and
 write `module_entries` from the browser (every seat reads, Member and up
@@ -81,8 +85,9 @@ write: `APPLY-2026-07-31-seat-access-data-plane.sql`).
 - *Resurrect*: a stale browser save carrying an old `n` would bring a voided
   link back. Every office save of an event carries the row's `updated_at`
   (`event_roster/internal.tsx`), and `zz_module_revision` moves it on every
-  write, so a save made before "Make a new link" is refused. The office app
-  must keep `_link` byte for byte, like every other key.
+  write, so a save made before "Make a new link" is refused. **The office app
+  must keep the `updated_at` guard on every save of an event, and keep `_link`
+  byte for byte, like every other key.** Left as documented (review of #2069).
 - Rotating `CUSTOMER_TOKEN_SECRET` ends every link (and every booking link
   already). With it unset, the routes answer 503 "Sign-up links aren't ready
   here yet." and nothing breaks.
@@ -114,10 +119,12 @@ default 120). The office's "Helpers serve about" field writes 30 to 720.
 
 ## 4. The switch
 
-`EVENT_SIGNUP_LINKS = off | owner | on`, default **owner**: the platform
-owner's own church only (`member_asks.platform_church`, read from the church,
-never from who is signed in). It opens only where EVENT_VOLUNTEERS is open
-too (`event_volunteers.open_for`). A typo reads as off.
+`EVENT_SIGNUP_LINKS = off | owner | on`, default **on**: every church. Kevin,
+2026-11-22: "switch it on for everyone when it's done… this has to be done".
+`owner` is the platform owner's own church only (`member_asks.platform_church`,
+read from the church, never from who is signed in). It opens only where
+EVENT_VOLUNTEERS is open too (`event_volunteers.open_for`). A typo reads as
+off.
 
 - **It gates**: the link page and its sign-up, and every office route here.
   Closed, they are the same 404 as a wrong code; the status route says
@@ -130,28 +137,38 @@ too (`event_volunteers.open_for`). A typo reads as off.
 
 | who | get the link | make a new link | confirm, add to Members, remove a sign-up | see a sign-up's phone or email |
 |---|---|---|---|---|
-| Owner, Admin, Manager, office Member login (`event_volunteers._login`) | yes (made if missing) | yes | yes; Add to Members also needs the roll's own gate | yes |
+| Owner, Admin, Manager, office Member login (`event_volunteers._login`) | yes (made if missing) | yes | remove: yes. Confirm and Add to Members: only a login that reads Members (below) | only a login that reads Members |
 | Viewer | only one already made | no (403) | no (403) | no |
 | Member app, anyone else | no | no | no | no |
 | Whoever has the link | signs up | no | no | no (counts only, never names) |
 
-"Add to Members" goes through `church_roll_edit.add_people`, behind the roll's
-gate (`church_roll._areas_ok`, a Manager and up, CHURCH_ROLL_EDIT open), as a
-guest who found us at an event. Nothing automatic ever makes someone a member.
+"Reads Members" is the roll's own rule: a Manager and up, CHURCH_ROLL open,
+and `church_roll._areas_ok` (the owner and Admins, or the People & care or
+Office areas). Only such a login sees a sign-up's phone, email and Members
+hint, and may confirm who it is; anyone else sees the typed name only.
+"Add to Members" goes through `church_roll_edit.add_people`, behind the same
+rule and CHURCH_ROLL_EDIT, as a guest who found us at an event. Nothing
+automatic ever makes someone a member.
 
 ## 6. Rules
 
-### 6.1 The link's page: `GET https://<church host>/e/<code>`
+### 6.1 The link's page: `GET https://<church host>/e/<entry_id>.<code>`
 
 The church's subdomain and its own domain alike, served by `public_site`
 before the site's offline and coming-soon checks (it is a sign-up, not the
-website).
+website). Only for a church (`church_follow_up.is_church`): any other
+business's site keeps its own `/e/...` pages. One address may read link pages
+60 times a minute (`rate_limit` bucket `event_link_page`); past that, "Too
+many tries. Please wait a minute and try again." (429).
 
 - Shows: the church's name and logo, the flyer (`flyer_of`), the title, day
   and time on the church's clock, the place, then "How would you like to
-  help?": each role open by link with how many are still needed, or "Full";
-  a kids role reads "Ask the office about this one" with nothing to pick;
-  "Just coming". Then the name, "Phone or email", and Sign me up.
+  help?": each role open by link with how many are still needed, or "Full",
+  and "Just coming". Then the name, "Phone or email", and Sign me up.
+- **A kids role never shows** (the coordinator's call on review: a shared link
+  is as good as public, and 6.10 of the event volunteers spec says the public
+  never sees a kids role). Posted anyway, it is the same 400 as a role that
+  isn't there.
 - **Never another person's name.** Counts only.
 - The church's public theme (`public_form_theme`), phone-first, like `/events`.
 - `noindex, nofollow` (the meta tag and `X-Robots-Tag`), `Referrer-Policy:
@@ -165,10 +182,12 @@ website).
   it takes sign-ups (`church_event_signups.blocks_free_rsvp`: those go through
   the events page). Roles still work.
 
-### 6.2 Signing up: `POST /public/event-link/{slug}`
+### 6.2 Signing up: `POST /public/event-link`
 
-`{code, name, reach, role?, website?}`. The code is in the body, never the
-address, so it stays out of request logs.
+`{code, name, reach, role?, website?}`, `code` being `<entry_id>.<code>`. It
+is in the body, never the address, so it stays out of request logs. The
+church is the event's own (the code is keyed to it), so a church on its own
+domain with no subdomain row signs people up the same.
 
 1. The public RSVP's rate limit first (`events_rsvp_router._check_rsvp_rate`,
    10 a minute an address), before any read.
@@ -180,24 +199,36 @@ address, so it stays out of request logs.
    keeps its digits): "Add a phone number or an email so the church can
    reach you." / "That email doesn't look right." / "That phone number
    doesn't look right."
-4. The church from its slug; a sample church, a closed switch, a wrong code
-   and an event not taking sign-ups are all the same 404: "This event isn't
-   taking sign-ups."
-5. The role: unknown is a 400 "Pick one of the ways to help on the page.";
-   **a kids role is a 403 "Ask the office about this one."**, whatever was
-   posted; full is a 409 "{Role} just filled up." from the church's own data.
+4. The event from its id, its church from the row; not a church, a sample
+   church, a closed switch, a wrong code and an event not taking sign-ups are
+   all the same 404: "This event isn't taking sign-ups."
+5. The role: unknown, or a kids role, is a 400 "Pick one of the ways to help
+   on the page."; full is a 409 "{Role} just filled up." from the church's
+   own data.
    No role on an event that's full is a 409 "This event is full."; on one
    that takes sign-ups, a 409 "This event takes sign-ups on the church's
    events page."
-6. Already on the list (a link sign-up with the same phone or email, or the
-   public page's registration for that email): the same success, with
-   nothing written and no second email.
-7. The write: a read-modify-write of `data` as the server, guarded by
+6. **Caps**, past which: 429 "This event isn't taking more sign-ups right now.
+   Contact the church." and no email.
+   - an event: 30 link sign-ups an hour and 500 at all, counted from its own
+     `via: "link"` sign-ups and their `at` (durable: every replica reads the
+     same row);
+   - a church: 100 link sign-ups an hour across its events (`rate_limit`
+     bucket `event_link_church`, `allow_strict`: shared across replicas in
+     Postgres, fail-closed).
+7. Already on the list (a link sign-up with the same phone or email, or the
+   public page's registration for that email): nothing written, no second
+   email, and **the same answer as a new sign-up**, so nobody learns from the
+   page whether someone signed up. The checks above come first, so a full
+   role reads the same for everyone too.
+8. The write: a read-modify-write of `data` as the server, guarded by
    `updated_at`, tried five times.
-8. The email (section 7) when they gave one.
-9. The answer: `{ok, role, when, place, emailed}`; the page says "You're on
-   the list." with the role or "Coming", the day and time, the place, and
-   "We sent the details to {email}." when one went.
+9. The email (section 7) when they gave one, within the church's hourly
+   email cap (60, `rate_limit` bucket `event_link_mail`, shared).
+10. The answer: `{ok, role, when, place}`, the same for a new sign-up and a
+   repeat; the page says "You're on the list." with the role or "Coming", the
+   day and time, the place, and "The details go to {email}." when an email
+   was typed.
 
 ### 6.3 The office routes (`/church/event-links`)
 
@@ -211,16 +242,21 @@ parsed as UUIDs before they reach an address; every value is quoted.
 | method | path | does |
 |---|---|---|
 | GET | `/status?business_id=` | `{enabled}`: links are open here for this login |
-| GET | `/{entry_id}?business_id=` | the link (made if missing, unless a Viewer), `made_at`, `visibility`, `page_url` for a public event (`/events?event=<id>`), and the event's link sign-ups |
+| GET | `/{entry_id}?business_id=` | the link (made if missing, unless a Viewer), `made_at`, `visibility`, `page_url` for a public event (`/events?event=<id>`), `warning` for a church-only or invite event, `taking`, and the event's link sign-ups |
 | POST | `/{entry_id}/new` `{business_id}` | a new `n`: the old link stops working |
 | POST | `/{entry_id}/signups/{sid}/confirm` `{business_id, contact_id}` | set `contact_id` to a person on THIS church's Members (not merged away), and confirm it |
 | POST | `/{entry_id}/signups/{sid}/add` `{business_id}` | add them to Members (guest, found us at an event) through `church_roll_edit.add_people`, then confirm |
 | DELETE | `/{entry_id}/signups/{sid}?business_id=` | take this sign-up off the event |
 
 The sign-ups list: `{sid, name, role_id, role, at, confirmed, contact_id?}`;
-for a login that isn't a Viewer also `phone`/`email`, and, while
+for a login that reads Members (section 5) also `phone`/`email`, and, while
 unconfirmed, `maybe: {contact_id, name}` when that phone or email is already
-on Members (a hint for the office, never written).
+on Members (a hint for the office, never written, at most 25 lookups a read).
+
+`warning` (the coordinator's call on review): "Anyone you send this link to
+can sign up, even for a church-only event." ("…an invite-only event."), null
+for a public event. The office shows it on the link card. The office app
+never builds a link itself: it shows the `url` the server gives.
 
 Write answers carry the whole new `data` and `updated_at`, so the office
 saves on top of them.
@@ -248,13 +284,15 @@ serving gains `event_minutes` beside `events`.
 
 ## 7. Notices
 
-- **Email**: when they gave one, once, through the church's own sender
+- **Email**: when they gave one, once (and within the church's hourly cap),
+  through the church's own sender
   (`church_event_signups._send_email`: `send_via_resend` from the church's
   name and verified domain, with its suppression list and the sample church's
   refusal; Resend is a flat cost, nothing is metered per send). Idempotency
   key `evlink-{entry}-{sid}`. "You're on the list for {title}", the role, the
   day and time and the place, and "If anything changes, {church} will be in
-  touch."
+  touch." The send is a task held in a module set until it finishes, so it
+  is never collected half-sent.
 - **No text.** The only church texts to someone who didn't sign in go to a
   person who ticked "text me" on a paid sign-up, under that event's own
   consent. A phone typed on this page is not consent to texts, and adding a
