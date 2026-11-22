@@ -279,6 +279,7 @@ jobs:
           node __tests__/event_volunteers_db.mjs
           node __tests__/db_health_db.mjs
           node __tests__/ets_close_policies_db.mjs
+          node __tests__/member_plan_prefs_db.mjs
 
           node __tests__/gift_thankyou_events_db.mjs
 
