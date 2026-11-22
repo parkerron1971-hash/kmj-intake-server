@@ -514,22 +514,27 @@ def desk(counts: Optional[Dict[str, Any]], *, church: str, short: str, office: s
     and comments the check held (Review, in the office's News room:
     `office`), and, at a church with no news yet, Post the church's first
     news (/my/news/write). `counts` from member_portal_lumen.desk_counts
-    (None when it couldn't be read: only the first news); `quiet` no news
-    reaches Home yet. '' with nothing waiting."""
+    (None when it couldn't be read: no rows at all, not even the first news,
+    which the feed keeps then); `quiet` no news reaches Home yet. A count
+    that reached the read's window says "60+". '' with nothing waiting."""
+    if counts is None:
+        return ""
     rows = []
-    c = counts or {}
+    c = counts
     good = int(c.get("good") or 0)
     if good:
         came = _came(c.get("good_at") or "", now)
         when = ((f"It came in {came}." if good == 1 else f"The newest came in {came}.") if came else "")
         nudge = (f"Approve {'it' if good == 1 else 'them'} and {short}'s feed begins." if quiet else
                  f"Approve {'it' if good == 1 else 'them'} to post {'it' if good == 1 else 'them'}.")
-        title = f"{good} good news post{' is' if good == 1 else 's are'} waiting"
+        title = (f"{good}+ good news posts are waiting" if c.get("good_more") else
+                 f"{good} good news post{' is' if good == 1 else 's are'} waiting")
         rows.append((title, " ".join(x for x in (when, nudge) if x), office, "Review"))
     hc, hp = int(c.get("held_comments") or 0), int(c.get("held_posts") or 0)
     if hc or hp:
         bits = [f"{n} {word}{'' if n == 1 else 's'}" for n, word in ((hc, "comment"), (hp, "post")) if n]
-        title = " and ".join(bits) + (" is held" if hc + hp == 1 else " are held")
+        title = (" and ".join(bits) + (" is held" if hc + hp == 1 else " are held") if not c.get("held_more")
+                 else f"{hc + hp}+ comments and posts are held")
         rows.append((title, "The check held " + ("it" if hc + hp == 1 else "them") + " for a safety officer to read.",
                      office, "Review"))
     if first_news and not good:

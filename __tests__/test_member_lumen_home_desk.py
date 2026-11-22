@@ -116,6 +116,24 @@ def test_a_failed_read_leaves_the_counts_out_and_isnt_kept(owner, fake, monkeypa
     assert "<b>1 good news post is waiting</b>" in _desk(c.get("/my").text)
 
 
+def test_a_failed_read_keeps_the_first_news_in_the_feed(owner, fake, monkeypatch):  # noqa: F811
+    # The strip can't tell what waits: it says nothing, and the owner's way
+    # to post stays where it was, in the feed.
+    fake.t["church_posts"].clear()
+    fake.t.setdefault("church_news_posters", []).append({"business_id": tct.BIZ, "contact_id": tct.ANA})
+    fake.down.add("church_post_comments")
+    html = _client(fake, monkeypatch).get("/my").text
+    assert 'class="lm-desk"' not in html and html.count("Post the church&#x27;s first news") == 1
+
+
+def test_many_group_posts_never_crowd_out_the_good_news(owner, fake, monkeypatch):  # noqa: F811
+    for i in range(70):
+        fake.add("church_posts", id=tct.cid(2600 + i), business_id=tct.BIZ, source="member", status="waiting",
+                 group_id=tct.GROUP, removed_at=None, attach={}, created_at=_ago(minutes=i))
+    desk = _desk(_client(fake, monkeypatch).get("/my").text)
+    assert "<b>1 good news post is waiting</b>" in desk and "held" not in desk
+
+
 def test_old_good_news_and_nothing_waiting(owner, fake, monkeypatch):  # noqa: F811
     fake.t["church_posts"][0]["created_at"] = _ago(days=45)   # past the office list's 30 days
     assert 'class="lm-desk"' not in _client(fake, monkeypatch).get("/my").text
@@ -130,5 +148,8 @@ def test_the_words():
     assert "<b>3 good news posts are waiting</b>" in html and "The newest came in on Thursday." in html
     assert "Approve them to post them. Only you see this." in html
     assert "<b>1 comment is held</b>" in html and "The check held it for a safety officer to read.</p>" in html
-    assert lh.desk(None, church="x", short="x", office="o", now=now) == ""
+    assert lh.desk(None, church="x", short="x", office="o", now=now, first_news=True) == ""
+    many = lh.desk({"good": 60, "good_more": True, "good_at": "", "held_posts": 1, "held_comments": 59,
+                    "held_more": True}, church="x", short="x", office="o", now=now)
+    assert "<b>60+ good news posts are waiting</b>" in many and "<b>60+ comments and posts are held</b>" in many
     assert lh.desk({"good": 0, "held_posts": 0, "held_comments": 0}, church="x", short="x", office="o", now=now) == ""

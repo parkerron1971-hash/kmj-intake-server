@@ -291,6 +291,7 @@ def streams(biz: Dict[str, Any]) -> Optional[bool]:
 DESK_SECONDS = 60.0
 _DESK = None
 GOOD_DAYS = 30           # news_share's office list shows waiting good news this long
+DESK_MOST = 60           # each count is read up to this; at it, the strip says "60+"
 
 
 def is_owner(biz: Dict[str, Any], me: Dict[str, Any], preview_owner: bool = False) -> bool:
@@ -309,8 +310,10 @@ def desk_counts(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     you: good news members shared for the whole church, waiting to be posted
     (news_share, the last GOOD_DAYS days as its list shows them), members'
     group posts the check held (member_posts.held_posts), and comments the
-    check held (church_news). Two reads, kept DESK_SECONDS per church; None
-    when either failed (the counts are left out)."""
+    check held (church_news). Three small reads, each filtered in the query
+    with its own window of DESK_MOST (a count that reaches it is "60+": the
+    `*_more` flags), kept DESK_SECONDS per church; None when any failed (the
+    counts are left out)."""
     global _DESK
     import member_cache
     import sb_clients
@@ -324,22 +327,28 @@ def desk_counts(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if hit:
         return got
     b = quote(bid, safe="")
+    # A UTC "Z" time: a "+00:00" in the address would read as a space.
+    since = (datetime.now(timezone.utc) - timedelta(days=GOOD_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    member = f"/church_posts?business_id=eq.{b}&source=eq.member&status=eq.waiting&removed_at=is.null"
     try:
-        posts = sb_clients.sb_get_as_service(
-            f"/church_posts?business_id=eq.{b}&source=eq.member&status=eq.waiting&removed_at=is.null"
-            f"&select=id,group_id,attach,created_at&order=created_at.desc&limit=60")
+        good = sb_clients.sb_get_as_service(
+            f"{member}&group_id=is.null&created_at=gte.{since}&select=id,created_at&order=created_at.desc"
+            f"&limit={DESK_MOST}")
+        group = sb_clients.sb_get_as_service(
+            f"{member}&group_id=not.is.null&select=id,attach&order=created_at.desc&limit={DESK_MOST}")
         held = sb_clients.sb_get_as_service(
-            f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id&limit=60")
+            f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id&limit={DESK_MOST}")
     except Exception:  # noqa: BLE001 — the counts are left out
         logger.warning("home: the desk's counts skipped", exc_info=True)
         return None
-    if not isinstance(posts, list) or not isinstance(held, list):
+    if not isinstance(good, list) or not isinstance(group, list) or not isinstance(held, list):
         return None
-    since = (datetime.now(timezone.utc) - timedelta(days=GOOD_DAYS)).isoformat()
-    good = [r for r in posts if not r.get("group_id") and str(r.get("created_at") or "") >= since]
-    held_posts = [r for r in posts if r.get("group_id") and isinstance(r.get("attach"), dict) and r["attach"].get("held")]
-    out = {"good": len(good), "good_at": str(good[0].get("created_at") or "") if good else "",
-           "held_posts": len(held_posts), "held_comments": len(held)}
+    # A member's group post waits only while the check holds it (member_posts).
+    held_posts = [r for r in group if isinstance(r.get("attach"), dict) and r["attach"].get("held")]
+    out = {"good": len(good), "good_more": len(good) >= DESK_MOST,
+           "good_at": str(good[0].get("created_at") or "") if good else "",
+           "held_posts": len(held_posts), "held_comments": len(held),
+           "held_more": len(group) >= DESK_MOST or len(held) >= DESK_MOST}
     _DESK.put(bid, out, tag=bid)
     return out
 

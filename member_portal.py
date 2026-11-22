@@ -2248,8 +2248,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     news_posts, news_n = news if news else (None, 0)
     # No news reaches me yet: if I post, Home shows where it will go.
     rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
-    # The owner's way to post the first news moves into their desk strip.
-    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), None if home_owner else rights,
+    # The owner's way to post the first news moves into their desk strip
+    # (the feed keeps it when the strip's counts couldn't be read).
+    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), None if home_owner and desk is not None else rights,
                                **({"title": "What's happening", "more": "News", "me": me, "site": site,
                                    "new_n": news_n, "total": (feed_kw.get("count") or {}).get("n"),
                                    "extras": feed_more, "library": lib, "newest": False}
