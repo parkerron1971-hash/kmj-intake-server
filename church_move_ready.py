@@ -258,7 +258,7 @@ def _look(biz: Dict[str, Any]) -> Tuple[str, str]:
     kit = kit if isinstance(kit, dict) else {}
     assets = kit.get("assets") if isinstance(kit.get("assets"), dict) else {}
     logo = bool(kit.get("logo_url") or kit.get("logo") or assets.get("primary"))
-    colour = member_app_ui.brand_colour(biz, {})
+    colour = member_app_ui.brand_colour(biz, {}, app=False)
     if logo and colour:
         return READY, "The logo and the church colour are in, so the app and the giving page look like the church."
     if logo or colour:

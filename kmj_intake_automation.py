@@ -696,6 +696,11 @@ app.include_router(member_yt_pictures_router)
 # public_site_router.
 from member_app_pictures import router as member_app_pictures_router
 app.include_router(member_app_pictures_router)
+# The same pictures from the office (member_pictures_office.py): Settings →
+# Member page → Pictures, GET/POST /member-portal/{biz}/pictures, for the
+# same people, through the same save.
+from member_pictures_office import router as member_pictures_office_router
+app.include_router(member_pictures_office_router)
 # Meet the pastor (member_pastor.py): POST /my/pastor/note, the pastor's
 # welcome note, for the same people as the pictures. BEFORE public_site_router.
 from member_pastor import router as member_pastor_router

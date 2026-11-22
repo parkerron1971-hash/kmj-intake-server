@@ -180,7 +180,7 @@ def _colours(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, str]:
     import member_app_ui as ui
     try:
         from public_form_theme import resolve_theme
-        c = ui.brand_colour(biz, resolve_theme(biz, site) or {})
+        c = ui.brand_colour(biz, resolve_theme(biz, site) or {}, app=False)
     except Exception:
         c = None
     c = c or "#6d28d9"

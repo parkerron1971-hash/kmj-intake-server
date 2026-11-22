@@ -535,13 +535,13 @@ def _look(biz: Dict[str, Any], answers: Dict[str, Any], files: List[Dict[str, An
     steps = []
     said = _plain(answers.get("colour"))
     if said:
-        have = member_app_ui.brand_colour(biz, {})
+        have = member_app_ui.brand_colour(biz, {}, app=False)
         want = brand_dna.pref_color_to_hex(said)
         if have:
             steps.append(_step(THERE, f"The church colour is already set ({have})."))
         elif not want:
             steps.append(_step(CANT, "The church colour", f"“{said}” isn't a colour name or code that can be read."))
-        elif not member_app_ui.brand_colour({"settings": {"brand_kit": {"colors": {"primary": want}}}}, {}):
+        elif not member_app_ui.brand_colour({"settings": {"brand_kit": {"colors": {"primary": want}}}}, {}, app=False):
             steps.append(_step(CANT, "The church colour", f"“{said}” ({want}) is too close to black, white or grey "
                                                           "for the app to wear. Ask the church for a second colour."))
         else:

@@ -2694,6 +2694,11 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
         # can change the app's pictures (member_app_pictures).
         "colours": "church" if portal_settings(biz.get("settings")).get("colours") == "church" else "family",
         "photo_editors": _editors_of(biz),
+        # The app's own colour (Settings → Member page → App colour,
+        # 2026-11-22): the church's pick for the member app alone, or None
+        # (it wears the brand's); the brand's colour it would wear, and every
+        # colour the brand kit has to pick from.
+        **_colour_payload(biz, site),
         "pictures": len(portal_settings(biz.get("settings")).get("pictures") or {}),
         # Tabs your members see (member_app_ui.church_tabs, 2026-10-27): the
         # church's bar in order, every tab it can pick, and how many fit.
@@ -2702,6 +2707,16 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
         # pairing, the three to pick from, and whether the pick shows yet.
         **_fonts_payload(biz, user),
     }
+
+
+def _colour_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]:
+    import member_app_ui as ui
+    from public_form_theme import resolve_theme
+    theme = resolve_theme(biz, site) or {}
+    return {"app_colour": ui.app_colour(biz), "brand_colour": ui.brand_colour(biz, theme, app=False),
+            "brand_colours": ui.brand_colours(biz, theme),
+            # The new look's highlight: the church's pick, or None (the app's gold).
+            "app_highlight": ui.app_highlight(biz), "highlight_default": ui.FAMILY["gold"]["fill"]}
 
 
 def _fonts_payload(biz: Dict[str, Any], user: Optional[AuthedUser]) -> Dict[str, Any]:
@@ -2813,6 +2828,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
     tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "",
     colours?: "family"|"church", photo_editors?: [contact id],
+    app_colour?: "#rrggbb" | "" | null (the app's own colour; ""/null: the brand's),
+    app_highlight?: "#rrggbb" | "" | null (the new look's highlight; ""/null: the app's gold),
     tabs?: [tab key] | null, fonts?: "a"|"b"|"c" }
     (the kinds are member_push.KINDS;
     tiles are checked by member_portal_church.clean_tiles; tabs by
@@ -2845,6 +2862,13 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             raise HTTPException(400, "tiles must be a list")
     if "colours" in body and body.get("colours") not in ("family", "church"):
         raise HTTPException(400, "colours must be family or church")
+    for field in ("app_colour", "app_highlight"):
+        if body.get(field) not in ("", None):
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(body.get(field))):
+                raise HTTPException(400, f"{field} must be a colour like #d6336c")
+            if not ui.wears(body[field]):
+                raise HTTPException(400, "That colour is too close to black, white or grey for the app to wear. "
+                                         "Choose one with more colour in it.")
     editors_list = None
     if "photo_editors" in body:
         import member_app_pictures as mapic
@@ -2870,7 +2894,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     site, _ = ensure_business_site(biz)
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
             or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None
-            or "tabs" in body or fonts_key is not None):
+            or "tabs" in body or fonts_key is not None or "app_colour" in body
+            or "app_highlight" in body):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -2907,6 +2932,12 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["colours"] = body["colours"]
         if editors_list is not None:
             cfg["photo_editors"] = editors_list
+        for field in ("app_colour", "app_highlight"):
+            if field in body:
+                if body.get(field):
+                    cfg[field] = str(body[field]).lower()
+                else:
+                    cfg.pop(field, None)
         if fonts_key is not None:
             cfg["fonts"] = fonts_key
         if "tabs" in body:

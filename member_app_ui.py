@@ -359,18 +359,58 @@ def base_of(biz: Dict[str, Any]) -> str:
     return b if b in BASES else DEFAULT_BASE
 
 
-def brand_colour(biz: Dict[str, Any], theme: Dict[str, Any]) -> Optional[str]:
-    """The church's own colour: its accent, then its brand primary or
-    secondary — the first one with real colour in it."""
+def wears(c: Any) -> bool:
+    """A colour with real colour in it, one the app can wear: not near
+    black, white or grey."""
+    c = color(c)
+    return bool(c) and _hls(c)[2] >= 0.18 and 0.08 <= _hls(c)[1] <= 0.92
+
+
+def app_colour(biz: Dict[str, Any]) -> Optional[str]:
+    """The app's own colour (Settings → Member page → App colour,
+    settings.member_portal.app_colour), or None: the app wears the brand's.
+    Only the member app reads it; Brand Studio, the website and flyers keep
+    the brand kit's colours."""
+    cfg = ((biz or {}).get("settings") or {}).get("member_portal") or {}
+    c = color(cfg.get("app_colour")) if isinstance(cfg, dict) else None
+    return c.lower() if c and wears(c) else None
+
+
+def app_highlight(biz: Dict[str, Any]) -> Optional[str]:
+    """The new look's second colour, the church's pick
+    (settings.member_portal.app_highlight), or None: the app's gold."""
+    cfg = ((biz or {}).get("settings") or {}).get("member_portal") or {}
+    c = color(cfg.get("app_highlight")) if isinstance(cfg, dict) else None
+    return c.lower() if c and wears(c) else None
+
+
+def brand_colours(biz: Dict[str, Any], theme: Dict[str, Any]) -> list:
+    """Every colour the app could wear from the brand: its accent, then its
+    brand primary or secondary, each once, in the order brand_colour reads
+    them."""
     kit = ((biz or {}).get("settings") or {}).get("brand_kit") or {}
     kit = kit if isinstance(kit, dict) else {}
     cols = kit.get("colors") if isinstance(kit.get("colors"), dict) else {}
+    out: list = []
     for c in (theme.get("accent"), kit.get("accent"), cols.get("accent"), cols.get("primary"),
               kit.get("primary_color"), cols.get("secondary")):
         c = color(c)
-        if c and _hls(c)[2] >= 0.18 and 0.08 <= _hls(c)[1] <= 0.92:
-            return c
-    return None
+        if c and wears(c) and c.lower() not in [x.lower() for x in out]:
+            out.append(c)
+    return out
+
+
+def brand_colour(biz: Dict[str, Any], theme: Dict[str, Any], *, app: bool = True) -> Optional[str]:
+    """The church's own colour: the app's own colour when the church gave
+    it one (app_colour; `app=False` where it isn't the member app), else
+    its accent, then its brand primary or secondary — the first one with
+    real colour in it."""
+    if app:
+        own = app_colour(biz)
+        if own:
+            return own
+    found = brand_colours(biz, theme)
+    return found[0] if found else None
 
 
 def _readable_on(c: str, bg: str, dark: bool, need: float = 4.5) -> str:
@@ -439,7 +479,31 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church", *
             out.update({slot: f["fill"], f"{slot}_on": f["on"], f"{slot}_ink": f["ink_d" if dark else "ink_l"],
                         f"{slot}_deep": f["deep_d" if dark else "deep_l"], f"{slot}_night": f["deep_d"],
                         f"{slot}_lit": f["ink_d"]})
+    # The new look's highlight (Settings → Member page → Highlight colour):
+    # the gold on the verse of the day, today's date, days in a row, a plan's
+    # day dots and "Today"/"Tomorrow" is the church's pick when it made one.
+    hi = app_highlight(biz) if space == "church" else None
+    if hi:
+        import member_lumen
+        if member_lumen.page():
+            out.update(_highlight(hi, bg, dark))
     return out
+
+
+def _highlight(hi: str, bg: str, dark: bool) -> Dict[str, str]:
+    """The gold slot's colours worked out from the church's highlight: its
+    fill on this base, words on it, its ink (4.5:1 on the base: a deeper
+    shade on white), its deep surfaces and its shade on black."""
+    h, _l, s = _hls(hi)
+    fill = hi
+    if dark and contrast(fill, bg) < 2.2:
+        fill = _readable_on(fill, bg, True, 2.2)
+    elif not dark and contrast(fill, bg) < 1.35:
+        fill = _readable_on(fill, bg, False, 1.35)
+    return {"gold": fill, "gold_on": "#FFFFFF" if contrast("#FFFFFF", fill) >= 4.5 else "#0B0B0C",
+            "gold_ink": _readable_on(hi, bg, dark),
+            "gold_deep": _hex(h, 0.10, min(s, 0.6)) if dark else _hex(h, 0.95, min(s, 0.75)),
+            "gold_night": _hex(h, 0.10, min(s, 0.6)), "gold_lit": _readable_on(hi, "#000000", True)}
 
 
 def accent_for(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
