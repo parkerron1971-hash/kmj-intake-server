@@ -65,7 +65,9 @@ def _devotional(monkeypatch, author="Pastor James Carter"):
 
 def _post(monkeypatch, *, hours=2, pastor=True, title="Keep Sister Denise in prayer"):
     import church_news as cn
-    at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    # Hours before the scene's evening (the church's clock), not the server's
+    # now: late in the evening the server's "2 hours ago" is after 6:45 PM.
+    at = (EVENING.astimezone(timezone.utc) - timedelta(hours=hours)).isoformat()
     post = {"id": POST, "kind": "announcement", "title": title, "body": "She asked the church to pray for rest.",
             "posted_by": tct.BEN, "created_at": at, "pastor": pastor, "author": {"id": tct.BEN, "name": "James Carter"},
             "my_rx": [], "rx": {}, "comment_n": 0, "attach": {}, "comments": "on"}
