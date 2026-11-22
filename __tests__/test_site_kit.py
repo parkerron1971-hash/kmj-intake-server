@@ -104,7 +104,7 @@ def test_a_lowercase_display_face_gets_room_between_lines():
 def test_a_third_headline_line_is_set_as_its_tail():
     h = kit._headline(["Sharp fades.", "Clean lineups.", "Two chairs in Lakewood."], "Sharp")
     assert '<span class="k-acc">Sharp</span>' in h
-    assert '<span class="k-h1-tail">Two chairs in Lakewood.</span>' in h
+    assert '<span class="k-h1-tail" data-kit-edit>Two chairs in Lakewood.</span>' in h   # its own edit run
 
 
 def test_the_board_title_is_never_a_call_to_action():

@@ -282,7 +282,11 @@ a{color:inherit}
 .k-links a{text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;
   font:500 12.5px/1 var(--k-label);letter-spacing:.14em;text-transform:uppercase}
 .k-links small{font:400 10px/1 var(--k-body);letter-spacing:.04em;text-transform:none;color:var(--k-muted)}
-.k-nav-end{display:flex;align-items:center;gap:22px}
+.k-nav-end{display:flex;align-items:center;gap:22px;flex:none}
+.k-mark b{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.k-nav .k-mark-long b{white-space:normal;font-size:17px;line-height:1.1;text-wrap:balance;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+@media (max-width:760px){.k-nav .k-mark-long b{font-size:14.5px}}
 .k-tel{font:500 13px/1 var(--k-label);letter-spacing:.06em;color:var(--k-second);text-decoration:none;white-space:nowrap}
 .k-nav .k-btn{padding:14px 18px;font-size:12px}
 
@@ -515,8 +519,10 @@ def nav(d, w) -> str:
            if d.get("phone") else "")
     cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
     mark = w.get("wordmark") or {}
+    main = str(mark.get("main") or d["name"])
+    long_name = " k-mark-long" if len(main) > 24 else ""      # two short lines, never under the button
     return (f'<header class="k-nav"><div class="k-wrap">'
-            f'<a class="k-mark" href="#top"><b>{_wordmark(mark.get("main") or d["name"])}</b>'
+            f'<a class="k-mark{long_name}" href="#top"><b>{_wordmark(main)}</b>'
             f'{_raw("span", "", e(mark.get("sub") or ""))}</a>'
             f'<nav aria-label="Sections"><ul class="k-links">{links}</ul></nav>'
             f'<div class="k-nav-end">{tel}{cta}</div></div></header>')
@@ -534,10 +540,10 @@ def _headline(lines: List[str], accent: str) -> str:
             pat = re.compile(re.escape(e(accent)), re.IGNORECASE)
             txt = pat.sub(lambda m: f'<span class="k-acc">{m.group(0)}</span>', txt, count=1)
             done = True
-        out.append(txt)
+        out.append(f"<bdi data-kit-edit>{txt}</bdi>")
     head = "<br>".join(out)
     if tail:
-        head += f'<span class="k-h1-tail">{e(" ".join(tail))}</span>'
+        head += f'<span class="k-h1-tail" data-kit-edit>{e(" ".join(tail))}</span>'
     return head
 
 
@@ -555,6 +561,8 @@ def hero(d, w) -> str:
     lines = [x for x in (h.get("lines") or []) if str(x).strip()][:4] or [d["name"]]
     sub = f'<p class="k-lead">{e(h.get("subhead"))}</p>' if h.get("subhead") else ""
     label = str(h.get("secondary") or "").rstrip(" ↓→>").strip()
+    if label.lower() == str(w.get("action_label") or "").strip().lower():
+        label = ""
     second = (f'<a class="k-link" href="#{e(h.get("secondary_target") or "board")}">{e(label)} &darr;</a>'
               if label else "")
     cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
@@ -717,7 +725,8 @@ def visit(d, w) -> str:
     details = f'<dl class="sxo sxo-details" data-sx-object="visit-details">{"".join(rows)}</dl>' if rows else ""
     mapl = (f'<a class="k-link k-map" href="https://maps.google.com/?q={quote_plus(d["address"])}" '
             f'rel="noopener" target="_blank">Directions &rarr;</a>' if d.get("address") else "")
-    cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
+    cta = (f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>'
+           if d.get("action_url") and d["action_url"] != "#visit" else "")
     side = hours_object(d, w) if d.get("hours_rows") else gatherings_card(d, w)
     return (f'<section class="k-section k-visit" id="visit"><div class="k-wrap"><div class="k-visit-grid{"" if side else " solo"}"><div>'
             f'{_opt("p", "k-eyebrow", v.get("eyebrow"))}'
@@ -946,6 +955,9 @@ def clean_gatherings(rows: Any, records: List[str]) -> List[Dict[str, Any]]:
         t = str(g.get("time") or "")
         if not (0 <= day <= 6 and re.match(r"^\d{2}:\d{2}$", t)):
             continue
+        named = [i for i, n in enumerate(DAYS) if re.search(rf"\b{n}s?\b", str(g.get("label") or ""), re.I)]
+        if len(named) == 1:
+            day = named[0]              # a label that names its day is believed over the number
         h = int(t[:2])
         h12 = str(h % 12 or 12)
         name = DAYS[day].lower()
@@ -1035,8 +1047,47 @@ def kit_layouts() -> Tuple[str, ...]:
     return ("booking",) + tuple(church.LAYOUTS)
 
 
+_EDIT_TAGS_RE = re.compile(r"<(h1|h2|h3|h4|p|li|blockquote|figcaption)(\s[^>]*)?>(.*?)</\1>", re.I | re.S)
+_EDIT_ACCENT_ONLY_RE = re.compile(r'^(?:[^<]|</?em>|<span class="k-(?:acc|under)">|</span>)*$', re.S)
+_EDIT_MARK_RE = re.compile(r"\sdata-kit-edit(?=[\s>])")
+_SCRIPT_SPLIT_RE = re.compile(r"(<script\b.*?</script>|<style\b.*?</style>)", re.I | re.S)
+
+
+def edit_keys(html: str) -> Tuple[str, int]:
+    """Edit Mode keys for a kit page, only where an edit cannot damage it.
+
+    An edit replaces everything inside the keyed element with plain text. The
+    builder's annotator keys every h/p/li, which on a kit page meant an edit to
+    the headline wiped the photos set in it, an edit to a menu item removed its
+    link, and a times tile collapsed into one line. Here a key goes on:
+      - an element that holds only text (or text and its accent word);
+      - the runs the kit marks itself (data-kit-edit): each line of a headline.
+    Anything that wraps other markup gets no key, and is looked into instead."""
+    def mark(m: "re.Match") -> str:
+        tag, attrs, inner = m.group(1), m.group(2) or "", m.group(3)
+        if "data-override-target" in attrs or "data-kit-edit" in attrs:
+            return m.group(0)
+        if "data-kit-edit" in inner or ("<" in inner and not _EDIT_ACCENT_ONLY_RE.match(inner)):
+            return f"<{tag}{attrs}>{_EDIT_TAGS_RE.sub(mark, inner)}</{tag}>"
+        if not re.sub(r"<[^>]+>|&nbsp;|\s", "", inner):
+            return m.group(0)
+        return f"<{tag}{attrs} data-kit-edit>{inner}</{tag}>"
+
+    count = 0
+
+    def key(_m: "re.Match") -> str:
+        nonlocal count
+        count += 1
+        return f' data-override-target="v2/auto_{count}"'
+
+    parts = _SCRIPT_SPLIT_RE.split(html or "")
+    for i in range(0, len(parts), 2):                      # the odd parts are scripts and styles
+        parts[i] = _EDIT_MARK_RE.sub(key, _EDIT_TAGS_RE.sub(mark, parts[i]))
+    return "".join(parts), count
+
+
 def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[str, str]]] = None,
-             layout: Optional[str] = None) -> str:
+             layout: Optional[str] = None, keep_edit_marks: bool = False) -> str:
     d = facts(fx, w)
     w = dict(w)
     layout = layout or str(w.get("layout") or "") or "booking"
@@ -1085,6 +1136,8 @@ def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[s
            f'{fonts_link(d["tokens"])}<style>{page_css}</style></head>'
            f'<body><div class="k-grain" aria-hidden="true"></div>{nav(d, w)}<main>{"".join(body)}</main>'
            f'{foot(d, w)}{dock(d, w)}<script>{STATUS_JS}</script></body></html>')
+    if not keep_edit_marks:
+        doc = _EDIT_MARK_RE.sub("", doc)
     return site_objects.inject_library(doc)
 
 
@@ -1457,12 +1510,12 @@ def build(ctx: Dict[str, Any], business_id: str, progress_cb=None) -> Tuple[Opti
                 report.setdefault("custom", []).append({"id": brief.get("id"), "ok": False, "why": str(ce)[:120]})
         if progress_cb:
             progress_cb(80, "Checking the page")
-        html = assemble(fx, words, custom, layout)
+        html = assemble(fx, words, custom, layout, keep_edit_marks=True)
         import builder_v2
         doc = site_objects.strip_library(html)
         doc, dropped = builder_v2.armor_scripts(doc, allowed_fetch=fx["form_endpoint"])
         doc, stripped = builder_v2.armor_external(doc)
-        doc, added = builder_v2.annotate_editability(doc)
+        doc, added = edit_keys(doc)
         doc = site_objects.inject_library(doc)
         report["mechanical"] = {"scripts_dropped": dropped, "externals_stripped": stripped,
                                 "override_targets_added": added}
