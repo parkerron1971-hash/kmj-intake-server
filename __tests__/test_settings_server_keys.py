@@ -196,7 +196,8 @@ def test_the_migration_is_safe_to_run_twice_and_its_rollback_is_commented_out():
 
 def test_the_ledger_names_it_not_applied():
     ledger = (ROOT / "docs" / "MIGRATIONS.md").read_text(encoding="utf-8")
-    row = next(line for line in ledger.splitlines() if "APPLY-2026-11-17-settings-server-keys.sql" in line)
+    # Its own row (the 11-20 refresh row names this file in its text too).
+    row = next(line for line in ledger.splitlines() if line.startswith("| `supabase/APPLY-2026-11-17-settings-server-keys.sql`"))
     assert "NOT APPLIED" in row
 
 
