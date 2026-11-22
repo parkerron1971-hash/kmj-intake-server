@@ -19,6 +19,10 @@ Everyone else changes only their own profile picture (member_photos).
     POST /my/pictures              save one spot
     /my?edit=pictures              Home with a Change button on its pictures
 
+The office's Settings → Member page → Pictures (member_pictures_office)
+saves through put() too: one store, one set of checks, so a change in
+either place shows in both.
+
 A spot's picture is settings.member_portal.pictures[key] = {url, look, at}
 (member_app_photos.assigned reads it; {"url": ""} keeps the spot's default
 picture). An upload is turned upright, made at most 1600px and WebP, which
@@ -348,10 +352,7 @@ async def save_picture(request: Request):
     """Save one spot's picture (multipart: key, look, pick = a photo's
     address | "default", and an optional new photo)."""
     import asyncio
-    import member_app_photos as photos
-    import member_photos as ph
     import member_portal as mp
-    import rate_limit
     church = await mp._church_or_404(request)
     if not mp._same_origin(request):
         return RedirectResponse("/my", status_code=303, headers=mp._SECURE_HEADERS)
@@ -368,47 +369,63 @@ async def save_picture(request: Request):
     key = str(form.get("key") or "")
     if not KEY_RE.fullmatch(key):
         return _back(request, back, err="error")
-    if not rate_limit.allow_strict("member_action", f"{biz['id']}|pictures|{who}"):
-        return _back(request, back, err="slow")
-    look = str(form.get("look") or "colour")
-    look = look if look in photos.LOOKS else "colour"
-    pick = str(form.get("pick") or "")
     upload = form.get("photo")
     raw = b""
     if hasattr(upload, "read"):
         raw = await upload.read(MAX_BYTES + 1)
+    err = await put(biz, site, key, str(form.get("look") or "colour"), str(form.get("pick") or ""), raw,
+                    who=who, label=str(form.get("label") or "")[:120])
+    return _back(request, back, **({"done": "picture"} if not err else {"err": err}))
+
+
+async def put(biz: Dict[str, Any], site, key: str, look: str, pick: str, raw: bytes, *, who: str,
+              label: str = "", screen: bool = True) -> str:
+    """Save one spot (a checked key) from the app or the office: a new photo
+    (`raw`: made safe by prepare, checked by the small model unless `screen`
+    is False, kept, and added to the media library), the default picture
+    (pick "default"), or one of the church's own photos (pick = its
+    address, from library). '' when saved, else the ERRORS key that says
+    why not. `who` is "owner:<id>" or "member:<contact id>"."""
+    import asyncio
+    import member_app_photos as photos
+    import member_photos as ph
+    import rate_limit
+    if not rate_limit.allow_strict("member_action", f"{biz['id']}|pictures|{who}"):
+        return "slow"
+    look = look if look in photos.LOOKS else "colour"
     uploaded = False
     if raw:
         try:
             webp = await asyncio.to_thread(prepare, raw)
         except ph.PhotoError:
-            return _back(request, back, err="bad")
-        try:
-            verdict = await ph.screen(biz["id"], webp, policy=POLICY,
-                                      question="Is this picture ok for the church's app?",
-                                      task="member_app_picture_screen")
-        except ph.ScreenUnavailable:
-            return _back(request, back, err="busy")
-        if verdict != "ok":
-            return _back(request, back, err="no")
+            return "bad"
+        if screen:
+            try:
+                verdict = await ph.screen(biz["id"], webp, policy=POLICY,
+                                          question="Is this picture ok for the church's app?",
+                                          task="member_app_picture_screen")
+            except ph.ScreenUnavailable:
+                return "busy"
+            if verdict != "ok":
+                return "no"
         url = await asyncio.to_thread(store, biz["id"], webp)
         if not url:
-            return _back(request, back, err="error")
+            return "error"
         uploaded = True
     elif pick == "default":
         url = ""
     elif pick and pick in await asyncio.to_thread(library, biz, site):
         url = pick
     else:
-        return _back(request, back, err="pick")
-    ok = await asyncio.to_thread(save_spot, biz["id"], key, url, look, by=who, uploaded=uploaded,
-                                 label=str(form.get("label") or "")[:120])
-    if ok:
-        # This copy reads the church (its pictures) fresh now; the others within a minute.
-        import member_cache
-        member_cache.forget_church(biz["id"])
-        logger.info("member app picture saved", extra={"business_id": biz["id"], "spot": key, "by": who})
-    return _back(request, back, **({"done": "picture"} if ok else {"err": "error"}))
+        return "pick"
+    ok = await asyncio.to_thread(save_spot, biz["id"], key, url, look, by=who, uploaded=uploaded, label=label[:120])
+    if not ok:
+        return "error"
+    # This copy reads the church (its pictures) fresh now; the others within a minute.
+    import member_cache
+    member_cache.forget_church(biz["id"])
+    logger.info("member app picture saved", extra={"business_id": biz["id"], "spot": key, "by": who})
+    return ""
 
 
 # ─── the pages ───────────────────────────────────────────────────────
