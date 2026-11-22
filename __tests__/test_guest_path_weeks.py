@@ -256,6 +256,9 @@ def db(monkeypatch):
     monkeypatch.setattr(nh, "switched_on", lambda bid: True)
     monkeypatch.setattr(nh, "tz_of", lambda business: ET)
     monkeypatch.setattr(nh, "_now", lambda: f.now.astimezone(timezone.utc))
+    # The weeks' own clock too: the room's "coming events" read it (guest_path_weeks.events), and
+    # on the real clock the Newcomers Lunch (2026-11-22 12:30) stopped being upcoming that afternoon.
+    monkeypatch.setattr(gpw, "_now", lambda: f.now.astimezone(timezone.utc))
     monkeypatch.setattr(nh, "_origin", lambda bid: "https://gracehill.church")
     monkeypatch.setattr(sample_church, "exclude", lambda col="business_id": "")
     monkeypatch.setattr(sample_church, "drop_samples", lambda rows, key="business_id": list(rows or []))
