@@ -267,7 +267,7 @@ def test_the_group_card(church, fake, monkeypatch):  # noqa: F811
     card = up[up.index('<article class="lm-wk">'):]
     card = card[:card.index("</article>")]
     assert f'<span class="lm-wkl" aria-hidden="true"><small>{TODAY:%a}</small><b>{TODAY.day}</b></span>' in card
-    assert '<p class="lm-wkk">Tonight · 7:00 PM</p>' in card                 # soonest first
+    assert '<p class="lm-wkk is-soon">Tonight · 7:00 PM</p>' in card                 # soonest first
     assert f'<h3 class="lm-wkt"><a href="/my/groups/{tct.GROUP}">Young Adults</a></h3>' in card
     assert "The Johnsons&#x27; home" in card
     assert "<b>11</b> going" in card                                         # members only; never faces
@@ -318,7 +318,7 @@ def test_the_sooner_event_is_featured_with_im_coming(church, fake, monkeypatch):
     cards = re.findall(r'<article class="lm-wk">.*?</article>', up, re.S)
     food = next(c for c in cards if "Food Drive" in c)
     assert cards.index(food) == 0                                            # tomorrow comes first
-    assert '<p class="lm-wkk">Tomorrow · 9:00 AM</p>' in food and "<b>12</b> going" in food
+    assert '<p class="lm-wkk is-soon">Tomorrow · 9:00 AM</p>' in food and "<b>12</b> going" in food
     assert 'action="/my/rsvp"' in food and 'name="back" value="/my"' in food and "I&#x27;m coming" in food
     church_cards = html[html.index('<section class="lm-feed lf-church"'):]
     assert "Food Drive" not in church_cards                                  # not twice
@@ -337,7 +337,7 @@ def test_sunday_morning_carries_check_in(church, fake, monkeypatch):  # noqa: F8
     html = c.get("/my").text
     assert "It&#x27;s Sunday, <em>Ana.</em>" in html and "Service starts at <b>10:30</b>." in html
     up = _week(html)
-    assert '<p class="lm-wkk">Today · 10:30 AM</p>' in up and "Sunday Worship" in up and "Sanctuary" in up
+    assert '<p class="lm-wkk is-soon">Today · 10:30 AM</p>' in up and "Sunday Worship" in up and "Sanctuary" in up
     assert up.count('action="/my/here"') == 2
     assert 'name="where" value="in"' in up and 'name="where" value="online"' in up
     assert f'name="people" value="{tct.ANA}"' in up and f'name="people" value="{tct.BEN}"' in up

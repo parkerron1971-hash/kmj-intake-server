@@ -427,6 +427,17 @@ def doors(items: List[str]) -> str:
     return f'<nav class="lm-doors" aria-label="Shortcuts" style="--n:{len(items)}">{"".join(items)}</nav>'
 
 
+SOON = ("Today", "Tonight", "Tomorrow")
+
+
+def _kicker(kicker: str) -> str:
+    """A This week card's kicker. "Today", "Tonight" and "Tomorrow" wear the
+    highlight (the app's gold, or the church's pick: --lm-gold); every
+    other day stays quiet."""
+    soon = any(kicker == w or kicker.startswith(w + " ") for w in SOON)
+    return f'<p class="lm-wkk{" is-soon" if soon else ""}">{kicker}</p>'
+
+
 def week_card(pic: str, *, href: str, day: date, kicker: str, title: str, place: str = "", count: str = "",
               action: str = "", note: str = "", pin: str = "") -> str:
     """One card of This week: the picture with the date leaf, the kicker,
@@ -435,7 +446,7 @@ def week_card(pic: str, *, href: str, day: date, kicker: str, title: str, place:
     `pin` are trusted markup; the title and place are escaped."""
     return (f'<article class="lm-wk"><span class="lm-wkp"><span class="lm-wka">{pic}</span>'
             f'<span class="lm-wkl" aria-hidden="true"><small>{day:%a}</small><b>{day.day}</b></span>{pin}</span>'
-            f'<div class="lm-wkbd"><p class="lm-wkk">{kicker}</p><h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
+            f'<div class="lm-wkbd">{_kicker(kicker)}<h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
             f'{f"<p class=lm-wkm>{_e(place)}</p>" if place else ""}'
             f'{f"<div class=lm-wkf>{count}{action}</div>" if count or action else ""}'
             f'{f"<p class=lm-wknote>{note}</p>" if note else ""}</div></article>')
@@ -468,7 +479,7 @@ def pass_card(pic: str, *, href: str, day: date, chip: str, kicker: str, title: 
     note_html = f'<p class="lm-wknote">{note}</p>' if note else ""
     return (f'<article class="lm-wk lm-pass"><span class="lm-wkp"><span class="lm-wka">{pic}</span>'
             f'<span class="lm-wkl" aria-hidden="true"><small>{day:%a}</small><b>{day.day}</b></span>{chip_html}{pin}</span>'
-            f'<div class="lm-wkbd"><p class="lm-wkk">{kicker}</p><h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
+            f'<div class="lm-wkbd">{_kicker(kicker)}<h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
             f'{place_html}{count_html}{btn_html}{note_html}</div></article>')
 
 
@@ -565,7 +576,7 @@ def live_bar(live: Dict[str, Any]) -> str:
 CSS = Template("""
 /* Home, Look 5.1 (member_lumen_home): the greeting, the doors, This week, the composer */
 .lm-brief{margin:18px 0 0;}
-.lm-ey4{margin:0;display:flex;align-items:center;gap:6px;font:700 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
+.lm-ey4{margin:0;display:flex;align-items:center;gap:6px;font:700 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--lm-gold);}
 .lm-ey4 svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
 body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter-spacing:-.02em;}
 .lm-line4{margin:8px 0 0;max-width:350px;font:400 15px/1.45 var(--mb-ui);color:var(--fg2);text-wrap:pretty;}
@@ -607,6 +618,7 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 .lm-wkl b{display:block;margin-top:3px;font:500 21px/1.05 var(--mb-serif);color:var(--fg);}
 .lm-wkbd{flex:1;display:flex;flex-direction:column;padding:12px 14px 14px;}
 .lm-wkk{margin:0;font:750 11px/1.2 var(--mb-ui);letter-spacing:.12em;text-transform:uppercase;color:var(--fg2);}
+.lm-wkk.is-soon{color:var(--lm-gold);}
 .lm-wkt{margin:7px 0 2px;font:650 17px/1.25 var(--mb-ui);letter-spacing:-.01em;}
 .lm-wkt a{color:var(--fg);text-decoration:none;}
 .lm-wkt a::after{content:"";position:absolute;inset:0;z-index:1;}
