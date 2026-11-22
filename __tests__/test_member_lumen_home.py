@@ -49,7 +49,23 @@ import test_church_threads as tct
 from test_church_threads import fake  # noqa: F401  (the fixture)
 
 NY = ZoneInfo("America/New_York")
-TODAY = date.today()
+
+
+def _scene_day() -> date:
+    """The scenes are a weekday evening with Sunday still to come, on the
+    church's own clock (New York), not the server's: CI runs on UTC, which
+    is already Sunday on a Saturday evening there. On a Sunday in New York
+    the scene is the Monday after (the church fixture moves the devotionals'
+    "today" with it). HOME_TEST_DAY=YYYY-MM-DD pins it, to check a shift."""
+    import os
+    pinned = os.environ.get("HOME_TEST_DAY")
+    if pinned:
+        return date.fromisoformat(pinned)
+    d = datetime.now(NY).date()
+    return d + timedelta(days=1) if d.weekday() == 6 else d
+
+
+TODAY = _scene_day()
 EVENING = datetime.combine(TODAY, time(18, 45), tzinfo=NY)
 
 
@@ -80,6 +96,14 @@ def church(fake, monkeypatch):  # noqa: F811
     w = {"day": sun, "start": datetime.combine(sun, time(10, 30), tzinfo=NY), "open": False, "weekday": "Sunday"}
     scene["checkin"] = {"state": "closed", "w": w}
     monkeypatch.setattr(mlp, "church_now", lambda b: scene["now"])
+    # The devotionals' "today" (member_portal_devotionals: date.today()) is the scene's.
+    import member_portal_devotionals as mpd
+
+    class _SceneDay(date):
+        @classmethod
+        def today(cls):
+            return scene["now"].date()
+    monkeypatch.setattr(mpd, "date", _SceneDay)
     monkeypatch.setattr(gg, "_now", lambda: scene["now"].astimezone(timezone.utc))
     monkeypatch.setattr(mpc, "upcoming_for", lambda b, me: [dict(o) for o in scene["occ"]])
     import member_portal_sermons as mps
@@ -347,7 +371,8 @@ def test_live(church, fake, monkeypatch):  # noqa: F811
 
 
 def test_someone_new_sees_their_first_sunday(church, fake, monkeypatch):  # noqa: F811
-    church["told"] = {"at": (EVENING - timedelta(days=1)).isoformat(), "first_time": True}
+    # They told us this afternoon: the coming Sunday is their first, whatever the day.
+    church["told"] = {"at": (EVENING - timedelta(hours=3)).isoformat(), "first_time": True}
     fake.add("groups", id=tct.cid(33), business_id=tct.BIZ, name="Women of Grace", active=True, kind="small_group",
              join_mode="open", meets="Tuesdays")
     html = _client(fake, monkeypatch).get("/my").text

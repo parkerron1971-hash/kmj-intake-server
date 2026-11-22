@@ -79,7 +79,8 @@ def test_a_church_with_no_posts_has_a_feed(quiet, fake, monkeypatch, klass):  # 
     assert "<b>The Making: Foundation</b><small>Lesson 1 of 4 · Continue</small>" in rows[1][1]
     assert '<i style="width:73%">' in rows[0][1]
     # The event two weeks out: its card, Going, and Share (it is on the public events page).
-    ev = re.search(r'<article class="lf-post lf-pev".*?</article>', cards, re.S).group(0)
+    ev = re.search(r'<article class="lf-post lf-pev" aria-label="Event: Oh Give Thanks".*?</article>', cards,
+                   re.S).group(0)
     assert "Event · " in ev and ">Oh Give Thanks</a></h3>" in ev
     assert 'action="/my/rsvp"' in ev and 'name="action" value="coming"' in ev and ">Going</button>" in ev
     assert f'data-share-kind="event"' in ev and f'data-share-id="{FAR}"' in ev
@@ -122,6 +123,7 @@ def test_an_old_message_is_the_latest_message(church, fake, monkeypatch):  # noq
 
 
 def test_events_this_week_stay_in_this_week(quiet, fake, monkeypatch):  # noqa: F811
+    quiet["occ"][1]["date"] = (TODAY + timedelta(days=1)).isoformat()      # Prayer Night: this week, whatever the day
     cards = _church(_client(fake, monkeypatch).get("/my").text)
     assert "Sunday Worship" not in cards and "Prayer Night" not in cards    # both this week: cards above
     titles = re.findall(r'aria-label="Event: ([^"]+)"', cards)

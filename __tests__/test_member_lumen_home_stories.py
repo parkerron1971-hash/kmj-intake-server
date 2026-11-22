@@ -37,7 +37,10 @@ OLD = "00000000-0000-4000-8000-000000000622"
 SER = "00000000-0000-4000-8000-000000000521"
 
 
-def _library(monkeypatch, days_ago=6, **extra):
+LAST_SUNDAY = (TODAY.weekday() + 1) % 7 or 7          # days back to the last Sunday (the scene is never one)
+
+
+def _library(monkeypatch, days_ago=LAST_SUNDAY, **extra):
     import member_portal_sermons as mps
     newest = {"id": MSG, "title": "Sunday, November 15 (Part 1)", "series_id": SER, "speaker": "Pastor KMJ",
               "preached_on": (TODAY - timedelta(days=days_ago)).isoformat(),
@@ -84,7 +87,8 @@ def test_the_newest_message_joins_after_sunday(church, fake, monkeypatch):  # no
     assert "New message · " in ms
     # Share hands over its public page (contract 1, member_lumen_share).
     assert f'href="/sermons/{MSG}" data-share-kind="moment"' in ms and f'data-share-id="message:{MSG}"' in ms
-    assert re.search(r'data-mo="ms:[^"]+"[^>]*>.*?<b>Last week</b>', html, re.S)   # under the circle
+    word = "Yesterday" if LAST_SUNDAY == 1 else "Last week"                      # under the circle
+    assert re.search(r'data-mo="ms:[^"]+"[^>]*>.*?<b>%s</b>' % word, html, re.S)
     assert f'href="/my/sermons/{MSG}" data-mo="ms:{MSG}"' in html              # without script: its page
 
 
