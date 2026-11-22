@@ -775,6 +775,11 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     from member_portal import _SECURE_HEADERS
     bid, cid = biz["id"], str(me["id"])
     if not parts:
+        import member_lumen
+        if member_lumen.page() and str(request.query_params.get("show") or "all") in ("all", "reading"):
+            # The new look's Plans tab (member_lumen_plans) has every plan; this page stays for
+            # the church's whole list (?show=church, the tab's See all) and a member's own (?show=yours).
+            return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
         devs, mine, done = await asyncio.gather(
             asyncio.to_thread(dv.catalog, bid), asyncio.to_thread(_or_empty, starts, preview, bid, cid),
             asyncio.to_thread(_or_empty, done_days, preview, bid, cid))
