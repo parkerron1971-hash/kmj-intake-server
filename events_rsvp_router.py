@@ -768,7 +768,13 @@ def render_events_page(
     import church_event_signups
     signup_css = church_event_signups.PUBLIC_CSS
     signup_js = church_event_signups.public_script(api_origin, slug)
-    if occasions:
+    if one:
+        # One event's own page shows only that event (docs/EVENT_SIGNUP_LINKS.md
+        # 6.4), with the public page's rules, and a way to everything else.
+        cards = (_occasion_card(one)
+                 + f'<p class="ev-all"><a href="{_esc(canonical_url)}">See everything coming up</a></p>')
+        canonical_url = og_url
+    elif occasions:
         cards = "".join(_occasion_card(o) for o in occasions)
     else:
         cards = ('<div class="ev-empty">Nothing on the calendar just yet — '
@@ -833,6 +839,8 @@ font-family:var(--font-body);}}
 .ev-fullnote{{margin-top:12px;font-size:13px;color:var(--text-muted);line-height:1.5;}}
 .ev-empty{{text-align:center;padding:32px 16px;color:var(--text-secondary);
 border:1px dashed var(--border);border-radius:16px;font-size:14px;line-height:1.6;}}
+.ev-all{{text-align:center;font-size:14px;margin:4px 0 0;}}
+.ev-all a{{color:var(--accent);font-weight:600;}}
 .ev-footer{{text-align:center;font-size:11px;color:var(--text-muted);margin-top:28px;
 padding-top:14px;border-top:1px solid var(--border);}}
 .ev-footer a{{color:var(--text-muted);text-decoration:none;}}

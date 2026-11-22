@@ -854,6 +854,7 @@ def member_view(biz: Dict[str, Any], cid: str) -> Dict[str, Any]:
         "extra": len(extra),
         # Events served as a special helper (event_credits): 0 with EVENT_VOLUNTEERS closed.
         "events": len(events),
+        "event_minutes": sum(x["minutes"] for x in events),
         "check": ({"status": c["status"], "on": c["on"], "due": c["due"], "next": c["next"]} if c else None),
         "check_link": settings["check_link"] or None,
     }
@@ -1080,6 +1081,12 @@ def _event_credits(biz_id: str, zone, lo: datetime, hi: datetime, sundays: List[
             if s.get("via") == "public":
                 continue            # matched by a typed email: not the member's own word
             credit = {"contact_id": cid, "event": str(e["id"]), "minutes": minutes, "day": day.isoformat()}
+            if s.get("via") == "link":
+                # A sign-up by the event's link counts only once the office said
+                # who it is (docs/EVENT_SIGNUP_LINKS.md 6.5): that is their word.
+                if s.get("confirmed") is True:
+                    found.setdefault((cid, str(e["id"])), credit)
+                continue
             if s.get("via") != "member" and keys:
                 typed.setdefault((cid, str(e["id"])), credit)
             else:
