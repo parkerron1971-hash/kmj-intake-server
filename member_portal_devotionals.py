@@ -127,6 +127,24 @@ def start(business_id: str, contact_id: str, plan: str, on: date) -> bool:
     return isinstance(rows, list)
 
 
+def restart(business_id: str, contact_id: str, plan: str, on: date) -> bool:
+    """Start a plan the member started again, from `on` (a new run)."""
+    rows = sb_clients.sb_post_as_service(
+        "/member_plan_starts?on_conflict=business_id,contact_id,plan",
+        {"business_id": business_id, "contact_id": contact_id, "plan": plan, "started_on": on.isoformat()},
+        prefer="return=representation,resolution=merge-duplicates")
+    return isinstance(rows, list) and bool(rows)
+
+
+def clear_done(business_id: str, contact_id: str, devotional_id: str) -> bool:
+    """The member's days of one devotional, not done any more (their
+    practices ticked and their journal stay)."""
+    got = sb_clients.sb_patch_as_service(
+        f"/devotional_progress?{_who(business_id, contact_id)}&devotional_id=eq.{_q(devotional_id)}&done_at=not.is.null",
+        {"done_at": None, "updated_at": datetime.now(timezone.utc).isoformat()})
+    return got is not None
+
+
 def stop(business_id: str, contact_id: str, plan: str) -> bool:
     return bool(sb_clients.sb_delete_as_service(f"/member_plan_starts?{_who(business_id, contact_id)}&plan=eq.{_q(plan)}"))
 
@@ -801,6 +819,10 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     st = state(dev, started, done, preview=preview)
     if len(parts) == 1:
         import member_portal_church as mpc
+        if member_lumen.page():
+            # The new look's plan page (member_lumen_plans), on the same reads.
+            import member_lumen_plans as mlp
+            return mlp.render_devotional(biz, site, request, me, dev, st), 200
         return render_devotional(biz, site, me, dev, st, flash=mpc._flash(request)), 200
     if not parts[1].isdigit() or not 1 <= int(parts[1]) <= st["count"] or int(parts[1]) > st["upto"]:
         return RedirectResponse(_href(dev), status_code=303, headers=_SECURE_HEADERS)
@@ -962,6 +984,67 @@ async def stop_plan(request: Request):
     resp = RedirectResponse(done_to if ok else f"/my/bible/plans/{plan[8:]}?err=error",
                             status_code=303, headers=_SECURE_HEADERS)
     return _wrote(resp, church["business"]["id"], me["id"]) if ok else resp
+
+
+@router.post("/my/bible/plans/over", include_in_schema=False)
+async def start_over(request: Request):
+    """Start over (the new look's plan page): a reading or topic plan the
+    member started runs again from today; a devotional's days marked read are
+    cleared (and one started on the member's own day starts again today).
+    Only the member's own rows; the journal stays."""
+    import asyncio
+    import member_portal as mp
+    import member_portal_church as mpc
+    import topic_plans as tp
+    from member_portal import _SECURE_HEADERS
+    form = await request.form()
+    plan = str(form.get("plan") or "")
+    if plan.startswith("reading:") and (plan[8:] in rp.PLANS or tp.is_topic(plan[8:])):
+        back = f"/my/bible/plans/{plan[8:]}"
+    elif plan.startswith("devotional:") and _UUID.fullmatch(plan[11:]):
+        back = f"/my/bible/plans/{plan[11:]}"
+    else:
+        back = "/my/bible?tab=plans"
+
+    def go(**q: str) -> RedirectResponse:
+        qs = "&".join(f"{k}={v}" for k, v in q.items())
+        return RedirectResponse(back + (f"?{qs}" if qs else ""), status_code=303, headers=_SECURE_HEADERS)
+    if not mp._same_origin(request):
+        return go(err="error")
+    church, me, unavailable = await mpc._signed_in(request)
+    if unavailable:
+        return go(err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+    if back == "/my/bible?tab=plans":
+        return go()
+    bid, cid = church["business"]["id"], str(me["id"])
+    mine = await asyncio.to_thread(starts, bid, cid)
+    if mine is None:
+        return go(err="error")
+    if plan.startswith("reading:"):
+        if plan not in mine:
+            return go()
+        if not mpc._allowed(church, me):
+            return go(err="slow")
+        ok = await asyncio.to_thread(restart, bid, cid, plan, date.today())
+    else:
+        dev, found = await asyncio.to_thread(dv.one, bid, plan[11:])
+        if not found:
+            return go(err="error")
+        if not dev:
+            return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
+        if not mpc._allowed(church, me):
+            return go(err="slow")
+        # The start moves first: if clearing then fails, the marks are still there (a retry does both).
+        ok = True
+        if not dev.get("starts_on") and plan in mine:
+            ok = await asyncio.to_thread(restart, bid, cid, plan, date.today())
+        if ok:
+            ok = await asyncio.to_thread(clear_done, bid, cid, str(dev["id"]))
+    if not ok:
+        return go(err="error")
+    return _wrote(go(done="over"), bid, cid)
 
 
 def clean_change(body: Dict[str, Any], dev: Dict[str, Any]) -> Optional[Dict[str, Any]]:

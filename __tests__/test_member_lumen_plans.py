@@ -362,12 +362,12 @@ def test_a_long_plan_lists_the_two_weeks_around_today(bible, fake, monkeypatch):
         fake.add("reading_progress", business_id=tct.BIZ, contact_id=tct.ANA, plan_key="bible-year",
                  start_date=start.isoformat(), day=d)
     html = _client(fake, monkeypatch).get("/my/bible/plans/bible-year").text
-    days = [int(n) for n in re.findall(r'aria-label="Day (\d+): mark as', html.split("<details")[0])]
+    days = [int(n) for n in re.findall(r'aria-label="Day (\d+): mark as', html.split('<details class="lm-catch"')[0])]
     assert days == list(range(94, 101))                                                  # the week to today
     assert re.findall(r'<li class="lm-pp-d is-shut"><span class="lm-pp-c" aria-hidden="true">(\d+)</span>', html) == \
         [str(n) for n in range(101, 108)]                                                # the week ahead, shut
     assert '<a class="lm-btn" href="' in html and "Continue day 100" in html
-    assert "14 days to catch up" in html.split("<details")[1]
+    assert "14 days to catch up" in html.split('<details class="lm-catch"')[1]
 
 
 def test_a_reading_plan_not_started_has_its_page(bible, fake, monkeypatch):  # noqa: F811

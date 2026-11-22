@@ -21,7 +21,7 @@ import reading_plans as rp
 
 router = APIRouter(tags=["member-portal"])
 
-DONE = {"read": "Marked as read. Well done.", "unread": "Unmarked."}
+DONE = {"read": "Marked as read. Well done.", "unread": "Unmarked.", "over": "Started over."}
 ERRORS = {"error": "That didn't save. Please try again.",
           "day": "That day can't be marked yet.",
           "preview": "This is a preview. Nothing is saved for the member.",
