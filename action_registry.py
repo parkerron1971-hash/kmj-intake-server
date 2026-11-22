@@ -770,6 +770,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "giving_counts": {**_r("reads the church's service counts: each service day's giving recorded together, "
                            "online gifts placed in the week's service, what's coming up", sensitive=True),
                       "chief_only": True},
+    "giving_summary": {**_r("reads what a church or nonprofit was given over a day or a span of days: the total, "
+                            "the gifts and givers counted, by fund, by way and by day; names no giver",
+                            sensitive=True),
+                       "chief_only": True},
     "record_service_gifts": {**_w("A", "records the gifts a person names into one service's open count, dated its "
                                        "day; every name must be one of the church's people or loose/anonymous; "
                                        "undo_service_gifts takes the batch back", bulk=True),

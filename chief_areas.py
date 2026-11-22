@@ -176,7 +176,7 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "search_transactions", "reconcile_books", "undo_reconcile_books", "bank_to_file", "file_bank_rows",
         "undo_file_bank_rows", "giving_deposits", "match_giving_deposits", "unmatch_giving_deposits", "bills",
         "match_bill_payment", "unmatch_bill_payment", "add_bill", "remove_bill",
-        "giving_counts", "record_service_gifts", "undo_service_gifts",
+        "giving_counts", "record_service_gifts", "undo_service_gifts", "giving_summary",
         "expense_categories", "set_expense_category", "save_category_rule", "undo_category_change",
         "set_expense_line",
         "fund_status", "set_fund",
@@ -235,7 +235,8 @@ MONEY_VIEWS = {"invoices", "products"}
 MONEY_READS = frozenset({
     "giving_statement", "giving_statements_run", "growth_report", "show_revenue", "review_books",
     "list_bookkeeping_proposals", "search_transactions", "bank_to_file", "giving_deposits", "bills",
-    "giving_counts", "expense_categories", "fund_status", "find_fund_payments", "bank_history", "list_expenses",
+    "giving_counts", "giving_summary", "expense_categories", "fund_status", "find_fund_payments", "bank_history",
+    "list_expenses",
     "check_balance", "unbilled_time", "list_products", "list_offerings", "offering_readiness", "check_inventory",
     "show_view"})
 # THE ONLY money verbs a giving tick's Chief runs: the ones whose handlers
@@ -247,7 +248,7 @@ MONEY_READS = frozenset({
 # Chief verb is never wider than its door. A verb is added here only with a
 # handler that asks church_money_gate.
 TICK_VERBS = frozenset({"giving_counts", "record_service_gifts", "undo_service_gifts", "giving_statement",
-                        "giving_statements_run"})
+                        "giving_statements_run", "giving_summary"})
 
 # Events and timeline entries that are money.
 MONEY_EVENT = re.compile(r"^(giv|gift|donat|pledge|invoice|payment|paid|pay_|payout|refund|charge|order|product_sold|"

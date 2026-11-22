@@ -277,6 +277,7 @@ from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_sugg
     handle_list_asks, handle_answer_ask, handle_undo_ask)
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
+from chief_giving_summary import handle_giving_summary
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
@@ -442,6 +443,7 @@ _ACTION_PHRASES = {
     "suggest_work_change": "sending it for a yes",
     "list_asks": "reading what your team suggested",
     "giving_counts": "reading the service counts",
+    "giving_summary": "adding up what came in",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
     "match_giving_deposits": "matching the gifts to their deposits",
@@ -1700,7 +1702,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     import chief_lean_brief
     _lean_tools = tool_rounds_on and chief_lean_brief.active_for(system)
     if _lean_tools:
-        _tools_arr = chief_lean_brief.tools_for_request(_tools_arr)
+        _tools_arr = chief_lean_brief.tools_for_request(_tools_arr, system)
     if _tools_arr:
         payload["tools"] = _tools_arr
     # Which part of the request the prompt cache is keyed on moved since
@@ -5607,11 +5609,113 @@ async def handle_show_revenue(client, biz, action) -> Dict:
     # actual) + Expenses + Send-to-Accountant + Export PDF/CSV.
     # The legacy OPERATE → Invoices Revenue toggle still works as a
     # tactical embed, but rich surface lives under GROW.
-    return {
+    #
+    # 2026-11-22: it is also a mid-turn lookup ("Revenue figures for this
+    # business"), and as one it answered the single word "navigating": a
+    # treasurer asking what came in got no figure at all. Inside a signed-in
+    # turn it now says the figures and still opens the screen.
+    #   result ..... one plain line: the app prints an action's result under
+    #                Chief's reply, so nothing in it is written for the model
+    #   figures .... the detail, for Chief (the tool loop hands it the whole
+    #                result)
+    # With nobody signed in (an outside agent, a scheduled run, the standing
+    # agent) it is the screen's action exactly as before: what an outside
+    # agent may read of a business's money is a decision nobody made here.
+    out = {
         "type": "show_revenue",
         "result": "navigating",
         "label": "💰 Opening Revenue Analytics",
         "nav": _nav("grow", "revenue"),
+    }
+    if not _TURN_USER_ID.get():
+        return out
+    try:
+        said = await _revenue_figures(client, biz)
+    except Exception as e:  # noqa: BLE001 — the screen still opens; the figures are said to be missing
+        logger.warning(f"show_revenue figures failed: {type(e).__name__}")
+        said = None
+    if said is None:
+        out["result"] = "Opening Revenue Analytics. The figures couldn't be read just now."
+        out["figures"] = {"unread": True, "say": "The figures are unavailable: say so; state no amount."}
+    else:
+        out["result"], out["figures"] = said
+    return out
+
+
+_REVENUE_ROWS = 1000        # one page; a month with more paid invoices than this is said as "at least"
+
+
+def _paid_net(row: Dict[str, Any]) -> float:
+    """What a paid invoice is worth after any refund (a refunded invoice
+    stays `paid`, with refund_amount_cents set)."""
+    cents = round(float(row.get("total") or 0) * 100) - int(float(row.get("refund_amount_cents") or 0))
+    return max(0, cents) / 100.0
+
+
+async def _revenue_figures(client, biz) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(the line a person reads, the detail Chief reads) for show_revenue.
+    A church or nonprofit: the month's giving (chief_giving_summary, behind
+    the giving gate; a refusal is said as one). Any other business: paid
+    invoices less refunds this month so far and last month, on the
+    business's own clock, and what is sent and not yet paid. None when a
+    read fails: a failed read is never a zero."""
+    from growth_words import giving_is_private
+    if giving_is_private((biz or {}).get("type")):
+        import chief_giving_summary
+        got = await asyncio.to_thread(chief_giving_summary.summary_sync, biz, {"period": "this_month"})
+        text = str(got.get("result") or "")
+        if got.get("failed"):
+            why = text.replace("Failed: ", "", 1).rstrip(".")
+            return (f"Giving couldn't be read for this login: {why}.",
+                    {"giving": None, "say": "Say that plainly; give no figure."})
+        return (f"Giving this month so far: {got.get('label')}.",
+                {"giving_this_month": text, "more": "giving_summary reads any other day or span."})
+    import group_gatherings
+    tz = await asyncio.to_thread(group_gatherings.zone, biz) or timezone.utc
+    this_start = datetime.now(timezone.utc).astimezone(tz).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    last_start = (this_start - timedelta(days=1)).replace(day=1)
+    paid = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz['id']}&status=eq.paid&is_gift=is.false"
+        f"&paid_at=gte.{_ts(last_start.astimezone(timezone.utc))}"
+        f"&select=total,refund_amount_cents,paid_at&order=paid_at.desc&limit={_REVENUE_ROWS}")
+    open_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz['id']}&status=in.(sent,viewed)&is_gift=is.false&select=total"
+        f"&limit={_REVENUE_ROWS}")
+    if not isinstance(paid, list) or not isinstance(open_rows, list):
+        return None
+    this_rows, last_rows = [], []
+    for r in paid:
+        try:
+            at = datetime.fromisoformat(str(r.get("paid_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None                     # a row whose day can't be read: no month is stated
+        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        if _paid_net(r) <= 0:
+            continue                        # refunded in full: not revenue
+        (this_rows if at >= this_start else last_rows).append(r)
+
+    def _sum(rows):
+        return round(sum(_paid_net(r) for r in rows), 2)
+
+    def _n(rows, word="paid invoice"):
+        return f"{len(rows)} {word}{'' if len(rows) == 1 else 's'}"
+
+    open_total = round(sum(float(r.get("total") or 0) for r in open_rows), 2)
+    capped = len(paid) >= _REVENUE_ROWS
+    line = (f"{this_start.strftime('%B')} so far: ${_sum(this_rows):,.2f} from {_n(this_rows)}. "
+            f"{last_start.strftime('%B')}: ${_sum(last_rows):,.2f} from {_n(last_rows)}. "
+            f"Sent and not yet paid: ${open_total:,.2f} on {_n(open_rows, 'invoice')}.")
+    return line, {
+        "this_month": {"month": this_start.strftime("%B %Y"), "paid": _sum(this_rows), "invoices": len(this_rows)},
+        "last_month": {"month": last_start.strftime("%B %Y"), "paid": _sum(last_rows), "invoices": len(last_rows)},
+        "not_yet_paid": {"total": open_total, "invoices": len(open_rows),
+                         "at_least": len(open_rows) >= _REVENUE_ROWS},
+        "at_least": capped,
+        "what_this_counts": ("Paid invoices less refunds, by the day each was paid on the business's own clock. "
+                             "Store orders and event tickets are not in these (Payments counts those); Revenue "
+                             "Analytics has expenses and planned against actual."
+                             + (" There are more paid invoices than one read holds: say 'at least'." if capped
+                                else "")),
     }
 
 
@@ -12523,6 +12627,7 @@ ACTION_HANDLERS = {
     "answer_ask":            handle_answer_ask,
     "undo_ask":              handle_undo_ask,
     "giving_counts":         handle_giving_counts,
+    "giving_summary":        handle_giving_summary,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,
     "match_bill_payment":    handle_match_bill_payment,

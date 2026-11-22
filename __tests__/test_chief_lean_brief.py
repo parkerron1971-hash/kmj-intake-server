@@ -246,10 +246,110 @@ def test_the_rare_actions_eval_asks_only_for_verbs_outside_the_kept_set():
 
 # ── the universal block and the cache ────────────────────────────────────
 
-def test_the_short_manual_is_the_same_for_every_business(on):
-    a = lean.segments(_system(BIZ, greeting=False))["universal"]
-    b = lean.segments(_system(CHURCH, greeting=True))["universal"]
+BIZ_2 = {**BIZ, "id": "00000000-0000-4000-8000-000000000021", "name": "Second Chair Barbers", "type": "barbershop",
+         "settings": {"practitioner_name": "Dre Carter"}}
+CHURCH_2 = {**CHURCH, "id": "00000000-0000-4000-8000-000000000022", "name": "Elevation Chapel",
+            "settings": {"practitioner_name": "Sam Roy"}}
+
+
+def _universal(biz, greeting=False):
+    return lean.segments(_system(biz, greeting=greeting))["universal"]
+
+
+def test_the_short_manual_is_the_same_for_every_business_of_an_edition(on):
+    """Two cached manuals, not one a business: every business reads the
+    standard edition, every church the church's (2026-11-22)."""
+    a, b = _universal(BIZ), _universal(BIZ_2, greeting=True)
+    c, d = _universal(CHURCH), _universal(CHURCH_2, greeting=True)
     assert a == b
+    assert c == d
+    assert a != c
+    assert lean.CHURCH_MARK in c and lean.CHURCH_MARK not in a
+    assert lean.edition_of(_system(CHURCH)) == "church" and lean.edition_of(_system(BIZ)) == ""
+    assert lean.edition_of([{"type": "text", "text": _system(CHURCH)}]) == "church"
+
+
+def test_with_the_church_edition_off_a_church_reads_the_standard_manual(on, monkeypatch):
+    monkeypatch.setenv("CHIEF_CHURCH_EDITION", "off")
+    assert lean.edition_for(CHURCH) == ""
+    assert _universal(CHURCH) == _universal(BIZ)
+    monkeypatch.setenv("CHIEF_CHURCH_EDITION", "on")
+    assert lean.edition_for(CHURCH) == "church" and lean.edition_for(BIZ) == "" and lean.edition_for(None) == ""
+
+
+def test_the_church_edition_only_adds_to_the_standard_one(on):
+    """Everything a business's Chief has written out, a church's has too:
+    the church edition keeps more in full and moves nothing to the lookup."""
+    std, church = _universal(BIZ), _universal(CHURCH)
+    have = set(church.split("\n"))
+    gone = [line for line in std.split("\n")
+            if line.strip() and line not in have and not line.startswith("  · ")
+            and not line.startswith(lean.LEAN_MARK) and "Also here, by name only" not in line]
+    assert not gone, gone[:5]
+    full = lean.full_manual()
+    assert lean.kept_verbs(full, "") < lean.kept_verbs(full, "church")
+    assert lean.CHURCH_VERBS <= lean.kept_verbs(full, "church")
+    # The treasurer's question has its words in a church's manual, in full.
+    assert "WHAT CAME IN (a church or nonprofit" in church
+    assert "GIVING BY SERVICE (a church records" in church and "· giving_counts" not in church
+    # ...and the standard edition still routes it (the request map is a rule section).
+    assert "giving_summary (a church or nonprofit" in std
+
+
+def test_a_churchs_lookups_are_loaded_on_a_churchs_turn(on):
+    """Measured 2026-11-22: on a church's turn the service counts, the Sunday
+    match, whose job something is, assignments and the serving week were all
+    a lookup away, and a deferred tool loses to a loaded neighbour."""
+    church_system, std_system = _system(CHURCH), _system(BIZ)
+    ctl.reset_turn(writes_allowed=True)
+    tools = ctl.tool_definitions_for_turn(True)
+    names = {t["name"] for t in tools}
+
+    def loaded(system):
+        return {t["name"] for t in lean.tools_for_request([dict(t) for t in tools], system)
+                if not t.get("defer_loading")}
+
+    church, std = loaded(church_system), loaded(std_system)
+    assert lean.CHURCH_VERBS & names <= church
+    for name in ("giving_summary", "giving_counts", "giving_deposits", "bills", "whose_job", "job_of",
+                 "list_duties", "assignments_of", "people_under", "serving_week", "who_is_away"):
+        assert name in names and name in church, name
+    # The plainest question is never a lookup away, for anyone.
+    assert "giving_summary" in std and "show_revenue" in std
+    assert "giving_counts" not in std and "whose_job" not in std
+    assert std < church
+    # The same tools are sent either way, in the same order: only what is loaded differs.
+    assert ([t["name"] for t in lean.tools_for_request([dict(t) for t in tools], church_system)]
+            == [t["name"] for t in lean.tools_for_request([dict(t) for t in tools], std_system)])
+    # The tools follow the prompt they travel with, whatever was cut last.
+    lean.lean_manual(lean.full_manual(), "")
+    assert loaded(church_system) == church
+
+
+def test_nothing_is_lost_from_the_church_edition_either(on):
+    full = _full_manual()
+    short = lean.lean_manual(full, "church")
+    try:
+        for section in lean._parsed(full):
+            area = lean._area_name(section.header)
+            whole = lean.guide(area, full) if area else ""
+            for line, own in zip(section.lines, section.owners):
+                if not line.strip() or line in short:
+                    continue
+                found = whole and line in whole
+                for verb in sorted(own or ()):
+                    found = found or line in (lean.guide(verb, full) or "")
+                assert found, ("lost from the church edition and the lookup", section.header[:60], line[:120])
+        registry = lean._tool_registry()
+        loaded = lean._loaded_for("church") | lean.kept_verbs(full, "church")
+        for line in short.splitlines():
+            if line.startswith("  · ") or not line.strip():
+                continue
+            for name in lean._SNAKE.findall(line):
+                if name in registry:
+                    assert name in loaded, (name, line[:120])
+    finally:
+        lean.lean_manual(full, "")
 
 
 def test_every_cached_segment_stays_above_the_cache_minimum(on):
