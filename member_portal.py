@@ -1467,11 +1467,13 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
             f'<button class="lm-txtbtn" type="submit">Sign out</button></form></div>')
     import member_lumen_look as mll
     look = mll.control(mll.here(), palette_for(biz, site)["bg"])
-    # Putting the app on the home screen: the card that was at the foot of
-    # Home (Kevin's Home plan, 2026-11-21, moved it here). It shows itself only
-    # where it can help (member_app_install).
+    # Putting the app on the home screen and turning on phone alerts: the
+    # cards that were at the foot of Home (Kevin's Home plan, 2026-11-21,
+    # moved them here). Each shows itself only where it can help
+    # (member_app_install, member_push).
     import member_app_install as mai
-    install = f'<div class="lm-cards">{mai.install_card((biz.get("name") or "").strip() or "Your church")}</div>'
+    install = (f'<div class="lm-cards">{mai.install_card((biz.get("name") or "").strip() or "Your church")}'
+               f'{member_push.home_card(biz)}</div>')
     return _shell(biz, site, "Me", you + giving + look + install + life, tab="me", who=me,
                   script=script + mll.script())
 

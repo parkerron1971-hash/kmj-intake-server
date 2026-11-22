@@ -162,6 +162,12 @@ def test_the_older_sections_are_gone_and_install_is_on_me(quiet, fake, monkeypat
         assert gone not in main, gone
     me = c.get("/my/me").text
     assert 'id="mb-install"' in me and "on your home screen" in me
+    import member_push
+    monkeypatch.setattr(member_push, "ready", lambda: True)
+    fake.biz[tct.BIZ]["settings"]["member_portal"]["notifications"] = {k: True for k in member_push.KIND_KEYS}
+    me = c.get("/my/me").text
+    assert 'id="np-card"' in me and "Get notified" in me                 # the alerts nudge moved to Me too
+    assert 'id="np-card"' not in _main(c.get("/my").text)
     # Today's look keeps its own Home and Me.
     monkeypatch.setenv("MEMBER_LUMEN", "off")
     assert 'id="mb-install"' in c.get("/my").text
