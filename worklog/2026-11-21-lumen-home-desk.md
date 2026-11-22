@@ -20,11 +20,13 @@ The church's owner sees what waits for them in the office's News room at the top
 first news when it has none yet. Nobody else sees or reads anything for it.
 
 Checked: switch off and MEMBER_LUMEN=preview for a non-owner, 951 page x scene dumps each (Home harness 656,
-Bible harness 295), main and this branch dumped back to back: same 951, differ 0 in both modes. Reads with the
+Bible harness 295), main (22f48f48) and this branch dumped back to back: same 951, differ 0 in both modes. Reads with the
 switch on (warm), per page and table in four looks: Home harness 1956 / 1956 over 328 page-looks, no page differs
 (the harness's member isn't the owner, and a test pins that nobody else reads for the strip); Bible harness, only
 the group feed's known run-to-run noise. The owner's first Home: two reads more (the waiting posts, the held
-comments), kept a minute per church. Member suites with -n 2: 1686 passed (8 new in
-__tests__/test_member_lumen_home_desk.py). Shots before and after (Chromium and WebKit, light and dark, 390x844
+comments), kept a minute per church. Member suites with -n 2: 1697 passed (8 new in
+__tests__/test_member_lumen_home_desk.py). Also: the Look 5.1 tests' pastor's post is dated from the scene's evening, not the
+server's clock (after 8:45 PM in New York, since #2052 moved the scene onto the church's date, '2 hours ago' fell after the
+scene's 6:45 PM). Shots before and after (Chromium and WebKit, light and dark, 390x844
 @2x, the owner at a church with no posts and one good news post waiting, plus the same church for a member) in
 the session scratchpad's home-build-shots/pr4-desk/.
