@@ -13,6 +13,16 @@ sizes and "Thursday · November 19"), then:
     nothing to say a door has a quiet line. Serve shows where the church
     schedules volunteers (sunday_serving.on), Kids only to a parent or a
     kids leader (the Kids space: a phone never checks a child in);
+  - (Kevin's Home plan, 2026-11-21) the doors' words: Prayer "3 new" else
+    "Ask or pray"; Events "2 coming up" (the calendar's upcoming occasions
+    and the service when it isn't on the calendar); Serve the next time,
+    else what waits, else "3 teams" the member can see; and Give ("Give
+    online", while the church takes gifts) as the fourth door, unless Kids
+    already is (Give is in the tab bar too). The service is This week's
+    first card as a pass (pass_card): a chip on the picture, I'll be there,
+    Watch live, Calendar. The sentence names the service's time tomorrow
+    and, with no gathering this week to lead with, what's ready to watch
+    and the next event a few weeks out (line, _later);
   - This week (week_card, week): horizontal cards, a picture with a date
     leaf, a grey kicker, the title, where, how many are going (a number:
     the new look shows no faces) and the record's own action, in place of
@@ -261,10 +271,17 @@ def pick(*, live: Optional[Dict[str, Any]], ck: Optional[Dict[str, Any]], gnext:
 
 
 def line(choice: Dict[str, Any], *, service: Optional[Dict[str, Any]], serving: Optional[Dict[str, Any]],
-         new: bool, first: Optional[Dict[str, Any]], now: datetime) -> List[Tuple[str, bool]]:
+         new: bool, first: Optional[Dict[str, Any]], now: datetime, message: Optional[Dict[str, Any]] = None,
+         occasions: Optional[List[Dict[str, Any]]] = None) -> List[Tuple[str, bool]]:
     """The greeting's sentence, as (words, heavier ink) parts. Only what the
     records say: the gathering it features and when, the church's next
-    service, where the member serves and when to be there."""
+    service (and its time, tomorrow), where the member serves and when to be
+    there. With no gathering this week to lead with (Kevin's Home plan,
+    2026-11-21: "Sunday is tomorrow at 11:00. Last week's message is ready to
+    watch, and Oh Give Thanks is two weeks out."), what's ready to watch
+    (`message`: the newest message while it's new, member_feed_more
+    .message_of) and the church's next event a week to three weeks out
+    (`occasions`, never a service)."""
     today = now.date()
     if new:
         parts: List[Tuple[str, bool]] = [("We're so glad you found us.", False)]
@@ -306,21 +323,64 @@ def line(choice: Dict[str, Any], *, service: Optional[Dict[str, Any]], serving: 
     if service and 0 < (service["day"] - today).days < 7 and service["day"] != lead:
         n = (service["day"] - today).days
         name = "Sunday" if service["day"].weekday() == 6 else f"{service['day']:%A}'s service"
-        soon = "tomorrow" if n == 1 else f"in {n} days"
+        st = service.get("time")
+        soon = ("tomorrow" + (f" at {hm(st)}" if st else "")) if n == 1 else f"in {n} days"
         c = serving_on(serving, service["day"])
         gap = " " if parts else ""
         if c:
-            parts += [(f"{gap}{name} is {soon}, and you're ", False), (serve_words(c), True), (".", False)]
+            parts += [(f"{gap}{name} is ", False), (soon, True), (", and you're ", False), (serve_words(c), True),
+                      (".", False)]
             said_serving = True
         else:
-            parts += [(f"{gap}{name} is {soon}.", False)]
+            parts += [(f"{gap}{name} is ", False), (soon, True), (".", False)]
     if not said_serving:
         for c in (serving or {}).get("coming") or []:
             d = _day((c.get("service") or {}).get("day"))
             if d and 0 < (d - today).days < 7 and (not service or d != service["day"]):
                 parts += [(f"{' ' if parts else ''}On {d:%A} you're ", False), (serve_words(c), True), (".", False)]
                 break
+    if lead is None:
+        parts += _later(today, message, occasions, service, gap=bool(parts))
     return parts
+
+
+def _later(today: date, message: Optional[Dict[str, Any]], occasions: Optional[List[Dict[str, Any]]],
+           service: Optional[Dict[str, Any]], *, gap: bool) -> List[Tuple[str, bool]]:
+    """"Last week's message is ready to watch, and Oh Give Thanks is two
+    weeks out.": the newest message while it's new, the next event a week to
+    three weeks out (not a service, not the service's own entry)."""
+    bits: List[List[Tuple[str, bool]]] = []
+    d = _day((message or {}).get("preached_on"))
+    if message and d and 0 <= (today - d).days <= 7:
+        k = (today - d).days
+        whose = ("Today's" if k == 0 else "Yesterday's" if k == 1 else "Last week's" if d.weekday() == 6
+                 else f"{d:%A}'s")
+        bits.append([(f"{whose} message is ", False), ("ready to watch", True)])
+    skip = str((service or {}).get("entry_id") or "")
+    for o in occasions or []:
+        od, title = _day(o.get("date")), " ".join(str(o.get("title") or "").split())
+        if not od or not title or (skip and str(o.get("entry_id") or "") == skip):
+            continue
+        if any(x in title.lower() for x in SERVICE_WORDS):
+            continue
+        n = (od - today).days
+        if n < 7:
+            continue
+        if n <= 24:
+            out_words = {1: "a week out", 2: "two weeks out"}.get(round(n / 7), "three weeks out")
+            bits.append([(f"{title} is ", False), (out_words, True)])
+        break
+    out: List[Tuple[str, bool]] = []
+    for i, b in enumerate(bits):
+        words, bold = b[0]
+        if i == 0:
+            words = (" " if gap else "") + words
+        else:
+            out.append((", and ", False))
+        out += [(words, bold)] + b[1:]
+    if out:
+        out.append((".", False))
+    return out
 
 
 # ─── the featured card ───────────────────────────────────────────────
@@ -391,6 +451,37 @@ def week_card(pic: str, *, href: str, day: date, kicker: str, title: str, place:
             f'{f"<p class=lm-wkm>{_e(place)}</p>" if place else ""}'
             f'{f"<div class=lm-wkf>{count}{action}</div>" if count or action else ""}'
             f'{f"<p class=lm-wknote>{note}</p>" if note else ""}</div></article>')
+
+
+def icon_link(href: str, icon_name: str, label: str, cls: str = "lm-wkb o", *, download: bool = False,
+              aria: str = "") -> str:
+    """A quiet outlined button that is a link, its icon before the words
+    (the pass's Watch live and Calendar)."""
+    import member_lumen_ui as lm
+    extra = (" download" if download else "") + (f' aria-label="{_e(aria)}"' if aria else "")
+    return f'<a class="{_e(cls)}" href="{_e(href)}"{extra}>{lm.ic(icon_name, 15)}{_e(label)}</a>'
+
+
+def pass_card(pic: str, *, href: str, day: date, chip: str, kicker: str, title: str, place: str = "",
+              count: str = "", buttons: Tuple[str, ...] = (), note: str = "", pin: str = "") -> str:
+    """The service as This week's first card, a pass (Kevin's Home plan,
+    2026-11-21): week_card's picture and date leaf with a chip on the
+    picture ("Today", "Tomorrow", the weekday), the kicker, the title, where
+    (or that it can be watched live), how many are going, and its buttons in
+    a row that wraps: the record's own answer (I'll be there, check-in on
+    the day), Watch live, Calendar. `pic`, `kicker`, `count`, `buttons`,
+    `note` and `pin` are trusted markup; the chip, title and place are
+    escaped."""
+    btns = "".join(b for b in buttons if b)
+    chip_html = f'<span class="lm-chip" aria-hidden="true">{_e(chip)}</span>' if chip else ""
+    place_html = f'<p class="lm-wkm">{_e(place)}</p>' if place else ""
+    count_html = f'<div class="lm-wkg">{count}</div>' if count else ""
+    btn_html = f'<div class="lm-wkf lm-wkf3">{btns}</div>' if btns else ""
+    note_html = f'<p class="lm-wknote">{note}</p>' if note else ""
+    return (f'<article class="lm-wk lm-pass"><span class="lm-wkp"><span class="lm-wka">{pic}</span>'
+            f'<span class="lm-wkl" aria-hidden="true"><small>{day:%a}</small><b>{day.day}</b></span>{chip_html}{pin}</span>'
+            f'<div class="lm-wkbd"><p class="lm-wkk">{kicker}</p><h3 class="lm-wkt"><a href="{_e(href)}">{_e(title)}</a></h3>'
+            f'{place_html}{count_html}{btn_html}{note_html}</div></article>')
 
 
 def week(cards: List[str]) -> str:
@@ -513,6 +604,14 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 .lm-wkp .mb-pin{z-index:3;top:auto;bottom:10px;right:10px;height:28px;padding:0 11px;font-size:12px;background:rgba(20,18,16,.55);box-shadow:none;}
 .lm-wkp .mb-pin svg{display:none;}
 .lm-wk5+.lm-ck{margin-top:16px;}
+/* the service as a pass (Kevin's Home plan): a chip on the picture, its buttons in a row that wraps */
+.lm-chip{position:absolute;right:12px;top:12px;z-index:2;height:26px;padding:0 11px;border-radius:13px;display:inline-flex;
+  align-items:center;background:rgba(20,18,16,.62);color:#fff;font:650 12px/1 var(--mb-ui);letter-spacing:.01em;}
+.lm-wkg{position:relative;z-index:2;margin-top:10px;}
+.lm-wkf3{flex-wrap:wrap;gap:8px;}
+.lm-wkf3>.lm-wkb:not(.q),.lm-wkf3>form:not(.q){margin-left:0;}
+.lm-wkb.o{background:none;color:var(--fg);box-shadow:inset 0 0 0 1px var(--lm-line);}
+.lm-wkb.o svg{color:var(--fg2);}
 /* the composer, then the band before the feed */
 .lm-hcp{display:flex;align-items:center;gap:10px;margin:22px -10px 0 0;padding:0 0 16px;}
 .lm-hcpav{position:relative;width:40px;height:40px;flex:none;border-radius:50%;overflow:hidden;display:grid;place-items:center;

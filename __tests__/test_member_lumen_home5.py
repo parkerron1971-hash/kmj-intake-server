@@ -327,9 +327,9 @@ def test_the_doors_read_the_records(church, fake, monkeypatch):  # noqa: F811
                                                  "title": "Sunday service"}}],
                          "asks": [], "teams": [{"name": "Greeters"}]}
     doors = _doors(_client(fake, monkeypatch).get("/my").text)
-    n = sum(1 for o in church["occ"] if 0 <= (date.fromisoformat(o["date"]) - TODAY).days < 7)
-    assert doors[0] == ("/my/connect#lm-pray-h", "Prayer", "", "Ask for prayer")
-    assert doors[1] == ("/my/events", "Events", "", f"{n} this week")
+    n = sum(1 for o in church["occ"] if date.fromisoformat(o["date"]) >= TODAY)   # everything coming up
+    assert doors[0] == ("/my/connect#lm-pray-h", "Prayer", "", "Ask or pray")
+    assert doors[1] == ("/my/events", "Events", "", f"{n} coming up")
     assert doors[2] == ("/my/connect#lm-sv-h", "Serve", "", f"Sun 9:45")
     assert len(doors) == 3                                                   # no Kids space: no Kids door
 
