@@ -222,6 +222,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_bills.TOOL]  # the Bills tab (what's owed): the same
     import chief_giving_counts
     out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
+    import chief_giving_summary
+    out += [chief_giving_summary.TOOL]  # what came in over a day or a span, no giver named: the same
     import chief_duties
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
     import chief_church_assignments
@@ -498,7 +500,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "find_housing_payments", "fund_status",
                                               "find_fund_payments", "bank_history", "bank_to_file",
                                               "giving_deposits", "expense_categories", "bills",
-                                              "giving_counts", "list_duties", "list_map",
+                                              "giving_counts", "giving_summary", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
                                               "move_in_status", "people_under", "assignments_of", "church_email",
                                               "one_on_one", "whose_job", "job_of",

@@ -110,8 +110,95 @@ CORE_READS: FrozenSet[str] = frozenset({
     "contact_deep_dive", "list_availability", "church_people", "search_transactions",
     "list_expenses", "sms_status", "email_setup_status", "get_weather", "view_website",
     "list_scheduled", "what_undo",
+    # What came in over a day or a span (a church or nonprofit): the plainest
+    # question a treasurer asks, so it never waits on a lookup (2026-11-22).
+    "giving_summary",
 })
 LOADED_TOOLS: FrozenSet[str] = KEEP_VERBS | CORE_READS
+
+# ── The church edition ──────────────────────────────────────────────────
+#
+# Kevin, 2026-11-22: a new church's treasurer asked Chief what the giving
+# was that day and Chief couldn't find it; "any person that we add in, it
+# seems like Chief doesn't get the information about the church, the role,
+# responsibilities".
+#
+# The kept verbs above were chosen from what Chief DID in the 60 days to
+# 2026-11-03: seven businesses, mostly business work, before most of a
+# church's lookups existed. So on a church's turn nearly every church read
+# was a lookup away (measured 2026-11-22 on main: of 143 tools, 68 deferred,
+# among them the service counts, the Sunday match, bills, whose job
+# something is, someone's job, the duties, assignments, the serving week
+# and who is away), and a deferred tool loses to a loaded neighbour
+# (_siblings): the question went to show_revenue, which answered nothing.
+#
+# A church's turn gets its own edition of the same manual: everything the
+# standard edition keeps, PLUS the verbs below written out in full and
+# loaded as tools. Nothing is reworded and nothing is removed; the lookup
+# works the same. The edition is the same text for every church, so it
+# caches once for all of them (a second cached manual beside the standard
+# one). Switched by CHIEF_CHURCH_EDITION: on (the default) | off.
+CHURCH_MARK = "THIS IS THE CHURCH EDITION"
+CHURCH_VERBS: FrozenSet[str] = frozenset({
+    # Giving & money, as a church's office asks for it.
+    "giving_summary", "giving_counts", "record_service_gifts", "undo_service_gifts",
+    "giving_deposits", "match_giving_deposits", "unmatch_giving_deposits",
+    "giving_statement", "giving_statements_run", "bills",
+    # Who does what: the duties, whose job something is, someone's job, a login's own work.
+    "list_duties", "whose_job", "job_of", "my_work",
+    # The people under someone and their assignments.
+    "people_under", "assignments_of", "one_on_one", "give_assignment", "mark_assignment",
+    "team_week", "monthly_report_draft",
+    # The leaders schedule and the volunteers' week.
+    "who_is_away", "time_off_asks", "serving_week", "check_dates", "event_volunteers",
+    "church_email",
+})
+EDITIONS = ("", "church")
+
+
+def church_edition_on() -> bool:
+    return (os.environ.get("CHIEF_CHURCH_EDITION") or "on").strip().lower() != "off"
+
+
+def edition_for(business: Any) -> str:
+    """Which edition of the short manual this business's turn reads:
+    "church" for a church (the switch on), "" for everyone else and
+    whenever that can't be told."""
+    if not church_edition_on():
+        return ""
+    try:
+        import church_follow_up
+        return "church" if church_follow_up.is_church(business if isinstance(business, dict) else {}) else ""
+    except Exception:  # pragma: no cover - the standard edition, never a failed turn
+        return ""
+
+
+def edition_of(system: Any) -> str:
+    """The edition a built prompt carries, read from its own text, so the
+    tools sent always match the manual that explains them. Only the short
+    manual's own opening line counts (the one that starts THE SHORT MANUAL):
+    the same words in a business's data, further down, change nothing."""
+    if isinstance(system, str):
+        texts = [system]
+    elif isinstance(system, list):
+        texts = [str(b.get("text") or "") for b in system if isinstance(b, dict)]
+    else:
+        return ""
+    opening = LEAN_MARK + " — "
+    for text in texts:
+        at = text.find(opening)
+        if at != -1:
+            end = text.find("\n", at)
+            return "church" if CHURCH_MARK in text[at:end if end != -1 else len(text)] else ""
+    return ""
+
+
+def _keep_for(edition: str) -> FrozenSet[str]:
+    return KEEP_VERBS | CHURCH_VERBS if edition == "church" else KEEP_VERBS
+
+
+def _loaded_for(edition: str) -> FrozenSet[str]:
+    return LOADED_TOOLS | CHURCH_VERBS if edition == "church" else LOADED_TOOLS
 
 # Sections kept whole in lean mode: identity, character, trust, approvals,
 # money, voice, the build bridge, earned permission, the request map, and
@@ -410,6 +497,10 @@ def _asked_as(section: _Section, verb: str) -> str:
 
 _LEAN_CACHE: Dict[str, Tuple[str, List[_Section], FrozenSet[str]]] = {}
 _LAST_FULL: List[str] = []
+# The edition of the request being made (set where the manual is cut and
+# where its tools are chosen), for the calls that come without a prompt:
+# the lookup's answer, the note a verb ran without its how-to.
+_EDITION: contextvars.ContextVar[str] = contextvars.ContextVar("chief_lean_brief.edition", default="")
 
 
 def _tool_registry() -> Dict[str, str]:
@@ -439,7 +530,8 @@ def _tool_registry() -> Dict[str, str]:
 SIBLING_PASSES = 4
 
 
-def _siblings(sections: List[_Section], registry: Dict[str, str]) -> FrozenSet[str]:
+def _siblings(sections: List[_Section], registry: Dict[str, str],
+              keep: FrozenSet[str] = KEEP_VERBS, loaded_tools: FrozenSet[str] = LOADED_TOOLS) -> FrozenSet[str]:
     """The tools a kept verb or a rule points at, which must be callable
     without a lookup and written out in full like it.
 
@@ -454,8 +546,8 @@ def _siblings(sections: List[_Section], registry: Dict[str, str]) -> FrozenSet[s
     Repeated until nothing new joins (add_block_range brings its
     remove_block_range), at most SIBLING_PASSES times."""
     names = set(registry)
-    kept = set(KEEP_VERBS)
-    loaded = set(LOADED_TOOLS)
+    kept = set(keep)
+    loaded = set(loaded_tools)
     found: set = set()
 
     def named(text: str, n: str) -> bool:
@@ -490,27 +582,40 @@ def _parsed(manual: str) -> List[_Section]:
     return _entry(manual)[1]
 
 
-def _entry(manual: str) -> Tuple[str, List[_Section], FrozenSet[str]]:
-    key = hashlib.sha256(manual.encode("utf-8")).hexdigest()
+def _entry(manual: str, edition: Optional[str] = None) -> Tuple[str, List[_Section], FrozenSet[str]]:
+    """(the short manual, the full one's sections, the verbs kept in full)
+    for one edition of this manual. Kept per edition: a church's turn and a
+    business's alternate on the same process, and neither re-cuts the other."""
+    edition = _EDITION.get() if edition is None else edition
+    if edition not in EDITIONS:
+        edition = ""
+    digest = hashlib.sha256(manual.encode("utf-8")).hexdigest()
+    key = digest + "|" + edition
     hit = _LEAN_CACHE.get(key)
     if hit is None:
-        sections = _parse(manual, _known_verbs())
-        kept = KEEP_VERBS | _siblings(sections, _tool_registry())
-        hit = (_render_lean(sections, kept), sections, kept)
-        _LEAN_CACHE.clear()
+        other = next((v for k, v in _LEAN_CACHE.items() if k.startswith(digest + "|")), None)
+        sections = other[1] if other else _parse(manual, _known_verbs())
+        keep = _keep_for(edition)
+        kept = keep | _siblings(sections, _tool_registry(), keep, _loaded_for(edition))
+        hit = (_render_lean(sections, kept, edition), sections, kept)
+        for k in [k for k in _LEAN_CACHE if not k.startswith(digest + "|")]:
+            _LEAN_CACHE.pop(k, None)          # an older manual's cuts (a deploy, a test)
         _LEAN_CACHE[key] = hit
     return hit
 
 
-def kept_verbs(manual: Optional[str] = None) -> FrozenSet[str]:
+def kept_verbs(manual: Optional[str] = None, edition: Optional[str] = None) -> FrozenSet[str]:
     """Written out in full in the short manual and never deferred:
-    KEEP_VERBS plus the siblings this manual points at."""
+    KEEP_VERBS (and a church's own, in its edition) plus the siblings this
+    manual points at. `edition` None: the edition of the request being made."""
     manual = manual if manual is not None else full_manual()
-    return _entry(manual)[2] if manual else KEEP_VERBS
+    edition = _EDITION.get() if edition is None else edition
+    return _entry(manual, edition)[2] if manual else _keep_for(edition)
 
 
-def siblings(manual: Optional[str] = None) -> FrozenSet[str]:
-    return kept_verbs(manual) - KEEP_VERBS
+def siblings(manual: Optional[str] = None, edition: Optional[str] = None) -> FrozenSet[str]:
+    edition = _EDITION.get() if edition is None else edition
+    return kept_verbs(manual, edition) - _keep_for(edition)
 
 
 def prose_to_lookup(manual: str) -> List[str]:
@@ -526,9 +631,18 @@ def prose_to_lookup(manual: str) -> List[str]:
     return out
 
 
-def _render_lean(sections: List[_Section], keep: FrozenSet[str] = KEEP_VERBS) -> str:
+CHURCH_INTRO = (
+    " " + CHURCH_MARK + ": the lookups a church's office asks for most are written out in full and "
+    "ready to call as well: what came in (giving_summary) and the service counts, the Sunday match, "
+    "bills, whose job something is and someone's job, the duties, the people under someone and their "
+    "assignments, who is away and the volunteers' week. When a church's person asks about any of those, "
+    "call the lookup and answer from what it returns; never say you can't see it before you have.")
+
+
+def _render_lean(sections: List[_Section], keep: FrozenSet[str] = KEEP_VERBS, edition: str = "") -> str:
     out: List[str] = []
     intro_done = False
+    intro = INTRO + (CHURCH_INTRO if edition == "church" else "")
     for s in sections:
         if s.rule:
             out.extend(s.lines)
@@ -557,20 +671,24 @@ def _render_lean(sections: List[_Section], keep: FrozenSet[str] = KEEP_VERBS) ->
                 out.extend(_index_entry(s, v) for v in dropped)
             out.append("")
         if not intro_done and s.header.startswith("ACTION FORMAT"):
-            out.extend([INTRO, ""])
+            out.extend([intro, ""])
             intro_done = True
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text)
     if not intro_done:  # pragma: no cover - the manual lost its ACTION FORMAT line
-        text = INTRO + "\n\n" + text
+        text = intro + "\n\n" + text
     return text.rstrip() + "\n\n"
 
 
-def lean_manual(full: str) -> str:
-    """The short manual for this full manual (memoised: it is the same
-    text for every business, so it is cut once per process)."""
+def lean_manual(full: str, edition: str = "") -> str:
+    """The short manual for this full manual, in one edition ("" the
+    standard one, "church" a church's: edition_for). Memoised: an edition
+    is the same text for every business that reads it, so it is cut once
+    per process."""
+    edition = edition if edition in EDITIONS else ""
     _LAST_FULL[:] = [full]
-    return _entry(full)[0]
+    _EDITION.set(edition)
+    return _entry(full, edition)[0]
 
 
 def lean_prompt(system: str) -> str:
@@ -693,15 +811,19 @@ def _tool_definition(deferred: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def tools_for_request(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def tools_for_request(tools: List[Dict[str, Any]], system: Any = None) -> List[Dict[str, Any]]:
     """The same tools, the rarely used ones deferred, plus the lookup.
 
     Order is kept (the cache prefix depends on it). Server tools (with a
-    `type`) and every kept verb stay loaded; at least the lookup is."""
+    `type`) and every kept verb stay loaded; at least the lookup is. With
+    `system` (the prompt this request carries) the edition is read from its
+    own text, so a church's manual always travels with a church's tools."""
     out: List[Dict[str, Any]] = []
     deferred: List[Dict[str, Any]] = []
     manual = full_manual()
-    loaded = LOADED_TOOLS | (kept_verbs(manual) if manual else frozenset())
+    edition = edition_of(system) if system is not None else _EDITION.get()
+    _EDITION.set(edition)
+    loaded = _loaded_for(edition) | (kept_verbs(manual, edition) if manual else frozenset())
     for t in tools:
         name = t.get("name")
         if t.get("type") or not name or name in loaded or name == TOOL_NAME:
