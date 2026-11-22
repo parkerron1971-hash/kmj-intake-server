@@ -515,6 +515,12 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
         raise HTTPException(409, "this invitation was revoked")
     if inv.get("status") == "active":
         return {"ok": True, "already": True, "business_id": inv.get("business_id")}
+    return _accept_row(inv, user, body.name)
+
+
+def _accept_row(inv: Dict[str, Any], user: AuthedUser, name_in: Any) -> Dict[str, Any]:
+    """One invited seat becomes this signed-in person's: the token link
+    (accept) and their own confirmed address (accept_mine) both end here."""
     sb_clients.sb_patch_as_service(
         f"/business_users?id=eq.{inv['id']}",
         {"status": "active", "user_id": str(user.id), "joined_at": _now_iso()})
@@ -529,7 +535,7 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
     # gets in. The invite's email finds their record, else the address they
     # signed up with.
     biz = str(inv.get("business_id"))
-    name = _clean_name(body.name)
+    name = _clean_name(name_in)
     tie: Dict[str, Any] = {"name": name} if name else {}
     if not inv.get("contact_id"):
         c = match_contact(biz, inv.get("invited_email"), name) or match_contact(biz, getattr(user, "email", None), name)
@@ -540,6 +546,69 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
     return {"ok": True, "business_id": inv.get("business_id"), "role": inv.get("role"),
             "me": _person_for_seat(biz, {**inv, **tie}),
             "church_email": _give_church_address(biz, str(user.id), str(inv.get("invited_by") or ""), name or "")}
+
+
+def _confirmed_email(user_id: str) -> Optional[str]:
+    """The account's own sign-in address, only once Supabase has confirmed
+    it (email_confirmed_at). None when it isn't confirmed or can't be read:
+    never a guess, so an address someone merely typed opens nothing."""
+    import httpx
+    base = sb_clients.sb_url()
+    if not base or not safe_id(str(user_id or "")):
+        return None
+    try:
+        r = httpx.get(f"{base}/auth/v1/admin/users/{quote(str(user_id), safe='')}",
+                      headers=sb_clients.sb_headers_service(), timeout=10)
+    except Exception:  # noqa: BLE001
+        logger.warning("[team] the account's address couldn't be read", exc_info=True)
+        return None
+    if r.status_code != 200:
+        return None
+    u = r.json() or {}
+    if not (u.get("email_confirmed_at") or u.get("confirmed_at")):
+        return None
+    return str(u.get("email") or "").strip().lower() or None
+
+
+class AcceptMineBody(BaseModel):
+    name: Optional[str] = None
+
+
+MINE_MAX = 10
+
+
+@router.post("/accept-mine")
+def accept_mine(body: Optional[AcceptMineBody] = None, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Every invitation waiting for this person's confirmed address, taken.
+
+    Kevin, 2026-11-21: "when the login access is going out to those the
+    churches give ... the system have them create account but it makes them
+    sign up like they are a church." The invite link's token lives in the
+    browser that opened it; a confirmation link opened on another browser
+    (a phone's mail app), or an emailed sign-in link, comes back without it,
+    and a person with no business is shown the new-church setup. The app
+    asks here before that setup: the invitation was emailed to this address,
+    and Supabase confirmed they hold it, so it is theirs as the link would
+    be. Returns {ok, accepted: [business_id, ...]}; [] when nothing waits or
+    the address isn't confirmed yet."""
+    email = _confirmed_email(str(user.id))
+    if not email:
+        return {"ok": True, "accepted": [], "confirmed": False}
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?invited_email=eq.{quote(email, safe='@')}&status=eq.invited"
+        f"&select=*&order=invited_at.asc&limit={MINE_MAX}")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Your invitations couldn't be read just now. Try again.")
+    name = (body.name if body else None)
+    accepted: List[str] = []
+    for inv in rows:
+        if str(inv.get("invited_email") or "").strip().lower() != email or inv.get("status") != "invited":
+            continue
+        got = _accept_row(inv, user, name)
+        accepted.append(str(got.get("business_id")))
+    if accepted:
+        logger.info("[team] %d invitation(s) taken by a confirmed address", len(accepted))
+    return {"ok": True, "accepted": accepted, "confirmed": True}
 
 
 def _give_church_address(biz: str, uid: str, invited_by: str, name: str) -> Optional[str]:
