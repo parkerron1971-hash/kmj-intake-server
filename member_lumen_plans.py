@@ -681,6 +681,14 @@ def render_plan(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any], key
     return _shell(biz, site, m["title"], body, tab="bible", who=me)
 
 
+def _own_flash(request: Any) -> str:
+    """The notices of this page's own forms (Start over; a day's form sent
+    for a day not open yet)."""
+    import member_portal_reading as mpr
+    q = request.query_params
+    return mpr._flash(request) if q.get("done") in ("over",) or q.get("err") == "day" else ""
+
+
 def over(plan: str, words: str) -> str:
     """Start over: a quiet button that opens to say what it does, then the
     form that does it (no script needed)."""
@@ -769,8 +777,7 @@ def render_devotional(biz: Dict[str, Any], site, request: Any, me: Dict[str, Any
         rows.append(f'<li class="lm-pp-d{" " + cls if cls else ""}">{circle}{body}</li>')
     page = (f'<a class="mb-back" href="/my/bible?tab=plans">{ui.icon("back", 16)}Plans</a>{top}'
             + (f'<div class="lm-pp-about">{about}</div>' if about else "")
-            + (f'<p class="mp-ok mp-flash" role="status">Started over.</p>' if request.query_params.get("done") == "over"
-               else mpc._flash(request)) + (f'<div class="lm-pp-acts">{acts}</div>' if acts else "") + note
+            + (_own_flash(request) or mpc._flash(request)) + (f'<div class="lm-pp-acts">{acts}</div>' if acts else "") + note
             + f'<section aria-labelledby="lm-pp-dh"><h2 class="mp-sr" id="lm-pp-dh">The days</h2>'
             f'<ol class="lm-pp-days">{"".join(rows)}</ol></section>')
     return _shell(biz, site, title, page, tab="bible", who=me)
@@ -790,6 +797,10 @@ async def day_page(request: Any, biz: Dict[str, Any], site, me: Dict[str, Any], 
     ver = "" if preview else version(request)
     mine = await asyncio.to_thread(starts, bid, cid, ver, preview)
     plan = own(key, (mine or {}).get(f"reading:{key}"))
+    if preview:
+        # The owner's preview sees every day, as started long enough ago, and saves nothing.
+        m = meta(key) or {}
+        plan = own(key, date.today() - timedelta(days=max(0, int(m.get("count") or 1) - 1)))
     back = RedirectResponse(f"/my/bible/plans/{key}", status_code=303, headers=_SECURE_HEADERS)
     if mine is None or not plan or not raw.isdigit():
         return back

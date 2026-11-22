@@ -220,7 +220,8 @@ def test_the_days_form_marks_done_and_keeps_the_journal_and_checklist(full, fake
 def test_the_days_form_refuses_a_day_not_open_and_another_site(full, fake, monkeypatch):  # noqa: F811
     c = _app(fake, monkeypatch)
     r = c.post("/my/bible/plans/day", data={"devotional": D1, "day": "5", "done": "1"}, follow_redirects=False)
-    assert r.headers["location"] == f"/my/bible/plans/{D1}/5?err=day"
+    assert r.headers["location"] == f"/my/bible/plans/{D1}?err=day"
+    assert "That day can&#x27;t be marked yet." in c.get(r.headers["location"]).text
     r = c.post("/my/bible/plans/day", data={"devotional": D1, "day": "3", "done": "1"},
                headers={"origin": "https://evil.example"}, follow_redirects=False)
     assert r.status_code == 403
@@ -292,3 +293,43 @@ def test_the_css_is_its_own_block_under_body_lm():
             one = one.strip()
             if one and one not in ("from", "to"):
                 assert one.startswith("body.lm"), one
+
+
+def test_the_days_form_never_calls_a_failed_save_saved(full, fake, monkeypatch):  # noqa: F811
+    import member_portal_devotionals as mpd
+    c = _app(fake, monkeypatch)
+    form = {"devotional": D1, "day": "3", "step": "journal", "journal": "x", "done": "1"}
+    real_started = mpd.started_on
+    monkeypatch.setattr(mpd, "save_day", lambda *a: None)                              # the write failed
+    r = c.post("/my/bible/plans/day", data=form, follow_redirects=False)
+    assert r.headers["location"] == f"{DAY3}?step=journal&err=error"
+    monkeypatch.setattr(mpd, "started_on", lambda *a: False)                           # the start couldn't be read
+    r = c.post("/my/bible/plans/day", data=form, follow_redirects=False)
+    assert r.headers["location"] == f"{DAY3}?step=journal&err=error"
+    fake.down.add("devotionals")                                                       # the devotional couldn't be read
+    r = c.post("/my/bible/plans/day", data=form, follow_redirects=False)
+    assert r.headers["location"] == f"{DAY3}?step=journal&err=error"
+    r = c.post("/my/bible/plans/day", data={**form, "devotional": "not-an-id"}, follow_redirects=False)
+    assert r.headers["location"] == "/my/bible?tab=plans"
+    assert not [x for x in fake.t["devotional_progress"] if x["day"] == 3]
+    fake.down.discard("devotionals")
+    monkeypatch.setattr(mpd, "started_on", real_started)
+    html = c.get(f"{DAY3}?step=journal&err=error").text
+    assert "That didn&#x27;t save" in html and "Marked done" not in html
+
+
+def test_the_preview_sees_a_plans_day_and_saves_nothing(bible, fake, monkeypatch):  # noqa: F811
+    import member_lumen_plans as mlp
+    import member_lumen
+    from fastapi.responses import RedirectResponse
+    import asyncio
+
+    class R:
+        cookies, query_params = {}, {}
+    monkeypatch.setattr(member_lumen, "page", lambda: True)
+    got = asyncio.run(mlp.day_page(R(), fake.business(), {}, {"id": tct.ANA, "name": "Ana"}, "topic-grief", "7",
+                                   preview=True))
+    assert not isinstance(got, RedirectResponse)
+    html, status = got
+    assert status == 200 and "This is a preview: Mark done doesn't save here." in html
+    assert 'action="/my/reading"' not in html and "I am the resurrection" in html

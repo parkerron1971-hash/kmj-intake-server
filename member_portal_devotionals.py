@@ -1169,7 +1169,8 @@ async def _save_day_form(request: Request, bid: str, cid: str):
     if started is False:
         return go(err="error")
     if not 1 <= n <= dv.open_upto(dv.run_start(dev, started), int(dev.get("day_count") or 0)):
-        return go(err="day")
+        # a day not open yet has no page of its own: the devotional says so
+        return RedirectResponse(f"/my/bible/plans/{dev_id}?err=day", status_code=303, headers=_SECURE_HEADERS)
     body: Dict[str, Any] = {}
     if "journal" in form:
         body["journal"] = str(form.get("journal") or "")
