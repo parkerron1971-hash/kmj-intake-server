@@ -851,7 +851,17 @@ padding-top:14px;border-top:1px solid var(--border);}}
     Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
   </footer>
 </main>
-<script>
+{_rsvp_script(api_origin, slug)}
+{signup_js}
+</body>
+</html>"""
+
+
+def _rsvp_script(api_origin: str, slug: str) -> str:
+    """The plain sign-up cards' script (a ticketed event's card has its own,
+    church_event_signups.public_script). Shared by the events page and the
+    section a hand-built site's Events page carries."""
+    return f"""<script>
 (function() {{
   var API = {api_origin!r};
   var SLUG = {slug!r};
@@ -898,10 +908,29 @@ padding-top:14px;border-top:1px solid var(--border);}}
     }});
   }});
 }})();
-</script>
-{signup_js}
-</body>
-</html>"""
+</script>"""
+
+
+EVENTS_MARKER = "<!--solutionist:events-->"
+EMBED_CSS = '<style>\n.ev-embed{padding:clamp(48px,8vw,96px) 0}\n.ev-embed .ev-embed-title{font-size:clamp(28px,5vw,44px);line-height:1.1;margin:0 0 24px}\n.ev-embed .ev-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:20px}\n.ev-embed .ev-card{border:1px solid rgba(127,127,127,.28);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:8px;min-width:0}\n.ev-embed .ev-flyer img{width:100%;height:auto;border-radius:10px;display:block}\n.ev-embed .ev-when{font-size:14px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;opacity:.8}\n.ev-embed .ev-title{font-size:22px;line-height:1.2;margin:0}\n.ev-embed .ev-loc{opacity:.8}\n.ev-embed .ev-roles{display:flex;flex-wrap:wrap;gap:6px}\n.ev-embed .ev-role{font-size:13px;border:1px solid rgba(127,127,127,.35);border-radius:999px;padding:2px 10px}\n.ev-embed .ev-role.done{opacity:.55}\n.ev-embed .ev-spots,.ev-embed .ev-full{font-size:13px;font-weight:600;margin-left:6px;opacity:.85}\n.ev-embed .ev-form{display:flex;flex-direction:column;gap:8px;margin-top:6px}\n.ev-embed .ev-input{font:inherit;font-size:16px;padding:11px 12px;border-radius:10px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;width:100%}\n.ev-embed .ev-go{font:inherit;font-weight:700;font-size:16px;padding:12px 16px;border-radius:999px;border:0;cursor:pointer;background:var(--ev-accent,#7a2a62);color:#fff;min-height:44px}\n.ev-embed .ev-go:disabled{opacity:.6}\n.ev-embed .ev-msg{font-size:14px;min-height:1em}\n.ev-embed .ev-msg.ok{color:#2f7a4f}\n.ev-embed .ev-msg.err{color:#b3261e}\n.ev-embed .ev-fullnote{opacity:.8}\n.ev-embed .ev-input:focus-visible,.ev-embed .ev-go:focus-visible{outline:2px solid currentColor;outline-offset:3px}\n</style>'
+
+
+def render_events_section(business: Dict[str, Any], occasions: List[Dict[str, Any]],
+                          slug: str, *, api_origin: str) -> str:
+    """The "Coming up" section a hand-built site's Events page carries where
+    it puts EVENTS_MARKER (Kevin 2026-11-22: "the event page on website
+    doesn't show our events"): the hosted events page's own cards, sign-up
+    forms and rules, inside the site's layout. Empty when nothing public is
+    coming up, so the page reads as it was written."""
+    if not occasions:
+        return ""
+    import church_event_signups
+    cards = "".join(_occasion_card(o) for o in occasions)
+    return (EMBED_CSS + "<style>" + church_event_signups.PUBLIC_CSS + "</style>"
+            '<section class="ev-embed" aria-labelledby="ev-embed-title"><div class="wrap">'
+            '<h2 id="ev-embed-title" class="ev-embed-title">Coming up</h2>'
+            f'<div class="ev-list">{cards}</div></div></section>'
+            + _rsvp_script(api_origin, slug) + church_event_signups.public_script(api_origin, slug))
 
 
 def render_events_unavailable_page(business: Dict[str, Any],
