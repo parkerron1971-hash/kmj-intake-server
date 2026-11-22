@@ -7,7 +7,11 @@ it installable (a home-screen icon that opens in its own window, no
 browser bar):
 
     /my/manifest.webmanifest   name, colours, icons, start /my, scope /my
-    /my/icon-<size>.png        the church's initials on its own colour
+    /my/icon-<size>.png        the church's initials on its own colour, or
+                               the icon it chose (member_app_icon)
+    /my/startup-<w>x<h>.png    an iPhone/iPad opening screen, once a church
+                               has chosen its icon (member_app_icon)
+    /my/opening-mark.png       the in-app opening screen's middle (the same)
     /my/sw.js                  a small service worker scoped to /my: pages
                                always come from the network; with no
                                connection, a plain "you're offline" page
@@ -24,15 +28,25 @@ Store apps (Capacitor) are wave 3.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import logging
 from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi.responses import Response
 
+logger = logging.getLogger("member_app_install")
+
 ICON_SIZES = (180, 192, 512)
-ASSETS = ("/my/manifest.webmanifest", "/my/sw.js") + tuple(f"/my/icon-{s}.png" for s in ICON_SIZES)
+ASSETS = ("/my/manifest.webmanifest", "/my/sw.js", "/my/opening-mark.png") + tuple(f"/my/icon-{s}.png" for s in ICON_SIZES)
+
+
+def is_asset(path: str) -> bool:
+    """One of ASSETS, or an opening screen's address (member_app_icon)."""
+    import member_app_icon as mic
+    return path in ASSETS or mic.startup_size(path) is not None
 
 _CACHE_A_DAY = {"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"}
 
@@ -63,9 +77,10 @@ def short_name(name: str) -> str:
 
 
 def manifest(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    import member_app_icon as mic
     pal, _ = _colours(biz, site)
     name = " ".join((biz.get("name") or "").split()) or "Your church"
-    return {
+    out = {
         "name": name,
         "short_name": short_name(name),
         "description": f"Your page at {name}: messages, groups, sermons, giving and what's coming up.",
@@ -78,6 +93,9 @@ def manifest(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str, A
         "icons": [{"src": f"/my/icon-{s}.png", "sizes": f"{s}x{s}", "type": "image/png",
                    "purpose": "any maskable" if s == 512 else "any"} for s in (192, 512)],
     }
+    # The church's own icon, background and name under the icon, once it chose them.
+    out.update(mic.manifest_overrides(biz, pal))
+    return out
 
 
 @lru_cache(maxsize=256)
@@ -99,8 +117,16 @@ def _icon(size: int, initials: str, ground: str, accent: str, on_accent: str) ->
 
 
 def icon_png(biz: Dict[str, Any], site: Optional[Dict[str, Any]], size: int) -> bytes:
+    import member_app_icon as mic
     import member_app_ui as ui
     pal, _ = _colours(biz, site)
+    try:
+        own = mic.icon_png(biz, pal, size)
+    except Exception:  # noqa: BLE001 — a picture that can't be drawn leaves today's icon
+        logger.info("the church's icon couldn't be drawn", exc_info=True)
+        own = None
+    if own:
+        return own
     return _icon(int(size), ui.initials(biz.get("name") or "Church"),
                  pal["ground"], pal["accent"], pal["on_accent"])
 
@@ -201,6 +227,19 @@ def serve_asset(biz: Dict[str, Any], site: Optional[Dict[str, Any]], path: str) 
     for s in ICON_SIZES:
         if path == f"/my/icon-{s}.png":
             return Response(icon_png(biz, site, s), media_type="image/png", headers=_CACHE_A_DAY)
+    import member_app_icon as mic
+    size = mic.startup_size(path)
+    if size or path == "/my/opening-mark.png":
+        pal, _ = _colours(biz, site)
+        try:
+            got = mic.startup_png(biz, pal, *size) if size else mic.mark_png(biz, pal)
+        except Exception:  # noqa: BLE001
+            logger.info("an opening screen couldn't be drawn", exc_info=True)
+            got = None
+        if not got:
+            return Response(status_code=404, headers={"Cache-Control": "no-store"})
+        tag = '"' + hashlib.sha256(got).hexdigest()[:20] + '"'
+        return Response(got, media_type="image/png", headers={**_CACHE_A_DAY, "ETag": tag})
     return None
 
 
@@ -222,16 +261,27 @@ def serve_sheet(path: str) -> Optional[Response]:
                     headers={"Cache-Control": keep, "X-Content-Type-Options": "nosniff"})
 
 
-def head_tags(biz: Dict[str, Any]) -> str:
-    """What every member page's <head> adds so the browser can install it."""
+def head_tags(biz: Dict[str, Any], theme: Optional[Dict[str, Any]] = None) -> str:
+    """What every member page's <head> adds so the browser can install it.
+    Once the church has chosen its icon (member_app_icon): its address
+    carries the choice, the iPhone opening screens are linked, and the
+    in-app opening screen comes along. The name under the icon is the
+    church's when it typed one."""
     from html import escape
-    short = escape(short_name(biz.get("name") or ""), quote=True)
+    import member_app_icon as mic
+    c = mic.choice(biz)
+    short = escape(mic.short(biz) or short_name(biz.get("name") or ""), quote=True)
+    touch = f"/my/icon-180.png?v={mic.version(c)}" if c else "/my/icon-180.png"
+    extra = ""
+    if c:
+        import member_app_ui as ui
+        extra = mic.head_tags(biz, ui.palette(biz, theme or {}))
     return ('<link rel="manifest" href="/my/manifest.webmanifest">'
-            '<link rel="apple-touch-icon" href="/my/icon-180.png">'
+            f'<link rel="apple-touch-icon" href="{touch}">'
             '<meta name="mobile-web-app-capable" content="yes">'
             '<meta name="apple-mobile-web-app-capable" content="yes">'
             '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'
-            f'<meta name="apple-mobile-web-app-title" content="{short}">')
+            f'<meta name="apple-mobile-web-app-title" content="{short}">' + extra)
 
 
 REGISTER_JS = ("<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){"
