@@ -217,8 +217,8 @@ def test_home_leads_with_the_next_gathering(church, fake, monkeypatch):  # noqa:
     assert 'action="/my/rsvp"' in up and "I&#x27;m coming" in up
     assert "<b>40</b> going" in up
     assert "Prayer Night" in up                                              # this week: a card, not a row
-    assert 'class="lm-page"' in html and "Verse of the day" in html          # the ivory verse card
-    assert "How can we pray for you?" in html
+    assert 'class="lm-page lf-vod"' in html and "Verse of the day" in html  # the ivory verse card, in the feed
+    assert '<b>Prayer</b>' in html and 'href="/my/connect#lm-pray-h"' in html  # prayer is a door
     assert 'class="lm-ck"' not in html and 'action="/my/here"' not in html  # check-in is off
 
 

@@ -192,6 +192,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # The same for a member's devotional days: their journal is private.
     "devotional_progress":     "a member's own devotional days: done, practices ticked and a private journal (staff can't read it), so never in the church's export; cascade on member/business/devotional deletion",
     "member_plan_starts":      "the reading plans and devotionals a member started on their own day; keyed to devotional ids an import re-mints; cascade on member/business deletion",
+    "member_plan_prefs":       "a member's own choices for a plan (the group they read it with, a reminder time); keyed to devotional ids an import re-mints; cascade on member/business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported

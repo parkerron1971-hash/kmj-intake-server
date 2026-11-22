@@ -147,22 +147,19 @@ def test_someone_new_meets_the_pastor_on_home(pastor, fake, monkeypatch):  # noq
     fake.add("groups", id=tct.cid(33), business_id=tct.BIZ, name="Women of Grace", active=True, kind="small_group",
              join_mode="open", meets="Tuesdays")
     html = _app(fake, monkeypatch).get("/my").text
-    also = _also(html)
-    tiles = re.findall(r'<a class="lm-t4" href="([^"]+)">(.*?)</a>', also, re.S)
-    assert [h for h, _ in tiles] == ["/my/groups", "/my/pastor"]
-    t = tiles[1][1]
-    assert '<span class="lm-t4k">Your pastor</span><b class="lm-t4t">James Carter</b>' in t
-    assert '<span class=lm-t4m>Lead Pastor</span>' in t and 'class="lm-bdg"' in t and "<b>JC</b>" in t
-    # Prayer isn't lost: it moves below.
-    assert 'class="lm-pray" href="/my/prayer"' in _main(html)[_main(html).index('id="lm-today-h"'):]
+    # Kevin's Home plan (2026-11-21) took Also for you off Home: Meet the
+    # pastor is a row among the church's own cards, for someone new.
+    assert 'class="lm-also"' not in html
+    row = re.search(r'<a class="lf-crow" href="/my/pastor">.*?</a>', html, re.S).group(0)
+    assert "<b>Meet James Carter</b>" in row and "<small>Your pastor · Lead Pastor</small>" in row and "<b>JC</b>" in row
 
 
 def test_no_pastor_keeps_todays_tiles(pastor, fake, monkeypatch):  # noqa: F811
     _new(pastor)
     fake.t["church_leader_roles"].clear()
     mpa._KEPT.clear()
-    also = _also(_app(fake, monkeypatch).get("/my").text)
-    assert "Your pastor" not in also and "How can we pray for you?" in also
+    html = _app(fake, monkeypatch).get("/my").text
+    assert 'href="/my/pastor"' not in html and 'class="lm-also"' not in html
 
 
 def test_everyone_else_sees_no_tile_and_reads_nothing_more(pastor, fake, monkeypatch):  # noqa: F811
@@ -188,11 +185,13 @@ def test_someone_new_reads_the_pastor_once_then_it_is_kept(pastor, fake, monkeyp
     assert mine() == []
 
 
-def test_edit_mode_puts_change_on_the_tile(pastor, fake, monkeypatch):  # noqa: F811
+def test_edit_mode_changes_the_pastors_picture_on_their_page(pastor, fake, monkeypatch):  # noqa: F811
+    # Home's row has no Change of its own now; the Pastor spot is still in
+    # the pictures list (member_app_pictures).
     _new(pastor)
     fake.biz[tct.BIZ]["settings"]["member_portal"]["photo_editors"] = [tct.ANA]
-    also = _also(_app(fake, monkeypatch).get("/my?edit=pictures").text)
-    assert 'href="/my/pictures/spot?key=pastor&amp;back=home"' in also
+    html = _app(fake, monkeypatch).get("/my?edit=pictures").text
+    assert 'href="/my/pastor"' in html and "Changing pictures" in html
 
 
 # ─── Connect ─────────────────────────────────────────────────────────

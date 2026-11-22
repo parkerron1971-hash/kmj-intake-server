@@ -30,7 +30,9 @@ sizes and "Thursday · November 19"), then:
   - the composer (composer): Share a praise or a prayer (contract 2:
     /my/post, the members' composer, member_posts), and the band before
     the feed.
-Also for you moved below the feed. What follows is Look 4.1 as first built.
+Also for you moved below the feed, then (Kevin's Home plan, 2026-11-21) left
+Home: the feed ends with the church's own cards (member_lumen_feed
+.church_cards). What follows is Look 4.1 as first built.
 
 Kevin approved the Look 4.1 Home mock on 2026-11-19 ("build this app"): calm
 and confident, warm, with pictures. Restraint is the point (he turned down a
@@ -52,8 +54,7 @@ From the top:
     label, the serif title, where, how many are going (a number, never names
     or faces: the new look's rule everywhere), the main button and a quiet
     second one (featured());
-  - "Also for you": two picture tiles, each with a round icon badge, a label,
-    a title and one line (tiles()).
+  - "Also for you": two picture tiles (since gone from Home).
 
 Which card is featured (pick()): the church live > Sunday's service while
 check-in is open > for someone brand new, their first Sunday > the sooner of
@@ -88,25 +89,12 @@ MOON = ('<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
 SUN = ('<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.6"/>'
        '<path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6'
        'M7.2 16.8l-1.6 1.6"/></svg>')
-# The tiles' badge icons the look doesn't have yet (member_lumen_ui.ICONS has the rest).
-WAVE = ('<path d="M7 11V6a1.5 1.5 0 0 1 3 0v4M10 10V4.5a1.5 1.5 0 0 1 3 0V10M13 10V5.5a1.5 1.5 0 0 1 3 0V12'
-        'M16 9.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L4.3 15a1.5 1.5 0 0 1 2.5-1.7L7 13.6"/>')
-
 # Words in an occasion's name that make it the church's service.
 SERVICE_WORDS = ("worship", "service", "sunday", "mass")
 
 
 def _e(s: Any) -> str:
     return escape(str(s if s is not None else ""), quote=True)
-
-
-def icon(name: str, size: int = 15) -> str:
-    import member_lumen_ui as lm
-    if name == "wave":
-        return (f'<svg class="lm-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
-                f'{WAVE}</svg>')
-    return lm.ic(name, size)
 
 
 # ─── clocks and words ────────────────────────────────────────────────
@@ -510,37 +498,13 @@ def live_bar(live: Dict[str, Any]) -> str:
             f'<span>Live now{f" · {_e(title)}" if title else ""}</span><b>Join</b></a>')
 
 
-# ─── Also for you ────────────────────────────────────────────────────
-
-
-def tile(href: str, pic: str, badge: str, kicker: str, title: str, meta: str = "", *, day_leaf: Optional[int] = None,
-         progress: Optional[int] = None, pin: bool = False, tag: str = "") -> str:
-    """One picture tile. `href`, `pic` and `tag` (a Sample mark) are trusted
-    markup; the words are escaped."""
-    import member_app_ui as ui
-    dl = f'<span class="lm-dl4" aria-hidden="true"><small>DAY</small><b>{int(day_leaf)}</b></span>' if day_leaf else ""
-    bar = (f'<span class="lm-t4bar" aria-hidden="true"><i style="width:{max(0, min(100, int(progress)))}%"></i></span>'
-           if progress is not None else "")
-    return (f'<a class="lm-t4" href="{href}"><span class="lm-t4p"><span class="lm-t4a">{pic}</span>'
-            f'<span class="lm-bdg" aria-hidden="true">{icon(badge)}</span>{dl}{ui.pin("", link=False) if pin else ""}</span>'
-            f'<span class="lm-t4k">{_e(kicker)}{tag}</span><b class="lm-t4t">{_e(title)}</b>'
-            f'{f"<span class=lm-t4m>{_e(meta)}</span>" if meta else ""}{bar}</a>')
-
-
-def also(tiles_html: List[str]) -> str:
-    if not tiles_html:
-        return ""
-    return (f'<section class="lm-also" aria-labelledby="lm-also-h"><h2 class="lm-also4" id="lm-also-h">Also for you</h2>'
-            f'<div class="lm-g4{" one" if len(tiles_html) == 1 else ""}">{"".join(tiles_html)}</div></section>')
-
-
 # ─── the sheet ───────────────────────────────────────────────────────
 # Accent level 2's tokens (member_lumen_ui): --acc reads as words on the page,
 # --acc-fill is a button's colour with --on-acc on it, --lm-tint-12 the soft
 # church-colour surface. The card's 4% church tint is a color-mix over the
 # page; a browser without it gets the plain page colour.
 CSS = Template("""
-/* Home, Look 5.1 (member_lumen_home): the greeting, the doors, This week, the composer; Also for you (lower down) */
+/* Home, Look 5.1 (member_lumen_home): the greeting, the doors, This week, the composer */
 .lm-brief{margin:18px 0 0;}
 .lm-ey4{margin:0;display:flex;align-items:center;gap:6px;font:700 11px/1.2 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
 .lm-ey4 svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
@@ -576,7 +540,7 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 .lm-wks>.lm-wk:only-child{width:100%;}
 .lm-wkp{position:relative;display:block;height:124px;background:var(--s2);}
 .lm-wka{position:absolute;inset:0;overflow:hidden;}
-.lm-wka>*,.lm-t4a>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm-wka>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
 .lm-wka img{display:block;width:100%;height:100%;object-fit:cover;}
 .lm-wkl{position:absolute;left:12px;top:12px;z-index:2;width:46px;padding:6px 0 7px;border-radius:12px;background:var(--bg);text-align:center;
   box-shadow:0 2px 10px rgba(0,0,0,.14);}
@@ -620,41 +584,16 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 .lm-hcpin{flex:1;min-width:0;height:44px;display:flex;align-items:center;padding:0 16px;overflow:hidden;border-radius:22px;background:var(--s1);
   color:var(--fg3);font:400 15px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;text-overflow:ellipsis;}
 .lm-band{height:8px;margin:0 -20px;background:var(--s1);}
-/* Also for you: two picture tiles (lower on Home since Look 5.1) */
-.lm-t4a .mb-ph.is-colour img{filter:saturate(.9) sepia(.05);}
-.lm-t4p .mb-pin{top:auto;bottom:8px;right:8px;height:26px;padding:0 10px;font-size:11px;background:rgba(20,18,16,.55);box-shadow:none;}
-.lm-t4p .mb-pin svg{display:none;}
-.lm-also{margin-top:34px;}
-.lm-also4{margin:0 0 12px;font:650 11px/1 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
-.lm-g4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
-.lm-g4.one{grid-template-columns:minmax(0,1fr);}
-.lm-t4{display:flex;flex-direction:column;align-items:flex-start;min-width:0;color:var(--fg);text-decoration:none;}
-.lm-t4p{position:relative;display:block;width:100%;height:112px;margin-bottom:10px;border-radius:16px;overflow:hidden;background:var(--s2);}
-.lm-t4a{position:absolute;inset:0;}
-.lm-bdg{position:absolute;right:8px;top:8px;z-index:2;width:28px;height:28px;border-radius:50%;background:var(--acc-fill);color:var(--on-acc);
-  display:grid;place-items:center;box-shadow:0 0 0 2px rgba(255,255,255,.85);}
-.lm-bdg svg{width:15px;height:15px;stroke-width:2;}
-.lm-dl4{position:absolute;left:8px;bottom:8px;z-index:2;width:38px;height:42px;border-radius:10px;background:rgba(255,255,255,.94);color:#1D3A2A;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;}
-.lm-dl4 small{font:700 8px/1 var(--mb-ui);letter-spacing:.14em;}
-.lm-dl4 b{margin-top:1px;font-family:var(--lm-num);font-weight:var(--lm-nw);font-size:19px;line-height:1;}
-.lm-t4k{display:block;font:650 10.5px/1.1 var(--mb-ui);letter-spacing:.14em;text-transform:uppercase;color:var(--acc);}
-.lm-t4t{display:block;margin-top:6px;font:600 15px/1.25 var(--mb-ui);}
-.lm-t4m{display:block;max-width:100%;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 12.5px/1.35 var(--mb-ui);color:var(--fg2);}
-.lm-t4bar{display:block;width:100%;height:2px;margin-top:9px;border-radius:1px;background:var(--lm-line);overflow:hidden;}
-.lm-t4bar i{display:block;height:100%;background:var(--fg);}
 @media (prefers-reduced-motion:no-preference){
-  .lm-t4,.lm-lv4,.lm-wk,.lm-door{transition:transform .2s ease-out;}
-  .lm-t4:active,.lm-lv4:active,.lm-wk:active,.lm-door:active{transform:scale(.98);}
+  .lm-lv4,.lm-wk,.lm-door{transition:transform .2s ease-out;}
+  .lm-lv4:active,.lm-wk:active,.lm-door:active{transform:scale(.98);}
 }
-.lm-t4:focus-visible,.lm-lv4:focus-visible,.lm-hcpin:focus-visible,.lm-sh5 a:focus-visible,.lm-wkb:focus-visible
+.lm-lv4:focus-visible,.lm-hcpin:focus-visible,.lm-sh5 a:focus-visible,.lm-wkb:focus-visible
 {outline:2px solid var(--acc);outline-offset:3px;border-radius:12px;}
 .lm-door:focus-visible{outline:2px solid var(--acc);outline-offset:-3px;border-radius:18px;}
 .lm-wkt a:focus-visible{outline:none;}
 .lm-wkt a:focus-visible::after{outline:2px solid var(--acc);outline-offset:-2px;border-radius:18px;}
-/* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the badges' ring in the page's black,
-   the date leaf on a raised surface */
+/* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the date leaf on a raised surface */
 """ + _dark("""
-body.lm.lm-dark .lm-bdg{box-shadow:0 0 0 2px rgba(10,10,11,.85);}
 body.lm.lm-dark .lm-wkl{background:var(--s2);box-shadow:0 2px 10px rgba(0,0,0,.4);}
 """))

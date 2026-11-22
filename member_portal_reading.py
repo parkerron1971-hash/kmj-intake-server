@@ -21,7 +21,8 @@ import reading_plans as rp
 
 router = APIRouter(tags=["member-portal"])
 
-DONE = {"read": "Marked as read. Well done.", "unread": "Unmarked.", "over": "Started over."}
+DONE = {"read": "Marked as read. Well done.", "unread": "Unmarked.", "over": "Started over.",
+        "done": "Marked done. Well done.", "undone": "Marked not done yet.", "saved": "Saved."}
 ERRORS = {"error": "That didn't save. Please try again.",
           "day": "That day can't be marked yet.",
           "preview": "This is a preview. Nothing is saved for the member.",
@@ -181,6 +182,9 @@ async def tick(request: Request):
     key = str(form.get("plan") or "")
     key = key if key in rp.PLANS or tp.is_topic(key) else ""
     back = "/my" if str(form.get("back") or "") == "/my" else (f"/my/bible/plans/{key}" if key else "/my/reading")
+    import re
+    if key and re.fullmatch(rf"/my/bible/plans/{re.escape(key)}/\d{{1,3}}", str(form.get("back") or "")):
+        back = str(form.get("back"))                  # a day of the plan (the new look's day page)
 
     def go(**q: str) -> RedirectResponse:
         qs = "&".join(f"{k}={v}" for k, v in q.items())

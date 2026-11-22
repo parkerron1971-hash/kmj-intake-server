@@ -47,6 +47,17 @@ posts edge to edge, a hairline between them:
   * A GROUP'S POST from its Board (group_post_card): who posted (by the
     group's name setting), the words, and the way to the group.
 
+THE CHURCH'S OWN CARDS (church_cards, church_block; Kevin's Home plan,
+2026-11-21). After the posts, Home draws the church's own records as cards:
+the newest message ("New message" while it's new, "Latest message" after;
+Home asks home_feed to leave it out of the stream: newest=False), with rows
+under it for Meet the pastor (someone new), Pick up where you left off
+(Watch's place on the member's own record) and the member's class; the
+church's events after this week (an event card: Going, and Share where the
+public events page has it; no Maybe, which has no route); the verse of the
+day on the ivory card with Share as a picture; the church's own tiles; then
+"You're all caught up" (end) and nothing below it.
+
 Pinned first; then what this member hasn't opened and the newer group
 items, "You're all caught up", then the rest (Earlier). Home keeps four of
 the church's posts, the new message and two group items; See all posts
@@ -333,15 +344,16 @@ def _day_word(d: Optional[date], today: date) -> str:
 
 
 def message_card(biz: Dict[str, Any], site, lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str],
-                 pool: List[str], used: set, today: date) -> str:
-    """The church's newest message, while it is new (member_feed_more.message_of)."""
+                 pool: List[str], used: set, today: date, label: str = "New message") -> str:
+    """The church's newest message, while it is new (member_feed_more.message_of);
+    `label` "Latest message" for the newest one once it isn't (church_cards)."""
     try:
         d: Optional[date] = date.fromisoformat(str(s.get("preached_on") or "")[:10])
     except ValueError:
         d = None
     church = (biz.get("name") or "").strip() or "Your church"
-    small = " · ".join(x for x in ("New message", _day_word(d, today)) if x)
-    return (f'<article class="lf-post lf-pmsg" id="msg-{_e(s["id"])}" aria-label="{_e("New message: " + (s.get("title") or ""))}">'
+    small = " · ".join(x for x in (label, _day_word(d, today)) if x)
+    return (f'<article class="lf-post lf-pmsg" id="msg-{_e(s["id"])}" aria-label="{_e(label + ": " + (s.get("title") or ""))}">'
             f'{_head(_church_face(biz), _e(church), small, "/my/sermons/" + str(s["id"]), "Open the message")}'
             f'{_message_body(lib, s, pal, site, pool, used)}</article>')
 
@@ -681,12 +693,14 @@ def see_all(total: Optional[int]) -> str:
 def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], occ, open_: bool,
               rights: Optional[Dict[str, Any]] = None, *, me: Optional[Dict[str, Any]] = None,
               new_n: Optional[int] = None, total: Optional[int] = None, extras: Optional[Dict[str, Any]] = None,
-              library: Optional[Dict[str, Any]] = None, today: Optional[date] = None) -> str:
+              library: Optional[Dict[str, Any]] = None, today: Optional[date] = None, newest: bool = True) -> str:
     """Home's feed in the new look. Nothing when the news couldn't be read;
     with no news and nothing from the groups yet, a poster sees where it
     will go. `extras`: the member's group items (member_feed_more.gather);
-    `library`: Home's sermon library, for the newest message. Under the
-    posts, See all posts (`total`: how many there are)."""
+    `library`: Home's sermon library, for the newest message (`newest`
+    False: Home draws it after the posts, among the church's own cards:
+    church_cards). Under the posts, See all posts (`total`: how many there
+    are)."""
     import group_gatherings as gg
     import member_app_photos as photos
     import member_feed_more as fm
@@ -698,7 +712,7 @@ def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], 
     # Whether the newest message is still new, by the day as UTC sees it (the
     # church's clock is a read, made below only when there is a feed to draw).
     from datetime import timezone
-    msg = fm.message_of(library, today or datetime.now(timezone.utc).date())
+    msg = fm.message_of(library, today or datetime.now(timezone.utc).date()) if newest else None
     if msg and any(str((p.get("sermon") or {}).get("id") or "") == str(msg["id"]) for p in posts):
         msg = None                                                    # a post already carries it
     items = _group_items(extras, fm.SHOWN)
@@ -740,6 +754,150 @@ def home_feed(biz: Dict[str, Any], site, posts: Optional[List[Dict[str, Any]]], 
     more = see_all(total) if posts else ""
     return (f'<section class="lm-feed" aria-labelledby="lm-feed-h">{_sr_head(biz)}'
             f'<div class="lf-list">{"".join(out)}</div>{more}</section>{JS}')
+
+
+# ─── the church's own cards, after the posts ─────────────────────────
+# Kevin's Home plan (2026-11-21, "yes to everything"): a church that posts
+# little (Love City had none) still has a feed. After the posts, the church's
+# own records as cards, in the mock's styles: its newest message (when the
+# posts above don't already carry it), Pick up where you left off and the
+# class the member is in (rows under it), its events after this week, the
+# verse of the day; then "You're all caught up" and nothing below.
+
+EVENT_CARDS = 3          # the church's events after this week, as cards
+
+
+def _crow(href: str, art: str, title: str, sub: str, pct: Optional[int] = None) -> str:
+    """One row under the message: a small picture, a title, a line, how far
+    along. `art` is trusted markup; the words are escaped."""
+    bar = (f'<span class="lf-cbar" aria-hidden="true"><i style="width:{max(2, min(100, int(pct)))}%"></i></span>'
+           if pct is not None else "")
+    return (f'<a class="lf-crow" href="{_e(href)}"><span class="lf-cimg">{art}</span><span class="lf-ct">'
+            f'<b>{_e(title)}</b><small>{_e(sub)}</small>{bar}</span></a>')
+
+
+def church_cards(biz: Dict[str, Any], site, *, me: Optional[Dict[str, Any]], library: Optional[Dict[str, Any]],
+                 occasions: Optional[List[Dict[str, Any]]], klass: Optional[Dict[str, Any]], bible: str, today: date,
+                 shown: Optional[set] = None, pool: Optional[List[str]] = None, used: Optional[set] = None,
+                 label: str = "Latest message", pastor: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The church's own cards for Home's feed, each left out when its record
+    isn't there (nothing is made up; a failed read leaves its card out).
+    `shown`: the message ids the posts above already carry; `label` the
+    message card's word ("New message" while it's new); `pastor` the
+    church's pastor for someone new (member_pastor.who: Meet the pastor,
+    which Also for you carried before). From what Home
+    read already: its sermon library, the member's own record (Watch's place:
+    member_lumen_watch.state), the class (member_portal_lumen.my_class), the
+    calendar, the verse of the day (no read)."""
+    import member_app_photos as photos
+    import member_app_samples as samples
+    import member_app_ui as ui
+    import member_lumen_share as msl
+    import member_lumen_watch as mlw
+    import member_portal_news as mpn
+    from member_portal import palette_for
+    pool = pool if pool is not None else photos.photos(biz, site)
+    used = used if used is not None else set()
+    pal = palette_for(biz, site)
+    shown = {str(x) for x in (shown or set()) if x}
+    lib = library or {}
+    sermons = [s for s in lib.get("sermons") or [] if not samples.is_sample(s)]
+    church = (biz.get("name") or "").strip() or "Your church"
+    out: List[str] = []
+    # The newest message (the feed above carries it while it's new).
+    msg = sermons[0] if sermons else None
+    head = ""
+    if msg and str(msg["id"]) not in shown:
+        head = message_card(biz, site, lib, msg, pal, pool, used, today, label=label)
+        shown.add(str(msg["id"]))
+    # Meet the pastor (someone new), Pick up where you left off, and the
+    # class: rows under the message.
+    rows = []
+    if pastor and pastor.get("id") and pastor.get("name"):
+        import member_pastor
+        rows.append(_crow("/my/pastor", member_pastor._art(biz, pastor), f"Meet {pastor['name']}",
+                          " · ".join(x for x in ("Your pastor", pastor.get("title") or "") if x)))
+    by_id = {str(s["id"]).lower(): s for s in sermons}
+    for sid, (pos, dur, _at, mode) in mlw.state(me)["p"].items():
+        s = by_id.get(sid)
+        if not s or str(s["id"]) in shown or not mlw.started(pos, dur):
+            continue
+        pic = msl.message_art(lib, s, site, pool)
+        rows.append(_crow(f"/my/sermons/{s['id']}" + ("?listen=1" if mode == "a" else ""),
+                          ui.art(pic) if pic else ui.default_art("messages"), "Pick up where you left off",
+                          " · ".join(x for x in (s.get("title") or "", mlw.left(pos, dur)) if x),
+                          round(100 * pos / dur) if dur else None))
+        break
+    if klass and klass.get("course_id") and klass.get("title"):
+        total, done = int(klass.get("total") or 0), int(klass.get("done") or 0)
+        pic, lk = photos.choose(biz, f"class:{klass['course_id']}", pool, title=klass["title"], look="colour")
+        rows.append(_crow("/my/classes", ui.picture(pic, lk, "classes"), klass["title"],
+                          (f"Lesson {done + 1} of {total} · Continue" if total and done < total else "Continue"),
+                          round(100 * done / total) if total else None))
+    if head or rows:
+        conts = f'<div class="lf-conts">{"".join(rows)}</div>' if rows else ""
+        out.append(head[:-len("</article>")] + conts + "</article>" if head else
+                   f'<article class="lf-post lf-pconts" aria-label="Keep going">{conts}</article>')
+    # The church's events after this week (This week has the rest), as cards.
+    by = mpn._occasions(occasions)
+    n = 0
+    for o in occasions or []:
+        try:
+            d = date.fromisoformat(str(o.get("date") or "")[:10])
+        except ValueError:
+            continue
+        if (d - today).days < 7 or samples.is_sample(o) or not o.get("entry_id"):
+            continue
+        box = _event(biz, site, {"id": "", "attach": {"event": str(o["entry_id"])}, "body": ""}, by, pool, used)
+        if not box:
+            continue
+        eid = str(o["entry_id"])
+        small = f"Event · {d:%A}, {d:%B} {d.day}"
+        out.append(f'<article class="lf-post lf-pev" aria-label="{_e("Event: " + (o.get("title") or ""))}">'
+                   f'{_head(_church_face(biz), _e(church), small, "/my/events#mp-occ-" + eid, "Open the event")}'
+                   f'{box}</article>')
+        n += 1
+        if n == EVENT_CARDS:
+            break
+    out.append(verse_card(bible))
+    return [x for x in out if x]
+
+
+def verse_card(bible: str) -> str:
+    """The verse of the day (member_portal_bible.verse_of_day) on the ivory
+    card, opening its chapter, with Share as a picture (the Bible's own
+    verse share: contract 1, kind verse, its Your story picture). '' when no
+    verse can be read."""
+    import bible_text as bt
+    import member_lumen_bible as mlb
+    import member_portal_bible as mpb
+    v = mpb.verse_of_day(bible)
+    if not v:
+        return ""
+    share = mlb.verse_share(v["label"], mlb._plain(v["html"]), bible, mlb.verse_id(v["label"], bible), cls="lf-vsh",
+                            inner="Share as a picture", aria="Share the verse of the day as a picture")
+    return (f'<article class="lf-post lf-pvod"><div class="lm-page lf-vod"><span class="lbl">Verse of the day</span>'
+            f'<a class="lf-vq" href="{_e(v["href"])}"><q>{v["html"]}</q></a><span class="ref">'
+            f'<span>{_e(v["label"])} · {_e(bt.TRANSLATIONS[bible]["short"])}</span>{share}</span></div></article>')
+
+
+def end() -> str:
+    """The foot of Home's feed: "You're all caught up". Nothing below it."""
+    return (f'<div class="lf-done lf-end"><span class="lf-ok">{_i("check")}</span><b>You&#x27;re all caught up</b>'
+            f'<p>You&#x27;ve seen everything from this week.</p></div>')
+
+
+def church_block(biz: Dict[str, Any], cards: List[str], *, tiles: str = "", ending: bool = True) -> str:
+    """The church's cards after the feed, edge to edge as the posts are,
+    then the church's own tiles (when it saved some) and the end."""
+    cards = [c for c in cards if c]
+    if not cards and not tiles and not ending:
+        return ""
+    church = (biz.get("name") or "").strip() or "your church"
+    listed = f'<div class="lf-list">{"".join(cards)}</div>' if cards else ""
+    tiled = f'<div class="lf-tiles">{tiles}</div>' if tiles else ""
+    return (f'<section class="lm-feed lf-church" aria-label="{_e("From " + church)}">{listed}{tiled}'
+            f'{end() if ending else ""}</section>')
 
 
 def _sr_head(biz: Dict[str, Any]) -> str:
@@ -1129,6 +1287,30 @@ CSS = Template("""
   letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);}
 .lm .lf-older::before,.lm .lf-older::after{content:"";flex:1;height:1px;background:var(--lm-line);}
 .lm .lf-older+.lf-post{border-top:0;}
+/* the church's own cards after the posts (Kevin's Home plan): rows under the message, events, the verse, the end */
+.lm .lf-church>.lf-list>.lf-post:first-child{border-top:1px solid var(--lm-line);}
+.lm .lf-conts{display:flex;flex-direction:column;gap:10px;padding:16px 20px 0;}
+.lm .lf-pconts .lf-conts{padding-top:20px;}
+.lm .lf-crow{display:flex;align-items:center;gap:14px;padding:12px;border-radius:18px;background:var(--bg);
+  box-shadow:inset 0 0 0 1px var(--lm-line);color:var(--fg);text-decoration:none;}
+.lm .lf-cimg{position:relative;width:76px;height:50px;flex:none;border-radius:11px;overflow:hidden;background:var(--s2);}
+.lm .lf-cimg>*{position:absolute;inset:0;width:100%;height:100%;border-radius:0;aspect-ratio:auto;}
+.lm .lf-cimg img{display:block;width:100%;height:100%;object-fit:cover;}
+.lm .lf-cimg .mb-def-ic{top:50%;left:50%;right:auto;width:22px;height:22px;transform:translate(-50%,-50%);}
+.lm .lf-cimg .lm-pini b{font-size:19px;}
+.lm .lf-cimg .mb-ph.lm-pph img{object-position:50% 25%;}
+.lm .lf-ct{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.lm .lf-ct b{font:700 14.5px/1.25 var(--mb-ui);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lm .lf-ct small{font:400 13px/1.3 var(--mb-ui);color:var(--fg2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lm .lf-cbar{display:block;height:3px;margin-top:6px;border-radius:2px;background:var(--lm-line);overflow:hidden;}
+.lm .lf-cbar i{display:block;height:100%;border-radius:2px;background:var(--acc-fill);}
+.lm .lf-pvod{padding:20px;}
+.lm .lf-vod .lf-vq{display:block;color:inherit;text-decoration:none;}
+.lm .lf-vod .ref .lf-vsh{color:var(--lm-ink2);font:600 12.5px/1 var(--mb-ui);text-decoration:none;}
+.lm .lf-tiles{padding:8px 20px 4px;border-top:1px solid var(--lm-line);}
+.lm .lf-end{padding:36px 20px 28px;}
+.lm .lf-end p{margin:-6px 0 0;font:400 14px/1.4 var(--mb-ui);color:var(--fg2);}
+.lm .lf-crow:focus-visible,.lm .lf-vod .lf-vq:focus-visible,.lm .lf-vsh:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 /* See all posts under Home's; Show more on the all-posts page */
 .lm .lf-see{display:flex;align-items:center;gap:10px;min-height:52px;margin:6px 20px 0;padding:0 14px 0 18px;border-radius:18px;
   background:var(--bg);box-shadow:inset 0 0 0 1px var(--lm-line);color:var(--fg);text-decoration:none;}

@@ -546,15 +546,18 @@ if(sh)sh.addEventListener('click',function(){var t=sh.getAttribute('data-text');
 
 
 def render_day(biz, site, me, dev: Dict[str, Any], n: int, st: Dict[str, Any],
-               mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False, night: bool = False) -> str:
+               mine: Optional[Dict[str, Any]], *, tr: str = "kjv", listen: bool = False, night: bool = False,
+               step: str = "", flash: str = "") -> str:
     """A devotional's day (approved board 11). `mine` is the member's own
     day (done, ticks, journal); None = it couldn't load, so nothing on the
     page can save. `night` (the member's night reading, the Bible reader's
     cookie) is the new look's dark day; today's day ignores it."""
     import member_lumen
     if member_lumen.page():
-        import member_lumen_devotional as mld
-        return mld.render_day(biz, site, me, dev, n, st, mine, tr=tr, listen=listen, night=night)
+        # The new look's day, one step at a time (member_lumen_plan_day: Plans, screen 3).
+        import member_lumen_plan_day as mlpd
+        return mlpd.render_day(biz, site, me, dev, n, st, mine, tr=tr, listen=listen, night=night, step=step,
+                               flash=flash)
     import member_app_photos as photos
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -775,6 +778,11 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
     from member_portal import _SECURE_HEADERS
     bid, cid = biz["id"], str(me["id"])
     if not parts:
+        import member_lumen
+        if member_lumen.page() and str(request.query_params.get("show") or "all") in ("all", "reading"):
+            # The new look's Plans tab (member_lumen_plans) has every plan; this page stays for
+            # the church's whole list (?show=church, the tab's See all) and a member's own (?show=yours).
+            return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
         devs, mine, done = await asyncio.gather(
             asyncio.to_thread(dv.catalog, bid), asyncio.to_thread(_or_empty, starts, preview, bid, cid),
             asyncio.to_thread(_or_empty, done_days, preview, bid, cid))
@@ -797,6 +805,10 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
         # The new look's plan page (member_lumen_plans), started or not.
         import member_lumen_plans as mlp
         return await mlp.plan_page(request, biz, site, me, key, tr=tr, preview=preview)
+    if len(parts) == 2 and (key in rp.PLANS or tp.is_topic(key)) and member_lumen.page():
+        # A day of a plan of the member's own (member_lumen_plan_day).
+        import member_lumen_plans as mlp
+        return await mlp.day_page(request, biz, site, me, key, parts[1], tr=tr, preview=preview)
     if key in rp.PLANS and len(parts) == 1:
         mine = await asyncio.to_thread(_or_empty, starts, preview, bid, cid)
         plan = own_plan(key, (mine or {}).get(f"reading:{key}"))
@@ -828,8 +840,10 @@ async def serve(request: Request, biz, site, me, parts: List[str], *, tr: str, p
         return RedirectResponse(_href(dev), status_code=303, headers=_SECURE_HEADERS)
     n = int(parts[1])
     import devotional_voice as dvv
+    import member_portal_reading as mpr
     return render_day(biz, site, me, dev, n, st, None if days is None and not preview else (days or {}).get(n, {}),
-                      tr=tr, listen=dvv.can_speak(), night=_reader_night()), 200
+                      tr=tr, listen=dvv.can_speak(), night=_reader_night(),
+                      step=str(request.query_params.get("step") or ""), flash=mpr._flash(request)), 200
 
 
 def _reader_night():
@@ -1092,6 +1106,9 @@ async def save_my_day(request: Request):
         return no("signin", 401)
     bid, cid = church["business"]["id"], str(me["id"])
     # The same budget as Bible marks: a checklist is many taps.
+    as_form = (request.headers.get("content-type") or "").startswith("application/x-www-form-urlencoded")
+    if as_form:
+        return await _save_day_form(request, bid, cid)
     if not rate_limit.allow("bible_mark", f"{bid}|{cid}"):
         return no("slow", 429)
     try:
@@ -1122,6 +1139,58 @@ async def save_my_day(request: Request):
     upto = dv.open_upto(dv.run_start(dev, started), count)
     return _wrote(JSONResponse({"ok": True, "done": bool(row.get("done_at")), "checks": row.get("checks") or [],
                                 "streak": dv.streak(done, upto)}, headers=h), bid, cid)
+
+
+async def _save_day_form(request: Request, bid: str, cid: str):
+    """The day's form (the new look's day without script): Mark done or Not
+    done yet, with the journal and the checklist as they stand; or just
+    save them. Back to the day's last step, saying how it went."""
+    import asyncio
+    import rate_limit
+    from member_portal import _SECURE_HEADERS
+    form = await request.form()
+    dev_id = str(form.get("devotional") or "")
+    step = str(form.get("step") or "")
+    step = step if step in ("read", "scripture", "act", "pray", "journal") else ""
+    try:
+        n = int(str(form.get("day") or ""))
+    except ValueError:
+        n = 0
+    if not _UUID.fullmatch(dev_id) or not n:
+        return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
+    here = f"/my/bible/plans/{dev_id}/{n}"
+
+    def go(**q: str) -> RedirectResponse:
+        qs = "&".join(f"{k}={v}" for k, v in ({"step": step, **q} if step else q).items())
+        return RedirectResponse(here + (f"?{qs}" if qs else ""), status_code=303, headers=_SECURE_HEADERS)
+    if not rate_limit.allow("bible_mark", f"{bid}|{cid}"):
+        return go(err="slow")
+    dev, ok = await asyncio.to_thread(dv.one, bid, dev_id)
+    if not ok:
+        return go(err="error")
+    if not dev:
+        return RedirectResponse("/my/bible?tab=plans", status_code=303, headers=_SECURE_HEADERS)
+    started = await asyncio.to_thread(started_on, bid, cid, dev)
+    if started is False:
+        return go(err="error")
+    if not 1 <= n <= dv.open_upto(dv.run_start(dev, started), int(dev.get("day_count") or 0)):
+        # a day not open yet has no page of its own: the devotional says so
+        return RedirectResponse(f"/my/bible/plans/{dev_id}?err=day", status_code=303, headers=_SECURE_HEADERS)
+    body: Dict[str, Any] = {}
+    if "journal" in form:
+        body["journal"] = str(form.get("journal") or "")
+    if form.get("checks_in"):
+        body["checks"] = [str(x) for x in form.getlist("checks")]
+    if str(form.get("done") or "") in ("0", "1"):
+        body["done"] = form.get("done") == "1"
+    change = clean_change(body, dev)
+    if not change:
+        return go()
+    row = await asyncio.to_thread(save_day, bid, cid, dev_id, n, change)
+    if row is None:
+        return go(err="error")
+    words = {True: "done", False: "undone"}.get(change.get("done"), "saved")
+    return _wrote(go(done=words), bid, cid)
 
 
 def _wrote(resp, business_id, contact_id):
