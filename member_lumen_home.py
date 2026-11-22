@@ -492,6 +492,60 @@ def composer(face: str) -> str:
             f'<div class="lm-band" aria-hidden="true"></div>')
 
 
+def _came(iso: str, now: datetime) -> str:
+    """'today', 'yesterday', 'on Thursday', 'on November 12': when it came in."""
+    try:
+        at = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    d = at.astimezone(now.tzinfo).date() if at.tzinfo and now.tzinfo else at.date()
+    n = (now.date() - d).days
+    if n <= 0:
+        return "today"
+    if n == 1:
+        return "yesterday"
+    return f"on {d:%A}" if n < 7 else f"on {d:%B} {d.day}"
+
+
+def desk(counts: Optional[Dict[str, Any]], *, church: str, short: str, office: str, now: datetime,
+         first_news: bool = False, quiet: bool = False) -> str:
+    """The owner's desk strip (Kevin's Home plan, 2026-11-21), after This week:
+    good news members shared that waits to be posted, members' group posts
+    and comments the check held (Review, in the office's News room:
+    `office`), and, at a church with no news yet, Post the church's first
+    news (/my/news/write). `counts` from member_portal_lumen.desk_counts
+    (None when it couldn't be read: only the first news); `quiet` no news
+    reaches Home yet. '' with nothing waiting."""
+    rows = []
+    c = counts or {}
+    good = int(c.get("good") or 0)
+    if good:
+        came = _came(c.get("good_at") or "", now)
+        when = ((f"It came in {came}." if good == 1 else f"The newest came in {came}.") if came else "")
+        nudge = (f"Approve {'it' if good == 1 else 'them'} and {short}'s feed begins." if quiet else
+                 f"Approve {'it' if good == 1 else 'them'} to post {'it' if good == 1 else 'them'}.")
+        title = f"{good} good news post{' is' if good == 1 else 's are'} waiting"
+        rows.append((title, " ".join(x for x in (when, nudge) if x), office, "Review"))
+    hc, hp = int(c.get("held_comments") or 0), int(c.get("held_posts") or 0)
+    if hc or hp:
+        bits = [f"{n} {word}{'' if n == 1 else 's'}" for n, word in ((hc, "comment"), (hp, "post")) if n]
+        title = " and ".join(bits) + (" is held" if hc + hp == 1 else " are held")
+        rows.append((title, "The check held " + ("it" if hc + hp == 1 else "them") + " for a safety officer to read.",
+                     office, "Review"))
+    if first_news and not good:
+        rows.append(("Post the church's first news", f"Everyone at {church} sees it here, on Home.", "/my/news/write",
+                     "Post"))
+    if not rows:
+        return ""
+    out = []
+    for i, (title, line, href, btn) in enumerate(rows):
+        line = line + (" Only you see this." if i == 0 else "")
+        out.append(f'<div class="lm-dk"><div class="lm-dkt"><b>{_e(title)}</b><p>{_e(line.strip())}</p></div>'
+                   f'<a class="lm-dkb" href="{_e(href)}">{_e(btn)}</a></div>')
+    return (f'<section class="lm-desk" aria-labelledby="lm-desk-h"><h2 class="mp-sr" id="lm-desk-h">Waiting for you</h2>'
+            f'{"".join(out)}</section>')
+
+
 def live_bar(live: Dict[str, Any]) -> str:
     title = (live or {}).get("title") or ""
     return (f'<a class="lm-lv4" href="/my/live"><i aria-hidden="true"></i>'
@@ -576,6 +630,16 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 .lm-wkf3>.lm-wkb:not(.q),.lm-wkf3>form:not(.q){margin-left:0;}
 .lm-wkb.o{background:none;color:var(--fg);box-shadow:inset 0 0 0 1px var(--lm-line);}
 .lm-wkb.o svg{color:var(--fg2);}
+/* the owner's desk strip (Kevin's Home plan): what waits in the office's News room, the church's first news */
+.lm-desk{margin:22px 0 0;border-radius:18px;background:var(--lm-tint-12);overflow:hidden;}
+.lm-dk{display:flex;align-items:center;gap:12px;padding:14px 14px 14px 16px;}
+.lm-dk+.lm-dk{border-top:1px solid var(--lm-line);}
+.lm-dkt{flex:1;min-width:0;}
+.lm-dkt b{display:block;font:700 14.5px/1.3 var(--mb-ui);color:var(--fg);}
+.lm-dkt p{margin:3px 0 0;font:400 13px/1.4 var(--mb-ui);color:var(--fg2);text-wrap:pretty;}
+.lm-dkb{flex:none;height:34px;padding:0 16px;border-radius:17px;display:inline-flex;align-items:center;background:var(--bg);
+  color:var(--fg);font:650 13.5px/1 var(--mb-ui);text-decoration:none;white-space:nowrap;}
+.lm-dkb:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
 /* the composer, then the band before the feed */
 .lm-hcp{display:flex;align-items:center;gap:10px;margin:22px -10px 0 0;padding:0 0 16px;}
 .lm-hcpav{position:relative;width:40px;height:40px;flex:none;border-radius:50%;overflow:hidden;display:grid;place-items:center;
@@ -596,4 +660,5 @@ body.lm .lm-brief .lm-hi4{margin-top:10px;font-size:30px;line-height:1.12;letter
 /* the dark look (member_lumen_look; its colours are member_lumen_ui.DARK_TOKENS): the date leaf on a raised surface */
 """ + _dark("""
 body.lm.lm-dark .lm-wkl{background:var(--s2);box-shadow:0 2px 10px rgba(0,0,0,.4);}
+body.lm.lm-dark .lm-dkb{background:var(--fg);color:var(--bg);}
 """))
