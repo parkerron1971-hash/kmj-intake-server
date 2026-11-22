@@ -63,6 +63,7 @@ _MUST_STAY_NO_STORE = (
     "_serve_booking_page",
     "_serve_give_page",
     "_serve_events_page",
+    "_serve_event_link",
     "_render_offline_page",
     "_serve_learner",
 )

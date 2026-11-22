@@ -569,6 +569,10 @@ Each step is its own PR, branched fresh from main. Never stack PRs.
 - Two event dates with the same title on one day, after a move or a rename
   (the one-title-a-day rule holds only when a date is made). Left as it is.
 
+Built since (2026-11-22): an event's sign-up link for people without the app,
+its by-link sign-ups and their hours once the office confirms who it is, in
+`docs/EVENT_SIGNUP_LINKS.md`.
+
 ## 11. Decisions made while building
 
 ### S1 (this PR)

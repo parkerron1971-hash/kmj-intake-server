@@ -6253,6 +6253,16 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str, *, query:
     )
 
 
+async def _serve_event_link(biz_id: Optional[str], slug: str, code: str) -> HTMLResponse:
+    """An event's sign-up link, https://<church host>/e/<code>
+    (docs/EVENT_SIGNUP_LINKS.md): the one event and its sign-up, or the one
+    "not taking sign-ups" page (404) for every way it can't. Live state:
+    no-store, noindex, and the code never leaves in a Referer."""
+    import event_signup_links
+    return await event_signup_links.serve_page(biz_id, slug, code, api_origin=_EMBED_ORIGIN,
+                                               headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _serve_sermons_page(client, biz_id: Optional[str], slug: str, path: str) -> HTMLResponse:
     """The church's sermon library — /sermons and /sermons/<id> on its own
     host (subdomain or custom domain), like /events. Published sermons
@@ -7118,6 +7128,11 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
         site = sites[0]
         biz_id = site.get("business_id")
 
+        # An event's sign-up link (/e/<code>; event_signup_links.py). Before
+        # the offline and coming-soon checks: it is a sign-up, not the website.
+        if (path.rstrip("/") or "/").startswith("/e/"):
+            return await _serve_event_link(biz_id, slug, path.rstrip("/")[3:])
+
         # Practitioner took the public site down to work on it. Editor
         # preview (/public/site/{slug}) is unaffected — only the public
         # address shows the maintenance page.
@@ -7339,6 +7354,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
         site = sites[0]
         biz_id = site.get("business_id")
         slug = site.get("slug") or domain
+
+        # An event's sign-up link on the church's own domain too.
+        if (path.rstrip("/") or "/").startswith("/e/"):
+            return await _serve_event_link(biz_id, slug, path.rstrip("/")[3:])
 
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
