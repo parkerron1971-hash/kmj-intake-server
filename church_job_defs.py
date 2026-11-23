@@ -211,6 +211,38 @@ def find(business_id: Any, key: Any, *, gone: bool = False) -> Optional[Dict[str
     return _shape(pick) if pick else None
 
 
+def own_with_writer(business_id: Any, key: Any, rows: Optional[List[Dict[str, Any]]] = None
+                    ) -> Optional[Dict[str, Any]]:
+    """One of the church's OWN jobs by its key, a removed one too, with who
+    made it (`maker`: created_by) and who saved it last (`writer`: updated_by,
+    else created_by; '' when nobody is kept): whoever puts its words in front
+    of Chief has to know whose words they are. A save stamps the saver
+    whatever they changed, so `writer` alone never says who wrote the words. None for a starting job, no job, or a table that couldn't be
+    read. `rows`: the church's job rows already read (_rows), to save a read."""
+    key = str(key or "")
+    if not key or any(j["key"] == key for j in presets()):
+        return None
+    rows = rows if rows is not None else _rows(business_id)
+    mine = [r for r in (rows or []) if str(r.get("key")) == key]
+    live = [r for r in mine if not r.get("deleted_at")]
+    pick = live[0] if live else (mine[-1] if mine else None)
+    if not pick:
+        return None
+    return {**_shape(pick), "maker": str(pick.get("created_by") or ""),
+            "writer": str(pick.get("updated_by") or pick.get("created_by") or ""),
+            "gone": bool(pick.get("deleted_at"))}
+
+
+def _office_forgets(business_id: Any) -> None:
+    """A job made, changed or removed: Chief's roster and cards for this
+    church are read again (chief_office), not kept their two minutes."""
+    try:
+        import chief_office
+        chief_office.forget(business_id)
+    except Exception:  # noqa: BLE001 — Chief reads the new job within two minutes either way
+        pass
+
+
 def label_of(business_id: Any, key: Any) -> Optional[str]:
     """A job's title by its key, a removed one's too; None for no job."""
     j = find(business_id, key, gone=True)
@@ -460,6 +492,7 @@ def create(business: Dict[str, Any], body: Dict[str, Any], by: str, by_role: str
         "created_at": now, "updated_at": now})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, UNSAVED)
+    _office_forgets(biz)
     return {"job": _shape(saved[0]), "created": True, "before": None}
 
 
@@ -489,6 +522,7 @@ def update(business: Dict[str, Any], key: str, body: Dict[str, Any], by: str, by
         {**fields, "updated_by": str(by), "updated_at": _now()})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, UNSAVED)
+    _office_forgets(biz)
     return {"job": _shape(saved[0]), "created": False, "before": _shape(row)}
 
 
@@ -506,6 +540,7 @@ def remove(business: Dict[str, Any], key: str, by: str, by_role: str) -> Dict[st
         {"deleted_at": _now(), "updated_by": str(by), "updated_at": _now()})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, UNSAVED)
+    _office_forgets(biz)
     return {"job": _shape(row), "removed": True}
 
 

@@ -16082,13 +16082,24 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"church findway block failed: {e}")
 
+            # WHO YOU ARE TALKING WITH (chief_office.card_for): for a church login that isn't the owner's,
+            # an Admin's and a Member's too, what the church's own record says of them: their job and what
+            # it does, who they answer to, where they work, whether Giving & money is open to them. Until
+            # 2026-11-22 an Admin's turn carried only their name. The tail, never a cached segment; kept a
+            # minute a replica; a read that fails adds nothing. It follows the login's own block below.
+            import church_follow_up as _cfu
+            _who_card = ""
+            if chief_areas.WHO.get() is not None and _cfu.is_church(biz):
+                _who_card = await asyncio.to_thread(_church_office.card_for, biz, str(user_session.user.id),
+                                                    chief_areas.TURN.get())
+                if _who_card:
+                    chief_truth.record('context:talking_with', _who_card, kind='context')
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
-            _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
+            _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz) + _who_card
             # Is this right? (church_map_asks): an office login's check of its work, what came of its asks,
             # and for the owner and an admin how many wait. Read alongside the context; a read that fails adds
             # nothing. What it tells is marked told once the reply is out (below).
-            import church_follow_up as _cfu
             if _asks_read is None and _cfu.is_church(biz):      # its row wasn't read up front: read them now
                 import church_map_asks
                 _asks_read = await asyncio.to_thread(church_map_asks.turn_lines, biz, str(user_session.user.id),

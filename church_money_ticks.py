@@ -225,6 +225,8 @@ def _forget(business_id: Any, user_id: Any) -> None:
         import church_areas
         chief_areas.forget(business_id)
         church_areas._forget(str(business_id), str(user_id))
+        import chief_office
+        chief_office.forget(business_id)    # their card says whether giving is open to them
     except Exception:  # noqa: BLE001 — Chief reads the new sheet within the minute either way
         pass
 

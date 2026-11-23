@@ -403,8 +403,10 @@ def refusal(verb: str, action: Optional[Dict[str, Any]], scope: Optional[Dict[st
                 "Ask the owner or an admin to do it.")
     theirs = _list([label(a) for a in needs])
     if needs == MONEY:
-        return (f"That's {theirs}: the owner, an admin or the treasurer handles it. This login works in {mine}, "
-                "and Chief doesn't read or change money for it.")
+        # Not "or the treasurer": the one asking may be the church's treasurer on a login the owner
+        # hasn't opened money to yet.
+        return (f"That's {theirs}: it isn't open to this login, and the owner or an Admin handles it. This login "
+                f"works in {mine}, and Chief doesn't read or change money for it.")
     return (f"That's {theirs}, outside this login's areas ({mine}). Ask whoever has {theirs}, the owner or "
             "an admin.")
 
@@ -599,7 +601,10 @@ def block(scope: Optional[Dict[str, Any]], who: Optional[Dict[str, Any]] = None,
         if not has(scope, *MONEY):
             lines.append("Money isn't this login's: you don't see gifts, giving, invoices, payments, the bank or the "
                          "books, and you never say what anyone gave, what came in or what anything costs. If asked, "
-                         "say the owner, an admin or the treasurer can answer.")
+                         # Not "or the treasurer": the one asking may be the church's treasurer on a login
+                         # the owner hasn't opened money to yet (chief_office.card_for says what to tell them).
+                         "say that Giving & money isn't open to this login, and that the owner or an Admin can "
+                         "answer.")
         lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them.")
     elif (who or {}).get("jobs"):
         # A login nothing keeps to a lane still has its jobs.
