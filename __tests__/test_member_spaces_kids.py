@@ -44,6 +44,19 @@ def _clean_space():
     msp.CURRENT.set({})
 
 
+@pytest.fixture(autouse=True)
+def _one_week(monkeypatch):
+    """The story a child with no lesson gets follows the calendar's week
+    (story_of_week), eight stories in turn. One of them is "David and
+    Goliath", the title of this file's own lesson: in that week (2026's 48th,
+    from Nov 23) a family with one child on the lesson and one on the week's
+    story reads "This week Ava and Eli learned", and every branch's tests
+    failed for seven days. The week is held at the one these tests were
+    written in (Jonah's); a test that passes its own day still gets it."""
+    real = mk.story_of_week
+    monkeypatch.setattr(mk, "story_of_week", lambda today=None: real(today or date(2026, 10, 18)))
+
+
 @pytest.fixture
 def people(monkeypatch):
     state = {"leaders": {}, "parents": set()}
