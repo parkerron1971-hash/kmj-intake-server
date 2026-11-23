@@ -16089,6 +16089,17 @@ async def chief_chat(
             # and for the owner and an admin how many wait. Read alongside the context; a read that fails adds
             # nothing. What it tells is marked told once the reply is out (below).
             import church_follow_up as _cfu
+            # WHO YOU ARE TALKING WITH (chief_office.card_for): for a church login that isn't the owner's,
+            # an Admin's and a Member's too, what the church's own record says of them: their job and what
+            # it does, who they answer to, where they work, whether Giving & money is open to them. Until
+            # 2026-11-22 an Admin's turn carried only their name. The tail, never a cached segment; kept a
+            # minute a replica; a read that fails adds nothing.
+            if chief_areas.WHO.get() is not None and _cfu.is_church(biz):
+                _who_card = await asyncio.to_thread(_church_office.card_for, biz, str(user_session.user.id),
+                                                    chief_areas.TURN.get())
+                if _who_card:
+                    chief_truth.record('context:talking_with', _who_card, kind='context')
+                    _login_block += _who_card
             if _asks_read is None and _cfu.is_church(biz):      # its row wasn't read up front: read them now
                 import church_map_asks
                 _asks_read = await asyncio.to_thread(church_map_asks.turn_lines, biz, str(user_session.user.id),

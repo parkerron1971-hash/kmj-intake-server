@@ -119,7 +119,10 @@ def test_what_a_lane_may_and_may_not_do():
                            "and Groups & classes)")
     for verb, args in (("show_revenue", {}), ("create_invoice", {}), ("giving_statement", {}),
                        ("show_view", {"view": "invoices"}), ("propose_send_invoice", {}), ("list_products", {})):
-        assert ca.refusal(verb, args, CARE).startswith("That's Giving & money: the owner, an admin or the treasurer"), verb
+        said = ca.refusal(verb, args, CARE)
+        assert said.startswith("That's Giving & money: it isn't open to this login, and the owner or an Admin "
+                               "handles it."), verb
+        assert "treasurer" not in said, "the one asking may be the treasurer"
     for verb in ("recall_conversation", "catch_up", "search_ledger", "remember", "forget", "undo_last",
                  "update_business_profile_field", "provision_sms_number", "propose_adopt_business_rule",
                  "a_verb_nobody_placed"):
@@ -289,6 +292,11 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     monkeypatch.setattr(ca, "who_for", lambda b, uid, owner_id=None: (
         {"role": "manager", "name": "Carla Reyes", "first_name": "Carla"} if uid == "carla" else None))
     monkeypatch.setattr(ca, "_jobs", lambda b, uid: "Their jobs here: The care board." if uid == "carla" else None)
+    # WHO YOU ARE TALKING WITH (chief_office.card_for): asked for a login that isn't the owner's, with its scope.
+    import chief_office
+    carded = []
+    monkeypatch.setattr(chief_office, "card_for", lambda b, uid, scope=None: (
+        carded.append((b["id"], uid, scope)) or "WHO YOU ARE TALKING WITH, from Love City Church's own record."))
     monkeypatch.setattr(chief, "_format_setup_block", lambda _: "")
     sources = {"voice_examples": "", "session_context": "", "mentor_active": False, "forecast": None,
                "relationship_insights": [], "time_block": "", "habit_block": "", "bookkeeping_block": "Cash: $9,000"}
@@ -324,6 +332,10 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     assert seen["kw"]["growth_turn_block"].startswith("TALKING WITH: Carla Reyes, an office login on ")
     assert "THIS LOGIN — not the owner. It has the People & Care lane" in seen["kw"]["growth_turn_block"]
     assert "Their jobs here: The care board." in seen["kw"]["growth_turn_block"], "and the duties she does"
+    tail = seen["kw"]["growth_turn_block"]
+    assert carded == [("biz", "carla", CARE)]
+    assert tail.index("TALKING WITH: Carla Reyes") < tail.index("Their jobs here") < tail.index(
+        "WHO YOU ARE TALKING WITH, from Love City Church's own record"), "her card follows her login's block"
     assert seen["after"] is None, "the scope ends with the turn"
 
     seen.clear()
@@ -332,6 +344,7 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     assert seen["turn"] is None and seen["ctx"]["open_invoices"] and seen["kw"]["bookkeeping_block"] == "Cash: $9,000"
     assert "THIS LOGIN" not in seen["kw"]["growth_turn_block"] and "TALKING WITH" not in seen["kw"]["growth_turn_block"]
     assert seen["who"] is None
+    assert len(carded) == 1, "the owner's turn asks for no card"
 
 
 # ─── Who's talking ────────────────────────────────────────────────────
