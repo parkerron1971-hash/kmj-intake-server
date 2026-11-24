@@ -56,9 +56,11 @@ TABS = (
 MAIN = ("home", "watch", "bible", "connect", "give")
 # Which tab a page sits under (the old map, with Messages, Me and the alerts
 # under none: they open from the top bar, over whatever tab you were on).
+# News, a post and New post sit under Home, where the feed is (Kevin,
+# 2026-11-24: under Connect they lit a tab with no way to the posts).
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "classes": "connect",
-          "directory": "connect", "events": "connect", "prayer": "connect", "news": "connect",
+          "directory": "connect", "events": "connect", "prayer": "connect", "news": "home",
           "ask": "connect", "lead": "lead", "board": "board"}
 
 # Lumen's own icons (the rest are member_app_ui.ICONS).

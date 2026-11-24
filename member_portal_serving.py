@@ -660,8 +660,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <div class="sv-lt h-teal"><p class="sv-eb">{_e(me.get("name") or "")}</p><h1 class="sv-h">My <em>serving</em></h1></div>
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
 {f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
-{_flash(request)}{_asked_flash(request, m)}{_vol_flash(request, m)}
-{_msa.section(m.get("approve"))}
+{_flash(request)}{_asked_flash(request, m)}{_vol_flash(request, m)}{_msa.section(m.get("approve"))}
 {_check_html(m.get("hours")) if check_first else ""}
 {_hours_html(m.get("hours"), me)}
 <section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">

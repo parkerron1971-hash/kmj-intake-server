@@ -55,7 +55,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
 from urllib.parse import quote
 
@@ -109,11 +109,36 @@ _TABLE = "member_push_subscriptions"
 
 # ─── the church's switch ─────────────────────────────────────────────
 
+# Every church starts with the main kinds on (Kevin, 2026-11-24: "make sure
+# every person has the ability to turn on notification in the app"); a
+# church turns one off by saving it False, and each member unchecks what they
+# don't want. Before DEFAULT_ON_FROM (a Thursday, the day features switch on)
+# a kind is on only where the church switched it on.
+DEFAULT_ON = ("announcements", "news", "messages", "prayer", "groups")
+DEFAULT_ON_FROM = date(2026, 11, 26)
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def defaults_live() -> bool:
+    """MEMBER_ALERTS_DEFAULTS: "on" always, "off" never (unit tests run off
+    unless a test turns it on: __tests__/conftest.py); unset, from
+    DEFAULT_ON_FROM."""
+    import os
+    mode = (os.environ.get("MEMBER_ALERTS_DEFAULTS") or "").strip().lower()
+    if mode in ("on", "off"):
+        return mode == "on"
+    return _today() >= DEFAULT_ON_FROM
+
+
 def church_kinds(settings: Optional[Dict[str, Any]]) -> Set[str]:
     cfg = ((settings or {}).get("member_portal") or {}).get("notifications") or {}
     if not isinstance(cfg, dict):
-        return set()
-    return {k for k in KIND_KEYS if cfg.get(k) is True}
+        cfg = {}
+    defaults = DEFAULT_ON if defaults_live() else ()
+    return {k for k in KIND_KEYS if cfg.get(k) is True or (k in defaults and cfg.get(k) is None)}
 
 
 def visible_kinds(ctx: Optional[Dict[str, Any]]) -> Set[str]:
@@ -757,6 +782,29 @@ def home_card(biz: Dict[str, Any]) -> str:
   if(no||!('Notification' in window)||!('PushManager' in window)||Notification.permission!=='default') return;
   c.hidden=false;
   document.getElementById('np-card-no').addEventListener('click',function(){
+    c.hidden=true; try{localStorage.setItem('np-card-no','1');}catch(e){}
+  });
+})();</script>"""
+
+
+def lumen_home_card(biz: Dict[str, Any]) -> str:
+    """Home's Turn on notifications, in the new look (the canvas "Posts and
+    Alerts", board 1): a row like the desk strip's, shown only on a phone
+    that can take notifications and hasn't been asked yet, until Not now."""
+    if not ready() or not church_kinds(biz.get("settings")) - set(OWN_PAGE_KINDS):
+        return ""
+    return """<section class="lm-desk lm-npc" id="lm-npc" aria-labelledby="lm-npc-h" hidden>
+<div class="lm-dk"><div class="lm-dkt"><b id="lm-npc-h">Turn on notifications</b>
+<p>Hear about church news, messages and prayer on this phone.</p></div>
+<a class="lm-dkb" href="/my/notifications">Turn on</a></div>
+<button type="button" id="lm-npc-no" style="display:block;min-height:44px;padding:0 16px 6px;border:0;background:none;color:var(--fg2);font:inherit;font-size:14px;cursor:pointer">Not now</button>
+</section>
+<script>(function(){
+  var c=document.getElementById('lm-npc'); if(!c) return;
+  var no=false; try{no=localStorage.getItem('np-card-no')==='1';}catch(e){}
+  if(no||!('Notification' in window)||!('PushManager' in window)||Notification.permission!=='default') return;
+  c.hidden=false;
+  document.getElementById('lm-npc-no').addEventListener('click',function(){
     c.hidden=true; try{localStorage.setItem('np-card-no','1');}catch(e){}
   });
 })();</script>"""
