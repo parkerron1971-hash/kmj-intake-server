@@ -34,6 +34,11 @@ approved by me or admins."
 
 Office API (owner or admin):
   POST /church/news/shared/{post_id}   {business_id, action: post|later, body?}
+  GET  /church/news/shared/count       {waiting, newest_at, first}: the office Home's card
+
+The pastors and the leaders the office picks also approve from the member
+app's Serve page, and hear on their phones when one comes in
+(news_approvers).
 """
 from __future__ import annotations
 
@@ -45,7 +50,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import sb_clients
@@ -193,6 +198,11 @@ async def share(business: Dict[str, Any], me: Dict[str, Any], kind: str, text: s
         if pic:
             await asyncio.to_thread(chat_photos.drop, pic["path"])
         return False, "error", ""
+    # The pastors and the leaders the office picked hear it came in
+    # (news_approvers: Serve's To approve; never the picked leaders for
+    # words about self-harm).
+    import news_approvers
+    await asyncio.to_thread(news_approvers.notify, business, row, str(me.get("name") or ""))
     if verdict == "self_harm":
         import member_portal_messaging as mpm
         try:
@@ -250,6 +260,20 @@ def photo_link(business_id: str, post_id: str, n: int, me_id: str) -> Optional[s
     if p.get("removed_at"):
         return ""
     if str(p.get("posted_by") or "") != str(me_id):
+        if p.get("status") == "waiting" and not p.get("group_id"):
+            # Waiting: the people who approve it (news_approvers, Serve's To
+            # approve) see its photo; nobody else does yet.
+            import news_approvers
+            business = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{_q(business_id)}&select=id,settings,owner_id&limit=1")
+            if business is None:
+                return None
+            r = news_approvers.role(business[0], me_id) if business else ""
+            if r is None:
+                return None
+            if not news_approvers.may_see(r, p):
+                return ""
+            return storage_links.signed_url_sync(member_photos.BUCKET, str(pics[n]["path"]), ttl=LINK_TTL) or None
         if not cn.is_live(p):
             return ""
         groups = cn.my_groups(business_id, me_id) if cn.scoped(p) else []
@@ -335,39 +359,35 @@ def _need(business_id: str, user: AuthedUser) -> str:
 
 @router.post("/church/news/shared/{post_id}")
 def decide(post_id: str, body: DecideIn, user: AuthedUser = Depends(require_user)):
-    """Post it (as written, or with the office's edit), or Not now."""
+    """Post it (as written, or with the office's edit), or Not now. The
+    app's Serve page decides through the same settle (news_approvers)."""
     import church_news as cn
     import kids_router
+    import news_approvers
     biz_id = kids_router._uuid(body.business_id, "business_id")
     # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
     _need(biz_id, user)
     pid = kids_router._uuid(post_id, "post")
-    rows = cn._get(f"/church_posts?id=eq.{_q(pid)}&business_id=eq.{_q(biz_id)}&source=eq.member"
-                   f"&status=in.(waiting,declined)&removed_at=is.null&select=id,status,attach,posted_by&limit=1")
-    if not rows:
-        raise HTTPException(404, "That one was already decided.")
-    now = _now().isoformat()
-    if body.action == "later":
-        patch: Dict[str, Any] = {"status": "declined", "decided_at": now, "decided_by": user.id}
-    else:
-        patch = {"status": "posted", "publish_at": now, "decided_at": now, "decided_by": user.id}
-        if body.body is not None:
-            text = clean(body.body)
-            if not text:
-                raise HTTPException(422, "Write something first.")
-            patch["body"] = text
-    done = sb_clients.sb_patch_as_service(
-        f"/church_posts?id=eq.{_q(pid)}&business_id=eq.{_q(biz_id)}&status=in.(waiting,declined)", patch)
-    if done is None:
+    business = cn._business(biz_id)
+    code, _post, told = news_approvers.settle(business, pid, body.action, decided_by=str(user.id), body=body.body)
+    if code == "error":
         raise cn._unavailable()
-    if not done:
+    if code == "gone":
         raise HTTPException(404, "That one was already decided.")
-    told = False
-    if body.action == "post":
-        import news_alerts
-        business = cn._business(biz_id)
-        post = {**rows[0], **done[0]}
-        told = _tell(business, post)
-        # Members who chose Everything hear about it too (news_alerts).
-        news_alerts.alert_later(business, post)
+    if code == "empty":
+        raise HTTPException(422, "Write something first.")
     return {"ok": True, "told": told}
+
+
+@router.get("/church/news/shared/count")
+def shared_count(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """The office Home's card: good news waiting for the whole church."""
+    import church_news as cn
+    import kids_router
+    import news_approvers
+    biz_id = kids_router._uuid(business_id, "business_id")
+    cn._need(biz_id, user, "viewer")
+    got = news_approvers.count(cn._business(biz_id))
+    if got is None:
+        raise cn._unavailable()
+    return got

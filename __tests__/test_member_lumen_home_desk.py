@@ -60,8 +60,10 @@ def test_the_owner_sees_what_waits(owner, fake, monkeypatch):  # noqa: F811
     desk = _desk(html)
     assert "<b>1 good news post is waiting</b>" in desk
     assert "It came in " in desk                                                # today, or yesterday by the scene's clock
-    assert ". Approve it and Grace Fellowship&#x27;s feed begins. Only you see this." in desk
-    assert '<a class="lm-dkb" href="https://' in desk and '/?nav=operate:news">Review</a>' in desk
+    # Good news is approved in the app now: My serving's To approve
+    # (news_approvers, the canvas "Good News Approvals").
+    assert ". Approve it in Serve and Grace Fellowship&#x27;s feed begins. Only you see this." in desk
+    assert '<a class="lm-dkb" href="/my/serving#approve">Approve</a>' in desk
     main = _main(html)
     assert main.index('id="lm-wk-h"') < main.index('class="lm-desk"') < main.index('class="lm-hcp"')
 

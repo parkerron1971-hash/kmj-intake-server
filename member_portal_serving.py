@@ -230,6 +230,10 @@ DONE = {
 }
 ERRS = {"preview": "This is a preview, so nothing was saved.", "slow": "One moment, then try that again.",
         "error": "That didn't save. Please try again in a moment."}
+# To approve (member_serving_approve): good news members shared, on top.
+import member_serving_approve as _msa  # noqa: E402
+DONE.update(_msa.DONE)
+ERRS.update(_msa.ERRS)
 # Away, for someone on the leaders schedule: it was asked for, not saved.
 # {to}: who it went to, by the name the church knows them by (worked out on
 # the page; only the short code rides in the address).
@@ -615,7 +619,8 @@ def _check_html(h: Optional[Dict[str, Any]]) -> str:
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], m: Dict[str, Any],
                 sub_for: Optional[Dict[str, Any]] = None, door: str = "") -> str:
     """`door`: ChurchSavvy's, for someone on its Sunday team (the Serve tab
-    opens here for someone whose only part is serving)."""
+    opens here for someone whose only part is serving). `m["approve"]`:
+    good news waiting for them to approve (member_serving_approve), on top."""
     import member_app_ui as ui
     from member_portal import _shell
     teams = "".join(
@@ -656,6 +661,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
 {f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
 {_flash(request)}{_asked_flash(request, m)}{_vol_flash(request, m)}
+{_msa.section(m.get("approve"))}
 {_check_html(m.get("hours")) if check_first else ""}
 {_hours_html(m.get("hours"), me)}
 <section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">
@@ -994,14 +1000,34 @@ def _vol(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
 async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], sub: str):
     from member_portal import _page, _SECURE_HEADERS
     biz, site = church["business"], church.get("site")
-    if not ss.on():
-        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     rest = sub[len("/my/serving"):].strip("/")
+    # Good news waiting for them to approve (news_approvers): on top of My
+    # serving, and the page itself for someone with no Sunday team here.
+    import news_approvers
+    try:
+        ap = await asyncio.to_thread(news_approvers.for_me, biz, str(me["id"])) if not rest or rest.startswith("approve/") else {}
+    except Exception:  # noqa: BLE001 — My serving still opens without it
+        logger.warning("my serving: to approve skipped", exc_info=True)
+        ap = None
+    if rest.startswith("approve/"):
+        pid = rest[len("approve/"):]
+        c = next((x for x in ((ap or {}).get("waiting") or []) if x["id"] == pid), None) if _ID.match(pid) else None
+        if not c:
+            return RedirectResponse("/my/serving?err=ap_gone#approve" if ap else "/my/serving",
+                                    status_code=303, headers=_SECURE_HEADERS)
+        return _page(_msa.edit_page(biz, site, request, me, c, _tab()))
+    if not ss.on():
+        if not rest and ap and ap.get("role"):
+            return _page(_msa.only_page(biz, site, request, me, ap, _tab()))
+        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     try:
         if not rest:
             m = await asyncio.to_thread(ss.mine, biz, str(me["id"]))
             if m is None:
+                if ap and ap.get("role"):
+                    return _page(_msa.only_page(biz, site, request, me, ap, _tab()))
                 return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+            m["approve"] = ap
             sub_for = None
             want = str(request.query_params.get("sub") or "")
             hit = next((c for c in m["coming"] if c["id"] == want), None)
@@ -1082,6 +1108,12 @@ async def _act(request: Request, back_to_ask, fn, *fields: str):
             return None, _go("/my/serving")
         return None, _go(back, err="error")
     return back, None
+
+
+@router.post("/my/serving/approve", include_in_schema=False)
+async def approve(request: Request):
+    """Good news a member shared: Post it, or Not now (member_serving_approve)."""
+    return await _msa.decide(request)
 
 
 @router.post("/my/serving/answer", include_in_schema=False)
