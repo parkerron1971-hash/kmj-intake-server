@@ -161,9 +161,15 @@ def _open(atype: str, biz: Any, action: Dict[str, Any]) -> Tuple[Optional[Dict[s
         held = chief_said_again.gate(str((biz or {}).get("id") or ""), uid, atype, action, tainted=tainted, nav=NAV,
                                      heading={"save_church_job": "Save one of the church's own jobs",
                                               "remove_church_job": "Take one of the church's own jobs off the list"}[atype],
-                                     keys={"save_church_job": ("job", "key", "label", "does", "description", "role",
-                                                               "areas", "duties"),
-                                           "remove_church_job": ("job", "key")}[atype])
+                                     # `job` is the one a change or a removal is of (never `key`, which the
+                                     # handlers don't read); a save with no `job` makes a new one. What a save
+                                     # leaves out is set, not kept: church_job_defs.clean.
+                                     keys={"save_church_job": ("job", "label", "does", "description", "role", "areas",
+                                                               "duties"),
+                                           "remove_church_job": ("job",)}[atype],
+                                     defaults={"save_church_job": {
+                                         "job": "a new job (none is being changed)", "role": "manager (a Manager login)",
+                                         "areas": "none", "duties": "none"}}.get(atype))
         if held:
             return held, {}, ""
     on = _on(uid)

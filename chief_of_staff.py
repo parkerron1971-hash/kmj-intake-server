@@ -16795,6 +16795,10 @@ async def chief_chat(
             # A change held for this person's go-ahead counts only if its words are in the reply they
             # read, whole (chief_said_again.confirm_shown): the cleaner above works on the reply as one.
             if any(isinstance(t, dict) and t.get("said_again") for t in (taken or [])):
+                # The stream's own door cleans this reply once more before it sends it, and one clean
+                # can leave what a second cuts (a dropped sentence joins the two halves of a marker).
+                # So it is cleaned here until it holds still: what is checked is what is read.
+                response_text = chief_said_again.settled(response_text, req.message)
                 await asyncio.to_thread(chief_said_again.confirm_shown, req.business_id,
                                         str(user_session.user.id), response_text)
 
@@ -16973,6 +16977,11 @@ async def chief_chat_stream(
     if await _is_sample_turn(req):
         import sample_chief
         return await sample_chief.stream(req, user_session)
+    # A message that isn't a go-ahead lets whatever waited for this person's go-ahead lapse
+    # (chief_said_again). Here too: the first track can answer alone and never reach chief_chat.
+    import chief_said_again
+    chief_said_again.turn_begins(req.business_id, str(user_session.user.id), req.message or "",
+                                 (req.client_surface or "") == "voice")
     q: "asyncio.Queue[str]" = asyncio.Queue()
 
     def _sink(piece: str) -> None:

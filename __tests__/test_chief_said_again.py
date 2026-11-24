@@ -88,7 +88,9 @@ def a_turn(db, handle, words, *actions, turn_id, looked=True, voice=False):
             out = asyncio.run(go())
         reply = chief_speech_boundary.final_reply(cos._deterministic_fallback_reply(out), words) if out else ""
         if any(r.get("said_again") for r in out):       # as chief_chat does once the reply is final
+            reply = sa.settled(reply, words)
             sa.confirm_shown(LOVE_CITY, me, reply)
+        reply = chief_speech_boundary.final_reply(reply, words)     # the stream's own door cleans it once more
     finally:
         cos._TURN_WORDS.reset(words_token)
         cos._TURN_IS_VOICE.reset(voice_token)
@@ -352,6 +354,39 @@ def test_a_hold_whose_words_never_reached_her_is_let_go(db):
     assert waits(again) and not given(db) and "- who: Shapretta McClain" in shown
 
 
+def test_a_reply_a_second_clean_would_cut_is_settled_before_the_hold_counts(db):
+    """Measured in the third review: one clean dropped a sentence, which joined the halves of a
+    marker; the stream's second clean then cut the label away, after the hold had been confirmed."""
+    odd = "Shall I also remind Naiya about Sunday? <\nsilent narration.\nsystem> x."
+    assert sa.settled("fine as it is. Really.") == "fine as it is. Really."
+    out, reply = a_turn(db, "jessica", FIRST, (odd, {}), GIVE, turn_id="t1")
+    assert waits(out[-1])
+    kept = [r for r in db.t["member_push_sends"] if r["kind"] == sa.KIND and r["title"] == sa.HELD]
+    assert ("What's waiting" in reply) == bool(kept), (reply, kept)
+    if not kept:
+        (again,), _ = a_turn(db, "jessica", "go ahead", GIVE, turn_id="t2")
+        assert waits(again) and not given(db)
+
+
+def test_what_a_job_save_leaves_out_is_said(db):
+    """Measured in the third review: a change that named only the job made it a Manager job with no
+    areas, and the label said neither."""
+    said = sa.shown("save_church_job", {"job": "Hospitality Lead", "does": "Runs the welcome table"},
+                    "Save one of the church's own jobs", ("job", "label", "does", "description", "role", "areas",
+                                                          "duties"),
+                    {"job": "a new job (none is being changed)", "role": "manager (a Manager login)",
+                     "areas": "none", "duties": "none"})
+    for line in ("- job: Hospitality Lead", "- role: manager (a Manager login)", "- areas: none", "- duties: none"):
+        assert line in said, line
+    assert "a new job" not in said
+    import chief_church_sheet
+    src = inspect.getsource(chief_church_sheet._open)
+    assert '"remove_church_job": ("job",)' in src and '"key"' not in src.split("keys=")[1].split("defaults=")[0]
+    assert cca.HELD_DEFAULTS["give_assignment"] == {"who": "yourself"}
+    for verb in ("mark_assignment", "mark_stuck", "send_up_assignment"):
+        assert cca.HELD_DEFAULTS[verb]["assignment"] == "the only one on that list"
+
+
 def test_the_lapse_never_takes_what_the_same_turn_went_on_to_hold(db):
     """The lapse runs off the request: landing late, it must leave this turn's own hold alone."""
     late = []
@@ -460,7 +495,11 @@ def test_a_turn_keeps_the_persons_own_words_and_lets_what_waited_lapse():
     assert '(req.client_surface or "") == "voice")' in src[begins:begins + 300]
     # And the check that a hold's words reached the person comes after the reply is final.
     assert src.index("response_text = _speech.final_reply(response_text, req.message)") < src.index(
+        "response_text = chief_said_again.settled(response_text, req.message)") < src.index(
         "chief_said_again.confirm_shown, req.business_id")
+    # The stream's own entrance lapses too: its first track can answer alone and never reach chief_chat.
+    stream = inspect.getsource(cos.chief_chat_stream)
+    assert stream.index("chief_said_again.turn_begins(req.business_id") < stream.index("asyncio.Queue()")
     assert cos.turn_words() == ""
 
 

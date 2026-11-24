@@ -104,8 +104,10 @@ HELD_KEYS = {
     "set_my_day": ("duty", "day", "who"),
 }
 HELD_DEFAULTS = {
-    "mark_assignment": {"done": "yes", "who": "your own list"},
-    "mark_stuck": {"stuck": "yes", "who": "your own list"},
+    "give_assignment": {"who": "yourself"},
+    "mark_assignment": {"assignment": "the only one on that list", "done": "yes", "who": "your own list"},
+    "mark_stuck": {"assignment": "the only one on that list", "stuck": "yes", "who": "your own list"},
+    "send_up_assignment": {"assignment": "the only one on that list"},
     "set_my_day": {"day": "back to its usual day", "who": "your own"},
 }
 FILLER = frozenset({"the", "a", "an", "one", "my", "our", "that", "this", "on", "of", "for", "to", "assignment",

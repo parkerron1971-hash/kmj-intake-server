@@ -22,9 +22,10 @@ the way out, for the ones that are ordinary, undoable changes (class A):
                      (too long; a field the verb isn't known to take; a
                      field the reply's own cleaner would cut) is never kept:
                      it can't be released, only asked for again.
-    confirm_shown()  once the turn's reply is final: a hold whose words are
-                     not in that reply, whole, is let go. A go-ahead answers
-                     what the person read, never what they were meant to.
+    confirm_shown()  once the turn's reply is final (cleaned until it holds
+                     still: settled()): a hold whose words are not in that
+                     reply, whole, is let go. A go-ahead answers what the
+                     person read, never what they were meant to.
     release() ...... on the person's NEXT message, when that message is a
                      go-ahead and nothing else ("go ahead", "yes", "do it")
                      and Chief sends the same verb for the same person,
@@ -438,6 +439,24 @@ def confirm_shown(biz_id: Any, uid: Any, reply: Any) -> None:
         print(f"[chief_said_again] {biz_id[:8]}: {len(gone)} held change(s) let go: not shown whole", flush=True)
     except Exception:  # noqa: BLE001
         lapse(biz_id, uid)
+
+
+def settled(reply: Any, message: Any = "") -> str:
+    """A reply cleaned until cleaning changes nothing (chief_speech_boundary.final_reply, a few passes
+    at most). The reply is cleaned again further down the line (the stream's own door), and one pass
+    can leave what the next one cuts: a hold is confirmed against the text that holds still. If it
+    never does, the empty string: nothing is then found in it, and every hold of the turn is let go."""
+    text = str(reply or "")
+    try:
+        import chief_speech_boundary
+        for _ in range(4):
+            nxt = chief_speech_boundary.final_reply(text, str(message or ""))
+            if nxt == text:
+                return text
+            text = nxt
+    except Exception:  # noqa: BLE001 — couldn't settle it: nothing is confirmed
+        return ""
+    return ""
 
 
 def _later(fn, *args: Any) -> None:
