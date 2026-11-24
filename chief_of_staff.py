@@ -278,6 +278,7 @@ from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_sugg
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
 from chief_giving_summary import handle_giving_summary
+from chief_team_conversations import handle_team_conversations
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
@@ -444,6 +445,7 @@ _ACTION_PHRASES = {
     "list_asks": "reading what your team suggested",
     "giving_counts": "reading the service counts",
     "giving_summary": "adding up what came in",
+    "team_conversations": "reading what your team asked me",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
     "match_giving_deposits": "matching the gifts to their deposits",
@@ -12637,6 +12639,7 @@ ACTION_HANDLERS = {
     "undo_ask":              handle_undo_ask,
     "giving_counts":         handle_giving_counts,
     "giving_summary":        handle_giving_summary,
+    "team_conversations":    handle_team_conversations,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,
     "match_bill_payment":    handle_match_bill_payment,

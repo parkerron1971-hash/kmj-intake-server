@@ -161,6 +161,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "list_scheduled":      _r("reads queued chief_scheduled_actions"),
     "offering_readiness":  _r("offering_profiles.business_readiness — pure report"),
     "recall_conversation": _r("searches prior conversation"),
+    "team_conversations": {**_r("the owner reads what the team's other logins asked Chief and what Chief said and "
+                                "did, each conversation named; the owner's own login only", sensitive=True),
+                           "chief_only": True},
     # GUIDES, never narrates: returns a filter + a count and sends the
     # reader to the rows. Chief is deliberately given no row contents,
     # so it cannot summarise the ledger any more than the navigator can.
