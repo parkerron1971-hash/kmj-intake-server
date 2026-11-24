@@ -4,7 +4,7 @@ date: 2026-11-24
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "both" (a "Find clips in this service" button on each service recording, and a helper for sermons whose video is on YouTube)'
 status: waiting on Kevin
-prs: ["kmj-intake-server (this PR)", "solutionist-studio (the buttons, its own PR)"]
+prs: ["kmj-intake-server#2080", "solutionist-studio#1696"]
 migrations: []
 left_undone:
   - "Merging this deploys the clip service (clipper_worker/ changed): check its /health says busy false first; a deploy stops a running clip job."
