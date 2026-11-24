@@ -3,11 +3,10 @@ title: "Good news approvals: the pastors and picked leaders approve from Serve, 
 date: 2026-11-24
 agent: Claude Code (Claude Opus 5.5)
 asked: 'send a post request to the pastor''s or assigned leader to apporve post in the app serve tab area. Then, on the canvas Ktoy4b4qXoCDPCDoRmCGxj: build it' 
-status: in progress
-prs: ["kmj-intake-server (this PR)", "solutionist-studio (office Home card + Who approves good news, next)"]
+status: shipped
+prs: ["kmj-intake-server#2077", "solutionist-studio#1694"]
 migrations: []
 left_undone:
-  - "The office side (solutionist-studio): the Home card ('2 good news posts are waiting', GET /church/news/shared/count) and News settings → Who approves good news (POST /church/news/approvers, settings.approver_alerts), drawn on the canvas's boards 5 and 6. A separate FE PR."
   - "A Home cue for admins who aren't the owner: their phone note and the Serve page work, but Home's strip and the Serve door's count are the owner's and the picked leaders' only (an admin's member record needs a business_users read on every Home load)."
 decisions:
   - "Who approves: the church's owner (settings.church_owner_contact_id), every active owner or admin office login tied to a member record (business_users.contact_id), and up to 12 leaders the office picks (settings.news.approvers). Kevin's default from the canvas: a picked leader approves alone; whoever answers first decides (the update lands only on a row still waiting)."

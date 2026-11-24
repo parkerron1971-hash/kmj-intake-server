@@ -847,7 +847,11 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                             office=f"{app_base.app_base_url()}/?nav=operate:news", now=now,
                             first_news=owner and desk_post and posts == [], quiet=posts == [],
                             approve="/my/serving#approve")
-    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
+    # Turn on notifications (the canvas "Posts and Alerts"): only on a phone
+    # that can take them and hasn't been asked (member_push.lumen_home_card).
+    import member_push
+    alerts_card = member_push.lumen_home_card(biz)
+    top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{alerts_card}{tip}{doors_html}{week_html}{after}'
            f'{f"<div class=lm-cards>{under}</div>" if under else ""}{desk_html}{lh.composer(face)}')
     # The feed (`news`: the church's and the groups' posts), then the
     # church's own cards (Kevin's Home plan, 2026-11-21: its newest message,

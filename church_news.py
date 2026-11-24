@@ -487,9 +487,11 @@ def home_view(business_id: str, me_id: str, previews: bool = False,
         count["n"] = None if len(rows) >= 40 else sum(
             1 for r in rows if is_live(r, now) and reaches(r, mine, me_id) and not is_person_celebration(r))
     # A birthday, anniversary or milestone is Home's "Celebrating today", not
-    # "From the church" (News keeps them all).
+    # "From the church" (News keeps them all). Good news a pastor approved is
+    # the church's news like any post, so it shows on Home (Kevin, 2026-11-24:
+    # members' and leaders' posts are seen on Home, where announcements are).
     rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
-            and not is_person_celebration(r) and not (r.get("person_id") and r.get("kind") in ("milestone", "good_news"))]
+            and not is_person_celebration(r) and not (r.get("person_id") and r.get("kind") == "milestone")]
     if not rows:
         return [], 0
     since = (now - timedelta(days=14)).isoformat()

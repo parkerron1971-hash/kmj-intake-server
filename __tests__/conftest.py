@@ -31,6 +31,13 @@ os.environ.setdefault("LEAD_SCORING_MODE", "off")
 # tests call it directly with the reads faked.
 os.environ.setdefault("CHIEF_RAIL", "off")
 
+# The member app's main alert kinds are on by default for every church from
+# member_push.DEFAULT_ON_FROM (Kevin, 2026-11-24). The many tests written
+# against "a kind is on only where the church turned it on" run that way
+# whatever the date; the defaults' own tests (test_member_alerts_default)
+# turn them on with monkeypatch.setenv.
+os.environ.setdefault("MEMBER_ALERTS_DEFAULTS", "off")
+
 # Chief builds and durable event delivery are on by the code's default
 # (since 2026-11-17), and both read their own tables on every turn and every
 # event run: the build jobs (chief_build_runtime.context) and the delivery
