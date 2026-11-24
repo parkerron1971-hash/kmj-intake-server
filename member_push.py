@@ -112,10 +112,11 @@ _TABLE = "member_push_subscriptions"
 # Every church starts with the main kinds on (Kevin, 2026-11-24: "make sure
 # every person has the ability to turn on notification in the app"); a
 # church turns one off by saving it False, and each member unchecks what they
-# don't want. Before DEFAULT_ON_FROM (a Thursday, the day features switch on)
-# a kind is on only where the church switched it on.
+# don't want. Before DEFAULT_ON_FROM a kind was on only where the church
+# switched it on. Planned for Thursday 11-26; Kevin brought it forward the
+# same day ("make sure every church can have access now").
 DEFAULT_ON = ("announcements", "news", "messages", "prayer", "groups")
-DEFAULT_ON_FROM = date(2026, 11, 26)
+DEFAULT_ON_FROM = date(2026, 11, 24)
 
 
 def _today() -> date:
