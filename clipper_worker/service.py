@@ -37,7 +37,7 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from clipper_worker import empty_spots
 
@@ -55,7 +55,8 @@ COPY_MAX_SECONDS = int(os.getenv('CLIPPER_COPY_MAX_SECONDS', str(6 * 3600)))
 COPY_STALL_SECONDS = 600              # nothing new encoded this long: the reading stalled
 COPY_MAX_BYTES = 5 * 1024 ** 3        # one PUT
 COPY_PLAYLIST_CHARS = 8_000_000       # ~1 MB is a 2-hour service
-YIELD_WAIT_SECONDS = 30               # a copy stops within seconds when a clip job needs the service
+RECORDING_SIZE_SLACK = 32 * 1024 ** 2  # a service recording read to within this of the limit was cut off
+YIELD_WAIT_SECONDS = 30              # a copy stops within seconds when a clip job needs the service
 # About 720p, the aspect kept, never upscaled: a landscape picture fits in
 # 1280x720, a portrait one in 720x1280.
 COPY_SCALE = ("scale=w='if(gte(iw,ih),min(1280,iw),min(720,iw))':h='if(gte(iw,ih),min(720,ih),min(1280,ih))'"
@@ -102,9 +103,31 @@ class Options(BaseModel):
 
 
 class JobRequest(BaseModel):
+    """One recording to find clips in, sent one of three ways: source_url, a
+    signed link to an upload (CLIPPER_SOURCE_HOSTS); or a service recording
+    (the API's service_clips.py) from the media bucket (CLIPPER_COPY_HOSTS):
+    `playlist`, its playlist with every segment signed, already cut to the
+    stretch asked for, or `recording_url`, its smaller copy as one signed
+    link, with `start` and `end` in it. A service recording is read into one
+    MP4 here without re-encoding (the full quality stays)."""
     model_config = ConfigDict(extra='forbid')
-    source_url: str = Field(max_length=4096)
+    source_url: Optional[str] = Field(default=None, max_length=4096)
+    playlist: Optional[str] = Field(default=None, min_length=8, max_length=COPY_PLAYLIST_CHARS)
+    recording_url: Optional[str] = Field(default=None, max_length=4096)
+    start: float = Field(default=0, ge=0, le=COPY_MAX_SECONDS)
+    end: Optional[float] = Field(default=None, gt=0, le=COPY_MAX_SECONDS)
+    seconds: Optional[float] = Field(default=None, gt=0, le=COPY_MAX_SECONDS)
     options: Options = Field(default_factory=Options)
+
+    @model_validator(mode='after')
+    def one_source(self):
+        if sum(v is not None for v in (self.source_url, self.playlist, self.recording_url)) != 1:
+            raise ValueError('Send one of source_url, playlist or recording_url')
+        if (self.start or self.end is not None) and self.recording_url is None:
+            raise ValueError('start and end go with recording_url')
+        if self.end is not None and self.end <= self.start:
+            raise ValueError('end must come after start')
+        return self
 
 
 class CopyRequest(BaseModel):
@@ -425,7 +448,10 @@ def work(job_id, request, state):
         source = job_dir / 'source.mp4'
         (job_dir / 'out').mkdir(parents=True, exist_ok=True)
         (job_dir / 'work').mkdir(parents=True, exist_ok=True)
-        state['source_bytes'] = download(request.source_url, source, state)
+        if request.source_url is not None:
+            state['source_bytes'] = download(request.source_url, source, state)
+        else:
+            state['source_bytes'] = read_recording(request, state, source)
         probe(source)
         state.update(stage='listening', percent=5.0)
         final = run_engine(state, engine_config(job_id, source, job_dir / 'out', request.options), engine_env(job_dir), job_dir)
@@ -521,9 +547,11 @@ def copy_cmd(playlist, target):
             '-progress', 'pipe:1', '-nostats', str(target)]
 
 
-def run_copy(state, cmd, job_dir, seconds):
+def run_copy(state, cmd, job_dir, seconds, *, upto=89.0, what='copy', stage='making', again='It will be tried again.'):
     """Run ffmpeg and follow its -progress lines. Stops on a cancel, the job's
-    time limit, or COPY_STALL_SECONDS with nothing new encoded."""
+    time limit, or COPY_STALL_SECONDS with nothing new encoded. A copy's
+    progress runs to 89%; a clip job reading a service recording (what
+    'recording') to 5%, like a download."""
     lines = queue.Queue()
     log_path = job_dir / 'ffmpeg.log'
     with open(log_path, 'w', encoding='utf-8') as ffmpeg_log:
@@ -547,20 +575,71 @@ def run_copy(state, cmd, job_dir, seconds):
                 name, _, value = line.strip().partition('=')
                 if name in ('out_time_us', 'out_time_ms') and value.isdigit() and int(value) > done_us:
                     done_us, moved = int(value), time.monotonic()
-                    state['percent'] = round(min(89.0, 89 * done_us / 1e6 / seconds), 1)
+                    state['percent'] = round(min(upto, upto * done_us / 1e6 / seconds), 1)
                 check_cancel(state)
                 if time.monotonic() - moved > COPY_STALL_SECONDS:
-                    raise JobError('Reading the recording stalled. It will be tried again.', 'making', 'copy.stalled')
+                    raise JobError(f'Reading the recording stalled. {again}', stage, f'{what}.stalled')
             proc.wait(timeout=30)
         finally:
             stop(proc)
     said = log_path.read_text(encoding='utf-8', errors='replace')
     if proc.returncode != 0:
-        print(f'[clipper] copy: ffmpeg exited {proc.returncode}: {said[-1500:]}', flush=True)
-        raise JobError('The recording could not be read. It will be tried again.', 'making', 'copy.ffmpeg')
+        print(f'[clipper] {what}: ffmpeg exited {proc.returncode}: {said[-1500:]}', flush=True)
+        raise JobError(f'The recording could not be read. {again}', stage, f'{what}.ffmpeg')
     if any(words in said for words in SEGMENT_LOST):
-        print(f'[clipper] copy: part of the recording could not be read: {said[-1500:]}', flush=True)
-        raise JobError('Part of the recording could not be read. It will be tried again.', 'making', 'copy.segment')
+        print(f'[clipper] {what}: part of the recording could not be read: {said[-1500:]}', flush=True)
+        raise JobError(f'Part of the recording could not be read. {again}', stage, f'{what}.segment')
+
+
+def recording_cmd(source, target, start=0.0, length=None):
+    """A service recording into one MP4 without re-encoding: the full
+    quality stays, and a two-hour service takes minutes, not an hour.
+    Streams copied across a resume (a discontinuity) keep playing; ffmpeg
+    shifts the timestamps on (checked with ffmpeg 8.1). `start` seeks to the
+    keyframe at or before it (the copy has one every 4 s); -fs stops a file
+    that would pass the size an upload may have."""
+    cmd = ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'warning', '-y',
+           '-protocol_whitelist', 'file,https,tls,tcp,crypto']
+    if str(source).endswith('.m3u8'):
+        cmd += ['-seg_max_retry', '3']
+    if start:
+        cmd += ['-ss', f'{start:.3f}']
+    cmd += ['-i', str(source)]
+    if length:
+        cmd += ['-t', f'{length:.3f}']
+    return cmd + ['-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-avoid_negative_ts', 'make_zero',
+                  '-movflags', '+faststart', '-fs', str(MAX_SOURCE_BYTES), '-progress', 'pipe:1', '-nostats', str(target)]
+
+
+def read_recording(request, state, target):
+    """A service recording (its signed playlist, or its copy's link and the
+    stretch asked for) into `target`; its size in bytes."""
+    job_dir = state['dir']
+    if request.playlist is not None:
+        source = job_dir / 'recording.m3u8'
+        source.write_text(state.pop('playlist'), encoding='utf-8')
+        cmd = recording_cmd(source, target)
+    else:
+        length = request.end - request.start if request.end is not None else None
+        cmd = recording_cmd(request.recording_url, target, request.start, length)
+    try:
+        run_copy(state, cmd, job_dir, request.seconds or MAX_SOURCE_SECONDS, upto=5.0, what='recording',
+                 stage='downloading', again='Try again.')
+    finally:
+        # Its links are signed: kept no longer than the reading.
+        (job_dir / 'recording.m3u8').unlink(missing_ok=True)
+    size = target.stat().st_size if target.is_file() else 0
+    if not size:
+        raise JobError('The recording was empty.', 'downloading', 'recording.empty')
+    # -fs stops just short of the limit, not past it.
+    if size >= MAX_SOURCE_BYTES - RECORDING_SIZE_SLACK:
+        raise JobError('That stretch of the service is over 5 GB. Choose a shorter one.', 'downloading', 'recording.too_large')
+    if request.seconds:
+        got = probe(target)
+        if got < request.seconds - max(request.seconds * 0.02, 10):
+            print(f'[clipper] recording: {got:.0f} s read of {request.seconds:.0f} s', flush=True)
+            raise JobError('Part of the recording could not be read. Try again.', 'downloading', 'recording.short')
+    return size
 
 
 def probe_copy(path):
@@ -705,7 +784,17 @@ def health():
 
 @app.post('/jobs/{job_id}', status_code=202, dependencies=[Depends(authorized)])
 def start(job_id: UUID, request: JobRequest):
-    if not source_allowed(request.source_url):
+    playlist = None
+    if request.source_url is not None:
+        if not source_allowed(request.source_url):
+            raise HTTPException(422, 'Source link not allowed')
+    elif request.playlist is not None:
+        # A service recording's segments: the media bucket's host only, the
+        # same check a copy's segments pass (never CLIPPER_SOURCE_HOSTS).
+        playlist = checked_playlist(request.playlist)
+        if playlist is None:
+            raise HTTPException(422, 'Source link not allowed')
+    elif not source_allowed(request.recording_url, 'CLIPPER_COPY_HOSTS'):
         raise HTTPException(422, 'Source link not allowed')
     if not os.getenv('OPENROUTER_API_KEY'):
         raise HTTPException(503, 'Clip service is missing its AI key')
@@ -721,6 +810,8 @@ def start(job_id: UUID, request: JobRequest):
         job_dir.mkdir(parents=True)
         state = {'status': 'working', 'stage': 'downloading', 'percent': 0.0, 'clips_done': 0, 'clips_total': 0,
                  'error': None, 'dir': job_dir, 'cancel': threading.Event(), 'started': time.monotonic(), 'kind': 'clips'}
+        if playlist is not None:
+            state['playlist'] = playlist
         jobs[key] = state
         holder['state'] = state
         threading.Thread(target=work, args=(key, request, state), daemon=True).start()

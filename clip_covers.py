@@ -185,6 +185,10 @@ def backfill_faces(row, need_first=False):
     source = media_library.read(f"/media_assets?id=eq.{media_library.key(row.get('source_id') or row['id'])}"
                                 f"&business_id=eq.{media_library.key(row['business_id'])}&select=*&limit=1") if row.get('source_id') else []
     start, end = cfg.get('start_seconds'), cfg.get('end_seconds')
+    import service_clips
+    # A service has no file in program-media: its clip is the stretch to read.
+    if source and service_clips.is_service(source[0]):
+        source = []
     if source and source[0].get('status') == 'ready' and not source[0].get('source_removed_at') and start is not None and end:
         url = storage_links.signed_url_sync(media_library.BUCKET, media_library.object_path(source[0]), ttl=900)
     else:

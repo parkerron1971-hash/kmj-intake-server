@@ -1053,3 +1053,138 @@ def test_the_real_ffmpeg_reads_a_resumed_recording_and_writes_the_copy(tmp_path)
     svc.run_copy(fresh_state(), svc.copy_cmd(playlist, target), tmp_path, 8.0)
     seconds, width, height, audio = svc.probe_copy(target)
     assert (width, height, audio) == (1280, 720, True) and abs(seconds - 8.0) < 0.5
+
+
+# -- clips from a service recording (2026-11-24) ---------------------------
+
+COPY_LINK = f'https://{BUCKET_HOST}/media/live/b/s/copy.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=ef'
+
+
+def fake_recording(monkeypatch, *, size=4321, seconds=None):
+    """The clip pipeline's fakes, with the service recording read by a fake
+    ffmpeg that writes `size` bytes."""
+    seen = fake_pipeline(monkeypatch)
+
+    def run_copy(state, cmd, job_dir, total, **kw):
+        listed = job_dir / 'recording.m3u8'
+        seen.update(cmd=cmd, total=total, kw=kw, playlist=listed.read_text(encoding='utf-8') if listed.is_file() else None)
+        (job_dir / 'source.mp4').write_bytes(b'v' * size)
+    monkeypatch.setattr(svc, 'run_copy', run_copy)
+    if seconds is not None:
+        monkeypatch.setattr(svc, 'probe', lambda path: seconds)
+    return seen
+
+
+def test_clips_are_found_in_a_service_recordings_signed_playlist(copies, monkeypatch):
+    seen = fake_recording(monkeypatch)
+    job = uuid4()
+    body = {'playlist': copy_playlist(), 'seconds': 60.0, 'options': {'durations': ['short']}}
+    assert copies.post(f'/jobs/{job}', json=body, headers=AUTH).status_code == 202
+    done = wait_done(copies, job)
+    assert done['status'] == 'completed' and len(done['result']['clips']) == 2
+    assert done['result']['source']['bytes'] == 4321
+    cmd = seen['cmd']
+    # Read whole, without re-encoding, and only https after the local playlist.
+    assert cmd[cmd.index('-c') + 1] == 'copy' and '-ss' not in cmd and '-t' not in cmd
+    assert cmd[cmd.index('-protocol_whitelist') + 1] == 'file,https,tls,tcp,crypto'
+    assert cmd[cmd.index('-i') + 1].endswith('recording.m3u8') and cmd[-1].endswith('source.mp4')
+    assert seen['playlist'].rstrip().endswith('#EXT-X-ENDLIST')      # read as a finished video
+    assert seen['kw'] == {'upto': 5.0, 'what': 'recording', 'stage': 'downloading', 'again': 'Try again.'}
+    assert seen['total'] == 60.0
+    assert not (svc.ROOT / str(job) / 'recording.m3u8').exists()       # its signed links aren't kept
+
+
+def test_the_copy_of_a_service_is_read_from_its_start_for_its_stretch(copies, monkeypatch):
+    seen = fake_recording(monkeypatch, seconds=2699.5)
+    job = uuid4()
+    body = {'recording_url': COPY_LINK, 'start': 1800.0, 'end': 4500.0, 'seconds': 2700.0}
+    assert copies.post(f'/jobs/{job}', json=body, headers=AUTH).status_code == 202
+    assert wait_done(copies, job)['status'] == 'completed'
+    cmd = seen['cmd']
+    assert cmd[cmd.index('-ss') + 1] == '1800.000' and cmd.index('-ss') < cmd.index('-i')   # seeks, never reads the start
+    assert cmd[cmd.index('-i') + 1] == COPY_LINK and cmd[cmd.index('-t') + 1] == '2700.000'
+    assert '-seg_max_retry' not in cmd                                  # an MP4, not a playlist
+
+
+@pytest.mark.parametrize('body', [
+    {'playlist': copy_playlist('https://evil.example/seg_000000.ts')},
+    {'playlist': copy_playlist(SEG.replace(BUCKET_HOST, 'project.supabase.co'))},   # an upload host is not the bucket
+    {'playlist': copy_playlist(SEG).replace('#EXT-X-VERSION:3', '#EXT-X-KEY:METHOD=AES-128,URI="https://evil.example/k"')},
+    {'recording_url': 'https://evil.example/copy.mp4'},
+    {'recording_url': COPY_LINK.replace('https://', 'http://')},
+    {'recording_url': SOURCE},                                          # an upload host is not the bucket
+])
+def test_a_service_recording_is_read_only_from_the_media_bucket(copies, monkeypatch, body):
+    fake_recording(monkeypatch)
+    assert copies.post(f'/jobs/{uuid4()}', json=body, headers=AUTH).status_code == 422
+
+
+def test_without_the_bucket_host_no_service_recording_is_read(client, monkeypatch):
+    monkeypatch.delenv('CLIPPER_COPY_HOSTS', raising=False)
+    fake_recording(monkeypatch)
+    assert client.post(f'/jobs/{uuid4()}', json={'playlist': copy_playlist()}, headers=AUTH).status_code == 422
+    assert client.post(f'/jobs/{uuid4()}', json={'recording_url': COPY_LINK}, headers=AUTH).status_code == 422
+    # And the bucket never becomes an upload host: a source_url there is refused.
+    monkeypatch.setenv('CLIPPER_COPY_HOSTS', BUCKET_HOST)
+    assert client.post(f'/jobs/{uuid4()}', json={'source_url': COPY_LINK}, headers=AUTH).status_code == 422
+
+
+@pytest.mark.parametrize('fields', [
+    {},
+    {'source_url': SOURCE, 'playlist': copy_playlist()},
+    {'source_url': SOURCE, 'recording_url': COPY_LINK},
+    {'playlist': copy_playlist(), 'start': 10.0},                       # a playlist comes already cut
+    {'source_url': SOURCE, 'end': 30.0},
+    {'recording_url': COPY_LINK, 'start': 60.0, 'end': 60.0},
+])
+def test_a_job_names_exactly_one_recording(fields):
+    with pytest.raises(ValidationError):
+        svc.JobRequest(**fields)
+    assert svc.JobRequest(source_url=SOURCE).playlist is None           # uploads are sent as they always were
+
+
+def test_a_stretch_cut_off_at_the_size_limit_fails_plainly(copies, monkeypatch):
+    monkeypatch.setattr(svc, 'MAX_SOURCE_BYTES', 40 * 1024 ** 2)
+    fake_recording(monkeypatch, size=10 * 1024 ** 2)
+    job = uuid4()
+    copies.post(f'/jobs/{job}', json={'playlist': copy_playlist()}, headers=AUTH)
+    done = wait_done(copies, job)
+    assert done['status'] == 'failed' and done['error']['code'] == 'recording.too_large'
+    assert 'shorter' in done['error']['message']
+
+
+def test_a_recording_that_reads_short_is_not_clipped(copies, monkeypatch):
+    fake_recording(monkeypatch, seconds=40.0)
+    job = uuid4()
+    copies.post(f'/jobs/{job}', json={'playlist': copy_playlist(), 'seconds': 60.0}, headers=AUTH)
+    done = wait_done(copies, job)
+    assert done['status'] == 'failed' and done['error']['code'] == 'recording.short'
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='needs FFmpeg')
+def test_the_real_ffmpeg_reads_a_resumed_service_whole_without_re_encoding(tmp_path):
+    """The command as it runs on the clip service, on a tiny relay-style
+    recording with a resume (its timestamps restart), read from local files
+    instead of signed links: the whole length comes out, at full size."""
+    import subprocess
+    rec = tmp_path / 'rec'
+    rec.mkdir()
+    for flags in ('append_list+omit_endlist', 'append_list+omit_endlist+discont_start'):
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30',
+                        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '4',
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '30', '-c:a', 'aac', '-f', 'hls',
+                        '-hls_time', '2', '-hls_list_size', '0', '-hls_playlist_type', 'event', '-hls_flags', flags,
+                        '-hls_segment_filename', str(rec / 'seg_%06d.ts'), str(rec / 'index.m3u8')],
+                       check=True, capture_output=True, timeout=120)
+    text = (rec / 'index.m3u8').read_text(encoding='utf-8')
+    assert '#EXT-X-DISCONTINUITY' in text
+    lines = [str(rec / line) if line.startswith('seg_') else line for line in text.splitlines()]
+    playlist = tmp_path / 'recording.m3u8'
+    playlist.write_text('\n'.join(lines + ['#EXT-X-ENDLIST']) + '\n', encoding='utf-8')
+    target = tmp_path / 'source.mp4'
+    state = fresh_state()
+    svc.run_copy(state, svc.recording_cmd(playlist, target), tmp_path, 8.0, upto=5.0, what='recording',
+                 stage='downloading', again='Try again.')
+    assert abs(svc.probe(target) - 8.0) < 0.5 and 0 < state['percent'] <= 5.0
+    seconds, width, height, audio = svc.probe_copy(target)
+    assert (width, height, audio) == (1920, 1080, True)                 # the full quality, not the copy's 720p

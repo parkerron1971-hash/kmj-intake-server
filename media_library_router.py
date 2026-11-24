@@ -57,6 +57,26 @@ def find_clips(business_id: UUID, source_id: UUID, body: clip_finder.FindClips, 
     return {'ok': True, 'run': clip_finder.start_run(business_id, source_id, body, user)}
 
 
+@router.get('/{business_id}/services')
+def services(business_id: UUID, user: AuthedUser = Depends(require_user)):
+    """What the sermon and stream screens may offer this person: 'services'
+    (Find clips in this service) and 'clips' (Video Clips' Find my best clips,
+    for a recording they upload). A person without the clips duty gets the
+    access check's 403, and the screens offer neither."""
+    import service_clips
+    media_library.access(business_id, user)
+    ready = clip_finder.ready_for(business_id)
+    return {'ok': True, 'services': ready and service_clips.switched_on(business_id), 'clips': ready}
+
+
+@router.post('/{business_id}/services/{session_id}')
+def add_service(business_id: UUID, session_id: UUID, user: AuthedUser = Depends(require_user)):
+    """A service streamed through Solutionist, as a recording to find clips
+    in (service_clips.py). The same row every time for the same service."""
+    import service_clips
+    return {'ok': True, 'asset': service_clips.add_service(business_id, session_id, user)}
+
+
 @router.get('/{business_id}/runs')
 def clip_runs(business_id: UUID, user: AuthedUser = Depends(require_user)):
     return {'ok': True, 'runs': clip_finder.runs(business_id, user)}

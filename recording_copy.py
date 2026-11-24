@@ -69,11 +69,10 @@ THE METER (church_storage.stored_bytes)
   copy's room for its first 14 days). bytes_per_sunday stays the full size.
 
 CLIPS
-  "Find my best clips" makes clips from recordings uploaded to the media
-  library (clip_finder), not from these service recordings: today nothing
-  turns a relay recording into a clip source. When something does, it must
-  read the full-quality recording while it exists (full_removed_at null)
-  and the copy after.
+  "Find clips in this service" (service_clips.py, 2026-11-24) makes these
+  recordings clip sources: a run reads the full-quality segments while they
+  are kept (not within a day of the trim) and this copy after, or when the
+  stretch asked for is too big at full quality.
 
 THE SWITCH
   CHURCH_STORAGE_SMALL_COPY: off (the default) | owner (the platform owner's
