@@ -981,7 +981,14 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     roles = _get(f"/church_leader_roles?business_id=eq.{b}&status=eq.active&select=contact_id&limit=2000")
     chosen = {str(p["contact_id"]) for p in posters}
     pool = sorted({str(r["contact_id"]) for r in led + roles} - chosen)
-    pool_people = _people(biz_id, pool) or {}
+    # Who approves good news (news_approvers): the pastors always, and the
+    # leaders the office picks from the same leaders and group leaders.
+    import news_approvers as nap
+    picked = nap.picked(business)
+    pastor_ids = nap.pastors(business) or []
+    leaders = {str(r["contact_id"]).lower() for r in led + roles}
+    pool_people = _people(biz_id, set(pool) | set(picked) | set(pastor_ids) | leaders) or {}
+    pool_people = {**pool_people, **{k.lower(): v for k, v in pool_people.items()}}
     import news_share
     return {
         "posts": posts,
@@ -1017,6 +1024,16 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         "sermons": [{"id": str(s["id"]), "title": s.get("title") or "", "date": s.get("preached_on")} for s in sermons],
         "candidates": sorted(({"contact_id": c, "name": (pool_people.get(c) or {}).get("name") or ""} for c in pool
                               if (pool_people.get(c) or {}).get("name")), key=lambda x: x["name"].lower()),
+        "approvers": {
+            "alerts": nap.alerts_on(business),
+            "pastors": [{"contact_id": c, "name": (pool_people.get(c) or {}).get("name") or ""} for c in pastor_ids
+                        if (pool_people.get(c) or {}).get("name")],
+            "picked": [{"contact_id": c, "name": (pool_people.get(c) or {}).get("name") or ""} for c in picked],
+            "candidates": sorted(({"contact_id": c, "name": (pool_people.get(c) or {}).get("name") or ""}
+                                  for c in leaders - set(picked) - set(pastor_ids)
+                                  if (pool_people.get(c) or {}).get("name")), key=lambda x: x["name"].lower()),
+            "max": nap.PICKED_MAX,
+        },
     }
 
 
@@ -1287,6 +1304,41 @@ def posters(body: PostersIn, user: AuthedUser = Depends(require_user)):
     return {"ok": True}
 
 
+class ApproversIn(BaseModel):
+    business_id: str
+    add: List[str] = Field(default_factory=list)
+    remove: List[str] = Field(default_factory=list)
+
+
+@router.post("/church/news/approvers")
+def approvers(body: ApproversIn, user: AuthedUser = Depends(require_user)):
+    """The leaders who approve good news with the pastors
+    (settings.news.approvers, news_approvers). The owner and admins pick."""
+    import kids_router
+    import news_approvers as nap
+    biz_id = kids_router._uuid(body.business_id, "business_id")
+    _need(biz_id, user, "admin")
+    add = [kids_router._uuid(c, "person").lower() for c in body.add[:50]]
+    drop = {kids_router._uuid(c, "person").lower() for c in body.remove[:50]}
+    if add:
+        found = _get(f"/contacts?business_id=eq.{_q(biz_id)}&id=in.({_ids(add)})&select=id")
+        if len(found) != len(set(add)):
+            raise HTTPException(404, "Someone on that list isn't one of your people.")
+    business = _business(biz_id)
+    now = [c for c in nap.picked(business) if c not in drop]
+    now += [c for c in add if c not in now]
+    if len(now) > nap.PICKED_MAX:
+        raise HTTPException(422, f"Pick up to {nap.PICKED_MAX} leaders.")
+    settings = business.get("settings") if isinstance(business.get("settings"), dict) else {}
+    news = dict(settings.get("news") if isinstance(settings.get("news"), dict) else {})
+    news[nap.PICKED_KEY] = now
+    if sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz_id)}", {"settings": {**settings, "news": news}}) is None:
+        raise _unavailable()
+    import member_cache
+    member_cache.forget_church(biz_id)
+    return {"ok": True, "picked": now}
+
+
 class NewsSettingsIn(BaseModel):
     business_id: str
     comments: Optional[bool] = None
@@ -1299,6 +1351,9 @@ class NewsSettingsIn(BaseModel):
     # Members posting in their groups (member_posts.SWITCH; the owner's
     # preview has the same switch at /my/post/switch).
     member_posts: Optional[bool] = None
+    # A note to the people who approve good news when one comes in
+    # (news_approvers.ALERTS_KEY: False when off, gone when on).
+    approver_alerts: Optional[bool] = None
 
 
 @router.post("/church/news/settings")
@@ -1320,6 +1375,10 @@ def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)
         news["celebration_alerts"] = body.celebration_alerts
     if body.reach_rest is not None:
         news["reach_rest"] = bool(body.reach_rest)
+    if body.approver_alerts is True:
+        news.pop("approver_alerts", None)
+    elif body.approver_alerts is False:
+        news["approver_alerts"] = False
     new = {**settings, "news": news}
     if body.alerts is not None or body.member_posts is not None:
         import member_posts

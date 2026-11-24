@@ -410,7 +410,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 gatherings: Optional[List[Dict[str, Any]]] = None, write: Optional[Dict[str, bool]] = None,
                 leaders: Optional[Dict[str, Any]] = None, leaders_owner: bool = False,
                 klass: Optional[Dict[str, Any]] = None, streams: bool = False,
-                desk: Optional[Dict[str, Any]] = None, desk_post: bool = False, owner: bool = False) -> str:
+                desk: Optional[Dict[str, Any]] = None, desk_post: bool = False, owner: bool = False,
+                approver: bool = False) -> str:
     """Home in the new look (Look 5.1: member_lumen_home, member_lumen_stories):
     the moments, the greeting and its sentence, the four doors, This week,
     the composer, then `news` (the feed, member_portal_news.home_block), the
@@ -431,7 +432,10 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     the church's owner (is_owner), who alone gets the desk strip: `desk` what
     waits (desk_counts; None when it couldn't be read) and `desk_post`
     whether they may post the church's first news (church_news.can_post,
-    read only when no news reaches them); `posts`
+    read only when no news reaches them); `approver` a leader the office
+    picked to approve good news (news_approvers), whose strip has only that
+    row (news_approvers.leader_desk); both approve in My serving, and its
+    door says how many wait; `posts`
     Home's posts (church_news.home_view: a pastor's word for the moments)
     and `write` whether the member may write to its author
     (news_and_reply). `leaders` is what leaders' own moments are drawn
@@ -626,6 +630,9 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     n_events = (sum(1 for o in occ if _day(o["date"]) >= day0) + (1 if svc and not svc_o else 0)
                 if occasions is not None else 0)
     doors.append(lh.door("/my/events", "calendar", "Events", f"{n_events} coming up" if n_events else "Calendar"))
+    # Good news waiting for them to approve (desk_counts, or a picked
+    # leader's news_approvers.leader_desk): Serve's door says how many.
+    ap_n = int((desk or {}).get("good") or 0) if (owner or approver) else 0
     if ssv.on():
         si = serving_info or {}
         soon = None
@@ -648,8 +655,13 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
         else:
             line = "Your teams" if si.get("teams") else "Ways to serve"
         mine_sv = bool(si.get("coming") or si.get("asks") or si.get("teams"))
-        doors.append(lh.door("/my/connect#lm-sv-h" if mine_sv else "/my/serving", "hand", "Serve", line,
-                             new=bool(si.get("asks")) and not soon))
+        if ap_n:
+            line = f"{ap_n} to approve" + (f" · {line}" if soon else "")
+        doors.append(lh.door("/my/serving#approve" if ap_n else "/my/connect#lm-sv-h" if mine_sv else "/my/serving",
+                             "hand", "Serve", line, new=bool(ap_n) or (bool(si.get("asks")) and not soon)))
+    elif ap_n:
+        # No Sunday scheduling here: Serve is where the good news waits.
+        doors.append(lh.door("/my/serving#approve", "hand", "Serve", f"{ap_n} to approve", new=True))
     ctx = msp.CURRENT.get() or {}
     if "kids" in (ctx.get("options") or []):
         doors.append(lh.door("/my/space?to=kids", "smile", "Kids",
@@ -829,11 +841,12 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     # The owner's desk (Kevin's Home plan, 2026-11-21): what waits for them
     # in the office's News room, and the church's first news.
     desk_html = ""
-    if owner:
+    if owner or approver:
         import app_base
         desk_html = lh.desk(desk, church=church, short=mpc._short_name(church) or church,
                             office=f"{app_base.app_base_url()}/?nav=operate:news", now=now,
-                            first_news=desk_post and posts == [], quiet=posts == [])
+                            first_news=owner and desk_post and posts == [], quiet=posts == [],
+                            approve="/my/serving#approve")
     top = (f'{editbar}{flash}{stories_html}{lh.live_bar(live) if live else ""}{hello}{tip}{doors_html}{week_html}{after}'
            f'{f"<div class=lm-cards>{under}</div>" if under else ""}{desk_html}{lh.composer(face)}')
     # The feed (`news`: the church's and the groups' posts), then the

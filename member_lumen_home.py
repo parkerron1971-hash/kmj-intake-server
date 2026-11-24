@@ -519,7 +519,7 @@ def _came(iso: str, now: datetime) -> str:
 
 
 def desk(counts: Optional[Dict[str, Any]], *, church: str, short: str, office: str, now: datetime,
-         first_news: bool = False, quiet: bool = False) -> str:
+         first_news: bool = False, quiet: bool = False, approve: str = "") -> str:
     """The owner's desk strip (Kevin's Home plan, 2026-11-21), after This week:
     good news members shared that waits to be posted, members' group posts
     and comments the check held (Review, in the office's News room:
@@ -527,7 +527,9 @@ def desk(counts: Optional[Dict[str, Any]], *, church: str, short: str, office: s
     news (/my/news/write). `counts` from member_portal_lumen.desk_counts
     (None when it couldn't be read: no rows at all, not even the first news,
     which the feed keeps then); `quiet` no news reaches Home yet. A count
-    that reached the read's window says "60+". '' with nothing waiting."""
+    that reached the read's window says "60+". '' with nothing waiting.
+    `approve`: where the good news is approved in the app (My serving's To
+    approve, news_approvers); the office's News room when not given."""
     if counts is None:
         return ""
     rows = []
@@ -536,11 +538,15 @@ def desk(counts: Optional[Dict[str, Any]], *, church: str, short: str, office: s
     if good:
         came = _came(c.get("good_at") or "", now)
         when = ((f"It came in {came}." if good == 1 else f"The newest came in {came}.") if came else "")
-        nudge = (f"Approve {'it' if good == 1 else 'them'} and {short}'s feed begins." if quiet else
-                 f"Approve {'it' if good == 1 else 'them'} to post {'it' if good == 1 else 'them'}.")
+        it = "it" if good == 1 else "them"
+        if approve:
+            nudge = (f"Approve {it} in Serve and {short}'s feed begins." if quiet else f"Approve {it} in Serve.")
+        else:
+            nudge = (f"Approve {it} and {short}'s feed begins." if quiet else f"Approve {it} to post {it}.")
         title = (f"{good}+ good news posts are waiting" if c.get("good_more") else
                  f"{good} good news post{' is' if good == 1 else 's are'} waiting")
-        rows.append((title, " ".join(x for x in (when, nudge) if x), office, "Review"))
+        rows.append((title, " ".join(x for x in (when, nudge) if x), approve or office,
+                     "Approve" if approve else "Review"))
     hc, hp = int(c.get("held_comments") or 0), int(c.get("held_posts") or 0)
     if hc or hp:
         bits = [f"{n} {word}{'' if n == 1 else 's'}" for n, word in ((hc, "comment"), (hp, "post")) if n]
