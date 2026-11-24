@@ -3535,6 +3535,14 @@ _TURN_GO_AHEAD: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "chief.turn_go_ahead", default=False)
 _TURN_ERRAND_CONFIRMED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "chief.turn_errand_confirmed", default=False)
+# The person's own message this turn, as typed or heard: what a held change's
+# release is judged from (chief_said_again.go_ahead), never the model's words.
+_TURN_WORDS: "contextvars.ContextVar[str]" = contextvars.ContextVar("chief.turn_words", default="")
+
+
+def turn_words() -> str:
+    """The person's own message on this turn ('' outside one)."""
+    return _TURN_WORDS.get()
 _TURN_ERRAND_PLANS: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
     "chief.turn_errand_plans", default=())
 
@@ -15569,6 +15577,11 @@ async def chief_chat(
     # rejected upstream by require_user_session with 401.
     _jwt_token = sb_clients.set_user_jwt(user_session.token)
     _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
+    # A message that isn't a go-ahead lets whatever waited for this person's go-ahead lapse
+    # (chief_said_again): here, before every reply path, so a shortcut answer lapses it too.
+    import chief_said_again
+    chief_said_again.turn_begins(req.business_id, str(user_session.user.id), req.message or "",
+                                 (req.client_surface or "") == "voice")
     import chief_truth
     _truth_token = chief_truth.begin(str(user_session.user.id), req.message or '')
     _sentence_streamer = None
@@ -16320,6 +16333,7 @@ async def chief_chat(
             _confirm_token = _TURN_CONFIRMED.set(
                 _is_voice_turn and _is_voice_confirmation(req.message or ""))
             _go_ahead_token = _TURN_GO_AHEAD.set(_is_voice_confirmation(req.message or ""))
+            _words_token = _TURN_WORDS.set(str(req.message or ""))
             _sentence_streamer = None
             _errand_confirm_token = _TURN_ERRAND_CONFIRMED.set(_is_errand_confirmation(req.message or ""))
             _errand_plans_token = _TURN_ERRAND_PLANS.set(())
@@ -16778,6 +16792,15 @@ async def chief_chat(
             if _voice_bridge is not None and _voice_bridge.text:
                 response_text = _voice_bridge.stitch(response_text)
             response_text = _speech.final_reply(response_text, req.message)
+            # A change held for this person's go-ahead counts only if its words are in the reply they
+            # read, whole (chief_said_again.confirm_shown): the cleaner above works on the reply as one.
+            if any(isinstance(t, dict) and t.get("said_again") for t in (taken or [])):
+                # The stream's own door cleans this reply once more before it sends it, and one clean
+                # can leave what a second cuts (a dropped sentence joins the two halves of a marker).
+                # So it is cleaned here until it holds still: what is checked is what is read.
+                response_text = chief_said_again.settled(response_text, req.message)
+                await asyncio.to_thread(chief_said_again.confirm_shown, req.business_id,
+                                        str(user_session.user.id), response_text)
 
             # The turn goes on file (2026-09-04) — every turn, every
             # surface, no model call — so recall_conversation reads a
@@ -16838,6 +16861,7 @@ async def chief_chat(
                 _TURN_IS_VOICE.reset(_voice_token)
                 _TURN_CONFIRMED.reset(_confirm_token)
                 _TURN_GO_AHEAD.reset(_go_ahead_token)
+                _TURN_WORDS.reset(_words_token)
                 _TURN_ERRAND_CONFIRMED.reset(_errand_confirm_token)
                 _TURN_ERRAND_PLANS.reset(_errand_plans_token)
                 _TRUNCATED_TAGS.reset(_trunc_token)
@@ -16953,6 +16977,14 @@ async def chief_chat_stream(
     if await _is_sample_turn(req):
         import sample_chief
         return await sample_chief.stream(req, user_session)
+    # A message that isn't a go-ahead lets whatever waited for this person's go-ahead lapse
+    # (chief_said_again). Here too: the first track can answer alone and never reach chief_chat.
+    try:
+        import chief_said_again
+        chief_said_again.turn_begins(req.business_id, str(getattr(getattr(user_session, "user", None), "id", "") or ""),
+                                     req.message or "", (req.client_surface or "") == "voice")
+    except Exception:  # noqa: BLE001 — a lapse that can't start never costs the turn (chief_chat starts it too)
+        pass
     q: "asyncio.Queue[str]" = asyncio.Queue()
 
     def _sink(piece: str) -> None:
@@ -17158,6 +17190,19 @@ async def chief_chat_stream(
                     # The reply on file is the reply as it was shown.
                     payload = {**payload, "response": chief_fast_track.join_reply(
                         lead, payload.get("response") or "")}
+                # A change held for a go-ahead counts only if its words are in what is SENT
+                # (chief_said_again.confirm_shown): the stitch above can replace the reply the turn
+                # checked ("I couldn't confirm the rest of that..."), after its own check passed.
+                try:
+                    if any(isinstance(t, dict) and t.get("said_again")
+                           for t in (payload.get("actions_taken") or [])):
+                        import chief_said_again
+                        await asyncio.to_thread(
+                            chief_said_again.confirm_shown, req.business_id,
+                            str(getattr(getattr(user_session, "user", None), "id", "") or ""),
+                            str(payload.get("response") or ""), 300)
+                except Exception:  # noqa: BLE001 — the check never costs the reply; an unchecked hold runs out
+                    pass
                 if track is not None:
                     track.finish(payload)
                 yield _evt({"type": "final", "payload": payload})
