@@ -15513,8 +15513,10 @@ async def _archive_turn(client, biz: Dict[str, Any], message: str, reply: str,
         # nobody could read back what Chief had told the team, and Chief could recall nothing for
         # them. Only once the column is there (supabase/APPLY-2026-11-24-chief-conversations-by-
         # login.sql): before it, a row has no login to keep it apart from the owner's own.
+        # CHIEF_TURNS_BY_LOGIN=off stops this save (a turn is then saved as the person, as before).
+        import chief_turns_by_login
         uid = _TURN_USER_ID.get()
-        if uid and await schema_probe.has_columns_async("chief_conversations", ("user_id",)):
+        if uid and chief_turns_by_login.on() and (await asyncio.to_thread(chief_turns_by_login.keeps_login)) is True:
             saved = await asyncio.to_thread(sb_clients.sb_post_as_service, "/chief_conversations",
                                             {**row, "user_id": str(uid)})
             if not isinstance(saved, list) or not saved:
@@ -15529,19 +15531,22 @@ async def _recall_whose(biz: Dict[str, Any]) -> str:
     """The filter that keeps a recall to the conversations of whoever is
     asking: the login in this turn, its own; the owner (or a surface with
     no login in it, which acts for the owner), the owner's own and the ones
-    saved before a login was kept. '' before the column is there: the
-    table's own rule decides alone, as it always did. The database says the
-    same (the row rules of APPLY-2026-11-24); this is the server saying it
-    too, for a read made as the server."""
-    import schema_probe
+    saved before a login was kept. '' only when the table is known to keep
+    no login yet: the table's own rule then decides alone, as it always did.
+    When that couldn't be told, the filter is sent all the same: a read
+    made as the server has no row rule to hold it back, and a filter on a
+    column that isn't there fails the read ("history unavailable"), which
+    is the honest answer. The database says the same (the row rules of
+    APPLY-2026-11-24); this is the server saying it too."""
+    import chief_turns_by_login
     from urllib.parse import quote
-    if not await schema_probe.has_columns_async("chief_conversations", ("user_id",)):
+    if (await asyncio.to_thread(chief_turns_by_login.keeps_login)) is False:
         return ""
     owner = str((biz or {}).get("owner_id") or "")
     who = str(_TURN_USER_ID.get() or "") or owner
     if who and who != owner:
         return f"&user_id=eq.{quote(who, safe='')}"
-    return f"&or=(user_id.is.null,user_id.eq.{quote(owner, safe='')})" if owner else "&user_id=is.null"
+    return chief_turns_by_login.owners_own(owner)
 
 
 async def _log_chief_activity(client, *, user_id, business_id, source, taken):

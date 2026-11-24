@@ -11,6 +11,9 @@ left_undone:
   - "The owner reading the team's conversations: not built. The rows are kept apart on purpose (they never show unnamed in the owner's own history or recall); the read for the owner, with each conversation named, is the next change"
   - "The app's own four-hour sweep (ChiefOfStaff.tsx archiveToServer) still saves as the person: the owner's lands with no login (it reads as the owner's), an office login's is still refused. The server's save covers every turn, so nothing is lost"
   - "Platform quality (chief_quality) reads every saved reply, the team's too from now on: more replies in the 'couldn't verify' counts, which is what it is for"
+  - "FOUND, NOT FIXED HERE (it was there before, and this change does not widen it): /agents/notifications/{id}/act runs a stored Chief read with no login in the turn and no lane check, so a seat that can write its own notification row can have recall_conversation answer as the owner. Its own fix is the next PR"
+  - "A browser two logins share: the app keeps its conversation library by business, not by login, and sign-out doesn't clear it, so the owner's next sync can upload a seat's unsent threads as the owner's (no login on the row). A frontend fix (chiefConversations.ts keyed by login); not started"
+  - "After the SQL, a seat's Conversation Desk shows each saved turn as its own two-message conversation beside the live thread, as the owner's does today"
   - "No live Chief eval was run"
 decisions:
   - "Why nothing was saved: chief_conversations had one rule (owner only, APPLY-2026-09-08) and no login column, and a turn is archived as the person who asked. An office login's save was refused without a word: Love City, the week to 2026-11-23, 72 turns and 18 saved"
@@ -19,6 +22,10 @@ decisions:
   - "The code is safe before or after the file: user_id is written, and the recall filtered, only once the column answers (schema_probe)"
   - "recall_conversation is every login's (it was the owner's and the admins'): the read keeps to whoever is asking, said by the server (_recall_whose) and by the row rules. A surface with no login in it (the connector) acts for the owner, never for the team"
   - "The nightly brain pass learns from the owner's conversations only (chief_brain_pass._owners_own): what it learns becomes how Chief works for the business, and an office login's words are not the owner's"
+  - "After an independent review: the accountant reads its own rows too (is_business_collaborator), or its turns would be saved where it could never read them"
+  - "CHIEF_TURNS_BY_LOGIN=off stops the server's save (a turn is saved as the person again). It is the first step of the rollback: the old row rule alone would not stop the server saving the team's turns. Reads keep to whose they are either way"
+  - "chief_turns_by_login.keeps_login answers True, False or None. The shared column probe reads a failed read as 'no column' for ten minutes; here that would drop the filter on reads made as the server (the connector, the nightly pass). So: seen once is seen for good; couldn't tell is never 'no': the recall still sends its filter, and the nightly pass fails its run"
+  - "The row rules run on a real Postgres (PGlite) in CI: __tests__/chief_conversations_by_login_db.mjs, 25 checks, the file applied twice"
 related: [2026-11-23-chief-held-says-it-again.md, 2026-10-02-chief-conversation-gaps.md]
 ---
 Before building I read both repos' work logs: the conversation recovery and gaps

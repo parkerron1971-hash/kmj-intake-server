@@ -167,18 +167,21 @@ def _since_for(bid: str, now: datetime) -> datetime:
 
 
 def _owners_own(bid: str) -> str:
-    """The filter for the owner's own conversations; '' before a row keeps
-    its login (then every saved row is the owner's). An owner that can't be
-    read keeps only the rows with no login, which are the owner's."""
-    import business_brain
-    if not business_brain.has_columns("chief_conversations", ("user_id",)):
+    """The filter for the owner's own conversations; '' only when the table
+    is known to keep no login yet (then every saved row is the owner's).
+    When that can't be told, or the owner can't be read, the run fails and
+    its window is reviewed again: this read is made as the server, and a
+    guess here would teach Chief from an office login's words."""
+    import chief_turns_by_login
+    kept = chief_turns_by_login.keeps_login()
+    if kept is False:
         return ""
-    try:
-        rows = _get(f"/businesses?id=eq.{bid}&select=owner_id&limit=1")
-        owner = str((rows[0] if rows else {}).get("owner_id") or "")
-    except Exception:  # noqa: BLE001
-        owner = ""
-    return f"&or=(user_id.is.null,user_id.eq.{owner})" if owner else "&user_id=is.null"
+    if kept is None:
+        raise ReadFailed("chief_conversations")
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{bid}&select=owner_id&limit=1")
+    if not isinstance(rows, list):
+        raise ReadFailed("businesses")
+    return chief_turns_by_login.owners_own((rows[0] if rows else {}).get("owner_id"))
 
 
 def gather(bid: str, since: datetime) -> Dict[str, Any]:

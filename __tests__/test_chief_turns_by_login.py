@@ -14,8 +14,12 @@ Pins:
     login in it acts for the owner, never for the team
   * an office login may recall (it reads only its own)
   * what Chief learns nightly comes from the owner's conversations only
+  * "couldn't tell whether a login is kept" is never read as "none is kept":
+    the recall still sends its filter, and the nightly pass fails its run
+  * CHIEF_TURNS_BY_LOGIN=off stops the server's save, and nothing else
   * the SQL: who asked, an index, the two row rules, no rule that lets one login
-    read another's
+    read another's (the rules themselves run on a real Postgres in
+    __tests__/chief_conversations_by_login_db.mjs)
 """
 from __future__ import annotations
 
@@ -34,7 +38,7 @@ if ROOT not in sys.path:
 import chief_areas as ca  # noqa: E402
 import chief_brain_pass as cbp  # noqa: E402
 import chief_of_staff as cos  # noqa: E402
-import schema_probe  # noqa: E402
+import chief_turns_by_login as ctl  # noqa: E402
 import sb_clients  # noqa: E402
 
 OWNER = "00000000-0000-4000-8000-0000000000aa"
@@ -46,14 +50,11 @@ SQL = os.path.join(ROOT, "supabase", "APPLY-2026-11-24-chief-conversations-by-lo
 
 @pytest.fixture
 def column(monkeypatch):
-    """Whether chief_conversations keeps who asked (the file applied) is set by the test."""
+    """Whether chief_conversations keeps who asked (the file applied) is set by the test:
+    True, False, or None for "couldn't tell"."""
     state = {"there": True}
-
-    async def has_async(table, cols):
-        return state["there"] if tuple(cols) == ("user_id",) else False
-    monkeypatch.setattr(schema_probe, "has_columns_async", has_async)
-    monkeypatch.setattr(schema_probe, "has_columns",
-                        lambda table, cols: state["there"] if tuple(cols) == ("user_id",) else False)
+    monkeypatch.setattr(ctl, "keeps_login", lambda: state["there"])
+    monkeypatch.delenv("CHIEF_TURNS_BY_LOGIN", raising=False)
     return state
 
 
@@ -98,6 +99,21 @@ def test_before_the_column_a_turn_is_saved_exactly_as_it_always_was(monkeypatch,
     assert not served
     (method, path, row), = as_person
     assert (method, path) == ("POST", "/chief_conversations") and "user_id" not in row
+
+
+@pytest.mark.parametrize("unsure", [None])
+def test_a_turn_is_never_saved_under_a_login_on_a_guess(monkeypatch, column, unsure):
+    column["there"] = unsure
+    served, as_person = archive(monkeypatch, JESSICA)
+    assert not served and len(as_person) == 1
+
+
+def test_the_switch_stops_the_servers_save_and_only_that(monkeypatch, column):
+    monkeypatch.setenv("CHIEF_TURNS_BY_LOGIN", "off")
+    served, as_person = archive(monkeypatch, JESSICA)
+    assert not served and len(as_person) == 1 and "user_id" not in as_person[0][2]
+    # A read still keeps to whose it is.
+    assert f"&user_id=eq.{JESSICA}&" in recall_path(monkeypatch, JESSICA)
 
 
 def test_with_nobody_in_the_turn_nothing_is_saved_as_the_server(monkeypatch, column):
@@ -158,6 +174,13 @@ def test_before_the_column_the_recall_reads_as_it_always_did(monkeypatch, column
     assert "user_id" not in path
 
 
+def test_when_it_cant_be_told_the_recall_still_keeps_to_whose_it_is(monkeypatch, column):
+    """A read made as the server has no row rule behind it: no filter would hand over the team's."""
+    column["there"] = None
+    assert f"&user_id=eq.{JESSICA}&" in recall_path(monkeypatch, JESSICA)
+    assert f"&or=(user_id.is.null,user_id.eq.{OWNER})&" in recall_path(monkeypatch, "")
+
+
 def test_an_office_login_may_recall_and_is_told_its_conversations_are_its_own():
     lane = {"areas": ["people_care"], "role": "manager", "lane": "people_care"}
     assert ca.refusal("recall_conversation", {}, lane) is None
@@ -170,15 +193,65 @@ def test_an_office_login_may_recall_and_is_told_its_conversations_are_its_own():
 # ─── What Chief learns from ───────────────────────────────────────────
 
 def test_the_nightly_pass_learns_from_the_owners_conversations_only(monkeypatch, column):
-    monkeypatch.setattr(cbp, "_get", lambda path: [{"owner_id": OWNER}] if path.startswith("/businesses") else [])
+    reads = {"/businesses": [{"owner_id": OWNER}]}
+    monkeypatch.setattr(cbp.sb_clients, "sb_get_as_service", lambda path: reads.get(path.split("?")[0]))
     assert cbp._owners_own(BIZ["id"]) == f"&or=(user_id.is.null,user_id.eq.{OWNER})"
-    # An owner that can't be read: only the rows with no login, which are the owner's.
-    monkeypatch.setattr(cbp, "_get", lambda path: [])
+    # A business with no owner on its row: only the rows with no login.
+    reads["/businesses"] = [{}]
     assert cbp._owners_own(BIZ["id"]) == "&user_id=is.null"
+    # The owner can't be read, or whether a login is kept can't be told: the run fails (its window
+    # is reviewed again), never a read of everybody's words.
+    reads["/businesses"] = None
+    with pytest.raises(cbp.ReadFailed):
+        cbp._owners_own(BIZ["id"])
+    reads["/businesses"] = [{"owner_id": OWNER}]
+    column["there"] = None
+    with pytest.raises(cbp.ReadFailed):
+        cbp._owners_own(BIZ["id"])
     column["there"] = False
     assert cbp._owners_own(BIZ["id"]) == ""
     import inspect
     assert "{_owners_own(bid)}" in inspect.getsource(cbp.gather)
+
+
+# ─── Whether a login is kept ──────────────────────────────────────────
+
+def test_whether_a_login_is_kept_true_false_or_couldnt_tell(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+    answers, asked = {}, []
+
+    def get(path):
+        asked.append(path)
+        return answers.get("user_id" if "select=user_id" in path else "id")
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    ctl.forget()
+    try:
+        # Neither read answers: couldn't tell, and nothing is remembered.
+        assert ctl.keeps_login() is None and ctl.keeps_login() is None and len(asked) == 4
+        # The table answers and the column doesn't: not there yet (remembered a while).
+        answers["id"] = []
+        assert ctl.keeps_login() is False
+        n = len(asked)
+        assert ctl.keeps_login() is False and len(asked) == n
+        # Asked again later, the column answers: there, for good, whatever fails afterwards.
+        monkeypatch.setattr(ctl, "ABSENT_SECONDS", 0)
+        answers["user_id"] = []
+        assert ctl.keeps_login() is True
+        answers.clear()
+        n = len(asked)
+        assert ctl.keeps_login() is True and len(asked) == n
+    finally:
+        ctl.forget()
+    monkeypatch.delenv("SUPABASE_URL")
+    assert ctl.keeps_login() is False, "no database configured: as it always was"
+
+
+def test_the_switch_reads_off_only_when_it_says_off(monkeypatch):
+    monkeypatch.delenv("CHIEF_TURNS_BY_LOGIN", raising=False)
+    assert ctl.on()
+    for said, want in (("off", False), (" OFF ", False), ("on", True), ("", True), ("no", True)):
+        monkeypatch.setenv("CHIEF_TURNS_BY_LOGIN", said)
+        assert ctl.on() is want
 
 
 # ─── The SQL ──────────────────────────────────────────────────────────
@@ -195,7 +268,8 @@ def test_the_sql_keeps_who_asked_and_lets_no_login_read_anothers():
     assert "owner_id = auth.uid()" in owner
     own = live[live.index("create policy chief_conversations_own_read"):]
     assert "for select to authenticated" in own
-    assert "user_id = auth.uid() and public.is_business_member(business_id)" in own
+    assert "user_id = auth.uid()" in own
+    assert "(public.is_business_member(business_id) or public.is_business_collaborator(business_id))" in own
     # No rule opens the table wider than a login's own rows, and nothing here is destructive to rows.
     assert not re.search(r"using\s*\(\s*true\s*\)", live, re.I)
     assert not re.search(r"\b(delete from|truncate|drop table|drop column)\b", live, re.I)
@@ -203,3 +277,8 @@ def test_the_sql_keeps_who_asked_and_lets_no_login_read_anothers():
     ledger = open(os.path.join(ROOT, "docs", "MIGRATIONS.md"), encoding="utf-8").read()
     row = next(ln for ln in ledger.split("\n") if "APPLY-2026-11-24-chief-conversations-by-login.sql" in ln)
     assert "NOT APPLIED" in row
+    # The rollback names the switch first (the server keeps saving whatever the row rules say).
+    assert sql.index("CHIEF_TURNS_BY_LOGIN=off") > sql.index("-- ROLLBACK")
+    ci = open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+    assert "node __tests__/chief_conversations_by_login_db.mjs" in ci
+    assert "CHIEF_TURNS_BY_LOGIN=" in open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read()

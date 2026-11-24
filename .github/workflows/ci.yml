@@ -266,6 +266,7 @@ jobs:
           node __tests__/church_meetings_db.mjs
           node __tests__/church_job_descriptions_db.mjs
           node __tests__/church_jobs_db.mjs
+          node __tests__/chief_conversations_by_login_db.mjs
           node __tests__/serve_team_owner_db.mjs
           node __tests__/church_map_db.mjs
           node __tests__/church_map_step2_db.mjs
