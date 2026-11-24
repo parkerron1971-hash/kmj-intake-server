@@ -166,11 +166,32 @@ def _since_for(bid: str, now: datetime) -> datetime:
     return max(last, floor) if last else now - timedelta(hours=DEFAULT_LOOKBACK_HOURS)
 
 
+def _owners_own(bid: str) -> str:
+    """The filter for the owner's own conversations; '' only when the table
+    is known to keep no login yet (then every saved row is the owner's).
+    When that can't be told, or the owner can't be read, the run fails and
+    its window is reviewed again: this read is made as the server, and a
+    guess here would teach Chief from an office login's words."""
+    import chief_turns_by_login
+    kept = chief_turns_by_login.keeps_login()
+    if kept is False:
+        return ""
+    if kept is None:
+        raise ReadFailed("chief_conversations")
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{bid}&select=owner_id&limit=1")
+    if not isinstance(rows, list):
+        raise ReadFailed("businesses")
+    return chief_turns_by_login.owners_own((rows[0] if rows else {}).get("owner_id"))
+
+
 def gather(bid: str, since: datetime) -> Dict[str, Any]:
     """The evidence for one business. Every path is business_id=eq.<bid>."""
     import business_brain
     s = _z(since)
-    convos = _must(f"/chief_conversations?business_id=eq.{bid}&started_at=gte.{s}"
+    # The owner's own conversations only: what Chief learns here becomes how it works for the
+    # business, and an office login's words are not the owner's (they are saved too since
+    # 2026-11-24, each under its login).
+    convos = _must(f"/chief_conversations?business_id=eq.{bid}&started_at=gte.{s}{_owners_own(bid)}"
                   "&select=messages,started_at&order=started_at.asc&limit=80")
     queue_cols = "subject,body,status,channel,action_type,reviewed_at"
     if business_brain.has_columns("agent_queue", ("original_body",)):
