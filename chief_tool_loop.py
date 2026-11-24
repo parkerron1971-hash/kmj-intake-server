@@ -448,7 +448,8 @@ def _shrink(result: Any) -> str:
                                                            'monthly_report_draft', 'sheet_of',
                                                            'list_church_jobs', 'list_money_asks',
                                                            'draft_church_job',
-                                                           'draft_church_structure', 'church_structure_status'):
+                                                           'draft_church_structure', 'church_structure_status',
+                                                           'team_conversations'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
         # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and

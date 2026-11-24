@@ -38,6 +38,12 @@ def on() -> bool:
     return (os.environ.get("CHIEF_TURNS_BY_LOGIN") or "on").strip().lower() != "off"
 
 
+def saving() -> bool:
+    """Whether every login's turns are being saved right now, as far as this process has seen:
+    the switch on and the column answered. Never reads (a prompt is built on the event loop)."""
+    return on() and bool(_STATE["seen"])
+
+
 def forget() -> None:
     """Tests only."""
     _STATE.update(seen=False, absent_at=0.0)

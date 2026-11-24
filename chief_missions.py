@@ -85,6 +85,9 @@ _FORBIDDEN_VERBS = {
     # No recursion — a plan may not plan.
     "propose_mission", "start_mission", "advance_mission",
     "abandon_mission", "mission_status",
+    # The owner's read of the team's conversations: asked for in the moment, never a step whose
+    # names and counts would sit in a plan's row.
+    "team_conversations",
     # Window dressing — meaningless as plan steps.
     "set_chat_window", "navigate", "close_view",
     # The leaders schedule's writes (chief_church_schedule): each is the

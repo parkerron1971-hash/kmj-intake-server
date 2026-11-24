@@ -609,12 +609,24 @@ def block(scope: Optional[Dict[str, Any]], who: Optional[Dict[str, Any]] = None,
                          "say that Giving & money isn't open to this login, and that the owner or an Admin can "
                          "answer.")
         lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them. "
-                     "This login's own earlier conversations with you are theirs: recall_conversation finds them. "
-                     "They are saved, and the owner can read them: never call them private or say nobody else sees them.")
+                     "This login's own earlier conversations with you are theirs: recall_conversation finds them.")
     elif (who or {}).get("jobs"):
         # A login nothing keeps to a lane still has its jobs.
         lines.append(who["jobs"])
+    if who is not None and _turns_saved():
+        # Every login that isn't the owner's (a lane login, an Admin, a seat at any business), and only
+        # once it is true: the owner reads the team's conversations with Chief (chief_team_conversations).
+        lines.append("This login's conversations with you are saved, and the owner can read them: never call them "
+                     "private or say nobody else sees them.")
     return "\n".join(lines) + "\n" if lines else ""
+
+
+def _turns_saved() -> bool:
+    try:
+        import chief_turns_by_login
+        return chief_turns_by_login.saving()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ─── Who's talking ────────────────────────────────────────────────────
