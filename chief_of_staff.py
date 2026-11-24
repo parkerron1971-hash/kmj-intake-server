@@ -278,6 +278,7 @@ from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_sugg
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
 from chief_giving_summary import handle_giving_summary
+from chief_team_conversations import handle_team_conversations
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
@@ -444,6 +445,7 @@ _ACTION_PHRASES = {
     "list_asks": "reading what your team suggested",
     "giving_counts": "reading the service counts",
     "giving_summary": "adding up what came in",
+    "team_conversations": "reading what your team asked me",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
     "match_giving_deposits": "matching the gifts to their deposits",
@@ -12637,6 +12639,7 @@ ACTION_HANDLERS = {
     "undo_ask":              handle_undo_ask,
     "giving_counts":         handle_giving_counts,
     "giving_summary":        handle_giving_summary,
+    "team_conversations":    handle_team_conversations,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,
     "match_bill_payment":    handle_match_bill_payment,
@@ -15481,6 +15484,9 @@ def _conversation_row(business_id: str, message: str, reply: str,
             kinds.append(kind)
         compact.append({k: (str(t.get(k))[:200] if t.get(k) is not None else None)
                         for k in ("type", "label", "result")})
+        # Whether it failed, said by the door's own test (2026-11-24): most refusals carry no
+        # "Failed:" in their words, so the words alone can't say it later (chief_team_conversations).
+        compact[-1]["failed"] = bool(_action_failed(t))
     now = datetime.now(timezone.utc).isoformat()
     return {
         "business_id": business_id,
@@ -15502,6 +15508,15 @@ async def _archive_turn(client, biz: Dict[str, Any], message: str, reply: str,
     try:
         if not biz or not biz.get("id") or not str(message or "").strip():
             return
+        # A turn that read the team's words out to the owner keeps the question, not the answer:
+        # saved as the owner's, the team's words would come back unnamed through the owner's recall,
+        # an outside agent acting for the owner, and the nightly pass.
+        import chief_team_conversations as _team
+        if _team.read_this_turn():
+            reply = _team.NOT_KEPT
+            taken = [({"type": t.get("type"), "label": "Read the team's conversations", "result": "ok",
+                       "failed": False} if isinstance(t, dict) and t.get("type") == _team.ATYPE else t)
+                     for t in (taken or [])]
         row = _conversation_row(str(biz["id"]), message, reply, taken)
         import schema_probe
         if turn_context.turn_id() and await schema_probe.has_columns_async(
@@ -15615,6 +15630,8 @@ async def chief_chat(
     # rejected upstream by require_user_session with 401.
     _jwt_token = sb_clients.set_user_jwt(user_session.token)
     _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
+    import chief_team_conversations as _team_words
+    _team_words.turn_begins()
     # A message that isn't a go-ahead lets whatever waited for this person's go-ahead lapse
     # (chief_said_again): here, before every reply path, so a shortcut answer lapses it too.
     import chief_said_again

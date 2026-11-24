@@ -224,6 +224,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
     import chief_giving_summary
     out += [chief_giving_summary.TOOL]  # what came in over a day or a span, no giver named: the same
+    import chief_team_conversations
+    out += [chief_team_conversations.TOOL]  # what the team asked Chief: the owner's own login only, so Chief's alone
     import chief_duties
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
     import chief_church_assignments
@@ -446,7 +448,8 @@ def _shrink(result: Any) -> str:
                                                            'monthly_report_draft', 'sheet_of',
                                                            'list_church_jobs', 'list_money_asks',
                                                            'draft_church_job',
-                                                           'draft_church_structure', 'church_structure_status'):
+                                                           'draft_church_structure', 'church_structure_status',
+                                                           'team_conversations'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
         # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
@@ -500,7 +503,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "find_housing_payments", "fund_status",
                                               "find_fund_payments", "bank_history", "bank_to_file",
                                               "giving_deposits", "expense_categories", "bills",
-                                              "giving_counts", "giving_summary", "list_duties", "list_map",
+                                              "giving_counts", "giving_summary", "team_conversations", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
                                               "move_in_status", "people_under", "assignments_of", "church_email",
                                               "one_on_one", "whose_job", "job_of",

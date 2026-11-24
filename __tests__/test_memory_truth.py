@@ -39,8 +39,8 @@ def test_a_turn_becomes_one_row_in_the_browsers_own_shape():
     assert row["summary"].startswith("You: add Ada Lovelace as a lead — Chief: Done")
     assert row["key_topics"] == ["create_contact", "create_task"]
     assert row["actions_taken"] == [
-        {"type": "create_contact", "label": "Added Ada", "result": "created"},
-        {"type": "create_task", "label": "Task", "result": "added"}]
+        {"type": "create_contact", "label": "Added Ada", "result": "created", "failed": False},
+        {"type": "create_task", "label": "Task", "result": "added", "failed": False}]
     assert "nav" not in str(row["actions_taken"]), "plumbing is not history"
     assert row["started_at"] and row["ended_at"]
 
