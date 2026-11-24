@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 import onboarding_welcome as _welcome
@@ -1077,9 +1077,41 @@ async def check_urgent(req: NotifRequest,
         return await _check_urgent(client, req.business_id)
 
 
+def _bearer(authorization: Any) -> str:
+    """The caller's own token off the request (require_user has verified it)."""
+    if not isinstance(authorization, str) or not authorization.lower().startswith("bearer "):
+        return ""
+    return authorization.split(" ", 1)[1].strip()
+
+
+async def _run_as(handler, client, biz, action, user_id: str, as_login):
+    """Run one of Chief's handlers for a tap. `as_login` None: the owner's
+    tap, as it always ran. Otherwise (token, lane, who): the handler runs
+    with that login bound the way chief_chat binds it, so the database's
+    own row rules, the lane and every "who is asking" check see the person
+    who tapped, and all of it is unbound again whatever happens."""
+    if as_login is None:
+        return await handler(client, biz, action)
+    import chief_areas
+    import chief_of_staff
+    token, scope, who = as_login
+    jwt_token = sb_clients.set_user_jwt(token)
+    uid_token = chief_of_staff._TURN_USER_ID.set(user_id)
+    lane_token = chief_areas.TURN.set(scope)
+    who_token = chief_areas.WHO.set(who)
+    try:
+        return await handler(client, biz, action)
+    finally:
+        chief_areas.WHO.reset(who_token)
+        chief_areas.TURN.reset(lane_token)
+        chief_of_staff._TURN_USER_ID.reset(uid_token)
+        sb_clients.reset_user_jwt(jwt_token)
+
+
 @router.post("/agents/notifications/{notification_id}/act")
 async def execute_notification_action(notification_id: str,
-                                      user: AuthedUser = Depends(require_user)):
+                                      user: AuthedUser = Depends(require_user),
+                                      authorization: Optional[str] = Header(default=None)):
     """Execute the notification's stored action_payload via Chief's handlers.
 
     This is a real dispatcher into ACTION_HANDLERS — one of six — and it
@@ -1087,6 +1119,14 @@ async def execute_notification_action(notification_id: str,
     gate, and no audit row. All four are here now. Order is deliberate:
     read the notification to discover WHICH tenant it belongs to, then
     authorize the caller against that tenant before anything executes.
+
+    A tap by anyone but the owner runs AS THAT LOGIN (2026-11-24): under
+    their own sign-in, with them as the person in the turn and inside
+    their lane, exactly as their chat turn with Chief would. Before, the
+    handler ran here with no login at all, which every handler reads as
+    "the server, acting for the owner": a seat that could write its own
+    notification row (the tenant write policy lets it) could have Chief
+    read back the owner's conversations, or act outside its lane.
     """
     async with httpx.AsyncClient() as client:
         rows = await _sb(client, "GET",
@@ -1130,9 +1170,28 @@ async def execute_notification_action(notification_id: str,
             logger.warning(f"[notif] registry check failed for {atype}: {e}")
             raise HTTPException(503, "Action safety check unavailable")
 
+        # Whose tap this is. The owner's runs as it always has. Anyone
+        # else's needs their own sign-in to run under, and stays in their
+        # lane: refused here, in the words their chat would use.
+        as_login = None
+        if str(biz.get("owner_id") or "") != str(user.id):
+            token = _bearer(authorization)
+            if not token:
+                raise HTTPException(401, "Sign in again to do that.")
+            import chief_areas
+            try:
+                scope, who = await asyncio.to_thread(chief_areas.turn_for, str(biz.get("id")), str(user.id))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[notif] lane read failed for {atype}: {e}")
+                raise HTTPException(503, "Action safety check unavailable")
+            why = chief_areas.refusal(atype, action, scope)
+            if why:
+                raise HTTPException(403, why)
+            as_login = (token, scope, who)
+
         ok, err, result = True, None, None
         try:
-            result = await handler(client, biz, action)
+            result = await _run_as(handler, client, biz, action, str(user.id), as_login)
         except Exception as e:
             ok, err = False, str(e)
             logger.exception(f"Action {atype} failed: {e}")
