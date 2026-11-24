@@ -357,6 +357,15 @@ def _need(business_id: str, user: AuthedUser) -> str:
     return role or ""
 
 
+def _seen(business_id: str, user: AuthedUser) -> str:
+    """Any office seat that can see the news (church_news's viewer)."""
+    import kids_router
+    role = kids_router.role_for(business_id, user)
+    if _RANK.get(role or "", 0) < _RANK["viewer"]:
+        raise HTTPException(403, "This seat can't see the news.")
+    return role or ""
+
+
 @router.post("/church/news/shared/{post_id}")
 def decide(post_id: str, body: DecideIn, user: AuthedUser = Depends(require_user)):
     """Post it (as written, or with the office's edit), or Not now. The
@@ -386,7 +395,8 @@ def shared_count(business_id: str = Query(...), user: AuthedUser = Depends(requi
     import kids_router
     import news_approvers
     biz_id = kids_router._uuid(business_id, "business_id")
-    cn._need(biz_id, user, "viewer")
+    # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
+    _seen(biz_id, user)
     got = news_approvers.count(cn._business(biz_id))
     if got is None:
         raise cn._unavailable()

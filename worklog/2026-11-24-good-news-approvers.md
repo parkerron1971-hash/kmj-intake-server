@@ -2,7 +2,7 @@
 title: "Good news approvals: the pastors and picked leaders approve from Serve, with a phone note"
 date: 2026-11-24
 agent: Claude Code (Claude Opus 5.5)
-asked: "send a post request to the pastor's or assigned leader to apporve post in the app serve tab area." Then, on the canvas Ktoy4b4qXoCDPCDoRmCGxj: "build it"
+asked: 'send a post request to the pastor''s or assigned leader to apporve post in the app serve tab area. Then, on the canvas Ktoy4b4qXoCDPCDoRmCGxj: build it' 
 status: in progress
 prs: ["kmj-intake-server (this PR)", "solutionist-studio (office Home card + Who approves good news, next)"]
 migrations: []
