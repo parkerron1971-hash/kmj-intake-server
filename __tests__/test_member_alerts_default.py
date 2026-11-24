@@ -28,14 +28,15 @@ def _settings(**kinds):
     return {"member_portal": {"notifications": kinds}} if kinds else {}
 
 
-def test_before_thursday_a_kind_is_on_only_where_the_church_turned_it_on(monkeypatch):
-    _by_date(monkeypatch, date(2026, 11, 25))
+def test_before_the_start_a_kind_is_on_only_where_the_church_turned_it_on(monkeypatch):
+    _by_date(monkeypatch, date(2026, 11, 23))
     assert member_push.church_kinds({}) == set()
     assert member_push.church_kinds(_settings(live=True)) == {"live"}
 
 
-def test_from_thursday_every_church_has_the_main_kinds_on(monkeypatch):
-    _by_date(monkeypatch, date(2026, 11, 26))
+def test_from_the_start_every_church_has_the_main_kinds_on(monkeypatch):
+    assert member_push.DEFAULT_ON_FROM == date(2026, 11, 24)          # Kevin: "access now"
+    _by_date(monkeypatch, date(2026, 11, 24))
     assert member_push.church_kinds({}) == set(member_push.DEFAULT_ON)
     assert member_push.church_kinds(None) == set(member_push.DEFAULT_ON)
     assert {"news", "messages", "prayer"} <= set(member_push.DEFAULT_ON)
