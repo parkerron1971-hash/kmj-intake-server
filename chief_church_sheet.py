@@ -168,8 +168,9 @@ def _open(atype: str, biz: Any, action: Dict[str, Any]) -> Tuple[Optional[Dict[s
                                                                "duties"),
                                            "remove_church_job": ("job",)}[atype],
                                      defaults={"save_church_job": {
-                                         "job": "a new job (none is being changed)", "role": "manager (a Manager login)",
-                                         "areas": "none", "duties": "none"}}.get(atype))
+                                         "job": "a new job (none is being changed)", "does": "nothing said (left empty)",
+                                         "description": "none (left empty)", "role": "manager (a Manager login)",
+                                         "areas": "none set on the job", "duties": "none"}}.get(atype))
         if held:
             return held, {}, ""
     on = _on(uid)

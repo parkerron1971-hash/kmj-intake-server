@@ -17190,6 +17190,19 @@ async def chief_chat_stream(
                     # The reply on file is the reply as it was shown.
                     payload = {**payload, "response": chief_fast_track.join_reply(
                         lead, payload.get("response") or "")}
+                # A change held for a go-ahead counts only if its words are in what is SENT
+                # (chief_said_again.confirm_shown): the stitch above can replace the reply the turn
+                # checked ("I couldn't confirm the rest of that..."), after its own check passed.
+                try:
+                    if any(isinstance(t, dict) and t.get("said_again")
+                           for t in (payload.get("actions_taken") or [])):
+                        import chief_said_again
+                        await asyncio.to_thread(
+                            chief_said_again.confirm_shown, req.business_id,
+                            str(getattr(getattr(user_session, "user", None), "id", "") or ""),
+                            str(payload.get("response") or ""), 300)
+                except Exception:  # noqa: BLE001 — the check never costs the reply; an unchecked hold runs out
+                    pass
                 if track is not None:
                     track.finish(payload)
                 yield _evt({"type": "final", "payload": payload})

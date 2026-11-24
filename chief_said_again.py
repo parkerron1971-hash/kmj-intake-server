@@ -23,9 +23,11 @@ the way out, for the ones that are ordinary, undoable changes (class A):
                      field the reply's own cleaner would cut) is never kept:
                      it can't be released, only asked for again.
     confirm_shown()  once the turn's reply is final (cleaned until it holds
-                     still: settled()): a hold whose words are not in that
-                     reply, whole, is let go. A go-ahead answers what the
-                     person read, never what they were meant to.
+                     still: settled()), and once more at the stream's own
+                     door against what it actually sends: a hold whose words
+                     are not in that reply, whole, is let go. A go-ahead
+                     answers what the person read, never what they were
+                     meant to.
     release() ...... on the person's NEXT message, when that message is a
                      go-ahead and nothing else ("go ahead", "yes", "do it")
                      and Chief sends the same verb for the same person,
@@ -334,7 +336,8 @@ def _waiting(biz_id: str, uid: str) -> Optional[List[Dict[str, Any]]]:
             continue
         if isinstance(b, dict) and isinstance(b.get("action"), dict) and b["action"] and b.get("turn"):
             out.append({"id": r["id"], "ref": str(r.get("ref_id") or ""), "action": b["action"],
-                        "turn": str(b["turn"]), "held": r.get("title") == HELD, "label": str(b.get("label") or "")})
+                        "turn": str(b["turn"]), "held": r.get("title") == HELD, "label": str(b.get("label") or ""),
+                        "at": str(r.get("created_at") or "")})
     return out
 
 
@@ -413,20 +416,29 @@ def turn_begins(biz_id: Any, uid: Any, message: Any, voice: bool = False) -> Non
     _later(_lapse_twice, biz_id, uid, _iso(_now()))
 
 
-def confirm_shown(biz_id: Any, uid: Any, reply: Any) -> None:
+def confirm_shown(biz_id: Any, uid: Any, reply: Any, just_now: int = 0) -> None:
     """The turn's reply is final. Every hold kept on this turn whose words
     are not in that reply, whole, is let go: the reply is cleaned as one
     piece after every action's words are joined, and something ahead of a
     hold's words (another action's echo of a field) can cut them off. A
     go-ahead answers what the person read. A read that fails lets every
-    hold of this turn go."""
+    hold of this turn go.
+
+    `just_now` (seconds): for the stream's own door, which sends the reply
+    after the turn is over and can still replace it (a stitch onto what had
+    streamed throws a reply away). It has no turn to name, so it takes
+    every hold this login was shown in the last `just_now` seconds: one
+    whose words are not in what was SENT is let go, an earlier one that
+    this reply doesn't show again too."""
     biz_id, uid, turn = str(biz_id or ""), str(uid or ""), _turn()
-    if not biz_id or not uid or not turn:
+    if not biz_id or not uid or (not turn and not just_now):
         return
     said = str(reply or "")
     rows = _waiting(biz_id, uid)
-    gone = None if rows is None else [r for r in rows if r["held"] and r["turn"] == turn
-                                      and (not r["label"] or r["label"] not in said)]
+    since = _iso(_now() - timedelta(seconds=just_now)) if just_now else ""
+    gone = None if rows is None else [
+        r for r in rows if r["held"] and (r["at"] >= since if just_now else r["turn"] == turn)
+        and (not r["label"] or r["label"] not in said)]
     if gone == []:
         return
     try:

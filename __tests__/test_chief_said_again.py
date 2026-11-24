@@ -368,6 +368,28 @@ def test_a_reply_a_second_clean_would_cut_is_settled_before_the_hold_counts(db):
         assert waits(again) and not given(db)
 
 
+def test_the_streams_door_lets_go_a_hold_it_did_not_send(db):
+    """Measured in the third review's re-check: the stream's stitch replaced the reply with "I couldn't
+    confirm the rest of that..." after the turn's own check had passed, and the next yes ran it."""
+    (held,), reply = a_turn(db, "jessica", FIRST, GIVE, turn_id="t1")
+    assert waits(held) and "What's waiting" in reply
+    me = uid(db, LOVE_CITY, "jessica")
+    # What the stream sends is the same reply: the hold stays.
+    sa.confirm_shown(LOVE_CITY, me, "Sure. " + reply, 300)
+    assert [r for r in db.t["member_push_sends"] if r["kind"] == sa.KIND and r["title"] == sa.HELD]
+    # What the stream sends is something else: the hold is let go, and a go-ahead runs nothing.
+    sa.confirm_shown(LOVE_CITY, me, "I could not verify the explanation.\n\nI couldn't confirm the rest of that "
+                                    "from your records, so I stopped there.", 300)
+    assert not [r for r in db.t["member_push_sends"] if r["kind"] == sa.KIND and r["title"] == sa.HELD]
+    (again,), _ = a_turn(db, "jessica", "go ahead", GIVE, turn_id="t2")
+    assert waits(again) and not given(db)
+    import chief_of_staff as cos
+    stream = inspect.getsource(cos.chief_chat_stream)
+    stitch = stream.index("final_text = _stitch_after_stream(already, final_text)")
+    check = stream.index("chief_said_again.confirm_shown, req.business_id")
+    assert stitch < check < stream.index('yield _evt({"type": "final", "payload": payload})', check)
+
+
 def test_what_a_job_save_leaves_out_is_said(db):
     """Measured in the third review: a change that named only the job made it a Manager job with no
     areas, and the label said neither."""
