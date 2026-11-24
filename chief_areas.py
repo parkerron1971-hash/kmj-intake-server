@@ -89,6 +89,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # may ask (the handler keeps it to a Manager seat and above). The
         # leaders map and the ready-mades likewise (chief_map).
         "list_duties", "list_map", "search_templates",
+        # A login's own earlier conversations with Chief (2026-11-24): the read keeps to whoever is
+        # asking (chief_of_staff._recall_whose, and the table's own rule), never the owner's.
+        "recall_conversation",
         # "What's my church email?": any login may ask. Giving one out and taking one back: the handlers keep
         # them to the owner, an Admin, or whoever holds the church email duty (church_duties), never a lane.
         "church_email", "give_church_email", "take_back_church_email",
@@ -212,7 +215,7 @@ OWNERS = frozenset({
     "list_connected_agents", "make_offer", "mission_status", "open_case", "plan_errand",
     "propose_brand_kit_from_context", "propose_business_from_idea", "propose_mission",
     "propose_module_from_intake", "propose_voice_rule", "provision_sms_number", "publish_booking_page",
-    "queue_build_request", "recall_conversation", "record_edit_pattern", "reject_module_spec",
+    "queue_build_request", "record_edit_pattern", "reject_module_spec",
     "release_sms_number", "remember", "remove_business_rule", "remove_voice_rule", "rename_term",
     "respond_work_order", "responsibility_status", "restore_previous_site", "restore_sms_number",
     "revoke_standing_permission", "run_agent", "run_market_research", "save_business_model",
@@ -605,7 +608,8 @@ def block(scope: Optional[Dict[str, Any]], who: Optional[Dict[str, Any]] = None,
                          # the owner hasn't opened money to yet (chief_office.card_for says what to tell them).
                          "say that Giving & money isn't open to this login, and that the owner or an Admin can "
                          "answer.")
-        lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them.")
+        lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them. "
+                     "This login's own earlier conversations with you are theirs: recall_conversation finds them.")
     elif (who or {}).get("jobs"):
         # A login nothing keeps to a lane still has its jobs.
         lines.append(who["jobs"])

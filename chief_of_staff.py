@@ -11081,6 +11081,7 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
     rows = await _sb(
         client, "GET",
         f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
+        f"{await _recall_whose(biz)}"
         f"&order=ended_at.desc&limit=60"
         f"&select=id,summary,key_topics,actions_taken,messages,"
         f"started_at,ended_at,message_count",
@@ -15506,9 +15507,41 @@ async def _archive_turn(client, biz: Dict[str, Any], message: str, reply: str,
         if turn_context.turn_id() and await schema_probe.has_columns_async(
                 "chief_conversations", ("turn_id",)):
             row["turn_id"] = turn_context.turn_id()
+        # Saved by the server, under the login that asked (2026-11-24). The table lets only the
+        # business's owner save as themselves, and a turn was saved as the person: every office
+        # login's save was refused without a word (Love City, a week: 72 turns, 18 saved), so
+        # nobody could read back what Chief had told the team, and Chief could recall nothing for
+        # them. Only once the column is there (supabase/APPLY-2026-11-24-chief-conversations-by-
+        # login.sql): before it, a row has no login to keep it apart from the owner's own.
+        uid = _TURN_USER_ID.get()
+        if uid and await schema_probe.has_columns_async("chief_conversations", ("user_id",)):
+            saved = await asyncio.to_thread(sb_clients.sb_post_as_service, "/chief_conversations",
+                                            {**row, "user_id": str(uid)})
+            if not isinstance(saved, list) or not saved:
+                print(f"[chief] a turn wasn't saved (business {str(biz['id'])[:8]})", flush=True)
+            return
         await _sb(client, "POST", "/chief_conversations", row)
     except Exception as e:  # pragma: no cover
         logger.warning(f"[chief] turn archive failed (non-fatal): {e}")
+
+
+async def _recall_whose(biz: Dict[str, Any]) -> str:
+    """The filter that keeps a recall to the conversations of whoever is
+    asking: the login in this turn, its own; the owner (or a surface with
+    no login in it, which acts for the owner), the owner's own and the ones
+    saved before a login was kept. '' before the column is there: the
+    table's own rule decides alone, as it always did. The database says the
+    same (the row rules of APPLY-2026-11-24); this is the server saying it
+    too, for a read made as the server."""
+    import schema_probe
+    from urllib.parse import quote
+    if not await schema_probe.has_columns_async("chief_conversations", ("user_id",)):
+        return ""
+    owner = str((biz or {}).get("owner_id") or "")
+    who = str(_TURN_USER_ID.get() or "") or owner
+    if who and who != owner:
+        return f"&user_id=eq.{quote(who, safe='')}"
+    return f"&or=(user_id.is.null,user_id.eq.{quote(owner, safe='')})" if owner else "&user_id=is.null"
 
 
 async def _log_chief_activity(client, *, user_id, business_id, source, taken):

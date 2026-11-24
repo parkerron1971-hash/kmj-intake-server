@@ -166,11 +166,29 @@ def _since_for(bid: str, now: datetime) -> datetime:
     return max(last, floor) if last else now - timedelta(hours=DEFAULT_LOOKBACK_HOURS)
 
 
+def _owners_own(bid: str) -> str:
+    """The filter for the owner's own conversations; '' before a row keeps
+    its login (then every saved row is the owner's). An owner that can't be
+    read keeps only the rows with no login, which are the owner's."""
+    import business_brain
+    if not business_brain.has_columns("chief_conversations", ("user_id",)):
+        return ""
+    try:
+        rows = _get(f"/businesses?id=eq.{bid}&select=owner_id&limit=1")
+        owner = str((rows[0] if rows else {}).get("owner_id") or "")
+    except Exception:  # noqa: BLE001
+        owner = ""
+    return f"&or=(user_id.is.null,user_id.eq.{owner})" if owner else "&user_id=is.null"
+
+
 def gather(bid: str, since: datetime) -> Dict[str, Any]:
     """The evidence for one business. Every path is business_id=eq.<bid>."""
     import business_brain
     s = _z(since)
-    convos = _must(f"/chief_conversations?business_id=eq.{bid}&started_at=gte.{s}"
+    # The owner's own conversations only: what Chief learns here becomes how it works for the
+    # business, and an office login's words are not the owner's (they are saved too since
+    # 2026-11-24, each under its login).
+    convos = _must(f"/chief_conversations?business_id=eq.{bid}&started_at=gte.{s}{_owners_own(bid)}"
                   "&select=messages,started_at&order=started_at.asc&limit=80")
     queue_cols = "subject,body,status,channel,action_type,reviewed_at"
     if business_brain.has_columns("agent_queue", ("original_body",)):

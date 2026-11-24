@@ -123,7 +123,9 @@ def test_what_a_lane_may_and_may_not_do():
         assert said.startswith("That's Giving & money: it isn't open to this login, and the owner or an Admin "
                                "handles it."), verb
         assert "treasurer" not in said, "the one asking may be the treasurer"
-    for verb in ("recall_conversation", "catch_up", "search_ledger", "remember", "forget", "undo_last",
+    # A login's own earlier conversations are its own to recall (2026-11-24); the read keeps to them.
+    assert ca.refusal("recall_conversation", {}, CARE) is None
+    for verb in ("catch_up", "search_ledger", "remember", "forget", "undo_last",
                  "update_business_profile_field", "provision_sms_number", "propose_adopt_business_rule",
                  "a_verb_nobody_placed"):
         assert ca.refusal(verb, {}, CARE).startswith("That's for the church's owner or an admin"), verb
