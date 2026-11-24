@@ -16979,9 +16979,12 @@ async def chief_chat_stream(
         return await sample_chief.stream(req, user_session)
     # A message that isn't a go-ahead lets whatever waited for this person's go-ahead lapse
     # (chief_said_again). Here too: the first track can answer alone and never reach chief_chat.
-    import chief_said_again
-    chief_said_again.turn_begins(req.business_id, str(user_session.user.id), req.message or "",
-                                 (req.client_surface or "") == "voice")
+    try:
+        import chief_said_again
+        chief_said_again.turn_begins(req.business_id, str(getattr(getattr(user_session, "user", None), "id", "") or ""),
+                                     req.message or "", (req.client_surface or "") == "voice")
+    except Exception:  # noqa: BLE001 — a lapse that can't start never costs the turn (chief_chat starts it too)
+        pass
     q: "asyncio.Queue[str]" = asyncio.Queue()
 
     def _sink(piece: str) -> None:
