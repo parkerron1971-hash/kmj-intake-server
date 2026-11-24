@@ -35,7 +35,7 @@ from uuid import UUID, uuid5
 
 import httpx
 from fastapi import HTTPException
-from pydantic import Field
+from pydantic import Field, model_validator
 
 import media_library
 import sb_clients
@@ -76,6 +76,16 @@ class FindClips(StrictModel):
     caption_style: Literal['pop', 'clean', 'headline'] = 'pop'
     look_for: Optional[str] = Field(default=None, max_length=1000)
     covers: Optional[CoverPlan] = None
+    # A service only (service_clips.py): where the sermon starts and ends, in
+    # seconds from the start of the service. Its hours are the stretch's.
+    from_seconds: Optional[float] = Field(default=None, ge=0, le=6 * 3600, allow_inf_nan=False)
+    to_seconds: Optional[float] = Field(default=None, gt=0, le=6 * 3600, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def stretch_in_order(self):
+        if self.from_seconds is not None and self.to_seconds is not None and self.to_seconds <= self.from_seconds:
+            raise ValueError('The sermon has to end after it starts.')
+        return self
 
 
 class ClipUpdate(StrictModel):
@@ -182,7 +192,13 @@ def configuration(business_id):
             'included_hours': included_seconds(business_id) // 3600,
             'used_hours': round(used / 3600, 1), 'actions_per_extra_hour': UNITS_PER_EXTRA_HOUR,
             'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long'],
-            'covers': cover_offer()}
+            'covers': cover_offer(), 'services': available and _services_on(business_id)}
+
+
+def _services_on(business_id):
+    """Clips from a service streamed through Solutionist (service_clips.py)."""
+    import service_clips
+    return service_clips.switched_on(business_id)
 
 
 def cover_offer():
@@ -426,11 +442,26 @@ def start_run(business_id, source_id, body, user):
     billing_limits.require_feature(str(business_id), FEATURE)
     if spend_guard.over_budget(str(business_id)):
         raise HTTPException(429, 'AI work is paused for this business right now. Try again later.')
+    import service_clips
+    service = service_clips.is_service(source)
+    if service and source.get('source_removed_at'):
+        raise HTTPException(409, "This service's recording was deleted.")
     if source['kind'] != 'source' or source['status'] != 'ready' or source.get('source_removed_at'):
         raise HTTPException(409, 'Choose a recording that has finished uploading.')
-    seconds = float(source.get('duration_seconds') or 0)
-    if not 0 < seconds <= media_library.MAX_SECONDS:
-        raise HTTPException(409, 'Recordings can be up to 2 hours long.')
+    if service:
+        # The service as it is now: still kept, its full recording or its copy.
+        problem = service_clips.why_not(service_clips.read_session(business_id, service_clips.session_id_of(source)))
+        if problem:
+            raise HTTPException(409, problem)
+        seconds = service_clips.stretch(source, body.from_seconds, body.to_seconds)['seconds']
+        if seconds > media_library.MAX_SECONDS:
+            raise HTTPException(409, 'Clips are found in up to 2 hours of a service. Say where the sermon starts and ends.')
+    else:
+        if body.from_seconds is not None or body.to_seconds is not None:
+            raise HTTPException(422, 'Only a service can be cut to where the sermon starts and ends.')
+        seconds = float(source.get('duration_seconds') or 0)
+        if not 0 < seconds <= media_library.MAX_SECONDS:
+            raise HTTPException(409, 'Recordings can be up to 2 hours long.')
     if extra_units(seconds_this_month(business_id), seconds, included_seconds(business_id)):
         billing_limits.require_units(str(business_id))
     # About 0.4 GB of clips per hour of recording; leave room before starting.
@@ -448,8 +479,10 @@ def start_run(business_id, source_id, body, user):
     row = sb_clients.sb_post_as_service('/media_clip_runs', {
         'business_id': media_library.key(business_id), 'source_id': media_library.key(source_id),
         # No covers key unless covers were asked for: a JSON null would still
-        # match the cover step's options->covers=not.is.null.
-        'options': body.model_dump(mode='json', exclude={'covers'} if body.covers is None else None),
+        # match the cover step's options->covers=not.is.null. A stretch only
+        # when one was given (a service's), so an upload's run is as it was.
+        'options': body.model_dump(mode='json', exclude={k for k in ('covers', 'from_seconds', 'to_seconds')
+                                                         if getattr(body, k) is None} or None),
         'source_seconds': seconds, 'created_by': str(user.id)})
     if not row:
         # The one-active-run index refused it.
@@ -531,6 +564,9 @@ def file_clips(run, source, result):
     job = f'/jobs/{run["id"]}'
     rows = result.get('clips') or []
     filed = 0
+    # A service's stretch: the clips' times are in the whole service.
+    import service_clips
+    offset = float((run.get('counts') or {}).get('offset') or 0) if service_clips.is_service(source) else 0.0
     for n, clip in enumerate(rows):
         asset_id = clip_asset_id(run, clip['index'])
         exists = media_library.read(f'/media_assets?id=eq.{asset_id}&select=id&limit=1')
@@ -569,7 +605,7 @@ def file_clips(run, source, result):
                         frame = True
                     except (ValueError, RunFailed, httpx.HTTPError):
                         log.warning('Clean frame not saved for clip %s', asset_id)
-                start, end = (clip.get('start_ms') or 0) / 1000, (clip.get('end_ms') or 0) / 1000
+                start, end = offset + (clip.get('start_ms') or 0) / 1000, offset + (clip.get('end_ms') or 0) / 1000
                 saved = sb_clients.sb_post_as_service('/media_assets', {
                     'id': str(asset_id), 'business_id': media_library.key(run['business_id']), 'kind': 'clip',
                     'source_id': media_library.key(source['id']), 'name': (clip.get('title') or f'Clip {n + 1}')[:160],
@@ -729,12 +765,30 @@ def drive(run):
     if not source or source[0]['status'] != 'ready' or source[0].get('source_removed_at'):
         raise RunFailed('The recording is no longer available.')
     source = source[0]
+    import service_clips
+    service = service_clips.is_service(source)
     state = clipper('GET', job)
     if state.status_code == 404:
-        url = storage_links.signed_url_sync(BUCKET, media_library.object_path(source), ttl=3 * 3600)
-        if not url:
-            raise RunFailed('The recording could not be opened. Try again.')
-        started = clipper('POST', job, json={'source_url': url, 'options': engine_options(run['options'])})
+        if service:
+            # A service streamed through Solutionist: read from the media
+            # bucket where the relay recorded it (service_clips.clip_input).
+            try:
+                given = service_clips.clip_input(run['business_id'], source, run.get('options') or {})
+            except service_clips.Unavailable as why:
+                raise RunFailed(str(why)) from None
+            except HTTPException as refused:
+                raise RunFailed(str(refused.detail)) from None
+            # Where the stretch starts in the service, kept on the run so a
+            # resumed run files its clips at the same times.
+            run['counts'] = {'offset': given.pop('offset'), 'quality': given.pop('quality')}
+            report(run, counts=run['counts'])
+            body = {**given, 'options': engine_options(run['options'])}
+        else:
+            url = storage_links.signed_url_sync(BUCKET, media_library.object_path(source), ttl=3 * 3600)
+            if not url:
+                raise RunFailed('The recording could not be opened. Try again.')
+            body = {'source_url': url, 'options': engine_options(run['options'])}
+        started = clipper('POST', job, json=body)
         if started.status_code == 409:
             raise RunFailed('The clip service is busy. Try again in a few minutes.')
         if started.status_code >= 400:
@@ -753,8 +807,11 @@ def drive(run):
             flagged = sum(1 for c in result.get('clips') or [] if c.get('empty_spots'))
             # Completed first, then the charge: a crash in between can lose a
             # charge but can never bill a resumed run twice.
+            counts = result.get('counts')
+            if service:
+                counts = {**(counts or {}), **{k: v for k, v in (run.get('counts') or {}).items() if k in ('offset', 'quality')}}
             report(run, status='completed', stage='done', percent=100, clips_done=filed, clips_total=filed,
-                   counts=result.get('counts'), cost=result.get('cost'), timings=result.get('timings'), units=units,
+                   counts=counts, cost=result.get('cost'), timings=result.get('timings'), units=units,
                    finished_at=_z(datetime.now(timezone.utc)))
             meter(run, result, units)
             notify(run, source, filed, flagged)
@@ -839,8 +896,11 @@ def sweep():
     for source_id in {r['source_id'] for r in done}:
         if media_library.read(f'/media_clip_runs?source_id=eq.{source_id}&status=in.(queued,working)&select=id&limit=1'):
             continue
-        rows = media_library.read(f'/media_assets?id=eq.{source_id}&kind=eq.source&source_removed_at=is.null&select=id,business_id,kind&limit=1')
-        if rows:
+        rows = media_library.read(f'/media_assets?id=eq.{source_id}&kind=eq.source&source_removed_at=is.null&select=id,business_id,kind,configuration&limit=1')
+        # A service stays: the church's storage keeps or removes it, never
+        # Video Clips (service_clips.py).
+        import service_clips
+        if rows and not service_clips.is_service(rows[0]):
             remove_objects([media_library.object_path(rows[0])])
             sb_clients.sb_patch_as_service(f'/media_assets?id=eq.{source_id}&source_removed_at=is.null', {'source_removed_at': _z(now)})
 

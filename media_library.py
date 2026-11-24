@@ -199,6 +199,10 @@ def create_clip(business_id, body, user):
     source = asset(business_id, body.source_id, user)
     if source['kind'] != 'source' or source['status'] != 'ready':
         raise HTTPException(409, 'Wait for the recording to finish importing.')
+    import service_clips
+    if service_clips.is_service(source):
+        # A service has no file in this library to cut by hand.
+        raise HTTPException(409, "A service's clips come from Find my best clips. To cut one by hand, download the service and upload it.")
     if source.get('source_removed_at'):
         raise HTTPException(409, 'The original recording was removed 7 days after its clips were made.')
     if body.end_seconds > float(source['duration_seconds']):
@@ -233,6 +237,13 @@ def playback(business_id, asset_id, user, reviewed=False):
     row = asset(business_id, asset_id, user)
     if row['status'] != 'ready':
         raise HTTPException(409, 'This recording is not ready.')
+    import service_clips
+    if service_clips.is_service(row):
+        if reviewed or row.get('source_removed_at'):
+            raise HTTPException(409, "This service's recording was deleted." if row.get('source_removed_at')
+                                else 'Approve this exact clip before creating a reviewed handoff.')
+        audit(business_id, user, 'preview', asset_id)
+        return service_clips.preview(business_id, row)
     if row.get('source_removed_at'):
         raise HTTPException(409, 'The original recording was removed 7 days after its clips were made.')
     if reviewed and (row['kind'] != 'clip' or (row.get('approval') or {}).get('fingerprint') != fingerprint(row)):

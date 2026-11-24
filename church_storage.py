@@ -635,6 +635,12 @@ def remove_recording(business_id: str, s: Dict[str, Any], *, now: Optional[datet
         return None
     _forget(sid)
     _clear_drafts(business_id, sid, stamp)
+    try:
+        # Its Video Clips row, if it was added there, says it's gone (its clips stay).
+        import service_clips
+        service_clips.forget_service(business_id, sid, stamp)
+    except Exception as e:  # noqa: BLE001  (a run started on it fails in words anyway)
+        print(f"[church_storage] Video Clips not told of {sid[:8]}: {type(e).__name__}", flush=True)
     print(f"[church_storage] removed recording {sid[:8]} of {str(business_id)[:8]}: "
           f"{len(keys)} files, {stored_bytes(s)} bytes", flush=True)
     return {"marked": bool(got), "freed_bytes": stored_bytes(s) if got else 0}
