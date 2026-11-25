@@ -1992,6 +1992,12 @@ async def startup():
             import member_push as _member_push
             scheduler.add_job(g("member_push_sweep", _member_push.sweep_tick), "interval",
                               minutes=15, id="member_push_sweep")
+            # Every adult with a birthday on record can message, where a
+            # church has that switch on: birthdays added since the last pass
+            # (messaging_everyone.sweep_tick).
+            import messaging_everyone as _msg_everyone
+            scheduler.add_job(g("messaging_everyone_sweep", _msg_everyone.sweep_tick), "interval",
+                              minutes=15, id="messaging_everyone_sweep")
             # A church stream the relay stopped reporting is closed, never left
             # "live" in the member app or reused next Sunday (stream_relay_router).
             import stream_relay_router as _stream_relay

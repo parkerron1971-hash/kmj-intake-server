@@ -219,6 +219,8 @@ class SettingsIn(BaseModel):
     business_id: str
     enabled: Optional[bool] = None
     retention_days: Optional[int] = Field(default=None, ge=30, le=3650)
+    # Every adult with a birthday on their record can message (messaging_everyone).
+    adults_with_birthday: Optional[bool] = None
 
 
 @router.get("/messaging/settings")
@@ -233,6 +235,11 @@ def get_settings(business_id: str = Query(...), user: AuthedUser = Depends(requi
            "officers": offs, "member_officers": members, "officer_count": len(offs) + len(members),
            "min_officers": MIN_OFFICERS, "you_are_officer": str(user.id) in offs,
            "you_are_owner": str(row.get("owner_id")) == str(user.id)}
+    # Everyone 18+ with a birthday on record (messaging_everyone): the switch,
+    # and how many of those adults can message now (None when it couldn't count).
+    import messaging_everyone as me_
+    out["adults_with_birthday"] = me_.on(row)
+    out["adults"] = me_.counts(biz)
     if out["you_are_owner"]:
         out["team"] = [{**p, "officer": p["user_id"] in offs} for p in team(biz, row.get("owner_id"), user)]
         # The church's pastoral leaders (Kevin, 2026-10-20): officers from
@@ -260,11 +267,23 @@ def patch_settings(body: SettingsIn, user: AuthedUser = Depends(require_user)):
         cfg["enabled"] = body.enabled
     if body.retention_days is not None:
         cfg["retention_days"] = body.retention_days
+    import messaging_everyone as me_
+    if body.adults_with_birthday is not None:
+        cfg[me_.KEY] = bool(body.adults_with_birthday)
     settings["messaging"] = cfg
     saved = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz_id)}", {"settings": settings})
     if not saved:
         raise HTTPException(503, "That change didn't save. Please try again.")
-    return {"enabled": bool(cfg.get("enabled")), "retention_days": int(cfg.get("retention_days") or 365)}
+    out: Dict[str, Any] = {"enabled": bool(cfg.get("enabled")), "retention_days": int(cfg.get("retention_days") or 365),
+                           "adults_with_birthday": cfg.get(me_.KEY) is True}
+    if body.adults_with_birthday is not None:
+        # The switches follow at once: on opens every adult with a birthday on
+        # record who has no switch yet; off closes only what it opened. The
+        # sweep finishes the job if this pass fails partway.
+        changed = (me_.open_for_adults(biz_id) if body.adults_with_birthday else me_.close_what_it_opened(biz_id))
+        out["changed"] = changed
+        out["adults"] = me_.counts(biz_id)
+    return out
 
 
 class OfficerIn(BaseModel):
