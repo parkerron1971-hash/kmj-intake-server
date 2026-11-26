@@ -16219,10 +16219,12 @@ async def chief_chat(
             # the owner's, what that person last asked and what didn't go through, off their own saved
             # turns. No model call; a read that fails adds nothing. It follows the card above.
             import chief_last_time as _last_time
-            if chief_areas.WHO.get() is not None and _last_time.at_start(req.conversation_history):
+            if (chief_areas.WHO.get() is not None and not is_coach_mode
+                    and _last_time.at_start(req.conversation_history)):
                 _left_off = await asyncio.to_thread(_last_time.block_for, biz, str(user_session.user.id))
                 if _left_off:
-                    chief_truth.record('context:last_time', _left_off, kind='context')
+                    # As conversation: the person's own earlier words prove nothing about the business.
+                    chief_truth.record('conversation:last_time', _left_off, kind='conversation')
                     _who_card += _left_off
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
