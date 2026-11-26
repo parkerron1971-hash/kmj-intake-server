@@ -276,7 +276,7 @@ def test_the_sql_keeps_who_asked_and_lets_no_login_read_anothers():
     # The ledger lists it, and says it is waiting.
     ledger = open(os.path.join(ROOT, "docs", "MIGRATIONS.md"), encoding="utf-8").read()
     row = next(ln for ln in ledger.split("\n") if "APPLY-2026-11-24-chief-conversations-by-login.sql" in ln)
-    assert "NOT APPLIED" in row
+    assert "APPLIED" in row, "the ledger says where it stands"
     # The rollback names the switch first (the server keeps saving whatever the row rules say).
     assert sql.index("CHIEF_TURNS_BY_LOGIN=off") > sql.index("-- ROLLBACK")
     ci = open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()

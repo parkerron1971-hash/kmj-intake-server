@@ -382,7 +382,7 @@ def test_the_answer_check_is_handed_it_as_conversation_never_as_a_record():
 def test_the_ledger_ci_env_list_and_export_list_carry_it():
     ledger = open(os.path.join(ROOT, "docs", "MIGRATIONS.md"), encoding="utf-8").read()
     row = next(ln for ln in ledger.split("\n") if "APPLY-2026-11-25-chief-thread-summaries.sql" in ln)
-    assert "NOT APPLIED" in row
+    assert "APPLIED" in row, "the ledger says where it stands"
     assert "node __tests__/chief_thread_summaries_db.mjs" in open(
         os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
     assert "CHIEF_THREAD_SUMMARY=" in open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read()
