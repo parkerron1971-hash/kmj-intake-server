@@ -15701,6 +15701,7 @@ async def chief_chat(
     _who_token = chief_areas.WHO.set(_who)
     _asks_read, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
     _office_roster = None                  # THE OFFICE (chief_office): None until read
+    _church_facts_text = None              # the church's fact sheet (church_facts): None until read
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15898,10 +15899,14 @@ async def chief_chat(
             import church_follow_up as _cfu
             if biz_lite and _cfu.is_church(biz_lite):
                 import church_map_asks
+                import church_facts as _church_facts
                 _office_task = preparation.start(asyncio.to_thread(_church_office.text_for, biz_lite))
+                # THE CHURCH'S FACT SHEET (church_facts): read beside the roster, kept ten minutes a replica.
+                _facts_task = preparation.start(asyncio.to_thread(_church_facts.text_for, biz_lite))
                 ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
                     church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
                 _office_roster = await _office_task
+                _church_facts_text = await _facts_task
             else:
                 ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
@@ -16260,6 +16265,13 @@ async def chief_chat(
             _office_shown = _church_office.shown(_office_roster or "", chief_areas.WHO.get())
             if _office_shown:
                 chief_truth.record('context:office_roster', _office_shown, kind='context')
+            # The church's fact sheet (church_facts): the same for every login of a church, read from its
+            # own records, so it caches with the menu. Read up front with the context (else now).
+            if _church_facts_text is None and _cfu.is_church(biz):
+                import church_facts as _church_facts
+                _church_facts_text = await asyncio.to_thread(_church_facts.text_for, biz)
+            if _church_facts_text:
+                chief_truth.record('context:church_facts', _church_facts_text, kind='context')
             # The planning coach at a church: who already does what in the office (church_structure), so
             # the pastor isn't asked twice. For the owner or an Admin only, and the block itself reads
             # this signed-in person's role on this church and answers '' when it is anyone else's turn or
@@ -16292,6 +16304,7 @@ async def chief_chat(
                 orientation_kind=orientation_kind,
                 week_day=week_day,
                 office_roster=_office_shown,
+                church_facts=_church_facts_text or "",
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
