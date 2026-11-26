@@ -16231,6 +16231,16 @@ async def chief_chat(
                     # As conversation: the person's own earlier words prove nothing about the business.
                     chief_truth.record('conversation:last_time', _left_off, kind='conversation')
                     _who_card += _left_off
+            # CHURCH JOB STEPS (church_skills, behind CHIEF_CHURCH_SKILLS): the written steps for the job this
+            # message asks for, only when this login may use every action the job names. The turn's tail; the
+            # contents (one line a job) ride the per-church segment. Nothing for the coach.
+            import church_skills as _church_skills
+            _church_skills.begin_turn(biz, chief_areas.TURN.get())
+            if not is_coach_mode:
+                _job_steps = _church_skills.turn_block(biz, req.message or "", chief_areas.TURN.get())
+                if _job_steps:
+                    chief_truth.record('context:church_job_steps', _job_steps, kind='conversation')
+                    growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _job_steps).strip() + "\n"
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
             _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz) + _who_card
@@ -16305,6 +16315,7 @@ async def chief_chat(
                 week_day=week_day,
                 office_roster=_office_shown,
                 church_facts=_church_facts_text or "",
+                church_skills_contents=_church_skills.contents_for(biz),
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
