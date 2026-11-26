@@ -851,6 +851,12 @@ def tool_result(args: Dict[str, Any]) -> Tuple[bool, Any]:
     if not name:
         return True, "Say which verb or area to look up, e.g. {\"name\": \"plan_content\"}."
     _LOOKED_UP.set(_LOOKED_UP.get() + (name,))
+    # A church job's written steps (church_skills), by the job's name: only where skills are on for this church
+    # and this login may use every action the job names.
+    import church_skills
+    chapter = church_skills.lookup(raw)
+    if chapter:
+        return False, chapter
     if name in _DEFERRED.get():
         return False, [{"type": "tool_reference", "tool_name": name}]
     text = guide(name)
