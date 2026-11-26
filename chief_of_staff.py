@@ -16188,6 +16188,21 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"church findway block failed: {e}")
 
+            # EARLIER IN THIS CONVERSATION (chief_thread_summary): the app sends the last 30 messages of a
+            # chat, and what was older used to be dropped. A long chat's oldest messages are folded into a
+            # short summary after each reply (below, where the turn goes on file); here it is read for the
+            # login whose chat it is. The tail, never a cached segment; a read that fails adds nothing.
+            import chief_thread_summary as _thread_summary
+            if not is_coach_mode and not is_greeting:
+                _earlier = await asyncio.to_thread(
+                    _thread_summary.block_for, biz, str(user_session.user.id), req.conversation_id,
+                    (req.conversation_history or [])[-MAX_HISTORY:])
+                if _earlier:
+                    # As conversation, the standing its messages had while Chief could see them: the
+                    # answer check never takes it as proof of a fact, a status or a finished action.
+                    chief_truth.record('conversation:earlier_in_chat', _earlier, kind='conversation')
+                    growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _earlier).strip() + "\n"
+
             # WHO YOU ARE TALKING WITH (chief_office.card_for): for a church login that isn't the owner's,
             # an Admin's and a Member's too, what the church's own record says of them: their job and what
             # it does, who they answer to, where they work, whether Giving & money is open to them. Until
@@ -16901,6 +16916,12 @@ async def chief_chat(
             # app talking to itself and are not a conversation.
             if not is_greeting:
                 await _archive_turn(client, biz, req.message, response_text, taken)
+                # A long chat's oldest messages go into its running summary before the app stops sending
+                # them (chief_thread_summary). Off the request, in a thread; never costs the reply.
+                if not is_coach_mode:
+                    import chief_thread_summary as _thread_fold
+                    _thread_fold.after_turn(biz, str(user_session.user.id), req.conversation_id,
+                                            (req.conversation_history or [])[-MAX_HISTORY:])
 
             # The launch greeting went out, checked: now it has been said.
             # Every earlier return (no model reply, an error) leaves the
