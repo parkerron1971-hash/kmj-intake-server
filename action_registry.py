@@ -161,6 +161,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "list_scheduled":      _r("reads queued chief_scheduled_actions"),
     "offering_readiness":  _r("offering_profiles.business_readiness — pure report"),
     "recall_conversation": _r("searches prior conversation"),
+    "review_memories": {**_r("reads the business's own notes checked for tidying: which a reply carries, which "
+                             "look alike or may disagree, which are unused; changes nothing", sensitive=True),
+                        "chief_only": True},
     "team_conversations": {**_r("the owner reads what the team's other logins asked Chief and what Chief said and "
                                 "did, each conversation named; the owner's own login only", sensitive=True),
                            "chief_only": True},
