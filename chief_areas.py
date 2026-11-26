@@ -216,7 +216,7 @@ OWNERS = frozenset({
     "propose_brand_kit_from_context", "propose_business_from_idea", "propose_mission",
     "propose_module_from_intake", "propose_voice_rule", "provision_sms_number", "publish_booking_page",
     "queue_build_request", "record_edit_pattern", "reject_module_spec", "team_conversations",
-    "release_sms_number", "remember", "remove_business_rule", "remove_voice_rule", "rename_term",
+    "release_sms_number", "remember", "review_memories", "remove_business_rule", "remove_voice_rule", "rename_term",
     "respond_work_order", "responsibility_status", "restore_previous_site", "restore_sms_number",
     "revoke_standing_permission", "run_agent", "run_market_research", "save_business_model",
     "save_business_phase", "save_launch_plan", "save_packages", "save_phase", "save_pricing",

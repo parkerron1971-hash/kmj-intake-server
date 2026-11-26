@@ -67,7 +67,7 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          "giving_deposits", "expense_categories", "bills",
                                          "giving_counts", "list_duties", "list_map", "search_templates",
                                          # What came in over a day or a span, no giver named: the same.
-                                         "giving_summary", "team_conversations",
+                                         "giving_summary", "team_conversations", "review_memories",
                                          "my_work", "list_asks", "move_in_status",
                                          # Church assignments (chief_church_assignments): staff and leaders by name.
                                          "people_under", "assignments_of", "one_on_one",
