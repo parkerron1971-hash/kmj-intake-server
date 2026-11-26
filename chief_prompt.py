@@ -1194,7 +1194,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          orientation_kind: Optional[str] = None,
                          week_day: int = 0,
                          office_roster: str = "",
-                         church_facts: str = "") -> str:
+                         church_facts: str = "",
+                         church_skills_contents: str = "") -> str:
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
@@ -1276,6 +1277,9 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # THIS CHURCH, FROM ITS OWN RECORDS (church_facts): the same for every login of a church, with no
     # money and no names in it, so it caches with the menu; '' for any other business.
     church_facts_block = (church_facts.rstrip() + "\n") if church_facts else ""
+    # CHURCH JOBS WITH WRITTEN STEPS (church_skills): one line a job, for a church with skills on; the steps
+    # themselves come with the turn that needs them.
+    church_skills_block = (church_skills_contents.rstrip() + "\n") if church_skills_contents else ""
 
     # Intelligence blocks — supplied by chief_chat. Each is empty string
     # when there's nothing useful to inject so the prompt stays clean.
@@ -2554,7 +2558,7 @@ Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner has
 {vertical_block}
 
 {church_menu_block}
-{church_facts_block}{office_block}{moved_manual}{delegation_block}
+{church_facts_block}{church_skills_block}{office_block}{moved_manual}{delegation_block}
 
 {web_search_block}
 
