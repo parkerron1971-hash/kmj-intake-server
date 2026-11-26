@@ -7,7 +7,7 @@ status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
 left_undone:
-  - "47 of the menu's rooms have no Chief lookup (church_room_lookups.NO_LOOKUP): the order of service, kids check-in, the calendar, check requests, pledges, recurring gifts, the board and others. Chief is now told which; each one stays a gap until a lookup is built"
+  - "45 of the menu's rooms have no Chief lookup (church_room_lookups.NO_LOOKUP): the order of service, kids check-in, check requests, pledges, recurring gifts, the board and others. Chief is now told which; each one stays a gap until a lookup is built"
   - "A room in LOOKUPS is read in part where its lookup is narrower than the page (Members through church_people). The map says what Chief can say, not that it sees all of the page"
   - "No production church's sheet was read: what it says at Love City or Elevation of Grace has not been seen"
   - "No live Chief eval was run"
@@ -21,6 +21,7 @@ decisions:
   - "church_room_lookups: every page on a church's menu (church_findway.json) is in exactly one of LOOKUPS (the read actions that answer it), NO_LOOKUP (a gap, named) or NOT_A_ROOM. __tests__/test_church_room_lookups.py fails for a page in none of them, in two, or a lookup that isn't one of Chief's reads: a new church room can't ship with nobody deciding whether Chief can see it"
   - "Chief is told the NO_LOOKUP rooms by their menu names: use only what the prompt already shows of one, then say what the room is for and offer to open it; never guess what is in it or say it is empty"
   - "CHIEF_CHURCH_FACTS=off turns it off"
+  - "After an independent review, which found the first version not safe to merge. (1) 'Online giving is connected' came from a Stripe account alone; it now uses the giving page's own rule (giving_router.giving_is_active), and says when Stripe is connected but the page is off. (2) A draft texting registration read as sent; every status now says where it stands. (3) Over 4,000 characters the cut dropped the couldn't-read and can't-read lines; those now come first and the lists shrink instead. (4) Approvals, notifications and the calendar are in Chief's context every turn, so they are no longer called rooms it can't read (IN_CONTEXT). (5) Two wrong mappings fixed: Bills on a church's menu is what it sends, not what it owes, and the giving page is not the budget funds. (6) Invite-only and youth groups are not listed for joining; a group's time is the one its leader set; 'coming once' services use the church's own day; counts say 'at least' when a read hit its limit. (7) Any writing seat, a Member's included, can name a group, so a name with words an instruction would use (chief, ignore, always, never, rule, system, treat, reply) is left out as well"
 related: [2026-11-22-chief-church-lookups.md, 2026-11-22-chief-who-im-talking-with.md]
 ---
 Read both repos' work logs first; nothing open touches the per-church segment.

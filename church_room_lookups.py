@@ -9,6 +9,7 @@ This is the list that catches the next one. Every page of a church's menu
 (church_findway.json, the frontend's export) is in exactly one of:
 
     LOOKUPS ....... page -> the read actions that answer what is on it
+    IN_CONTEXT .... page -> what of it Chief already sees in its context every turn
     NO_LOOKUP ..... page -> why Chief can't read it yet (a gap, said plainly)
     NOT_A_ROOM .... page -> why it holds nothing to read (a help page, a builder)
 
@@ -66,7 +67,6 @@ LOOKUPS: Dict[str, Tuple[str, ...]] = {
     "operate:statements": ("giving_statements_run", "giving_statement"),
     "grow:intelligence": ("giving_summary",),
     "operate:offerings-manager": ("list_offerings", "list_products", "check_inventory"),
-    "operate:giving-page": ("fund_status",),
     # Messages
     "operate:email": ("email_setup_status", "church_email"),
     "operate:sms": ("sms_status",),
@@ -74,7 +74,7 @@ LOOKUPS: Dict[str, Tuple[str, ...]] = {
     # Office
     "operate:tasks": ("list_tasks",),
     "operate:projects": ("list_projects",),
-    "operate:invoices": ("bills",),
+    "operate:invoices": ("show_view",),
     "operate:inventory": ("check_inventory",),
     "operate:monthly-report": ("monthly_report_draft",),
     "grow:goals": ("check_goals",),
@@ -120,12 +120,10 @@ NO_LOOKUP: Dict[str, str] = {
     "operate:pay-staff": "staff pay",
     "operate:contractors": "contractors",
     "operate:money-controls": "money controls",
-    "operate:queue": "the approvals waiting",
+    "operate:giving-page": "the giving page and its funds",
     "operate:messaging": "member messaging",
     "operate:news": "news and celebrations",
     "build:email-templates": "email templates",
-    "operate:notifications": "notifications",
-    "operate:calendar": "the calendar",
     "operate:documents": "files and policies",
     "operate:spaces": "rooms and their bookings",
     "operate:rentals": "rentals",
@@ -148,6 +146,13 @@ NO_LOOKUP: Dict[str, str] = {
     "build:events-page": "the events page",
     "build:integrations": "integrations",
     "operate:agents": "autopilot",
+}
+
+# Rooms Chief sees in its own context every turn (chief_of_staff._gather_context), with no lookup to call.
+IN_CONTEXT: Dict[str, str] = {
+    "operate:queue": "the approvals waiting (agent_queue drafts)",
+    "operate:notifications": "unread notifications (chief_notifications)",
+    "operate:calendar": "what is coming up (sessions)",
 }
 
 # Pages that hold no church records of their own.

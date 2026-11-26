@@ -22,7 +22,7 @@ import church_room_lookups as crl  # noqa: E402
 def test_every_page_on_a_churchs_menu_is_decided_once():
     pages = crl.menu_pages()
     assert len(pages) > 90, "the menu was read"
-    decided = list(crl.LOOKUPS) + list(crl.NO_LOOKUP) + list(crl.NOT_A_ROOM)
+    decided = list(crl.LOOKUPS) + list(crl.IN_CONTEXT) + list(crl.NO_LOOKUP) + list(crl.NOT_A_ROOM)
     undecided = sorted(set(pages) - set(decided))
     assert not undecided, (
         f"church rooms nobody decided about for Chief: {undecided}. Put each in church_room_lookups: "
@@ -51,3 +51,19 @@ def test_chief_is_told_the_rooms_it_cant_read_by_their_menu_names():
     assert "Never guess what is in it, and never say it is empty" in line and "use only what this prompt already shows" in line
     listed = line.split(": ", 1)[1].split(". Asked")[0].split(", ")
     assert len(listed) == len(crl.NO_LOOKUP) and set(listed) <= {pages[k] for k in crl.NO_LOOKUP}
+
+
+def test_the_rooms_chief_sees_in_its_context_are_really_there():
+    """Told "you can't read" a room its own context carries, Chief would deflect a question it could answer."""
+    import inspect
+    src = inspect.getsource(cos._gather_context)
+    for table in ("agent_queue", "chief_notifications", "sessions"):
+        assert f"/{table}?" in src, table
+    assert set(crl.IN_CONTEXT).isdisjoint(crl.NO_LOOKUP)
+
+
+def test_mappings_the_review_caught_stay_fixed():
+    """Bills on a church's menu is what the church SENDS (receivables); the bills lookup reads what it owes.
+    The giving page and its funds is not the year's budget funds."""
+    assert "bills" not in crl.LOOKUPS["operate:invoices"]
+    assert "operate:giving-page" in crl.NO_LOOKUP
