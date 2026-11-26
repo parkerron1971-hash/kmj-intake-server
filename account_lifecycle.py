@@ -390,6 +390,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "business_financial_policy_history",
     "business_operating_profiles",
     "chief_conversations",
+    "chief_thread_summaries",  # a long chat's running summary, one row a chat (11/25)
     "chief_activity",
     "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)
     "chief_cases",            # problems Chief diagnosed, forecasts and results (10/5)
