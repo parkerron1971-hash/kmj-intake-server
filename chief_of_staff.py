@@ -16235,9 +16235,10 @@ async def chief_chat(
             # message asks for, only when this login may use every action the job names. The turn's tail; the
             # contents (one line a job) ride the per-church segment. Nothing for the coach.
             import church_skills as _church_skills
-            _church_skills.begin_turn(biz, chief_areas.TURN.get())
+            _skills_turn = await asyncio.to_thread(_church_skills.prepare, biz)
+            _church_skills.begin_turn(_skills_turn, chief_areas.TURN.get())
             if not is_coach_mode:
-                _job_steps = _church_skills.turn_block(biz, req.message or "", chief_areas.TURN.get())
+                _job_steps = _church_skills.turn_block(_skills_turn, req.message or "", chief_areas.TURN.get())
                 if _job_steps:
                     chief_truth.record('context:church_job_steps', _job_steps, kind='conversation')
                     growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _job_steps).strip() + "\n"
@@ -16315,7 +16316,7 @@ async def chief_chat(
                 week_day=week_day,
                 office_roster=_office_shown,
                 church_facts=_church_facts_text or "",
-                church_skills_contents=_church_skills.contents_for(biz),
+                church_skills_contents=_church_skills.contents_for(_skills_turn),
             )
 
             # JIT capture: prepend a directive at the very top of the prompt

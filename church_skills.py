@@ -13,6 +13,9 @@ recording, never close a count, never say "in the bank" before the match.
                                        build_skills matches)
                              actions   the actions its steps use; every one must
                                        be one of Chief's (a test checks)
+                             needs     the church features the job rides on
+                                       (NEEDS): a church where one isn't
+                                       switched on gets no steps for it
     contents_for(biz) .... the CONTENTS: one line per skill (name and use_when),
                            in the per-church cached segment. Kevin's cost idea:
                            only the contents ride every turn, the chapters don't.
@@ -54,6 +57,19 @@ SKILLS_DIR = pathlib.Path(__file__).resolve().parent / "church_skills"
 MAX_PER_TURN = 1
 CHAPTER_CHARS = 3000
 
+# A job's actions only work where the feature under them is switched on for the church.
+def _giving_services(bid: Any) -> bool:
+    import giving_ways
+    return bool(giving_ways.switched_on(bid))
+
+
+def _giving_deposits(bid: Any) -> bool:
+    import giving_deposits
+    return bool(giving_deposits.switched_on(bid))
+
+
+NEEDS = {"giving_services": _giving_services, "giving_deposits": _giving_deposits}
+
 # This turn's church and login lane, for the action_guide lookup (set in chief_chat).
 _TURN: contextvars.ContextVar[Optional[Tuple[Dict[str, Any], Any]]] = contextvars.ContextVar(
     "church_skills.turn", default=None)
@@ -65,11 +81,16 @@ def mode() -> str:
 
 
 def switched_on(biz: Any) -> bool:
-    """Off, the platform owner's own church, or every church."""
+    """Off, the platform owner's own church, or every church. Only where the short manual is on: the contents
+    tell Chief to look a job's steps up with its lookup (action_guide), which only it has. It reads (who owns
+    the church): call it off the event loop."""
     m = mode()
     if m == "off" or not isinstance(biz, dict) or not biz.get("id"):
         return False
     try:
+        import chief_lean_brief
+        if not chief_lean_brief.enabled():
+            return False
         import church_follow_up as cfu
         if not cfu.is_church(biz):
             return False
@@ -102,7 +123,7 @@ def parse(text: str, path: str = "") -> Optional[Dict[str, Any]]:
     for line in m.group(1).splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip().lower(), value.strip()
-        if key in ("triggers", "actions"):
+        if key in ("triggers", "actions", "needs"):
             fields[key] = _list(value)
         elif key:
             fields[key] = value
@@ -110,7 +131,7 @@ def parse(text: str, path: str = "") -> Optional[Dict[str, Any]]:
     if not fields.get("name") or not fields.get("use_when") or not fields.get("actions") or not body:
         return None
     return {"name": fields["name"], "use_when": fields["use_when"], "triggers": fields.get("triggers") or [],
-            "actions": fields["actions"], "body": body, "path": path}
+            "actions": fields["actions"], "needs": fields.get("needs") or [], "body": body, "path": path}
 
 
 @lru_cache(maxsize=1)
@@ -135,17 +156,32 @@ def _word(trigger: str) -> "re.Pattern[str]":
     return re.compile("(?<![a-z0-9])" + re.escape(trigger) + "s?(?![a-z0-9])")
 
 
-def allowed(skill: Dict[str, Any], scope: Any) -> bool:
-    """Whether this login may use every action the skill names (its lane; the owner and Admins have every one)."""
+def allowed(skill: Dict[str, Any], scope: Any, ready: Optional[Dict[str, bool]] = None) -> bool:
+    """Whether this login may use every action the skill names (its lane; the owner and Admins have every one),
+    and every feature the job rides on is switched on (`ready`, from features_on; none named: none needed)."""
     import chief_areas
+    if any(not (ready or {}).get(n, False) for n in skill.get("needs") or []):
+        return False
     return all(chief_areas.refusal(v, {}, scope) is None for v in skill["actions"])
+
+
+def features_on(biz: Any) -> Dict[str, bool]:
+    """Which of NEEDS are switched on for this church. Reads: call it off the event loop."""
+    out: Dict[str, bool] = {}
+    bid = (biz or {}).get("id") if isinstance(biz, dict) else None
+    for name, fn in NEEDS.items():
+        try:
+            out[name] = bool(bid) and fn(bid)
+        except Exception:  # noqa: BLE001 — can't tell: not on
+            out[name] = False
+    return out
 
 
 def matching(message: str) -> List[Dict[str, Any]]:
     text = (message or "").lower()
     scored = []
     for s in skills():
-        hits = sum(1 for t in s["triggers"] if t and _word(t).search(text))
+        hits = len({t.rstrip("s") for t in s["triggers"] if t and _word(t).search(text)})
         if hits:
             scored.append((-hits, s["name"], s))
     scored.sort(key=lambda x: (x[0], x[1]))
@@ -162,25 +198,43 @@ def _chapter(skill: Dict[str, Any]) -> str:
 
 # ─── What a turn reads ────────────────────────────────────────────────
 
-def contents_for(biz: Any) -> str:
-    """The contents, for the per-church cached segment; '' when skills are off for this church."""
-    if not switched_on(biz) or not skills():
+class Turn:
+    """What a turn knows about skills, worked out once off the event loop (prepare), then used without reads."""
+    def __init__(self, biz: Any, on: bool, ready: Dict[str, bool]):
+        self.biz, self.on, self.ready = biz, on, ready
+
+
+def prepare(biz: Any) -> "Turn":
+    """Whether skills are on for this church and which features are: the reads a turn needs, in one call, for
+    asyncio.to_thread."""
+    on = switched_on(biz)
+    return Turn(biz, on, features_on(biz) if on else {})
+
+
+def contents_for(turn: "Turn") -> str:
+    """The contents, for the per-church cached segment; '' when skills are off for this church. Only the jobs
+    whose features are on for it, so a church is never pointed at a job its account can't do."""
+    if not turn or not turn.on:
         return ""
-    lines = [f"  {s['name']}: {s['use_when']}" for s in skills()]
+    shown = [s for s in skills() if all(turn.ready.get(n, False) for n in s.get("needs") or [])]
+    if not shown:
+        return ""
+    lines = [f"  {s['name']}: {s['use_when']}" for s in shown]
     return ("CHURCH JOBS WITH WRITTEN STEPS (when one applies, its steps come with the message; if they haven't, "
-            "look them up with action_guide and the job's name before you start):\n" + "\n".join(lines) + "\n")
+            "look them up with action_guide and the job's name before you start; if the lookup has none, the job "
+            "isn't open to this login):\n" + "\n".join(lines) + "\n")
 
 
-def begin_turn(biz: Any, scope: Any) -> None:
-    _TURN.set((biz, scope) if switched_on(biz) else None)
+def begin_turn(turn: "Turn", scope: Any) -> None:
+    _TURN.set((turn, scope) if turn and turn.on else None)
 
 
-def turn_block(biz: Any, message: str, scope: Any) -> str:
-    """The chapter for this turn, or ''. Never raises."""
+def turn_block(turn: "Turn", message: str, scope: Any) -> str:
+    """The chapter for this turn, or ''. No reads. Never raises."""
     try:
-        if not switched_on(biz):
+        if not turn or not turn.on:
             return ""
-        picked = [s for s in matching(message) if allowed(s, scope)][:MAX_PER_TURN]
+        picked = [s for s in matching(message) if allowed(s, scope, turn.ready)][:MAX_PER_TURN]
         if picked:
             print(f"[church skills] {picked[0]['name']} for this turn", flush=True)
         return "".join(_chapter(s) for s in picked)
@@ -199,7 +253,7 @@ def lookup(name: str) -> Optional[str]:
         key = re.sub(r"[\s_]+", "-", (name or "").strip().lower())
         for s in skills():
             if s["name"] == key:
-                return _chapter(s) if allowed(s, turn[1]) else None
+                return _chapter(s) if allowed(s, turn[1], turn[0].ready) else None
         return None
     except Exception:  # noqa: BLE001
         return None

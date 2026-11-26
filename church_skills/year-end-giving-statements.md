@@ -1,14 +1,14 @@
 ---
 name: year-end-giving-statements
 use_when: giving statements for a tax year: the January mailing, one person's statement, or the gifts of $250 or more that need a written acknowledgment
-triggers: statement, statements, year-end, year end, end of year, tax letter, tax letters, contribution statement, giving letter, giving letters, acknowledgment, acknowledgement, 1771
+triggers: giving statement, giving statements, year-end statement, year-end giving, year end statement, contribution statement, tax letter, giving letter, donation statement, written acknowledgment, written acknowledgement
 actions: giving_statements_run, giving_statement
 ---
 STEPS
-1. Settle the year first: the year that has closed, unless they name another. Say which year you used.
+1. Settle the year first, and pass it as "year" every time: the year they name, or else the last full year. Say which year you used.
 2. Run giving_statements_run for that year before anything else. From its result, say: how many people gave, the total, how many need a written acknowledgment (a single gift of $250 or more), and any unattributed total.
-3. Unattributed gifts have no giver, so they can't go on anyone's statement. Say the amount, and suggest putting a giver on those gifts before the statements go out.
-4. For one person's statement, use giving_statement with their contact. It says no goods or services were given unless told otherwise. If something was given in return (a dinner, a gift), put what it was in goods_and_services: the statement then says a good-faith estimate of its value is still needed, which the church supplies before sending. "religious" is only for intangible religious benefits.
+3. Unattributed gifts are mostly loose plate cash and gifts given anonymously on purpose: they stay off every statement. Only where the church actually knows a gift's giver should it be put on that person, on the Gifts page.
+4. For one person's statement, use giving_statement with that person's contact id (find them the way you find any person first) and the year. It says no goods or services were given unless told otherwise. If something was given in return (a dinner, a gift), put what it was in goods_and_services: the statement then says a good-faith estimate of its value is still needed, which the church supplies before sending. "religious" is only for intangible religious benefits.
 5. Sending is done on the Year-end statements page (Giving). Offer to open it.
 
 HAND BACK
