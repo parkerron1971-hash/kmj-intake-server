@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "chief_thread_summaries": "a long chat's running summary (chief_thread_summary.py): one row a chat, keyed by a sign-in user id and the app's own id for a chat on one device, neither of which means anything in another business; a restored business's chats start again, and the rows go with the business (cascade)",
     "sample_church_questions": "the questions a person asked Chief about the made-up sample church before starting their own (sample_church.py): about Grace Street Fellowship, not their church, and counted per person so a restore must not hand back the ten; keyed by user_id, deleted with the person (USER_CHILD_TABLES), its business links set null when a business goes",
     "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
     "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
@@ -390,7 +391,6 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "business_financial_policy_history",
     "business_operating_profiles",
     "chief_conversations",
-    "chief_thread_summaries",  # a long chat's running summary, one row a chat (11/25)
     "chief_activity",
     "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)
     "chief_cases",            # problems Chief diagnosed, forecasts and results (10/5)

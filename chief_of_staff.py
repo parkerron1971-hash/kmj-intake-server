@@ -16160,7 +16160,9 @@ async def chief_chat(
                     _thread_summary.block_for, biz, str(user_session.user.id), req.conversation_id,
                     (req.conversation_history or [])[-MAX_HISTORY:])
                 if _earlier:
-                    chief_truth.record('context:earlier_in_chat', _earlier, kind='context')
+                    # As conversation, the standing its messages had while Chief could see them: the
+                    # answer check never takes it as proof of a fact, a status or a finished action.
+                    chief_truth.record('conversation:earlier_in_chat', _earlier, kind='conversation')
                     growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _earlier).strip() + "\n"
 
             # WHO YOU ARE TALKING WITH (chief_office.card_for): for a church login that isn't the owner's,

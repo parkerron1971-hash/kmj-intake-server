@@ -59,7 +59,7 @@ create index if not exists chief_thread_summaries_updated
   on public.chief_thread_summaries (updated_at);
 
 alter table public.chief_thread_summaries enable row level security;
-revoke all on public.chief_thread_summaries from anon, authenticated;
+revoke all on public.chief_thread_summaries from public, anon, authenticated;
 grant select, insert, update, delete on public.chief_thread_summaries to service_role;
 
 notify pgrst, 'reload schema';
