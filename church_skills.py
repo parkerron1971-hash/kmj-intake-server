@@ -270,6 +270,9 @@ CARRY_TURNS = 2
 CARRY_MINUTES = 30
 CARRY_JOB_MINUTES = 45
 CONTINUE_WORDS = 40
+CLOCK_SKEW_SECONDS = 60     # a saved turn a little "in the future" (another replica's clock), never more
+# A new question ("who is preaching Sunday?") is a new topic, not more of the job (Codex review).
+_NEW_QUESTION = re.compile(r"^\W*(?:who|what|when|where|why|which|how)\b.*\?\s*$", re.I | re.S)
 _NEUTRAL_ACTIONS = frozenset({"navigate", "close_view", "show_view", "set_chat_window", "action_guide"})
 _NEW_TOPIC = re.compile(
     r"^\W*(?:also\b|and also\b|another (?:thing|question)|different (?:thing|question|topic)|new (?:question|topic)|"
@@ -284,16 +287,18 @@ def _text(m: Any) -> Tuple[str, str]:
 
 
 def _same(a: Any, b: Any) -> bool:
-    """Two copies of one message (the history's and the saved turn's), compared on their opening words."""
+    """Two copies of one message (the history's and the saved turn's), compared whole, as the saved turn keeps
+    it (whitespace folded, at most 4,000 characters: chief_of_staff._conversation_row)."""
     def norm(v: Any) -> str:
-        return re.sub(r"\s+", " ", str(v or "")).strip().lower()[:160]
+        return " ".join(str(v or "").split())[:4000].lower()
     return bool(norm(a)) and norm(a) == norm(b)
 
 
 def continues(message: str) -> bool:
     """Whether a message reads as more of the same job: short, no new-topic opening, no job's own words."""
     text = re.sub(r"\s+", " ", message or "").strip()
-    if not text or _NEW_TOPIC.match(text) or len(text.split()) > CONTINUE_WORDS:
+    if (not text or _NEW_TOPIC.match(text) or _NEW_QUESTION.match(text)
+            or len(text.split()) > CONTINUE_WORDS):
         return False
     return not matching(text)
 
@@ -332,16 +337,25 @@ def _saved_turns(business_id: Any, user_id: Any, n: int) -> Optional[List[Dict[s
     import sb_clients
     rows = sb_clients.sb_get_as_service(
         f"/chief_conversations?business_id=eq.{quote(str(business_id), safe='')}"
-        f"&user_id=eq.{quote(str(user_id), safe='')}&select=ended_at,messages,key_topics"
+        f"&user_id=eq.{quote(str(user_id), safe='')}&message_count=eq.2&select=ended_at,messages,key_topics"
         f"&order=ended_at.desc&limit={int(n)}")
     return rows if isinstance(rows, list) else None
 
 
-def _asked(row: Dict[str, Any]) -> str:
-    for m in row.get("messages") or []:
-        if isinstance(m, dict) and m.get("role") == "user":
-            return str(m.get("content") or "")
-    return ""
+def _asked(row: Dict[str, Any]) -> Optional[str]:
+    """The person's message in one saved turn; None when the row isn't one usable turn."""
+    msgs = row.get("messages") if isinstance(row, dict) else None
+    if not isinstance(msgs, list) or not msgs or not isinstance(msgs[0], dict) or msgs[0].get("role") != "user":
+        return None
+    return str(msgs[0].get("content") or "")
+
+
+def _fresh(at: Optional[datetime], now: datetime, minutes: int) -> bool:
+    """Ended under `minutes` ago, and not later than now (beyond a minute of clock skew)."""
+    if at is None:
+        return False
+    age = now - at
+    return -timedelta(seconds=CLOCK_SKEW_SECONDS) <= age < timedelta(minutes=minutes)
 
 
 def carried_block(turn: "Turn", message: str, history: Any, scope: Any, user_id: Any,
@@ -357,16 +371,21 @@ def carried_block(turn: "Turn", message: str, history: Any, scope: Any, user_id:
         if not rows or len(rows) < back:
             return ""
         now = now or datetime.now(timezone.utc)
-        last, job = _ended(rows[0]), _ended(rows[back - 1])
-        if (last is None or job is None or now - last > timedelta(minutes=CARRY_MINUTES)
-                or now - job > timedelta(minutes=CARRY_JOB_MINUTES)):
+        if not (_fresh(_ended(rows[0]), now, CARRY_MINUTES) and _fresh(_ended(rows[back - 1]), now, CARRY_JOB_MINUTES)):
             return ""
-        # The saved turns are this chat's own messages, newest first, in step with the history.
-        if not all(_same(_asked(rows[i]), seen[i]) for i in range(back)):
+        # The saved turns are this chat's own messages, whole, newest first, in step with the history.
+        if not all((_asked(rows[i]) is not None) and _same(_asked(rows[i]), seen[i]) for i in range(back)):
             return ""
-        own = set(skill["actions"]) | _NEUTRAL_ACTIONS
-        if any(set(rows[i].get("key_topics") or []) - own for i in range(back - 1)):
-            return ""                           # a turn since the job's message did other work: a new topic
+        # A turn since the job's message counts only when it did some of the job (one of its own actions) and
+        # nothing else but a screen move; one that did other work, or only talked, or whose list of actions
+        # can't be read, is a new topic (Codex review: "who is preaching Sunday?" ran nothing and passed).
+        own = set(skill["actions"])
+        for i in range(back - 1):
+            kinds = rows[i].get("key_topics")
+            if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+                return ""
+            if not (set(kinds) & own) or set(kinds) - own - _NEUTRAL_ACTIONS:
+                return ""
         print(f"[church skills] {skill['name']} carried ({back} back)", flush=True)
         return (f"CHURCH JOB STEPS, CARRIED from this chat's message {back} turn{'' if back == 1 else 's'} ago "
                 f"(follow them only if this message continues that job; if it is about something else, ignore "

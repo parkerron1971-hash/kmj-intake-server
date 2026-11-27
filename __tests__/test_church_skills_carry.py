@@ -165,9 +165,62 @@ def test_a_turn_between_that_changed_topic_stops_the_carry(rows):
     assert rows["reads"] == 0
 
 
-def test_a_screen_move_between_is_not_a_new_topic(rows):
+def test_a_screen_move_beside_the_jobs_own_work_is_not_a_new_topic(rows):
+    rows["rows"] = saved(("show me what is in it", 1, ["navigate", "giving_counts"]), (JOB, 3, ["giving_counts"]))
+    assert "2 turns ago" in carry("ok, record Maria's 100", hist(JOB, "show me what is in it"))
+
+
+# ─── After the Codex review ───────────────────────────────────────────
+
+def test_a_turn_between_that_only_talked_is_a_new_topic(rows):
+    """Codex: "Who is preaching Sunday?" ran nothing, so its empty list of actions passed as the job's."""
+    rows["rows"] = saved(("is Pastor Ray preaching", 1, []), (JOB, 3, ["giving_counts"]))
+    assert carry("ok", hist(JOB, "is Pastor Ray preaching")) == ""
     rows["rows"] = saved(("open the gifts page", 1, ["navigate"]), (JOB, 3, ["giving_counts"]))
-    assert "2 turns ago" in carry("ok, record Maria's 100", hist(JOB, "open the gifts page"))
+    assert carry("ok", hist(JOB, "open the gifts page")) == "", "a screen move alone is not the job"
+
+
+@pytest.mark.parametrize("message", ["Who is preaching Sunday?", "when is choir practice?", "what's for lunch?"])
+def test_a_new_question_is_a_new_topic(rows, message):
+    rows["rows"] = saved((JOB, 1, []))
+    assert carry(message, hist(JOB)) == "", message
+
+
+@pytest.mark.parametrize("kinds", [None, "giving_counts", [None], [1]])
+def test_a_turn_between_whose_actions_cant_be_read_carries_nothing(rows, kinds):
+    rows["rows"] = saved(("Maria gave 100", 1, []), (JOB, 3, []))
+    rows["rows"][0]["key_topics"] = kinds
+    assert carry("and John 50", hist(JOB, "Maria gave 100")) == ""
+
+
+def test_malformed_saved_turns_carry_nothing(rows):
+    for bad in ({"ended_at": NOW.isoformat()}, {"ended_at": NOW.isoformat(), "messages": "x"},
+                {"ended_at": "not a time", "messages": [{"role": "user", "content": JOB}]},
+                {"ended_at": NOW.isoformat(), "messages": [{"role": "assistant", "content": JOB}]}):
+        rows["rows"] = [bad]
+        assert carry("ok, now record it", hist(JOB)) == "", bad
+
+
+def test_the_whole_message_must_match_not_its_opening(rows):
+    long_job = JOB + " " + "x" * 200
+    rows["rows"] = saved((long_job + " but a different ending", 1, []))
+    assert carry("ok, now record it", hist(long_job)) == ""
+    rows["rows"] = saved((long_job, 1, []))
+    assert "1 turn ago" in carry("ok, now record it", hist(long_job))
+
+
+def test_the_time_bounds_are_strict_and_the_future_is_refused(rows):
+    rows["rows"] = saved((JOB, cs.CARRY_MINUTES, []))
+    assert carry("ok, now record it", hist(JOB)) == "", "exactly 30 minutes is not under 30"
+    rows["rows"] = saved((JOB, -5, []))
+    assert carry("ok, now record it", hist(JOB)) == "", "five minutes in the future"
+    rows["rows"] = saved((JOB, -0.5, []))
+    assert carry("ok, now record it", hist(JOB)), "half a minute of another replica's clock is fine"
+
+
+def test_only_one_turn_rows_are_read():
+    import inspect
+    assert "message_count=eq.2" in inspect.getsource(cs._saved_turns), "the browser's whole-chat rows are left out"
 
 
 # ─── The gates still hold ─────────────────────────────────────────────
