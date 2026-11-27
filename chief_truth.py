@@ -202,6 +202,9 @@ Estimates/hypotheticals need explicit labels and supplied assumptions; check ari
 An action claim asserts an operation was performed or started. A capability statement
 ("I can text an invoice"), conditional offer or clarification question is NOT an
 executed action: classify any capability assertion as fact and check capability sources.
+An offer of work to come ("give me the amounts and I'll record them", "want me to match
+them?") is supported by a capability source that names that action. It does not need the
+records it would act on to be shown ready now: the action checks that when it runs.
 An explicit statement that no action ran is a fact supported by turn execution state.
 What a saved record holds now ("your FAQ has...", "both are in that answer", and "yes" when
 that is what it means) is a fact: cite the record and quote it, even when the owner asked
@@ -268,6 +271,62 @@ CAPABILITY_EVIDENCE = (
     'An identifiable invoice and a contact phone are required for SMS delivery. '
     'Capability does not establish that any action ran or that an account is configured.'
 )
+
+# What Chief can do, for the review (2026-11-27). Kevin, on a held-back offer: "when i said what said it
+# said it could[n't] verify it's answer. that needs to be fixed in general". Chief offered to record the
+# 22nd's gifts once it had them; the review held it back: "Nothing in the supplied sources shows ... that
+# Chief can record offerings". The only capability sources were invoice delivery and Chief's computer, so
+# any offer of any other action had nothing to stand on. Now the actions THIS login may use whose words
+# the draft shares are a capability source, each with what it does (action_registry): an honest offer
+# is supported, and it still proves nothing ran, is set up, or what a record holds.
+CAPABILITY_ACTIONS_MAX = 10
+_CAPABILITY_STOP = frozenset((
+    "the a an and or of to in on for with by from at as is are be it its this that one any all "
+    "your you their them they his her our we i chief what when how who which not no can will "
+    "reads read lists list returns shows writes row rows business businesses owner name names person "
+    "people only never each per via also".split()))
+
+
+def _capability_terms(text):
+    return {_stem(w) for w in _words(text) if len(w) > 2 and w not in _CAPABILITY_STOP}
+
+
+def actions_capability(reply, scope=None, *, handlers=None):
+    """A capability source: the actions this login may use that the draft's words point at, with what each
+    does. '' when none do. `scope` is the login's lane (chief_areas.TURN; None is every action)."""
+    try:
+        import action_registry
+        import chief_areas
+        if handlers is None:
+            import chief_of_staff
+            handlers = chief_of_staff.ACTION_HANDLERS
+        want = _capability_terms(reply)
+        if not want:
+            return ''
+        scored = []
+        for verb in sorted(handlers):
+            cls = action_registry.classification(verb) or {}
+            why = str(cls.get('why') or '').strip()
+            if not why or cls.get('effect') == 'ui':
+                continue
+            hits = want & _capability_terms(verb + ' ' + why)
+            named = want & _capability_terms(verb)
+            # The action's own name shares a word with the draft, or its description shares three.
+            if not (named and len(hits) >= 2) and len(hits) < 3:
+                continue
+            if chief_areas.refusal(verb, {}, scope) is not None:
+                continue
+            scored.append((-(len(hits) + 2 * len(named)), verb, why))
+        scored.sort()
+        lines = [f"- {verb}: {why[:220]}" for _, verb, why in scored[:CAPABILITY_ACTIONS_MAX]]
+        if not lines:
+            return ''
+        return ("Actions Chief can use for the person in this chat, each with what it does. This is a capability: "
+                "it supports 'I can ...' and offers of work to come, never that anything ran, that anything is "
+                "set up, or what a record holds.\n" + "\n".join(lines))
+    except Exception:  # noqa: BLE001 — no capability source is today's review
+        return ''
+
 
 def computer_capability(business_id) -> str:
     """What Chief's computer can do, for the reviewer: a true sentence about
@@ -2957,6 +3016,13 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
     sources['system:invoice_delivery'] = {'kind': 'capability', 'text': CAPABILITY_EVIDENCE, 'complete': True}
     sources['system:chief_computer'] = {'kind': 'capability', 'complete': True,
                                         'text': computer_capability(((ctx or {}).get('business') or {}).get('id'))}
+    try:
+        import chief_areas
+        _can = actions_capability(reply, chief_areas.TURN.get())
+    except Exception:  # noqa: BLE001
+        _can = ''
+    if _can:
+        sources['system:chief_actions'] = {'kind': 'capability', 'complete': True, 'text': _can}
     if not receipts:
         sources['turn:execution'] = {'kind': 'record', 'text': 'No action ran in this request.', 'complete': True}
     logger.info('reply review input: message_chars=%d history_turns=%d sources=%d draft_chars=%d',
