@@ -267,7 +267,10 @@ def _service(bid: str, action: Dict[str, Any]):
         return board, that_day[0]
     said = _plain(action.get("time"))
     at = _time_of(said) if said else None
-    hits = [s for s in that_day if at and (s["time"] == at or (int(at[:2]) < 12 and s["time"] ==
+    # "9" or "9:30" may mean the afternoon too; "9am" and "18:00" mean only what they say (Codex review).
+    either = bool(at) and not re.search(r"[ap]\.?\s*m?\.?\s*$", said.lower()) and int(at[:2]) < 12 and (
+        ":" not in said or int(said.split(":")[0]) < 12)
+    hits = [s for s in that_day if at and (s["time"] == at or (either and s["time"] ==
                                                                 f"{int(at[:2]) + 12:02d}{at[2:]}"))]
     if not hits and said:
         k = _stem(_key(said))
@@ -478,6 +481,24 @@ def _offer(bid: str, user: Any, action: Dict[str, Any]) -> Dict[str, Any]:
             "label": f"Offered {place['name']}, {_short(svc)}"[:80]}
 
 
+def _take_back_unless_yes(bid: str, user: Any, aid: str, name: str) -> None:
+    """The page's take back (sunday_planning.take_back: its _gate, _scheduler and _asked_gate, then the delete),
+    with the delete kept to an ask or an offer still unanswered, so a yes given after Chief looked is never
+    removed (Codex review: the route's own delete doesn't look at the status, and a team's leader may never
+    take back a yes either). A row still there after the delete said yes in between: a 409, nothing removed."""
+    sp = _sp()
+    import sb_clients
+    sp._gate(user)
+    who = sp._scheduler(bid, user)
+    sp._asked_gate(bid, who, sp._assignment(bid, aid))
+    where = f"/serve_assignments?id=eq.{sp._q(aid)}&business_id=eq.{sp._q(bid)}"
+    if not sb_clients.sb_delete_as_service(where + "&status=in.(asked,offered)"):
+        raise HTTPException(503, "That didn't save. Try again.")
+    if sp._read(where + "&select=status&limit=1"):
+        raise HTTPException(409, f"{name or 'They'} just said yes. Talk with them first; taking someone off a Sunday "
+                                 f"they agreed to is done on Who serves when")
+
+
 def _fill_asks(bid: str) -> List[str]:
     """The asks a fill made that haven't gone out yet and nobody answered (the unfill route keeps only those
     on the teams this login schedules)."""
@@ -517,7 +538,7 @@ def _take_back(bid: str, user: Any, action: Dict[str, Any]) -> Dict[str, Any]:
     if row.get("status") == "yes":
         raise HTTPException(409, f"{who or 'They'} already said yes. Talk with them first; taking someone off a "
                                  f"Sunday they agreed to is done on Who serves when")
-    sp.take_back(str(row["id"]), bid, user)
+    _take_back_unless_yes(bid, user, str(row["id"]), who)
     what = f"the ask to {who}" if row.get("status") == "asked" else "the offer to the team"
     sent = " It had already gone out, so they may have seen it." if row.get("notified_at") else ""
     return {"result": f"Took back {what} for {place['name']} ({team['name']}), {_when(svc)}. The spot is open again.{sent}",

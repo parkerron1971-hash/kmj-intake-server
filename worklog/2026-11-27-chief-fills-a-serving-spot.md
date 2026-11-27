@@ -18,6 +18,7 @@ decisions:
   - "Lanes: the verbs are every office login's in chief_areas (as serving_week and event_volunteers), because who schedules a team is a duty (serve_schedule, production_schedule) that can sit in any lane; the page refuses a login that schedules nothing, before any team's name is said"
   - "Skill church_skills/fill-a-serving-spot.md (needs serving_spots = the switch open for the church): look, suggest from the list only, get their yes to that name and spot, ask, hand back 'asked, waiting'"
   - "Free log check of the three giving skills (Railway web logs since they went live 11-26, read-only, no message text): 6 Chief turns at Love City; the first ('work on the offering', 00:01 UTC 11-27) loaded sunday-giving-count; its follow-up did not (no trigger words); no action_guide lookups; the 4 turns after #2093 loaded none"
+  - "Codex cross-review (gpt-6-luna, read-only, before the PR) found 2 medium, 0 high, both fixed with tests: '9am' could match a 9pm service on a day with two (now only a bare hour may mean the afternoon, and a bare hour that fits both asks which); and a yes given between Chief's look and the take-back could be deleted, because the route's own delete doesn't look at the status (now the page's own gates, then a delete kept to an ask or offer still unanswered; a row left means they just said yes: a 409)"
 related: [2026-11-26-church-skills.md, 2026-11-27-answer-check-knows-what-chief-can-do.md]
 ---
 Read both repos' work logs first; nothing open touches the serving page or the church skills.

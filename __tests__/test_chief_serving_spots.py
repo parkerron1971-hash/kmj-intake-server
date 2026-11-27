@@ -308,3 +308,34 @@ def test_the_read_is_a_mid_turn_lookup_and_the_writes_are_tags():
     reads = {t["name"] for t in chief_tool_loop.read_tool_definitions()}
     writes = {t["name"] for t in chief_tool_loop.write_tool_definitions()}
     assert "serving_spot" in reads and not (css.WRITES & (reads | writes))
+
+
+# ─── After the Codex cross-review ─────────────────────────────────────
+
+def test_9am_never_means_a_9pm_service(church):
+    db = church["db"]
+    first = next(s for s in db.t["worship_services"] if s["starts_at"].startswith(SUN))
+    first["starts_at"] = first["starts_at"][:11] + "14:00:00+00:00"            # 9:00am in Chicago
+    db.t["worship_services"].append({**first, "id": "55555555-5555-4555-8555-555555555555",
+                                     "starts_at": SUN + "T23:00:00+00:00", "title": "Night"})    # 6:00pm
+    db.t["worship_services"].append({**first, "id": "66666666-6666-4666-8666-666666666666",
+                                     "starts_at": "2026-10-26T02:00:00+00:00", "title": "Late"})  # 9:00pm, the 25th
+    assert "at 9:00am" in run("serving_spot", day=SUN, time="9am", place="Sound")["result"]
+    assert "at 9:00pm" in run("serving_spot", day=SUN, time="9pm", place="Sound")["result"]
+    assert "at 9:00pm" not in run("serving_spot", day=SUN, time="9am", place="Sound")["result"]
+    assert "at 6:00pm" in run("serving_spot", day=SUN, time="6", place="Sound")["result"], "a bare 6 may mean 6pm"
+    out = run("serving_spot", day=SUN, time="9", place="Sound")
+    assert out["failed"] and "say which time" in out["result"], "a bare 9 is both: asked, never guessed"
+
+
+def test_a_yes_given_after_chief_looked_is_never_taken_back(church, monkeypatch):
+    run("ask_to_serve", day=SUN, place="Sound", person="Kendra")
+    real = sp._asked_gate
+
+    def they_say_yes_now(biz, who, row):
+        real(biz, who, row)
+        rows(church)[0]["status"] = "yes"          # the volunteer answers between Chief's look and the delete
+    monkeypatch.setattr(sp, "_asked_gate", they_say_yes_now)
+    out = run("take_back_serving_ask", day=SUN, place="Sound", person="Kendra")
+    assert out["failed"] and "just said yes" in out["result"] and "Nothing changed." in out["result"]
+    assert [r["status"] for r in rows(church)] == ["yes"]
