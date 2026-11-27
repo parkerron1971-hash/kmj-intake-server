@@ -273,3 +273,26 @@ def test_a_new_bill_for_a_contractor_is_linked_and_1099_and_can_be_unlinked(fake
     # A bill without one is as before.
     plain = br.create_bill(br.BillBody(business_id="biz1", vendor_name="Office Depot", amount=30), user=_U())["bill"]
     assert "contractor_id" not in plain and plain["is_1099_eligible"] is False
+
+
+def test_a_stripe_paid_contractor_takes_no_typed_in_bills(fake):
+    """Account-2 review S3: the 1099 summary marks a contractor with a Stripe
+    account as Stripe's whole, and Stripe's 1099 counts only Stripe transfers,
+    so a check-paid bill linked to them would be on no 1099. Refused, plainly."""
+    from fastapi import HTTPException
+    import bills_router as br
+    jane = "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d"
+    fake.rows("contractors").append({"id": jane, "business_id": "biz1", "name": "Jane Dev", "email": None,
+                                     "stripe_account_id": "acct_jane2", "onboarding_status": "active",
+                                     "is_1099_eligible": True, "default_category": "operating"})
+    _bill(fake, "Jane Dev", 500.0)
+    with pytest.raises(HTTPException) as e:
+        cr.link_bills(jane, cr.LinkBillsBody(business_id="biz1", vendor_name="Jane Dev"), user=_U())
+    assert e.value.status_code == 409 and "paid through Stripe" in e.value.detail
+    assert all(b.get("contractor_id") is None for b in fake.rows("bills"))
+    with pytest.raises(HTTPException) as e:
+        br._contractor_of("biz1", jane)
+    assert e.value.status_code == 409 and "stays typed in under their name" in e.value.detail
+    # The typed-in bill still reaches the report as a manual row.
+    row = {r["name"]: r for r in _summary_1099("biz1", 2026)["rows"]}["Jane Dev"]
+    assert row["contractor_id"] is None and row["stripe_managed"] is False

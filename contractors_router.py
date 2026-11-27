@@ -374,6 +374,16 @@ async def pay(contractor_id: str, body: PayBody, request: Request,
             "amount": round(body.amount, 2)}
 
 
+def stripe_paid_words(name: Any) -> str:
+    """Why a Stripe-paid contractor's bills can't take another payment
+    (account-2 review S3): the 1099 summary marks the whole person as
+    Stripe's, Stripe's 1099 counts only Stripe transfers, so a check or bank
+    payment linked to them would be on no 1099 at all."""
+    who = str(name or "This contractor").strip() or "This contractor"
+    return (f"{who} is paid through Stripe, and Stripe's 1099 only counts what went through Stripe. A payment "
+            f"made another way stays typed in under their name, so the 1099 report keeps it for a 1099 you file.")
+
+
 class LinkBillsBody(BaseModel):
     business_id: str
     vendor_name: str
@@ -393,6 +403,8 @@ def link_bills(contractor_id: str, body: LinkBillsBody,
     c = _owner_for_contractor(contractor_id, user, min_role="manager")
     if str(c["business_id"]) != str(body.business_id):
         raise HTTPException(403, "contractor belongs to a different business")
+    if c.get("stripe_account_id"):
+        raise HTTPException(409, stripe_paid_words(c.get("name")))
     name = (body.vendor_name or "").strip().lower()
     if not name:
         raise HTTPException(400, "vendor_name is required")

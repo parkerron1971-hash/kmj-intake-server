@@ -41,13 +41,20 @@ def _contractor_of(business_id: str, contractor_id: Optional[str]) -> Optional[D
         raise HTTPException(400, "That contractor id isn't valid.")
     try:
         rows = sb_clients.sb_get_as_service(
-            f"/contractors?id=eq.{cid}&business_id=eq.{business_id}&select=id,name,is_1099_eligible&limit=1")
+            f"/contractors?id=eq.{cid}&business_id=eq.{business_id}"
+            f"&select=id,name,is_1099_eligible,stripe_account_id&limit=1")
     except Exception:
         raise HTTPException(503, "The contractors couldn't be read just now. Try again shortly.")
     if not isinstance(rows, list):
         raise HTTPException(503, "The contractors couldn't be read just now. Try again shortly.")
     if not rows:
         raise HTTPException(400, "That contractor isn't one of this business's.")
+    if rows[0].get("stripe_account_id"):
+        # A bill typed in here wasn't a Stripe transfer (those make their own
+        # bills), so linking it to a Stripe-paid contractor would leave it off
+        # every 1099 (account-2 review S3).
+        import contractors_router
+        raise HTTPException(409, contractors_router.stripe_paid_words(rows[0].get("name")))
     return rows[0]
 
 

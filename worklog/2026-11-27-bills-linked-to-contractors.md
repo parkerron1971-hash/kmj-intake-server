@@ -12,6 +12,7 @@ left_undone:
 decisions:
   - "bills.contractor_id existed (2026-06-09) but only a Stripe payout ever set it, so a church that paid its guest speaker by check and entered a 1099 bill got a 'Manual 1099 needed' row that could never get a W-9 or a draft (the review's C2). POST and PATCH /bills now take contractor_id: checked to be this business's contractor (400 otherwise, 503 when the read fails, never a silent unlink); naming one makes the bill 1099-eligible; '' on PATCH unlinks. A recurring bill's copies carry it."
   - "POST /contractors/{id}/link-bills {business_id, vendor_name}: links every 1099-eligible bill of the business with no contractor whose vendor name is the same, ignoring case and spaces at the ends, read in full (strict: a partial read links nothing). Manager and up, through the contractor's own access (the church wall first). Amounts, dates and the books don't change. Twice is harmless."
+  - "Review S3 (account 2): a contractor with a Stripe account (Stripe files their 1099, counting only Stripe transfers) can't be linked to a typed-in bill, by the bill picker or link-bills: 409 with a plain sentence. Such a payment stays typed in under their name, so the 1099 report keeps it as a manual row. Splitting a contractor's non-Stripe bills into their own row is the long-term fix, not done here."
 related: [2026-10-31-lock-contractor-payouts.md]
 ---
 `bills_router.py` (`_contractor_of`, contractor_id on create, patch and
