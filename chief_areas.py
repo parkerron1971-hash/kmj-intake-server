@@ -140,7 +140,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
-        "log_activity", "draft_nurture", "draft_shepherd_moves")},
+        "log_activity", "draft_nurture", "draft_shepherd_moves",
+        # Needs a look (chief_inbound): a held card's verdict; the handler keeps it to a Manager seat and up.
+        "mark_real_person", "mark_not_a_guest", "undo_inbound_decision")},
     "contact_deep_dive": PEOPLE + ("kids_youth", "groups_classes"),
     "church_people": PEOPLE + ("kids_youth", "groups_classes", "office"),
     # The drafts waiting for a yes, the inbox, and bulk mail.

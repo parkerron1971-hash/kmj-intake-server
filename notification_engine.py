@@ -322,16 +322,46 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
         # queue as a screen to remember.
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&channel=eq.action&select=id,subject,expires_at&order=created_at.asc&limit=10"),
     )
-    return {
+    held, held_line = await _needs_a_look(biz_id)
+    out = {
         # The onboarding welcome note is not a draft waiting on anyone.
         "pending": _welcome.without_welcome(pending) or [],
         "needs_your_hand": needs_hand or [],
         "sessions_today": sessions or [],
         "at_risk": at_risk or [],
         "urgent": urgent or [],
-        "new_leads_24h": new_leads or [],
-        "hot_leads": hot_leads or [],
+        # A card waiting for a look is not a new lead or guest to greet
+        # (inbound_hold): the brief says only how many wait.
+        "new_leads_24h": _inbound_hold().without_held(new_leads, held) if held else (new_leads or []),
+        "hot_leads": _inbound_hold().without_held(hot_leads, held) if held else (hot_leads or []),
     }
+    if held_line:
+        out["needs_a_look"] = held_line
+    return out
+
+
+def _inbound_hold():
+    import inbound_hold
+    return inbound_hold
+
+
+async def _needs_a_look(biz_id: str):
+    """(the ids of people whose cards wait for a look, the brief's one line).
+    Nothing while the switch is off; a read that fails leaves the lists as
+    they were."""
+    try:
+        import inbound_risk
+        if inbound_risk.mode() == "off":
+            return set(), ""
+        held = await asyncio.to_thread(_inbound_hold().held_ids, biz_id)
+        if not held:
+            return set(), ""
+        n = len(held)
+        return held, (f"{n} card{'s' if n != 1 else ''} need{'s' if n == 1 else ''} a look in Members before "
+                      "anything runs. Not guests or leads yet: never name them, welcome them or suggest "
+                      "reaching out; say only how many wait.")
+    except Exception:  # noqa: BLE001
+        return set(), ""
 
 
 async def _gather_midday_data(client, biz_id: str) -> Dict:
@@ -363,10 +393,11 @@ async def _gather_evening_data(client, biz_id: str) -> Dict:
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{_z(datetime.now(timezone.utc))}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
     )
+    held, _line = await _needs_a_look(biz_id)
     return {
         "approved_today": approved or [],
         "completed_sessions": completed or [],
-        "new_contacts": new_contacts or [],
+        "new_contacts": _inbound_hold().without_held(new_contacts, held) if held else (new_contacts or []),
         "pending_carryover": _welcome.without_welcome(pending) or [],
         "tomorrow_sessions": upcoming or [],
     }

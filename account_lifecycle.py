@@ -98,6 +98,9 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "inbound_checks": "Needs a look (inbound_hold.py): one row a checked website card, its verdict, reasons and salted hashes (no words); the card itself is exported with its contact and event. Hashes salted with this server's secret mean nothing elsewhere; the rows go with the business (cascade)",
+    "inbound_decisions": "Needs a look: each Real person / Not a guest / Scam tap and what it changed, for a week's undo; the outcome is on the contact (status, metadata.inbound_decision), which is exported. The rows go with the business (cascade)",
+    "inbound_senders": "Needs a look: a church's memory of a sender as salted hashes (real or scam), meaningful only under this server's secret; restored, a church starts its sender memory again. The rows go with the business (cascade)",
     "chief_thread_summaries": "a long chat's running summary (chief_thread_summary.py): one row a chat, keyed by a sign-in user id and the app's own id for a chat on one device, neither of which means anything in another business; a restored business's chats start again, and the rows go with the business (cascade)",
     "sample_church_questions": "the questions a person asked Chief about the made-up sample church before starting their own (sample_church.py): about Grace Street Fellowship, not their church, and counted per person so a restore must not hand back the ten; keyed by user_id, deleted with the person (USER_CHILD_TABLES), its business links set null when a business goes",
     "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",

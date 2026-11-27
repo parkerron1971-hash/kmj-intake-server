@@ -131,10 +131,13 @@ def store_once(table: str, row: Dict[str, Any]):
     raise RuntimeError(f"{table} write did not confirm storage")
 
 
-def save_prayer(business_id: str, data: Dict[str, Any], receipt: str):
+def save_prayer(business_id: str, data: Dict[str, Any], receipt: str, flag: Any = None):
     """A website prayer request. It reaches the prayer team only when the
     visitor chose "Our prayer team may pray over this with you" (fields.share
-    = "team"); asking to be followed up is asking for a call."""
+    = "team"); asking to be followed up is asking for a call.
+    `flag` (inbound_hold.prayer_flag): the request scored as possibly not
+    genuine. It is delivered exactly as always, carrying the mark
+    (submission.needs_a_look) for whoever reads it; prayer is never held."""
     import church_prayer
     said = str(data["fields"].get("share") or "").strip().lower()
     shared = said == "team" or ("prayer team" in said and "pastors only" not in said)
@@ -145,6 +148,8 @@ def save_prayer(business_id: str, data: Dict[str, Any], receipt: str):
         "follow_up": data["fields"].get("follow_up", False),
         "confidential": "no" if shared else "yes", "source": "website prayer request",
     }
+    if flag:
+        submission["needs_a_look"] = flag
     row = store_once("ministry_care_requests", {
         "id": receipt, "business_id": business_id, "form_id": None, "status": "new", "submission": submission,
         **church_prayer.consent_columns(submission, share=shared,

@@ -382,7 +382,7 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
                     "first_name:metadata->>first_name,last_name:metadata->>last_name,"
                     "imported_at:metadata->>imported_at,imported_from:metadata->>imported_from,"
                     "merged_into:metadata->>merged_into,member_confirmed:metadata->member_confirmed,"
-                    "not_same:metadata->not_same")
+                    "not_same:metadata->not_same,needs_look:metadata->inbound_hold")
     people: Dict[str, Dict[str, Any]] = {}
     for c in contacts:
         cid = str(c.get("id") or "")
@@ -578,6 +578,10 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
             "baptism_on": baptism_on[cid].isoformat() if cid in baptism_on else "",
             "phone": _plain(c.get("phone")),
             "email": _plain(c.get("email")),
+            # Their card is waiting for a look (inbound_hold): the badge, and why.
+            "needs_look": isinstance(c.get("needs_look"), dict),
+            "needs_look_reasons": [str(w) for w in ((c.get("needs_look") or {}).get("reasons") or [])][:4]
+            if isinstance(c.get("needs_look"), dict) else [],
             "_born": born, "_bday_this_week": in_week, "_age": age,
             "_not_same": [str(x) for x in not_same] if isinstance(not_same, list) else [],
         })
