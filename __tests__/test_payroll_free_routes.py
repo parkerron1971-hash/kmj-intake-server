@@ -79,8 +79,8 @@ def test_who_may_read_the_calendar(db):
     assert cal(OWNER)[0] == 200 and cal(ADMIN)[0] == 200
     for u in (MANAGER, MEMBER, VIEWER, STRANGER, OTHER_OWNER):
         assert cal(u) == (403, gate.GIVING_403), u
-    # The accountant passes the wall but holds no seat: as today, payroll's ladder refuses.
-    assert cal(ACCOUNTANT)[0] == 403
+    # The accountant passes the wall and reads, though they hold no seat (M-6).
+    assert cal(ACCOUNTANT)[0] == 200
     # A business that isn't a church keeps its own ladder: any seat reads.
     assert cal(SHOP_VIEWER, SHOP)[0] == 200 and cal(SHOP_OWNER, SHOP)[0] == 200
     out = pr.payroll_calendar_month(CHURCH, "2026-12", user=user(OWNER))
@@ -326,10 +326,9 @@ def test_money_is_never_nan_or_infinite(db):
 
 
 def test_the_pay_records_refusal_names_only_who_can_open_payroll():
-    # The accountant holds no seat, and payroll's own ladder refuses a login with none.
-    assert "accountant" not in gate.PAY_RECORDS_403
-    assert gate.PAY_RECORDS_403 == ("Pay and tax records are kept for the owner, an admin, or a login the owner gave "
-                                    "giving at Work.")
+    # The accountant reads payroll since M-6 (writes stay refused), so the refusal names them.
+    assert gate.PAY_RECORDS_403 == ("Pay and tax records are kept for the owner, an admin, the accountant (to read), "
+                                    "or a login the owner gave giving at Work.")
 
 
 # ─── Deposits marked sent ─────────────────────────────────────────────
@@ -464,7 +463,7 @@ def test_with_the_switch_off_nobody_gains_or_loses_payroll(db, monkeypatch):
     ticks(monkeypatch, {MANAGER: tick("lead"), MEMBER: tick("work", "member"), VIEWER: tick("see", "viewer")},
           mode="off")
     assert answers() == before
-    assert {u for u, a in before.items() if a[0] == 200} == {OWNER, ADMIN}
+    assert {u for u, a in before.items() if a[0] == 200} == {OWNER, ADMIN, ACCOUNTANT}   # the accountant reads (M-6)
 
 
 # ─── Around the doors ─────────────────────────────────────────────────
@@ -541,3 +540,56 @@ def test_payroll_reads_never_select_the_ssn_or_tin_ciphertext():
             assert "ssn_encrypted" not in m.group(0) and "select=*" not in m.group(0), mod
         code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
         assert "tin_encrypted" not in code and "decrypt" not in code, mod
+
+
+# ─── The church's accountant reads payroll, and changes nothing (M-6) ──
+
+def test_the_accountant_reads_every_payroll_page_and_downloads(db):
+    paid = run(db, "2026-11-30", "paid", lines=standard_lines())
+    item = next(i for i in db.rows("pay_run_items") if i["pay_run_id"] == paid["id"])
+    acct = user(ACCOUNTANT)
+    for fn, args in ((pr.summary, (CHURCH,)), (pr.list_employees, (CHURCH,)), (pr.list_runs, (CHURCH,)),
+                     (pr.get_run, (paid["id"],)), (pr.run_stubs, (paid["id"],)),
+                     (pr.item_stub, (paid["id"], item["id"])), (pr.item_stub_pdf, (paid["id"], item["id"])),
+                     (pr.forms_year, (CHURCH, 2026)), (pr.forms_year_csv, (CHURCH, 2026))):
+        assert status(fn, *args, user=acct)[0] == 200, fn.__name__
+    assert status(pr.payroll_calendar_month, CHURCH, "2026-12", user=acct)[0] == 200
+    assert status(pr.forms_quarter, CHURCH, q=4, year=2026, user=acct)[0] == 200
+
+
+def test_the_accountant_is_refused_every_payroll_write(db):
+    draft = run(db, "2026-12-15", "draft", lines=standard_lines())
+    approved = run(db, "2026-11-30", "approved", lines=standard_lines())
+    item = next(i for i in db.rows("pay_run_items") if i["pay_run_id"] == draft["id"])
+    acct = user(ACCOUNTANT)
+    writes = [
+        (pr.create_employee, (pr.EmployeeBody(business_id=CHURCH, first_name="Jo", last_name="Tran"),)),
+        (pr.update_employee, (STAFF, pr.EmployeePatch(first_name="Dana"))),
+        (pr.get_tax_profile, (STAFF,)),                                    # the W-4 stays the owner's
+        (pr.record_consent, (STAFF,)),
+        (pr.create_run, (pr.RunBody(business_id=CHURCH, period_start="2026-12-01", period_end="2026-12-14",
+                                    pay_date="2026-12-15"),)),
+        (pr.update_item, (draft["id"], item["id"], pr.ItemPatch(hours=10))),
+        (pr.approve_run, (draft["id"],)),
+        (pr.cancel_run, (draft["id"],)),
+        (pr.mark_paid, (approved["id"],)),
+        (pr.send_run_stubs, (approved["id"],)),
+        (pr.put_payroll_settings, (pr.PayrollSettingsBody(business_id=CHURCH, deposit_schedule="semiweekly"),)),
+    ]
+    for fn, args in writes:
+        assert status(fn, *args, user=acct)[0] == 403, fn.__name__
+    assert status(_mark, ACCOUNTANT)[0] == 403
+    assert next(r for r in db.rows("pay_runs") if r["id"] == draft["id"])["status"] == "draft"
+    assert db.rows("payroll_deposits") == []
+
+
+def test_the_accountant_reads_contractors_and_changes_none(db):
+    import contractors_router as cr
+    acct = user(ACCOUNTANT)
+    assert status(cr.list_contractors, CHURCH, user=acct)[0] == 200
+    assert status(cr.list_transfers, CHURCH, user=acct)[0] == 200
+    assert status(cr.create_contractor, cr.ContractorBody(business_id=CHURCH, name="Guest Speaker"),
+                  user=acct)[0] == 403
+    assert db.rows("contractors") == []
+    # Outside a church the wall isn't asked and nothing changes: a stranger still gets nothing.
+    assert status(cr.list_contractors, CHURCH, user=user(STRANGER))[0] == 403

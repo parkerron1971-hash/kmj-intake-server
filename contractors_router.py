@@ -79,8 +79,13 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     # must hold Work to READ them as well as to change them (Kevin,
     # 2026-11-19; church_money_gate.require_pay_records).
     import church_money_gate
-    church_money_gate.require_pay_records(biz, user, row)
+    passed = church_money_gate.require_pay_records(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
+        return row
+    # The church's accountant reads contractors (M-6, 2026-11-27), as payroll:
+    # the wall lets them in, the seat ladder refused them for want of a seat.
+    # Reads only; every write asks manager or admin and still meets the ladder.
+    if min_role == "viewer" and passed.by == church_money_gate.ACCOUNTANT:
         return row
     from business_users_router import require_role
     require_role(biz, str(user.id), min_role)

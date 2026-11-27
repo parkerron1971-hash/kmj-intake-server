@@ -473,7 +473,8 @@ def require_church_wall(business_id: Any, user: Any, need: str = "see", part: st
 # The accountant isn't named: payroll's own seat ladder (payroll_router,
 # contractors_router) refuses a login with no seat, and the accountant holds
 # none, so naming them would promise a door that doesn't open.
-PAY_RECORDS_403 = "Pay and tax records are kept for the owner, an admin, or a login the owner gave giving at Work."
+PAY_RECORDS_403 = ("Pay and tax records are kept for the owner, an admin, the accountant (to read), or a login the "
+                   "owner gave giving at Work.")
 
 
 def require_pay_records(business_id: Any, user: Any, business: Optional[Dict[str, Any]] = None) -> Pass:
