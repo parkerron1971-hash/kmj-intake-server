@@ -9,15 +9,19 @@ production (LLC-consolidation ruling: the platform account is the money
 home). The multi-practitioner funding model (destination charges / account
 debits) is a surfaced fork for a future ruling.
 
-LOCKED to the platform owner's own businesses (Kevin, 2026-10-31). Because
-the money comes out of the platform's balance, a church paying its sound
-tech $300 here would pay with Solutionist's money, and Solutionist would be
-the payer on the 1099. Until the business doing the paying is the one
-charged, only the platform owner's businesses may open a payout account or
-send a payment (`_platform_money`); everyone else keeps the contractor
-records and the 1099 summary, and pays from their own bank. The check runs
-twice: in each route, before anything is recorded, and again in
-`_stripe_post` just before Stripe is called. A read that fails is a no.
+LOCKED to an explicit list of businesses (M-6, Kevin 2026-11-27; first
+locked 2026-10-31 to "the platform owner's businesses", which turned out to
+mean every business that owner runs, his church included). Because the money
+comes out of the platform's balance, a church paying its sound tech $300
+here would pay with Solutionist's money, and Solutionist would be the payer
+on the 1099. Only a business named in CONTRACTOR_PAYOUT_BUSINESS_IDS, and
+never a church or nonprofit, may open a payout account or send a payment
+(`_platform_money`); everyone else keeps the contractor records and the 1099
+summary, and pays from their own bank. GET /contractors says which rails
+this business may use (`payouts`), so the app offers no button that would
+only be refused. The check runs twice: in each route, before anything is
+recorded, and again in `_stripe_post` just before Stripe is called. A read
+that fails is a no.
 
 Every paid transfer auto-creates a PAID AP bill (is_1099_eligible=true,
 contractor linked, paid_via='stripe_transfer'), so the GL books
@@ -108,14 +112,72 @@ def _owner_for_contractor(contractor_id: str, user: AuthedUser,
 
 PLATFORM_MONEY_ONLY = ("Paying contractors through Solutionist isn't available for your business yet. "
                        "Pay them from your own bank and record it as a bill; the 1099 summary still counts it.")
+PLATFORM_MONEY_UNREAD = ("Solutionist couldn't confirm this business just now, so no payout was started. "
+                         "Nothing was sent. Try again shortly.")
+
+# The businesses whose contractors may be paid from the PLATFORM's Stripe
+# balance: an explicit list of businesses.id values, comma or space
+# separated. Unset or empty: nobody.
+PAYOUT_IDS_ENV = "CONTRACTOR_PAYOUT_BUSINESS_IDS"
+
+
+def _canon(business_id: Any) -> str:
+    s = str(business_id or "").strip().lower()
+    try:
+        from uuid import UUID
+        return str(UUID(s))
+    except ValueError:
+        return s
+
+
+def payout_business_ids() -> set:
+    raw = os.environ.get(PAYOUT_IDS_ENV) or ""
+    return {_canon(p) for p in raw.replace(",", " ").split() if p.strip()}
+
+
+def _payout_verdict(biz: Any) -> Optional[str]:
+    """None when this business may spend the platform balance on a payout,
+    else the refusal's words. Both must hold:
+      1. it is named in CONTRACTOR_PAYOUT_BUSINESS_IDS;
+      2. it is not a church or nonprofit, ever, even if named (a church's
+         money is its own; paying its contractor from Solutionist's balance
+         makes Solutionist the payer).
+    A read of the business that fails is a no (PLATFORM_MONEY_UNREAD)."""
+    bid = _canon(biz)
+    if not bid or bid not in payout_business_ids():
+        return PLATFORM_MONEY_ONLY
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{bid}&select=id,type&limit=1")
+    except Exception:
+        logger.warning("[f1] payout check: business %s unreadable", bid[:8], exc_info=True)
+        return PLATFORM_MONEY_UNREAD
+    if not isinstance(rows, list) or not rows:
+        return PLATFORM_MONEY_UNREAD
+    import vertical_family
+    import vertical_registry
+    kind = rows[0].get("type")
+    # "Never a church" means what it means everywhere else: vertical_family's
+    # nonprofit list, and anything the registry resolves to a ministry or a
+    # nonprofit (the alias `pastor` is a church but isn't on that list).
+    if vertical_family.is_nonprofit_like(kind) or vertical_registry.resolve(kind or "") in ("ministry", "nonprofit"):
+        return PLATFORM_MONEY_ONLY
+    return None
+
+
+def payouts_open(biz: Any) -> bool:
+    """Whether this business's Contractors page may offer Stripe payouts."""
+    return _payout_verdict(biz) is None
 
 
 def _platform_money(biz: Any) -> None:
-    """Payouts spend the platform's own Stripe balance, so only the platform
-    owner's businesses may open a payout account or send one."""
-    import member_asks
-    if not member_asks.platform_church(biz):
-        raise HTTPException(403, PLATFORM_MONEY_ONLY)
+    """Payouts spend the platform's own Stripe balance: refuse unless
+    _payout_verdict says yes (403), or 503 when the business couldn't be read."""
+    why = _payout_verdict(biz)
+    if why == PLATFORM_MONEY_UNREAD:
+        raise HTTPException(503, why)
+    if why:
+        raise HTTPException(403, why)
 
 
 async def _stripe_post(path: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -151,7 +213,11 @@ def list_contractors(biz: str, user: AuthedUser = Depends(require_user)) -> Dict
     _owner(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/contractors?business_id=eq.{biz}&order=created_at.desc&select=*&limit=500") or []
-    return {"ok": True, "contractors": rows}
+    # How this business may send money to a contractor THROUGH Solutionist.
+    # The app shows a rail's buttons only when it is true here; otherwise the
+    # page is records, paid from the business's own bank. Another rail (a
+    # Moov payout from the business's own account, M-6 step 3) adds its key.
+    return {"ok": True, "contractors": rows, "payouts": {"stripe": payouts_open(biz)}}
 
 
 class ContractorBody(BaseModel):
