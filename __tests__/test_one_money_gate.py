@@ -329,6 +329,9 @@ def test_every_part_has_its_rows_and_each_admits_exactly_who_it_did():
         ("my_week", "see"): top, ("my_week", "work"): top,
         ("count_reopen", "work"): top,
         ("setup", "see"): (("owner",), None, None), ("setup", "work"): (("owner",), None, None),
+        # Sending with Moov (2026-11-27): seeing payouts is the giving rule's people; sending is the
+        # owner's or an Admin's.
+        ("send", "see"): finance, ("send", "work"): top,
     }
     # The legacy area row opens the treasurer's desk and nothing else.
     assert {p for (p, _), r in gate.RULES.items() if gate.MONEY_AREA in r.who + (r.elsewhere or ())} == {"checks", "help"}
@@ -696,6 +699,7 @@ def test_my_week_keeps_giving_off_the_list_for_everyone_but_the_owner_and_admins
 
 # Every module that holds a door onto a church's money.
 MONEY_MODULES = (
+    "moov_payouts", "moov_client",
     "giving_records", "giving_router", "giving_services", "giving_sheets", "giving_week", "giving_ways",
     "giving_deposits", "giving_statements", "giving_statement_mail", "giving_reports", "church_pledges",
     "church_recurring_gifts", "chief_giving_actions", "chief_giving_counts", "church_checks", "church_money_levels",
