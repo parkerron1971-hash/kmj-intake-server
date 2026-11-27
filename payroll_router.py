@@ -123,6 +123,14 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer", tick_work: boo
     passed = church_money_gate.require_pay_records(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
+    # The church's accountant reads payroll (M-6, 2026-11-27): the wall above
+    # already lets them in for pay records (Kevin's 2026-11-19 ruling), but an
+    # accountant collaborator holds no seat, so the ladder below refused every
+    # read. Reads only: every write asks manager, admin or owner and still
+    # meets the ladder. They see what a viewer sees, Social Security numbers'
+    # last four included; the W-4 itself (tax-profile) stays the owner's.
+    if min_role == "viewer" and passed.by == church_money_gate.ACCOUNTANT:
+        return row
     if min_role == "owner":
         raise HTTPException(403, "owner only")
     if tick_work and passed.by in church_money_gate.TICKS:
