@@ -520,6 +520,23 @@ def _header(msg: Dict[str, Any], name: str) -> str:
     return ""
 
 
+# A DMARC aggregate report (M-5, 2026-11-27): the daily XML Google, Microsoft
+# and Yahoo send a domain about who sent mail as it. At Love City 20 of 25
+# church mails in two weeks were these, each copied to the pastor's inbox.
+# Both must match: a DMARC sender and a report's subject. Anything else that
+# looks like one is ordinary mail.
+_DMARC_SUBJECT = re.compile(r"^\s*(?:\[[^\]]*\]\s*)?report[\s_-]*domain:\s*\S+.*\bsubmitter:\s*\S+", re.I)
+
+
+def dmarc_report(msg: Dict[str, Any], from_email: str = "") -> Optional[str]:
+    """Why this is kept and not copied when it's a DMARC report, else None."""
+    sender = (from_email or (_addresses(msg.get("from")) or [""])[0] or "").lower()
+    subject = str(msg.get("subject") or _header(msg, "subject") or "")
+    if "dmarc" in sender and _DMARC_SUBJECT.search(subject):
+        return "a DMARC report about the church's domain: kept here, not copied"
+    return None
+
+
 def held_because(msg: Dict[str, Any]) -> Optional[str]:
     """Why a message is kept but never copied, or None to copy it."""
     if _header(msg, COPY_HEADER):
@@ -872,6 +889,11 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
     if held:
         await asyncio.to_thread(_settle, row, "held", held, [])
         return {"address": address, "outcome": "held", "why": held}
+    report = dmarc_report(msg, from_email)
+    if report:
+        # Kept in the box, never copied out and never alerted (no alert_at).
+        await asyncio.to_thread(_settle, row, "stored", report, [])
+        return {"address": address, "outcome": "stored", "why": report}
     where = await asyncio.to_thread(reach, church, box)
     if where["prayer"]:
         got = await asyncio.to_thread(to_prayer_list, church, address, email_id, msg, from_email, from_name)

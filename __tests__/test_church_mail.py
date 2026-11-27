@@ -755,3 +755,37 @@ def test_a_login_joins_even_when_its_address_cant_be_made(db, monkeypatch):
                                                                                          email="sam@example.com"))
     assert out["ok"] and out["church_email"] is None
     assert next(s for s in db.t["business_users"] if s.get("token") == "tok-2")["status"] == "active"
+
+
+# ─── DMARC reports are kept, never copied (M-5, 2026-11-27) ───────────
+#
+# Google, Microsoft and Yahoo mail the church's domain a daily DMARC report
+# (an XML file about who sent as the domain). At Love City 20 of 25 church
+# mails in 11-15..11-27 were these, each copied to the pastor's own inbox.
+
+REPORTS = [
+    ("noreply-dmarc-support@google.com", "Report domain: lovecityc.com Submitter: google.com Report-ID: 6064497833943479253"),
+    ("dmarcreport@microsoft.com", "Report Domain: lovecityc.com Submitter: protection.outlook.com Report-ID: 4a035e90c62f"),
+    ("noreply@dmarc.yahoo.com", "Report Domain: lovecityc.com Submitter: yahoo.com Report-ID: <1795132800.5803>"),
+]
+
+
+@pytest.mark.parametrize("frm,subject", REPORTS)
+def test_a_dmarc_report_is_kept_in_church_mail_never_copied_or_alerted(db, resend, frm, subject):
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    _inbound(resend.add("m1", to=["tia@lovecityc.com"], frm=frm, name="", subject=subject,
+                        text="This is an aggregate report", html=""))
+    [row] = _rows(db, "church_mail")
+    assert row["outcome"] == "stored" and "DMARC report" in row["why"]
+    assert not resend.sent, "no copy to anyone's own inbox"
+    assert not row.get("alert_at"), "and no phone alert"
+
+
+def test_mail_that_only_looks_like_a_report_is_still_copied(db, resend):
+    """A person's mail about reports, or a report subject from an address
+    that isn't a DMARC sender, goes out as any mail does."""
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    _inbound(resend.add("m1", to=["tia@lovecityc.com"], subject="Report domain: lovecityc.com Submitter: me"))
+    _inbound(resend.add("m2", to=["tia@lovecityc.com"], frm="noreply-dmarc-support@google.com",
+                        subject="Your weekly summary"))
+    assert [r["outcome"] for r in _rows(db, "church_mail")] == ["copied", "copied"] and len(resend.sent) == 2

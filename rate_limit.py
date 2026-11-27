@@ -87,6 +87,15 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A church's New here card (new_here.py): anonymous, behind a code a
     # guest was texted; strict and per IP like the sign-ups above.
     "new_here_card": (int(os.environ.get("RL_NEW_HERE_CARD_PER_HOUR", "10")), 3600),
+    # The website form door (public_site contact-submit: connect cards,
+    # prayer requests, contact forms), per church and visitor address,
+    # shared and fail-open (allow_shared; M-5, 2026-11-27); it was 5 a minute
+    # in each replica. 30 a minute: a 300-person church's "fill in the card
+    # now" can send 20 to 40 cards in two minutes from one building wifi.
+    "site_contact": (int(os.environ.get("RL_SITE_CONTACT_PER_MIN", "30")), 60),
+    # The same door per church and email address: one person sending the
+    # same card again and again (in-process, fail-open; a courtesy).
+    "site_contact_email": (int(os.environ.get("RL_SITE_CONTACT_EMAIL_PER_10MIN", "5")), 600),
     # The no-card trial's phone check (no_card_trial.py). Sending a code
     # costs a text and is the classic SMS-pumping target, so few per
     # business per hour; checking a code is the brute-force target for a
@@ -460,6 +469,25 @@ def allow_strict(bucket: str, key: str, *, max_requests: Optional[int] = None) -
         return local if shared is None else shared
     except Exception:
         return False
+
+
+def allow_shared(bucket: str, key: str, *, max_requests: Optional[int] = None) -> bool:
+    """The shared window of allow_strict, but FAIL-OPEN: for a door a person
+    uses (a church's connect card), where a limiter that breaks must never
+    turn a visitor away. The local window decides first; a call it admits
+    is counted in the shared one, whose answer wins; anything that breaks
+    lets the call through."""
+    try:
+        local = _check(bucket, key) if max_requests is None else _check(bucket, key, max_requests)
+    except Exception:
+        return True
+    if not local:
+        return False
+    try:
+        shared = _shared_take(bucket, key) if max_requests is None else _shared_take(bucket, key, max_requests)
+    except Exception:
+        return True
+    return local if shared is None else shared
 
 
 def retry_after(bucket: str) -> int:

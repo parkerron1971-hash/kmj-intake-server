@@ -857,6 +857,13 @@ def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
     # practitioner checking their own draft does not pollute their
     # numbers.
     html = _inject_traffic_beacon(html, business_id)
+    # And the form door's token (site_form_guard, M-5): the script puts it on
+    # each contact-submit the page sends, frozen form scripts included.
+    try:
+        import site_form_guard
+        html = site_form_guard.inject(html, business_id)
+    except Exception:  # noqa: BLE001: a page always renders
+        pass
     if not business_id:
         return html
     try:
@@ -2413,21 +2420,21 @@ async def layout_override_endpoint(business_id: str, body: Dict[str, Any], user:
 
 # ─── Pass 3.6: contact-form submission via Resend ──────────────────────
 
-# In-memory rate limiter — 5 submissions per minute per IP. Acceptable
-# for v1; restarts reset state.
-_contact_rate: Dict[str, List[float]] = {}
+def _check_contact_rate(key: str) -> bool:
+    """The form door's limit per church and visitor address (`key` is
+    "<business id>:<ip>"), shared by every replica and fail-open
+    (rate_limit "site_contact", M-5, 2026-11-27). It was a dict in each
+    process, so the real limit was 5 a minute times the replicas."""
+    import rate_limit
+    return rate_limit.allow_shared("site_contact", key or "unknown")
 
 
-def _check_contact_rate(ip: str) -> bool:
-    now = time.time()
-    cutoff = now - 60
-    bucket = [t for t in _contact_rate.get(ip, []) if t > cutoff]
-    if len(bucket) >= 5:
-        _contact_rate[ip] = bucket
-        return False
-    bucket.append(now)
-    _contact_rate[ip] = bucket
-    return True
+def _check_contact_email(business_id: str, body: Any) -> bool:
+    """One email address sending this church's form again and again
+    (rate_limit "site_contact_email", in-process, fail-open)."""
+    import rate_limit
+    email = str((body or {}).get("email") or "").strip().lower()[:200] if isinstance(body, dict) else ""
+    return True if not email else rate_limit.allow("site_contact_email", f"{business_id}:{email}")
 
 
 def _record_website_sms_consent(business_id: str, phone_raw: str,
@@ -2591,7 +2598,21 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     def failure(status, error):
         return JSONResponse(status_code=status, content={"ok": False, "error": error})
 
-    if not _check_contact_rate(rate_limit.trusted_client_ip(request)):
+    if not _check_contact_rate(f"{business_id}:{rate_limit.trusted_client_ip(request)}"):
+        return failure(429, "Too many submissions. Please try again later.")
+    # A bot (site_form_guard: the hidden field filled, a token that isn't
+    # this church's, or sent faster than a person could): thanked like a
+    # person, and nothing is read, stored, alerted or mailed. Never logs
+    # what it said. A card with no token goes on: old pages don't send one.
+    import site_form_guard
+    bot = site_form_guard.verdict(business_id, body)
+    kind_seen = site_form_guard.form_kind(body) if isinstance(body, dict) else ""
+    if bot:
+        print(f"[contact-submit] bot dropped biz={business_id[:8]} form={kind_seen or '-'} why={bot}", flush=True)
+        return {"ok": True}
+    if isinstance(body, dict) and not body.get(site_form_guard.TOKEN_KEY):
+        print(f"[contact-submit] no form token biz={business_id[:8]} form={kind_seen or '-'}", flush=True)
+    if not _check_contact_email(business_id, body):
         return failure(429, "Too many submissions. Please try again later.")
     # A sample church (sample_church.py) takes no submissions: nothing in it
     # is real, so nothing is stored, alerted or mailed. The write guard
