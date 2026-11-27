@@ -385,6 +385,8 @@ app.include_router(worship_team_router)
 # "Next service". SUNDAY_HUB=off|owner|on (default off) until the one launch.
 from sunday_hub import router as sunday_hub_router
 app.include_router(sunday_hub_router)
+from sunday_summary import router as sunday_summary_router
+app.include_router(sunday_summary_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
