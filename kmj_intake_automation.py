@@ -1057,6 +1057,9 @@ app.include_router(chief_proposals_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
 app.include_router(contractors_router)
+# Moov payouts (test mode): a church pays its 1099 people from its own bank.
+from moov_payouts import router as moov_payouts_router
+app.include_router(moov_payouts_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation

@@ -64,7 +64,11 @@ SCOPE_LEDGER = "ledger"    # read the record
 SCOPE_ACCESS = "access"    # let someone else in: invites, audit links, redaction
 SCOPE_DANGER = "danger"    # money, and things with no undo
 SCOPE_CARE = "care"        # open Prayer & care (private_care.py), when the church asks for it
-SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE)
+# Send money from the church's own bank to a payee (moov_payouts, 2026-11-27).
+# Its own scope because the money gate lets an Admin send, and danger is the
+# owner's alone: the owner or an active Admin seat confirms it.
+SCOPE_PAY = "pay"
+SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE, SCOPE_PAY)
 
 # ── AN ACCESS OR DANGER UNLOCK IS FOR ONE BUSINESS (2026-11-18) ──────
 # The step-up endpoint decides WHO MAY RE-PROVE A PASSWORD by the
@@ -87,7 +91,7 @@ SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE)
 # The care scope (2026-11-18) is bound the same way: a church's Prayer &
 # care asks for the password when that church says so, and a proof
 # confirmed at one church opens no other's requests.
-BOUND_SCOPES = (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE)
+BOUND_SCOPES = (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE, SCOPE_PAY)
 
 # What each scope is asking the practitioner to agree to, in their
 # words. The prompt has to name the consequence or it is just a speed
@@ -97,6 +101,7 @@ SCOPE_PROMPT = {
     SCOPE_ACCESS: "Confirm your password to change who can get in.",
     SCOPE_DANGER: "Confirm your password — this one cannot be undone.",
     SCOPE_CARE: "Enter your password to open Prayer & care.",
+    SCOPE_PAY: "Confirm your password to send this money from the church's bank.",
 }
 
 # Same key as the rest of the ledger's signing, in its own DOMAIN. The
@@ -358,7 +363,7 @@ def _require_actor(business_id: str, user_id: str, scope: str) -> Dict[str, Any]
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) == str(user_id):
         return rows[0]
-    if scope != SCOPE_ACCESS:
+    if scope not in (SCOPE_ACCESS, SCOPE_PAY):
         raise HTTPException(403, "not authorized")
     seat = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{business_id}&user_id=eq.{quote(str(user_id), safe='')}"
@@ -366,6 +371,8 @@ def _require_actor(business_id: str, user_id: str, scope: str) -> Dict[str, Any]
     role = seat[0].get("role") if isinstance(seat, list) and seat else None
     if role == "admin":
         return rows[0]
+    if scope == SCOPE_PAY:
+        raise HTTPException(403, "not authorized")
     if role == "manager":
         try:
             import church_job_defs
@@ -393,7 +400,7 @@ async def step_up(body: _StepUpBody,
     """
     import rate_limit
     scope = (body.scope or "").strip()
-    if scope not in (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE):
+    if scope not in (SCOPE_ACCESS, SCOPE_DANGER, SCOPE_CARE, SCOPE_PAY):
         # SCOPE_LEDGER deliberately excluded: it has its own endpoint
         # with its own, correct, read-based pre-check.
         raise HTTPException(400, "unknown step-up scope")

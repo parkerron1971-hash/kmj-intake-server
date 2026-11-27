@@ -156,8 +156,10 @@ def _gates():
             text = ast.unparse(scope) if scope is not None else "SCOPE_LEDGER"
             if "SCOPE_LEDGER" in text:
                 continue
-            # Prayer & care's lock (2026-11-18) is bound to its church too.
-            assert ("SCOPE_ACCESS" in text or "SCOPE_DANGER" in text or "SCOPE_CARE" in text), \
+            # Prayer & care's lock (2026-11-18) is bound to its church too, and so is
+            # sending money with Moov (SCOPE_PAY, 2026-11-27).
+            assert ("SCOPE_ACCESS" in text or "SCOPE_DANGER" in text or "SCOPE_CARE" in text
+                    or "SCOPE_PAY" in text), \
                 f"{name}:{node.lineno} asks for {text}"
             names = len(node.args) > 3 or any(k.arg == "business_id" for k in node.keywords)
             out.append((name, node.lineno, names))
