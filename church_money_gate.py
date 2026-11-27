@@ -98,7 +98,7 @@ TICKS = (TICK, TICK_WORK, TICK_LEAD, TICK_WHO, TICK_WHO_WORK, TICK_BANK, TICK_BA
 
 NEEDS = ("see", "work")
 PARTS = ("giving", "books", "bank", "bills", "store", "checks", "help", "rentals", "my_week", "count_reopen",
-         "setup")
+         "setup", "send")
 
 PASS = ("*",)                # `elsewhere`: the question isn't asked of that kind of business
 NOT_ASKED = "not_asked"      # what "passed", when it was that: nobody was checked
@@ -208,6 +208,14 @@ RULES: Dict[Tuple[str, str], Rule] = {
     # housing_allowance.require_owner, and can_change on bank statements).
     ("setup", "see"): _OWNER_ONLY,
     ("setup", "work"): _OWNER_ONLY,
+    # Sending money to a 1099 person through Moov, from the church's own bank
+    # (moov_payouts, 2026-11-27). Seeing the payouts and their statuses: the
+    # giving rule's people (the owner, an Admin, the accountant). Sending:
+    # the owner or an Admin, nobody else, and no tick adds to it (RULES_ON
+    # keeps the same rows). The church's own Moov account and bank are
+    # "setup", the owner's alone.
+    ("send", "see"): _FINANCE._replace(detail="Payouts are kept with the owner, the admins and the accountant."),
+    ("send", "work"): _TOP._replace(detail="Only the owner or an admin sends money."),
 }
 
 
@@ -253,6 +261,8 @@ RULES_ON: Dict[Tuple[str, str], Rule] = {
     ("count_reopen", "work"): _and(RULES[("count_reopen", "work")], TICK_LEAD),
     ("setup", "see"): _OWNER_ONLY,
     ("setup", "work"): _OWNER_ONLY,
+    ("send", "see"): RULES[("send", "see")],
+    ("send", "work"): RULES[("send", "work")],
 }
 
 # Doors that are not rows of RULES (they stay the owner's while the switch
