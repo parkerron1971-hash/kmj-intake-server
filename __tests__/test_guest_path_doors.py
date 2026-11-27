@@ -929,7 +929,8 @@ def test_the_question_says_reply_yes_in_the_churchs_name(sender, db):
     ok, what = asyncio.run(nh.run_scheduled(db.biz, _action("confirm", "web")))
     assert ok and "confirm" in what
     [(phone, body)] = sender["texts"]
-    assert phone == PHONE and "Reply YES to get texts from Grace Hill Church" in body and "STOP" in body
+    assert phone == PHONE and body.startswith("Grace Hill Church: Reply YES to get texts from Grace Hill Church")
+    assert "Reply STOP to end, HELP for help." in body, "the carriers' opt-in words: STOP and HELP"
     assert "gracehill.church/new/" not in body, "no link until they say yes"
 
 
@@ -949,9 +950,9 @@ def test_yes_from_the_phone_keeps_the_yes_and_starts_the_path(db):
     nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     db.now = SUNDAY + timedelta(hours=2)
     hit = nh.on_yes(BIZ, "(231) 555-0142")
-    assert hit == {"contact_ids": [GUEST]}
+    assert hit == {"contact_ids": [GUEST], "welcome_at": _iso(SUNDAY + timedelta(hours=2))}
     [row] = db.t["sms_consents"]
-    assert row["source"] == "connect_card" and row["phone"] == PHONE and "YES" in row["user_agent"]
+    assert row["source"] == "connect_card_yes" and row["phone"] == PHONE and "YES" in row["user_agent"]
     mine = db.mine()
     assert mine["texts"] == "on" and mine["texts_ok"] is True and "confirm_at" not in mine and mine["yes_at"]
     assert db.steps() == ["confirm", "invite", "monday", "welcome"]
@@ -996,7 +997,7 @@ def test_a_second_web_card_this_week_never_asks_twice(db):
 
 def test_a_number_that_already_said_yes_isnt_asked_again(db):
     db.person()
-    said_yes(db, source="connect_card")
+    said_yes(db, source="connect_card_yes")
     mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     assert mine["texts"] == "on" and "confirm" not in db.steps() and "welcome" in db.steps()
 
@@ -1028,3 +1029,67 @@ def test_the_website_door_keeps_no_yes_when_the_box_is_ticked(db, monkeypatch):
     assert nh.keep_yes(BIZ, PHONE, source=nh.YES_SOURCES["form"]) is True
     assert nh.keep_yes(BIZ, "555", source=nh.YES_SOURCES["web"]) is False
     assert db.t["sms_consents"] == []
+
+
+# ── 12. the review of #2100 (account 2, 2026-11-27) ───────────────────
+
+@pytest.mark.parametrize("source", ["texts_page", "event_waitlist", "booking_widget", "website_contact",
+                                    "connect_card", "guest_form", "web_form"])
+def test_a_yes_typed_on_any_public_page_never_skips_the_question(db, source):
+    """Must-fix 1: someone puts a victim's number on the church's /texts page
+    or an event wait-list, then sends a connect card with it. Only a yes the
+    phone or a person gave counts."""
+    db.person()
+    said_yes(db, source=source)
+    mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    assert mine["texts"] == "confirm" and db.steps() == ["confirm"]
+
+
+@pytest.mark.parametrize("source", ["kids_checkin", "member_app_new", "member_app", "connect_card_yes",
+                                    "guest_form_yes"])
+def test_a_yes_given_in_person_in_the_app_or_by_reply_skips_it(db, source):
+    db.person()
+    said_yes(db, source=source)
+    assert nh.enroll(db.biz, db.contact(), door="form", texts_ok=True)["texts"] == "on"
+
+
+def test_the_yes_is_found_by_the_number_that_was_asked(db):
+    """Must-fix 2: a returning visitor matched by email keeps an old number
+    on their record; the question went to the card's new number."""
+    db.person(phone="+12315550000")
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True, phone="(231) 555-0142")
+    assert db.mine()["confirm_phone"] == PHONE
+    assert nh.on_yes(BIZ, "+12315550000") is None, "the old number on file was never asked"
+    assert nh.on_yes(BIZ, PHONE)["contact_ids"] == [GUEST]
+    assert {r["action"]["phone"] for r in db.scheduled()} == {PHONE}
+    assert db.t["sms_consents"][-1]["phone"] == PHONE
+
+
+def test_a_reply_is_kept_even_beside_an_old_unverified_row(db):
+    """Should-fix 4: a connect_card row from before the question used to make
+    the YES write nothing, so the record never showed the reply."""
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    said_yes(db, source="connect_card")
+    nh.on_yes(BIZ, PHONE)
+    assert [r["source"] for r in db.t["sms_consents"]] == ["connect_card", "connect_card_yes"]
+
+
+def test_a_stop_that_still_stands_starts_nothing_and_leaves_them_asked(db):
+    """Should-fix 5: on_yes never saves "Said STOP" for someone it counts as
+    started; sms_routing clears a STOP before asking it (a YES is a START)."""
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    db.t["sms_opt_outs"] = [{"phone": PHONE, "business_id": BIZ}]
+    assert nh.on_yes(BIZ, PHONE) is None
+    assert db.mine()["texts"] == "confirm" and db.t["sms_consents"] == [] and db.steps() == ["confirm"]
+    db.t["sms_opt_outs"] = []
+    assert nh.on_yes(BIZ, PHONE)["contact_ids"] == [GUEST]
+
+
+def test_a_yes_at_night_says_when_the_first_text_comes(db):
+    db.person()
+    db.now = at(2026, 11, 15, 21, 0)
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    hit = nh.on_yes(BIZ, PHONE)
+    assert hit["welcome_at"] == _iso(at(2026, 11, 16, 9))

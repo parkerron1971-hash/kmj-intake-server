@@ -389,3 +389,41 @@ def test_a_sentence_that_starts_with_yes_is_a_message(routed, asked):
     res = _run(sms_routing.route_inbound(
         from_number=CUSTOMER, text="Yes! We loved it and will be back Sunday", to_number=OWN_A))
     assert res["action"] != "new_here_yes" and asked == []
+
+
+def test_a_yes_after_stop_clears_the_stop_before_the_question_is_answered(routed, monkeypatch):
+    """The review of #2100, should-fix 5: the scoped STOP is cleared first,
+    so on_yes doesn't read a STOP the same text is taking back."""
+    import new_here
+    order = []
+
+    class _Client:
+        async def delete(self, url, **kw):
+            order.append("clear")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+    monkeypatch.setattr(sms_routing.httpx, "AsyncClient", lambda *a, **kw: _Client())
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: order.append("yes") or {"contact_ids": ["c1"]})
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="YES", to_number=OWN_A))
+    assert res["action"] == "new_here_yes" and order == ["clear", "yes"]
+
+
+def test_a_yes_whose_welcome_waits_is_told_they_are_in(routed, monkeypatch):
+    import new_here
+    from datetime import datetime, timedelta, timezone
+
+    async def own(client, biz):
+        return False
+    monkeypatch.setattr(sms_routing, "own_registration", own)
+    later = (datetime.now(timezone.utc) + timedelta(hours=9)).isoformat()
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: {"contact_ids": ["c1"], "welcome_at": later})
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="yes", to_number=OWN_A))
+    assert res["reply"].endswith(sms_routing.YES_THANKS) and "Glow Studio" in res["reply"]
+    assert "HELP" in res["reply"] and "STOP" in res["reply"]
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: {"contact_ids": ["c1"], "welcome_at": soon})
+    assert _run(sms_routing.route_inbound(from_number=CUSTOMER, text="yes", to_number=OWN_A))["reply"] is None

@@ -607,7 +607,17 @@ CONFIRM = "confirm"                         # the one question, as a scheduled s
 CONFIRM_DOORS = ("web", "form")
 CONFIRM_DAYS = 7                            # a YES later than this starts nothing
 CONFIRM_WORDS = ("Reply YES to get texts from {church} about your visit and next steps, up to 4 msgs a "
-                 "week. Msg & data rates may apply. Reply STOP to end.")
+                 "week. Msg & data rates may apply. Reply STOP to end, HELP for help.")
+# The yes a phone gave by replying YES to that question: its own source, so a
+# carrier can always see the reply, and so it's told apart from a box ticked
+# on a web page (the review of #2100, must-fix 1).
+YES_REPLIED = {"web": "connect_card_yes", "form": "guest_form_yes"}
+# The yeses a door that asks first trusts: given by the person in front of a
+# leader (the kids desk), by a signed-in member (the member app), or by the
+# phone itself (a YES reply). A yes typed on any public page (the /texts page,
+# an event wait-list, a booking, a contact form, a connect card from before
+# the question) never skips it: anyone can type anyone's number there.
+VERIFIED_YES_SOURCES = ("kids_checkin", "member_app_new", "member_app") + tuple(YES_REPLIED.values())
 TEXT_ME = "Text me."
 TEXT_ME_WORDS = ("Yes, {church} may text me about my visit and next steps, up to 4 msgs a week. "
                  "Msg & data rates may apply. Reply STOP to end, HELP for help.")
@@ -750,13 +760,15 @@ def keep_yes(business_id: Any, phone: Any, *, source: str, name: str = "", ip: s
         return False
 
 
-def has_yes(business_id: Any, phone: Any) -> Optional[bool]:
+def has_yes(business_id: Any, phone: Any, *, verified: bool = False) -> Optional[bool]:
     """Whether this number has a yes to this church's texts (an sms_consents
-    row of the church's). None when it couldn't be read."""
+    row of the church's); `verified`: only one a door that asks first trusts
+    (VERIFIED_YES_SOURCES). None when it couldn't be read."""
     number = mobile(phone)
     if not number:
         return False
-    rows = _rows(f"/sms_consents?business_id=eq.{_q(business_id)}&phone=eq.{_q(number)}&select=id&limit=1")
+    only = f"&source=in.({','.join(VERIFIED_YES_SOURCES)})" if verified else ""
+    rows = _rows(f"/sms_consents?business_id=eq.{_q(business_id)}&phone=eq.{_q(number)}{only}&select=id&limit=1")
     return None if rows is None else bool(rows)
 
 
@@ -765,14 +777,17 @@ def on_yes(business_id: Any, phone: Any) -> Optional[Dict[str, Any]]:
     guest of this church asked about this number in the last CONFIRM_DAYS
     has their yes kept (sms_consents, their door's source) and their
     Welcome Path texts start now, as their door would have started them.
-    {"contact_ids": [...]} for the ones started, or None (nobody was asked,
-    or it couldn't be read). Sync; never raises."""
+    The guest is found by the number the question went to (confirm_phone),
+    which can differ from the number on their record.
+    {"contact_ids": [...], "welcome_at": the first welcome} for the ones
+    started, or None (nobody was asked, a STOP still stands, or it couldn't
+    be read). Sync; never raises."""
     biz = str(business_id or "")
     try:
         number = mobile(phone)
         if not biz or not number:
             return None
-        people = _rows(f"/contacts?business_id=eq.{_q(biz)}&phone=eq.{_q(number)}"
+        people = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>confirm_phone=eq.{_q(number)}"
                        f"&metadata->new_here->>texts=eq.{CONFIRM}&select=id,name,phone,status,metadata&limit=5")
         if not people:
             return None
@@ -782,6 +797,7 @@ def on_yes(business_id: Any, phone: Any) -> Optional[Dict[str, Any]]:
         settings = settings_of(business)
         now = _now()
         started: List[str] = []
+        first_welcome: Optional[datetime] = None
         for contact in people:
             mine = dict((contact.get("metadata") or {}).get("new_here") or {})
             asked = _parse(mine.get("confirm_at"))
@@ -790,10 +806,12 @@ def on_yes(business_id: Any, phone: Any) -> Optional[Dict[str, Any]]:
             if str(contact.get("status") or "").strip().lower() in ("inactive", "churned"):
                 continue
             door = str(mine.get("door") or "web")
-            if not keep_yes(biz, number, source=YES_SOURCES.get(door, YES_SOURCES["web"]),
+            why = _why_not(business, settings, number, True)
+            if why == "stopped":
+                continue                    # a STOP still stands: still asked, nothing starts
+            if not keep_yes(biz, number, source=YES_REPLIED.get(door, YES_REPLIED["web"]),
                             name=str(contact.get("name") or ""), user_agent="Replied YES by text", confirmed=True):
                 continue
-            why = _why_not(business, settings, number, True)
             welcome = None if why else welcome_time(business, now)
             mine.pop("confirm_at", None)
             mine.update(texts_ok=True, yes_at=_iso(now))
@@ -813,7 +831,11 @@ def on_yes(business_id: Any, phone: Any) -> Optional[Dict[str, Any]]:
                     _keep(biz, contact, mine)
                     continue
             started.append(str(contact["id"]))
-        return {"contact_ids": started} if started else None
+            if welcome and (first_welcome is None or welcome < first_welcome):
+                first_welcome = welcome
+        if not started:
+            return None
+        return {"contact_ids": started, "welcome_at": _iso(first_welcome) if first_welcome else None}
     except Exception as e:  # noqa: BLE001: a YES is an ordinary text if this fails
         print(f"[new_here] {biz[:8]}: a YES reply wasn't taken ({type(e).__name__})", flush=True)
         return None
@@ -951,7 +973,7 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
             return mine
         if not on_path:
             mine.update(door=door, texted_at=_iso(now), visits=int(mine.get("visits") or 0) + 1)
-            for key in ("texts", "welcome_at", "confirm_at"):
+            for key in ("texts", "welcome_at", "confirm_at", "confirm_phone"):
                 mine.pop(key, None)
         mine["texts_ok"] = bool(texts_ok)
         mine["code"] = mine.get("code") or new_code()
@@ -963,7 +985,7 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
             # Typed on a web page: ask the phone first, unless this number
             # already said yes to the church (texted the word, the kids desk,
             # a YES before). A yes that can't be read is never a no.
-            had = has_yes(biz, number)
+            had = has_yes(biz, number, verified=True)
             if had is None:
                 why = "unread"
             elif not had:
@@ -972,7 +994,7 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
         if welcome:
             mine.update(texts="on", welcome_at=_iso(welcome))
         elif ask:
-            mine.update(texts=CONFIRM, confirm_at=_iso(ask))
+            mine.update(texts=CONFIRM, confirm_at=_iso(ask), confirm_phone=number)
         else:
             mine["texts"] = why
         if not _keep(biz, contact, mine):
@@ -986,6 +1008,7 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
                       flush=True)
                 mine["texts"] = "unread"
                 mine.pop("confirm_at", None)
+                mine.pop("confirm_phone", None)
                 _keep(biz, contact, mine)
             return mine
         if welcome:
