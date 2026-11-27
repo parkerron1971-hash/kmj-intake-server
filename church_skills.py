@@ -48,6 +48,7 @@ import logging
 import os
 import pathlib
 import re
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -245,6 +246,133 @@ def turn_block(turn: "Turn", message: str, scope: Any) -> str:
         return "".join(_chapter(s) for s in picked)
     except Exception as e:  # noqa: BLE001 — no chapter is today's Chief
         print(f"[church skills] not read: {type(e).__name__}", flush=True)
+        return ""
+
+
+# ─── Carrying a job's steps to its follow-ups ─────────────────────────
+#
+# Kevin, 2026-11-27 (through KAI), after the log check found the follow-up turn of a giving job had no steps:
+# "carry a skill's steps through the next turn or two of the same job, so follow-ups like 'ok, now record
+# it' keep the giving or serving steps", bounded so stale steps never reach an unrelated turn.
+#
+# A job's steps are carried to THIS message only when every one of these holds:
+#   * turns: a user message at most CARRY_TURNS back in this chat (the history the app sends) asked for the
+#     job, by the same trigger words a fresh message is matched on, and the login may still use it;
+#   * this message, and every message between, reads as a continuation: no other job's words, no new-topic
+#     opening ("also", "different question", "by the way"...), not a long new request (CONTINUE_WORDS);
+#   * time and the same chat, from this login's own saved turns (chief_conversations, saved by login): its
+#     last turn is this chat's last message and ended under CARRY_MINUTES ago, and the job's message ended
+#     under CARRY_JOB_MINUTES ago. Any turn after the job's message ran only the job's own actions (or a
+#     screen move): a turn that did other work is a new topic. A read that fails, or rows that don't line
+#     up with the history (another chat, turns not saved by login), carries nothing.
+# The carried steps say they are carried and to be followed only if this message continues the job.
+CARRY_TURNS = 2
+CARRY_MINUTES = 30
+CARRY_JOB_MINUTES = 45
+CONTINUE_WORDS = 40
+_NEUTRAL_ACTIONS = frozenset({"navigate", "close_view", "show_view", "set_chat_window", "action_guide"})
+_NEW_TOPIC = re.compile(
+    r"^\W*(?:also\b|and also\b|another (?:thing|question)|different (?:thing|question|topic)|new (?:question|topic)|"
+    r"unrelated|switching gears|change of (?:subject|topic)|by the way\b|btw\b|on another note|separate question|"
+    r"one more thing|forget (?:that|it)|never mind|nevermind)", re.I)
+
+
+def _text(m: Any) -> Tuple[str, str]:
+    if isinstance(m, dict):
+        return str(m.get("role") or ""), str(m.get("content") or "")
+    return str(getattr(m, "role", "") or ""), str(getattr(m, "content", "") or "")
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Two copies of one message (the history's and the saved turn's), compared on their opening words."""
+    def norm(v: Any) -> str:
+        return re.sub(r"\s+", " ", str(v or "")).strip().lower()[:160]
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+def continues(message: str) -> bool:
+    """Whether a message reads as more of the same job: short, no new-topic opening, no job's own words."""
+    text = re.sub(r"\s+", " ", message or "").strip()
+    if not text or _NEW_TOPIC.match(text) or len(text.split()) > CONTINUE_WORDS:
+        return False
+    return not matching(text)
+
+
+def carry_candidate(turn: "Turn", message: str, history: Any, scope: Any
+                    ) -> Optional[Tuple[Dict[str, Any], int, List[str]]]:
+    """(the job, how many user messages back it was asked, those messages newest first) from the history
+    alone, or None. No reads."""
+    if not turn or not turn.on or not continues(message):
+        return None
+    users = [c for r, c in (_text(m) for m in (history or [])) if r == "user" and c.strip()]
+    if users and _same(users[-1], message):
+        users = users[:-1]                      # the history already holds this message
+    seen: List[str] = []
+    for back, text in enumerate(reversed(users[-CARRY_TURNS:]), 1):
+        seen.append(text)
+        picked = [s for s in matching(text) if allowed(s, scope, turn.ready)][:MAX_PER_TURN]
+        if picked:
+            return picked[0], back, seen
+        if not continues(text):
+            return None
+    return None
+
+
+def _ended(row: Dict[str, Any]) -> Optional[datetime]:
+    try:
+        at = datetime.fromisoformat(str(row.get("ended_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _saved_turns(business_id: Any, user_id: Any, n: int) -> Optional[List[Dict[str, Any]]]:
+    """This login's last n saved turns, newest first; None when they can't be read."""
+    from urllib.parse import quote
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/chief_conversations?business_id=eq.{quote(str(business_id), safe='')}"
+        f"&user_id=eq.{quote(str(user_id), safe='')}&select=ended_at,messages,key_topics"
+        f"&order=ended_at.desc&limit={int(n)}")
+    return rows if isinstance(rows, list) else None
+
+
+def _asked(row: Dict[str, Any]) -> str:
+    for m in row.get("messages") or []:
+        if isinstance(m, dict) and m.get("role") == "user":
+            return str(m.get("content") or "")
+    return ""
+
+
+def carried_block(turn: "Turn", message: str, history: Any, scope: Any, user_id: Any,
+                  now: Optional[datetime] = None) -> str:
+    """The job's steps carried to this follow-up, or ''. Reads this login's last saved turns only when the
+    history names a job (call it off the event loop). Never raises."""
+    try:
+        found = carry_candidate(turn, message, history, scope)
+        if not found or not user_id or not isinstance(turn.biz, dict) or not turn.biz.get("id"):
+            return ""
+        skill, back, seen = found
+        rows = _saved_turns(turn.biz["id"], user_id, back)
+        if not rows or len(rows) < back:
+            return ""
+        now = now or datetime.now(timezone.utc)
+        last, job = _ended(rows[0]), _ended(rows[back - 1])
+        if (last is None or job is None or now - last > timedelta(minutes=CARRY_MINUTES)
+                or now - job > timedelta(minutes=CARRY_JOB_MINUTES)):
+            return ""
+        # The saved turns are this chat's own messages, newest first, in step with the history.
+        if not all(_same(_asked(rows[i]), seen[i]) for i in range(back)):
+            return ""
+        own = set(skill["actions"]) | _NEUTRAL_ACTIONS
+        if any(set(rows[i].get("key_topics") or []) - own for i in range(back - 1)):
+            return ""                           # a turn since the job's message did other work: a new topic
+        print(f"[church skills] {skill['name']} carried ({back} back)", flush=True)
+        return (f"CHURCH JOB STEPS, CARRIED from this chat's message {back} turn{'' if back == 1 else 's'} ago "
+                f"(follow them only if this message continues that job; if it is about something else, ignore "
+                f"them):\n" + _chapter(skill)[len("CHURCH JOB STEPS: "):])
+    except Exception as e:  # noqa: BLE001 — nothing carried is today's Chief
+        print(f"[church skills] carry not read: {type(e).__name__}", flush=True)
         return ""
 
 
