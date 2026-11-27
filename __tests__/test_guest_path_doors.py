@@ -192,6 +192,12 @@ def db(monkeypatch):
     return f
 
 
+def said_yes(db, phone=PHONE, source="kids_checkin"):
+    """This number already said yes to the church's texts (the kids desk, a
+    YES reply): a website card from it starts the texts at once (M-5)."""
+    db.t["sms_consents"].append({"business_id": BIZ, "phone": phone, "source": source})
+
+
 def _when(db, step):
     row = next(r for r in db.scheduled() if r["action"]["step"] == step)
     return datetime.fromisoformat(row["run_at"]).astimezone(ET)
@@ -227,6 +233,7 @@ def test_new_heres_own_keys_are_kept(db):
 
 def test_a_guest_who_wasnt_seen_at_church_gets_no_thank_you(db):
     db.person()
+    said_yes(db)
     nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     assert db.steps() == ["invite", "monday", "welcome"]
 
@@ -299,6 +306,7 @@ def test_a_welcome_that_cant_be_queued_is_never_texts_on(db):
     # Nothing after the welcome was queued either; the next door with a yes tries again.
     db.down.discard("chief_scheduled_actions")
     assert db.scheduled() == []
+    said_yes(db)
     again = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     assert again["texts"] == "on" and again["door"] == "kids" and "welcome" in db.steps()
 
@@ -313,6 +321,7 @@ def test_a_stop_at_another_church_is_not_this_churchs(db):
 
 def test_one_guest_is_one_path(db):
     db.person()
+    said_yes(db)
     nh.enroll(db.biz, db.contact(), door="kids", texts_ok=True, visit_at=SUNDAY)
     db.now = SUNDAY + timedelta(days=2)
     again = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
@@ -328,7 +337,7 @@ def test_a_second_door_with_a_yes_starts_the_texts_the_first_had_none(db):
     db.person()
     nh.enroll(db.biz, db.contact(), door="kids", texts_ok=False, visit_at=SUNDAY)
     db.now = SUNDAY + timedelta(days=1, hours=1)                        # Monday 11:42
-    mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    mine = nh.enroll(db.biz, db.contact(), door="app", texts_ok=True)
     assert mine["door"] == "kids" and mine["texted_at"] == _iso(SUNDAY)  # still the kids desk's path
     assert mine["texts_ok"] is True and mine["texts"] == "on"
     assert db.steps() == ["invite", "monday", "welcome"]               # no "today" thank-you a day later
@@ -339,6 +348,7 @@ def test_a_second_door_with_a_yes_starts_the_texts_the_first_had_none(db):
 
 def test_a_second_door_without_a_yes_never_undoes_one(db):
     db.person()
+    said_yes(db)
     nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     mine = nh.enroll(db.biz, db.contact(), door="desk", texts_ok=False)
     assert mine["texts_ok"] is True and mine["texts"] == "on" and mine["door"] == "web"
@@ -387,6 +397,7 @@ def test_early_in_the_morning_the_welcome_waits_and_the_thank_you_follows_it(db)
 def test_minutes_before_the_hours_close_it_waits_too(db):
     db.person()
     db.now = at(2026, 11, 15, 19, 55)
+    said_yes(db)
     nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     assert _when(db, "welcome") == at(2026, 11, 16, 9)
 
@@ -395,6 +406,7 @@ def test_the_churchs_own_hours(db):
     db.person()
     db.biz["settings"]["texting_hours"] = {"auto_from": 11, "auto_until": 18}
     db.now = at(2026, 11, 15, 10, 0)
+    said_yes(db)
     nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
     assert _when(db, "welcome") == at(2026, 11, 15, 11)
 
@@ -569,17 +581,21 @@ def test_the_new_here_card_of_a_guest_from_another_door_is_a_note(db, monkeypatc
 # ── 10. the yes, and the box ──────────────────────────────────────────
 
 def test_a_yes_is_kept_once_with_where_and_how(db):
-    assert nh.keep_yes(BIZ, "(231) 555-0142", source="connect_card", name=" Maria  Lopez ", ip="203.0.113.9",
+    assert nh.keep_yes(BIZ, "(231) 555-0142", source="kids_checkin", name=" Maria  Lopez ", ip="203.0.113.9",
                        user_agent="Mozilla/5.0") is True
     [row] = db.t["sms_consents"]
-    assert row["phone"] == PHONE and row["source"] == "connect_card" and row["business_id"] == BIZ
+    assert row["phone"] == PHONE and row["source"] == "kids_checkin" and row["business_id"] == BIZ
     assert row["name"] == "Maria Lopez" and row["ip"] == "203.0.113.9" and row["user_agent"] == "Mozilla/5.0"
     assert row["consented_at"]
-    assert nh.keep_yes(BIZ, PHONE, source="connect_card") is True and len(db.t["sms_consents"]) == 1
-    assert nh.keep_yes(BIZ, PHONE, source="kids_checkin") is True and len(db.t["sms_consents"]) == 2
-    assert nh.keep_yes(BIZ, "555-01", source="connect_card") is False
+    assert nh.keep_yes(BIZ, PHONE, source="kids_checkin") is True and len(db.t["sms_consents"]) == 1
+    assert nh.keep_yes(BIZ, PHONE, source="member_app_new") is True and len(db.t["sms_consents"]) == 2
+    assert nh.keep_yes(BIZ, "555-01", source="kids_checkin") is False
+    # A box ticked on a web page keeps nothing until the phone says YES (M-5).
+    assert nh.keep_yes(BIZ, PHONE, source="connect_card") is True and len(db.t["sms_consents"]) == 2
+    assert nh.keep_yes(BIZ, PHONE, source="connect_card", confirmed=True) is True
+    assert db.t["sms_consents"][-1]["source"] == "connect_card" and len(db.t["sms_consents"]) == 3
     db.down.add("sms_consents")
-    assert nh.keep_yes(BIZ, "+12315550111", source="connect_card") is False
+    assert nh.keep_yes(BIZ, "+12315550111", source="kids_checkin") is False
     assert set(nh.YES_SOURCES) == {"kids", "web", "form", "app"}
 
 
@@ -699,12 +715,13 @@ def test_the_intake_hand_off_keeps_a_guest_cards_yes_first(db, monkeypatch):
     monkeypatch.setattr(cfu, "on_intake_form", lambda *a, **kw: got.append(kw) or {"id": "f"})
     kw = dict(phone=PHONE, name="Maria Lopez", ip="203.0.113.9", user_agent="Mozilla/5.0")
     asyncio.run(intake_endpoint.church_card(db.biz, CONNECT, {}, GUEST, texts_ok=True, **kw))
-    [row] = db.t["sms_consents"]
-    assert row["source"] == "guest_form" and row["ip"] == "203.0.113.9" and got[-1]["texts_ok"] is True
+    # A box ticked on a web page is a request: nothing is kept until the phone
+    # replies YES (M-5), and the guest goes on to be asked.
+    assert db.t["sms_consents"] == [] and got[-1]["texts_ok"] is True
     # A yes on a card that isn't a guest door isn't one, and keeps nothing.
     asyncio.run(intake_endpoint.church_card(db.biz, {"id": "s1", "name": "Serve", "form_type": "volunteer"}, {},
                                             GUEST, texts_ok=True, **kw))
-    assert got[-1]["texts_ok"] is False and len(db.t["sms_consents"]) == 1
+    assert got[-1]["texts_ok"] is False and db.t["sms_consents"] == []
     # The endpoint takes the box out of the answers before anything stores them.
     src = (pathlib.Path(intake_endpoint.__file__)).read_text(encoding="utf-8")
     assert "submission_data.pop(TEXTS_NAME" in src
@@ -888,3 +905,126 @@ def test_no_box_ticked_or_the_path_off_keeps_nothing(site_post):
     site_post["path"] = False
     _card(site_post, sms_consent=True)
     assert site_post["yes"] == [] and site_post["capture"][-1]["texts_ok"] is False
+
+
+# ── 11. a box ticked on a web page asks the phone first (M-5) ─────────
+#
+# Kevin, 2026-11-27, after two website connect cards at Love City were one
+# sales campaign: welcome texts only after the phone replies YES. A website
+# card's "Text me" (or a church guest card's) took any number typed and
+# texted it four times, so anyone could put a stranger on a church's texts.
+
+@pytest.mark.parametrize("door", ["web", "form"])
+def test_a_web_cards_text_me_queues_one_question_and_keeps_no_yes(db, door):
+    db.person()
+    mine = nh.enroll(db.biz, db.contact(), door=door, texts_ok=True)
+    assert mine["texts"] == "confirm" and mine["confirm_at"] == _iso(SUNDAY) and mine["texts_ok"] is True
+    assert db.steps() == ["confirm"], "no welcome, no Monday note, no invite: one question"
+    assert db.t["sms_consents"] == [], "a typed number isn't a yes"
+    assert "welcome_at" not in mine and mine["texts"] in nh.WHY_NOT
+
+
+def test_the_question_says_reply_yes_in_the_churchs_name(sender, db):
+    db.contact()["metadata"]["new_here"] = {"code": "K7M2QX4P", "door": "web", "texts": "confirm"}
+    ok, what = asyncio.run(nh.run_scheduled(db.biz, _action("confirm", "web")))
+    assert ok and "confirm" in what
+    [(phone, body)] = sender["texts"]
+    assert phone == PHONE and "Reply YES to get texts from Grace Hill Church" in body and "STOP" in body
+    assert "gracehill.church/new/" not in body, "no link until they say yes"
+
+
+def test_the_question_isnt_sent_once_answered_and_waits_out_the_night(sender, db):
+    db.contact()["metadata"]["new_here"] = {"code": "K7M2QX4P", "door": "web", "texts": "on"}
+    ok, what = asyncio.run(nh.run_scheduled(db.biz, _action("confirm", "web")))
+    assert ok and "Already answered" in what and sender["texts"] == []
+    db.contact()["metadata"]["new_here"]["texts"] = "confirm"
+    db.now = at(2026, 11, 15, 22, 0)
+    ok, what = asyncio.run(nh.run_scheduled(db.biz, _action("confirm", "web")))
+    assert ok and "waits for the morning" in what and sender["texts"] == []
+    assert _when(db, "confirm") == at(2026, 11, 16, 9)
+
+
+def test_yes_from_the_phone_keeps_the_yes_and_starts_the_path(db):
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    db.now = SUNDAY + timedelta(hours=2)
+    hit = nh.on_yes(BIZ, "(231) 555-0142")
+    assert hit == {"contact_ids": [GUEST]}
+    [row] = db.t["sms_consents"]
+    assert row["source"] == "connect_card" and row["phone"] == PHONE and "YES" in row["user_agent"]
+    mine = db.mine()
+    assert mine["texts"] == "on" and mine["texts_ok"] is True and "confirm_at" not in mine and mine["yes_at"]
+    assert db.steps() == ["confirm", "invite", "monday", "welcome"]
+    assert _when(db, "welcome") == SUNDAY + timedelta(hours=2)
+    assert all(r["action"]["door"] == "web" for r in db.scheduled())
+    assert nh.on_yes(BIZ, PHONE) is None, "a second YES starts nothing more"
+    assert len(db.scheduled()) == 4
+
+
+def test_no_reply_means_nothing_more_and_a_late_yes_starts_nothing(db):
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    db.now = SUNDAY + timedelta(days=nh.CONFIRM_DAYS, hours=1)
+    assert nh.on_yes(BIZ, PHONE) is None
+    assert db.steps() == ["confirm"] and db.t["sms_consents"] == []
+
+
+def test_a_yes_from_someone_nobody_asked_about_is_an_ordinary_yes(db):
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="kids", texts_ok=False, visit_at=SUNDAY)
+    assert nh.on_yes(BIZ, PHONE) is None and db.t["sms_consents"] == []
+    db.person(cid=OTHER, phone="+12315550999", metadata={"new_here": {"texts": "confirm",
+                                                                      "confirm_at": _iso(SUNDAY), "door": "web"}})
+    db.t["contacts"][-1]["business_id"] = "another-church"
+    assert nh.on_yes(BIZ, "+12315550999") is None, "another church's question is theirs"
+
+
+def test_a_guest_marked_inactive_before_their_yes_starts_nothing(db):
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    db.contact()["status"] = "inactive"
+    assert nh.on_yes(BIZ, PHONE) is None and db.steps() == ["confirm"]
+
+
+def test_a_second_web_card_this_week_never_asks_twice(db):
+    db.person()
+    nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    db.now = SUNDAY + timedelta(days=2)
+    again = nh.enroll(db.biz, db.contact(), door="form", texts_ok=True)
+    assert again["texts"] == "confirm" and db.steps() == ["confirm"]
+
+
+def test_a_number_that_already_said_yes_isnt_asked_again(db):
+    db.person()
+    said_yes(db, source="connect_card")
+    mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    assert mine["texts"] == "on" and "confirm" not in db.steps() and "welcome" in db.steps()
+
+
+def test_a_yes_that_cant_be_read_is_never_a_question_or_a_no(db):
+    db.person()
+    db.down.add("sms_consents")
+    mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    assert mine["texts"] == "unread" and db.scheduled() == []
+
+
+def test_a_question_that_cant_be_queued_is_never_confirm(db):
+    db.person()
+    db.down.add("chief_scheduled_actions")
+    mine = nh.enroll(db.biz, db.contact(), door="web", texts_ok=True)
+    assert mine["texts"] == "unread" and db.mine()["texts"] == "unread" and "confirm_at" not in db.mine()
+
+
+def test_the_kids_desk_and_the_member_app_still_start_at_once(db):
+    db.person()
+    assert nh.enroll(db.biz, db.contact(), door="kids", texts_ok=True, visit_at=SUNDAY)["texts"] == "on"
+    assert "confirm" not in db.steps()
+
+
+def test_the_website_door_keeps_no_yes_when_the_box_is_ticked(db, monkeypatch):
+    """public_site's connect card calls keep_yes(source connect_card): it
+    says there's a number to ask, and keeps nothing."""
+    assert nh.keep_yes(BIZ, PHONE, source=nh.YES_SOURCES["web"], ip="203.0.113.9") is True
+    assert nh.keep_yes(BIZ, PHONE, source=nh.YES_SOURCES["form"]) is True
+    assert nh.keep_yes(BIZ, "555", source=nh.YES_SOURCES["web"]) is False
+    assert db.t["sms_consents"] == []

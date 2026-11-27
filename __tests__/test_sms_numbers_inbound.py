@@ -356,3 +356,36 @@ def test_daily_with_nothing_to_send_is_just_a_message(routed, giving, daily):
     assert res["action"] == "routed_direct"
     _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=PLATFORM))
     assert daily["asked"] == [(BIZ_A, CUSTOMER)]          # never on the shared number
+
+
+# ─── 7. YES to the Welcome Path's question (M-5, 2026-11-27) ──────────
+
+@pytest.fixture
+def asked(routed, monkeypatch):
+    import new_here
+    seen = []
+
+    def on_yes(biz, phone):
+        seen.append((biz, phone))
+        return {"contact_ids": ["c1"]} if phone == CUSTOMER else None
+    monkeypatch.setattr(new_here, "on_yes", on_yes)
+    return seen
+
+
+@pytest.mark.parametrize("text", ["YES", "yes", "Yes!", "Y", "yes please"])
+def test_yes_to_the_question_starts_the_path_and_shows_in_the_thread(routed, asked, text):
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text=text, to_number=OWN_A))
+    assert res == {"action": "new_here_yes", "business_id": BIZ_A, "reply": None}
+    assert asked == [(BIZ_A, CUSTOMER)]
+    assert routed["inbound"][0]["text"] == text and routed["bind"] == [(CUSTOMER, BIZ_A)]
+
+
+def test_yes_from_someone_nobody_asked_is_the_old_start(routed, asked, monkeypatch):
+    res = _run(sms_routing.route_inbound(from_number="+15550001111", text="YES", to_number=OWN_A))
+    assert res["action"] == "opt_in" and routed["inbound"] == []
+
+
+def test_a_sentence_that_starts_with_yes_is_a_message(routed, asked):
+    res = _run(sms_routing.route_inbound(
+        from_number=CUSTOMER, text="Yes! We loved it and will be back Sunday", to_number=OWN_A))
+    assert res["action"] != "new_here_yes" and asked == []

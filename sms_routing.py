@@ -370,7 +370,15 @@ async def route_inbound(
                     "phone": phone, "business_id": business_id,
                 })
                 return {"action": "opt_out", "business_id": business_id, "reply": None}
-            if first_word in START_WORDS:
+            # The Welcome Path's one question (new_here CONFIRM, M-5): a box
+            # ticked on a web page starts no texts until the phone itself
+            # says YES. "Yes!", "y" count too, but only as that answer.
+            yes_word = re.sub(r"[^A-Z]", "", first_word)
+            confirmed = None
+            if len(body.split()) <= 3 and (yes_word in START_WORDS or yes_word == "Y"):
+                import new_here
+                confirmed = await asyncio.to_thread(new_here.on_yes, business_id, phone)
+            if first_word in START_WORDS or confirmed:
                 logger.info(f"[ROUTE] START from {phone} on biz {business_id[:8]}'s own number — scoped opt-out cleared")
                 try:
                     await client.delete(
@@ -380,6 +388,16 @@ async def route_inbound(
                     )
                 except Exception as e:
                     logger.warning(f"[ROUTE] scoped opt-out clear failed: {e}")
+                if confirmed:
+                    # Their welcome is queued now (inside the church's hours);
+                    # the YES itself shows in the church's Text room.
+                    logger.info(f"[ROUTE] New here YES from {phone} on biz {business_id[:8]}'s own number")
+                    await _bind(client, phone, business_id)
+                    await record_inbound_sms(
+                        client, from_number=phone, text=body,
+                        provider_id=provider_id, media=media, business_id=business_id,
+                    )
+                    return {"action": "new_here_yes", "business_id": business_id, "reply": None}
                 return {"action": "opt_in", "business_id": business_id, "reply": None}
             if first_word in HELP_WORDS:
                 name = await _biz_name(client, business_id)
