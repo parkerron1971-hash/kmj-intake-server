@@ -401,7 +401,7 @@ def test_each_card_leads_with_its_founding_price_and_crosses_out_the_regular(mon
     cards = html[html.index('<div class="plans four">'):]
     assert cards.count('<span class="fchip">Founding price</span>') == 4
     for reg, reg_y, fnd, fnd_y, save_m, save_y in (
-            ("99", "990", "79", "790", "Save $20 a month · $240 a year", "Save $200 a year"),
+            ("129", "1,290", "99", "990", "Save $30 a month · $360 a year", "Save $300 a year"),
             ("249", "2,490", "199", "1,990", "Save $50 a month · $600 a year", "Save $500 a year"),
             ("499", "4,990", "399", "3,990", "Save $100 a month · $1,200 a year", "Save $1,000 a year"),
             ("899", "8,990", "699", "6,990", "Save $200 a month · $2,400 a year", "Save $2,000 a year")):
@@ -474,7 +474,7 @@ def test_the_plans_endpoint_and_the_move_status_carry_it(monkeypatch):
     out = asyncio.run(sb.billing_plans(for_type="church"))
     assert out["church_founding"] == {
         "on": True, "spots": 10, "left": 8, "ends": None,
-        "prices": {SMALL: {"month_cents": 7900, "quarter_cents": 23700, "year_cents": 79000},
+        "prices": {SMALL: {"month_cents": 9900, "quarter_cents": 29700, "year_cents": 99000},
                    GROWING: {"month_cents": 19900, "quarter_cents": 59700, "year_cents": 199000},
                    ESTABLISHED: {"month_cents": 39900, "quarter_cents": 119700, "year_cents": 399000},
                    LARGE: {"month_cents": 69900, "quarter_cents": 209700, "year_cents": 699000}}}
@@ -550,11 +550,14 @@ def test_the_catalog_carries_the_regular_and_the_founding_prices():
     for plan in fg.CHURCH_PLANS:
         key = f"STRIPE_PRICE_ID_{plan.upper()}"
         assert cat[key][1:] == (regular[plan], "month") and cat[key + "_ANNUAL"][1:] == (regular[plan] * 10, "year")
-        assert cat[key][0].endswith("_monthly_2026_11")              # new keys: the old ones name old amounts
+        # New keys: the old ones name old amounts. Small rose again on
+        # 2026-11-27, on its own keys (_2026_11b), founding price too.
+        assert cat[key][0].endswith("_monthly_2026_11b" if plan == SMALL else "_monthly_2026_11")
         assert cat[key + "_FOUNDING"][1:] == (founding[plan], "month")
         assert cat[key + "_ANNUAL_FOUNDING"][1:] == (founding[plan] * 10, "year")
         # The founding prices are the 2026-11-03 prices, reused by their keys.
-        assert cat[key + "_FOUNDING"][0] == f"solutionist_{plan}_monthly"
+        assert cat[key + "_FOUNDING"][0] == (f"solutionist_{plan}_monthly_founding_2026_11b" if plan == SMALL
+                                             else f"solutionist_{plan}_monthly")
         assert cf._env_key(plan, False) == key + "_FOUNDING"
         assert cf._env_key(plan, True) == key + "_ANNUAL_FOUNDING"
 
@@ -676,3 +679,98 @@ def test_the_plans_answer_offers_three_months_only_where_a_price_and_its_amount_
     del shown["price_grow_q_747"]
     out = asyncio.run(sb.billing_plans(for_type="church"))
     assert "quarterly_price_id" not in next(p for p in out["audience_plans"] if p["plan"] == GROWING)
+
+
+# ─── 7. a kept price (Small's $79 founding price, 2026-11-27) ─────────
+# Small's founding price went from $79 to $99. The church that took its place
+# at $79 is still charged $79: its price id is in STRIPE_PRICE_IDS_KEPT, and
+# what that price charges is read from Stripe, so its card, its move and the
+# income say $79, never today's founding price.
+
+KEPT_PRICES = {
+    "price_small_79": {"unit_amount": 7900, "recurring": {"interval": "month", "interval_count": 1}},
+    "price_small_q_237": {"unit_amount": 23700, "recurring": {"interval": "month", "interval_count": 3}},
+    "price_small_y_790": {"unit_amount": 79000, "recurring": {"interval": "year", "interval_count": 1}},
+}
+
+
+@pytest.fixture
+def kept(monkeypatch):
+    import httpx
+    calls = []
+
+    class _R:
+        def __init__(self, pid):
+            self.pid = pid
+            self.status_code = 200 if pid in KEPT_PRICES else 404
+
+        def json(self):
+            return KEPT_PRICES.get(self.pid, {"error": {"message": "No such price"}})
+
+    def get(url, auth=None, timeout=None):
+        pid = url.rsplit("/", 1)[-1]
+        calls.append(pid)
+        return _R(pid)
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_kept")
+    monkeypatch.setenv("STRIPE_PRICE_IDS_KEPT", ",".join(f"{p}={SMALL}" for p in (*KEPT_PRICES, "price_small_gone")))
+    monkeypatch.setattr(cf, "_kept", {})
+    return calls
+
+
+def test_a_kept_price_is_read_from_stripe_once(kept):
+    assert cf.kept_month_cents("price_small_79") == 7900
+    assert cf.kept_month_cents("price_small_q_237") == 7900          # every 3 months: a third
+    assert cf.kept_month_cents("price_small_y_790") == 7900          # a year: ten months' price
+    assert cf.kept_price("price_small_y_790")["year"] == 1
+    assert cf.kept_month_cents("price_small_79") == 7900 and kept.count("price_small_79") == 1   # once
+    assert cf.kept_month_cents("price_small_79", GROWING) is None   # another size pays its own price
+    assert cf.kept_month_cents("price_not_kept") is None and "price_not_kept" not in kept   # never asked
+    assert cf.kept_month_cents("price_small_gone") is None
+    assert cf.kept_month_cents("price_small_gone") is None and kept.count("price_small_gone") == 2   # asked again
+
+
+def test_no_stripe_key_reads_no_kept_price(kept, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY")
+    assert cf.kept_price("price_small_79") is None and kept == []
+
+
+def test_a_church_on_a_kept_price_pays_it_for_its_move(kept, monkeypatch):
+    import pricing_config
+    monkeypatch.setenv(cf._env_key(SMALL), "price_small_99")
+    church = {"subscription_plan": "price_small_79", "settings": {"founding_church": {"n": 2, "plan": SMALL}}}
+    assert pricing_config.church_founding_price_cents()[SMALL] == 9900
+    assert cf.price_cents_for(church, SMALL) == 7900                 # not today's $99
+    assert cb._move_cents(SMALL, church) == 3 * 7900
+    assert cf.price_cents_for(church, GROWING) == pricing_config.church_founding_price_cents()[GROWING]
+    # A church on today's founding price pays today's founding price.
+    assert cf.price_cents_for({"subscription_plan": "price_small_99"}, SMALL) == 9900
+
+
+def test_the_income_counts_a_kept_price_at_what_it_charges(kept):
+    import platform_money as pm
+    sets = {"founding_ids": set(), "founder_ids": set(), "annual_ids": set()}
+    assert pm.monthly_price_cents(SMALL, "price_small_79", **sets, kept_founding=True) == (7900, True)
+    assert pm.monthly_price_cents(SMALL, "price_small_79", **sets) == (7900, False)
+    assert pm.monthly_price_cents(SMALL, "price_small_y_790", **sets, kept_founding=True) == (round(79000 / 12), True)
+    rows = [{"id": "b1", "owner_id": "o1", "subscription_status": "active", "subscription_plan": "price_small_79",
+             "comp_tier": None, "founding": {"n": 2, "plan": SMALL}}]
+    out = pm.income_from_rows(rows, lambda owner_id: False)
+    assert (out["mrr_cents"], out["founding"]) == (7900, 1)
+
+
+def test_the_plans_answer_says_what_a_kept_price_charges(kept, monkeypatch):
+    async def no_display(pid):
+        return {}
+
+    async def no_founder():
+        return {"configured": False}
+    monkeypatch.setattr(sb, "_price_display", no_display)
+    monkeypatch.setattr(sb, "_founder_summary", no_founder)
+    monkeypatch.setattr(cf, "public_state", lambda: {"spots": 10, "left": 8})
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    out = asyncio.run(sb.billing_plans(for_type="church"))
+    assert out["price_plans"]["price_small_79"] == {"plan": SMALL, "every": "month", "kept_cents": 7900}
+    assert out["price_plans"]["price_small_q_237"] == {"plan": SMALL, "every": "quarter", "kept_cents": 23700}
+    assert out["price_plans"]["price_small_y_790"] == {"plan": SMALL, "every": "year", "kept_cents": 79000}
+    assert out["price_plans"]["price_small_gone"] == {"plan": SMALL, "every": None}   # unread: as before

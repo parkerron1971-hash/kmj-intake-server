@@ -43,11 +43,9 @@ def fake(monkeypatch):
         "id": "con1", "business_id": "biz1", "name": "Jane Dev", "email": "jane@x.com",
         "stripe_account_id": "acct_jane", "onboarding_status": "active",
         "is_1099_eligible": True, "default_category": "operating", "onboarded_at": "2026-01-01"})
-    # biz1 is the platform owner's own business; a test takes it out to
-    # play another business.
-    fb.platform = {"biz1"}
-    import member_asks
-    monkeypatch.setattr(member_asks, "platform_church", lambda biz: str(biz) in fb.platform)
+    # biz1 is named in CONTRACTOR_PAYOUT_BUSINESS_IDS (M-6); a test unsets
+    # it to play any other business.
+    monkeypatch.setenv(cr.PAYOUT_IDS_ENV, "biz1")
     return fb
 
 
@@ -141,10 +139,10 @@ def test_1099_summary_aggregates_and_thresholds(fake, stripe_ok):
 
 # ─── Locked to the platform owner's businesses (2026-10-31) ──────────
 
-def test_another_business_cannot_pay_from_the_platform_balance(fake, stripe_ok):
+def test_another_business_cannot_pay_from_the_platform_balance(fake, monkeypatch, stripe_ok):
     import asyncio
     from fastapi import HTTPException
-    fake.platform.clear()
+    monkeypatch.delenv(cr.PAYOUT_IDS_ENV, raising=False)
     with pytest.raises(HTTPException) as e:
         asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=300), request=_request(), user=_U()))
     assert e.value.status_code == 403
@@ -154,10 +152,10 @@ def test_another_business_cannot_pay_from_the_platform_balance(fake, stripe_ok):
     assert fake.rows("bills") == []
 
 
-def test_another_business_cannot_open_a_payout_account(fake, stripe_ok):
+def test_another_business_cannot_open_a_payout_account(fake, monkeypatch, stripe_ok):
     import asyncio
     from fastapi import HTTPException
-    fake.platform.clear()
+    monkeypatch.delenv(cr.PAYOUT_IDS_ENV, raising=False)
     fake.rows("contractors")[0].update(stripe_account_id=None, onboarding_status="none")
     with pytest.raises(HTTPException) as e:
         asyncio.run(cr.onboarding_link("con1", user=_U()))
@@ -184,10 +182,92 @@ def test_stripe_post_refuses_platform_money_for_another_business(fake, monkeypat
     assert e.value.status_code == 403
 
 
-def test_contractor_records_stay_open_to_every_business(fake):
-    fake.platform.clear()
+def test_contractor_records_stay_open_to_every_business(fake, monkeypatch):
+    monkeypatch.delenv(cr.PAYOUT_IDS_ENV, raising=False)
     out = cr.list_contractors("biz1", user=_U())
     assert out["ok"] and out["contractors"][0]["id"] == "con1"
+    assert out["payouts"] == {"stripe": False}          # the app offers no Pay button
+
+
+# ─── Locked to an explicit list, never a church (M-6, 2026-11-27) ─────
+
+def _refused(call, status=403):
+    import asyncio
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(call)
+    assert e.value.status_code == status
+    return e.value
+
+
+def test_the_owner_being_the_platform_owner_is_no_longer_enough(fake, monkeypatch, stripe_ok):
+    """The 10-31 lock asked member_asks.platform_church: any business whose
+    OWNER is the platform owner. That let Love City Church spend
+    Solutionist's balance. The owner's email no longer counts at all."""
+    import member_asks
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: True)
+    monkeypatch.delenv(cr.PAYOUT_IDS_ENV, raising=False)
+    _refused(cr.pay("con1", cr.PayBody(business_id="biz1", amount=300), request=_request(), user=_U()))
+    _refused(cr.onboarding_link("con1", user=_U()))
+    assert stripe_ok == [] and fake.rows("outbound_transfers") == [] and fake.rows("bills") == []
+    assert cr.list_contractors("biz1", user=_U())["payouts"] == {"stripe": False}
+
+
+@pytest.mark.parametrize("kind", ["church", "ministry", "nonprofit", "pastor"])
+def test_a_church_is_refused_even_when_named(fake, monkeypatch, kind):
+    """A church's or nonprofit's money is its own: named in the list by
+    mistake, it still never spends the platform balance, at every door."""
+    fake.rows("businesses")[0]["type"] = kind
+    monkeypatch.setenv(cr.PAYOUT_IDS_ENV, "biz1")
+
+    def _no_network(*a, **k):
+        pytest.fail("reached Stripe")
+    monkeypatch.setattr(cr.httpx, "AsyncClient", _no_network)
+    err = _refused(cr.pay("con1", cr.PayBody(business_id="biz1", amount=300), request=_request(), user=_U()))
+    assert "own bank" in err.detail
+    for path in ("/transfers", "/accounts"):
+        _refused(cr._stripe_post(path, {"metadata[business_id]": "biz1"}))
+    assert fake.rows("outbound_transfers") == [] and fake.rows("bills") == []
+    assert cr.payouts_open("biz1") is False
+
+
+def test_unset_or_empty_list_means_nobody(fake, monkeypatch):
+    for raw in (None, "", "  ,  "):
+        if raw is None:
+            monkeypatch.delenv(cr.PAYOUT_IDS_ENV, raising=False)
+        else:
+            monkeypatch.setenv(cr.PAYOUT_IDS_ENV, raw)
+        assert cr.payout_business_ids() == set()
+        assert cr.payouts_open("biz1") is False
+
+
+def test_the_list_takes_ids_in_any_case_and_separator(fake, monkeypatch):
+    bid = "7b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    fake.rows("businesses").append({"id": bid, "type": "consultant", "owner_id": "owner"})
+    monkeypatch.setenv(cr.PAYOUT_IDS_ENV, f" other-id ,{bid.upper()}  ")
+    assert cr.payouts_open(bid) is True
+    assert cr.payouts_open(bid.upper()) is True
+    assert cr.payouts_open("biz1") is False             # not named
+
+
+def test_a_business_that_cannot_be_read_is_a_no(fake, monkeypatch, stripe_ok):
+    import sb_clients
+    real = sb_clients.sb_get_as_service
+
+    def _blip(path, *a, **k):
+        if path.startswith("/businesses?id=eq.biz1&select=id,type"):
+            raise RuntimeError("supabase down")
+        return real(path, *a, **k)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _blip)
+    err = _refused(cr.pay("con1", cr.PayBody(business_id="biz1", amount=300), request=_request(), user=_U()), 503)
+    assert "Nothing was sent" in err.detail
+    assert stripe_ok == [] and fake.rows("outbound_transfers") == []
+    assert cr.payouts_open("biz1") is False
+
+
+def test_a_named_business_still_pays(fake, stripe_ok):
+    """The one way through: named, readable, and not a church."""
+    assert cr.list_contractors("biz1", user=_U())["payouts"] == {"stripe": True}
 
 
 # ─── Bills linked to a 1099 person (M-6, 2026-11-27) ─────────────────

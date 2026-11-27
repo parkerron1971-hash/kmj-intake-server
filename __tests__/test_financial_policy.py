@@ -18,6 +18,8 @@ def store(monkeypatch):
         state['calls'].append(path)
         if path.startswith('/business_financial_policies?'):
             return [{'business_id': 'biz', 'mode': state['mode']}]
+        if path.startswith('/businesses?id=eq.biz&select=id,type'):
+            return [{'id': 'biz', 'type': 'consultant'}]     # the payout lock's read (M-6)
         if path.startswith('/businesses?'):
             return [{'id': 'biz'}] if state['current'] else []
         if path.startswith('/business_financial_account_locks?'):
@@ -27,11 +29,17 @@ def store(monkeypatch):
     def forbidden(*a, **k):
         pytest.fail('Blocked financial action reached an external provider')
     monkeypatch.setattr(checkout.httpx, 'AsyncClient', forbidden)
-    # The contractor case is the platform owner's own business, so the
+    # The contractor case is a business named for payouts (M-6), so the
     # financial policy (not the platform-money lock) is what stops it.
-    import member_asks
-    monkeypatch.setattr(member_asks, 'platform_church', lambda biz: True)
+    monkeypatch.setenv(contractors_router.PAYOUT_IDS_ENV, 'biz')
     return state
+
+
+def test_the_contractor_case_passes_the_payout_lock(store):
+    """Guard for the parametrized test below: if the payout lock refused
+    first, 'contractor' would pass without the financial policy ever being
+    asked (a green that tests nothing)."""
+    assert contractors_router.payouts_open('biz') is True
 
 
 def test_lock_survives_disconnection_and_caller_settings_cannot_override(store):
