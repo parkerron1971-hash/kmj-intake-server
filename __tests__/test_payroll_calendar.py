@@ -361,7 +361,21 @@ def test_a_quarter_that_reaches_2500_says_it_can_not_wait_for_the_return(db):
         run(db, pd, "paid", lines=standard_lines())            # $956 each: $2,868 for the quarter
     fed = next(e for e in _feb_2027(db) if e["kind"] == "deposit_federal")
     assert fed["amount"] == 2868.0
-    assert "This quarter’s taxes have reached $2,500, so they can’t wait for the return" in fed["sub"]
+    assert "This quarter’s taxes have reached $2,500, so they may need to be deposited monthly" in fed["sub"]
+    assert "How the church deposits" in fed["sub"]
+
+
+def test_a_944_filer_past_2500_deposits_monthly_and_still_files_the_944(db):
+    """Account-2 review S1: never send a 944 filer to the schedule setting
+    (it would swap the 944 for quarterly 941s): deposits move, the 944 stays."""
+    _row(db)["settings"]["payroll"] = {"deposit_schedule": "annual"}
+    for pd in ("2026-10-30", "2026-11-30", "2026-12-31"):
+        run(db, pd, "paid", lines=standard_lines())            # $2,868 for the year
+    feb1 = _feb_2027(db)
+    fed = next(e for e in feb1 if e["kind"] == "deposit_federal")
+    assert "deposit each month’s taxes by the 15th of the next month from now on, and still file Form 944" in fed["sub"]
+    assert "How the church deposits" not in fed["sub"] and "switch to monthly" not in fed["sub"]
+    assert [e["title"] for e in feb1 if e["kind"] == "forms"] == ["Form 944", "W-2s, W-3 and 1099-NEC"]
 
 
 def test_a_form_944_filer_files_once_a_year_and_pays_with_it(db):

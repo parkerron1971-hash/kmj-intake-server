@@ -372,5 +372,17 @@ def test_paying_with_the_941_says_tick_the_line_16_box(db):
     _deposit(db, "federal:2026Q4", 1912.0)
     q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
     assert any("line 12 is less than $2,500" in n for n in q["notes"])
+    assert not any("$2,500 or more" in n for n in q["notes"])
     assert q["deposited"] == 1912.0
     assert pf.quarter_pdf(_biz(db), q)[:4] == b"%PDF"
+
+
+def test_a_quarter_at_2500_or_more_never_says_under_2500(db):
+    """Account-2 review S1: the line 16 note only when line 12 is under $2,500."""
+    _biz(db)["settings"]["payroll"] = {"deposit_schedule": "quarterly"}
+    for pd in ("2026-10-30", "2026-11-30", "2026-12-15"):
+        run(db, pd, "paid", lines=standard_lines())            # $956 each: $2,868
+    q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
+    assert q["lines"]["12"] >= 2500
+    assert not any("less than $2,500" in n or "under $2,500" in n for n in q["notes"])
+    assert any("$2,500 or more, so they may need to have been deposited monthly" in n for n in q["notes"])

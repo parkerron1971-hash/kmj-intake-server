@@ -356,10 +356,14 @@ def quarter(biz_row: Dict[str, Any], year: int, q: int, today: Optional[date] = 
         notes.append(f"You file Form 944 for the whole year, not a 941 each quarter. These are {pcal.QUARTER_WORDS[q]}’s "
                      f"share: the year’s quarters add up to the 944’s wages, income tax, Social Security and Medicare, "
                      f"due {pcal.long_day(pcal.form_944_due(year))}.")
+    elif schedule == pcal.QUARTERLY and total < pcal.SMALL_LINE:
+        notes.append("This quarter’s taxes are under $2,500, so they can be paid with this 941 by its due date: tick "
+                     "the line 16 box that says line 12 is less than $2,500 (Publication 15).")
     elif schedule == pcal.QUARTERLY:
-        notes.append("Your taxes are under $2,500 a quarter, so they are paid with this 941 by its due date: tick the "
-                     "line 16 box that says line 12 is less than $2,500. If a quarter reaches $2,500, deposit monthly "
-                     "instead (Publication 15).")
+        # Line 12 at $2,500 or more: never "under $2,500" (account-2 review S1).
+        notes.append(f"This quarter’s taxes are {pcal.money(total)}, $2,500 or more, so they may need to have been "
+                     f"deposited monthly rather than paid with the 941. Ask your accountant before you file; line 16 "
+                     f"then shows each month’s tax.")
     due = pcal.form_944_due(year) if schedule == pcal.ANNUAL else pcal.form_941_due(year, q)
     return {
         "ok": True, "year": year, "q": q, "due": due.isoformat(),

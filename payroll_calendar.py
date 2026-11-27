@@ -607,12 +607,20 @@ def build_events(*, runs: List[Dict[str, Any]], settings: Dict[str, Any], marked
         status = "sent" if key in marked else ("open" if g["runs"] else None)
         about = for_words + ("" if g["runs"] else ", projected")
         sub = f"{about}. {eftps_words(due)}"
-        # Paying with the return is only for small amounts (Publication 15):
-        # once the period's tax reaches $2,500 it can't wait for the return.
+        # Paying with the return is for small amounts (Publication 15). Once the
+        # period's tax reaches $2,500 it may need depositing before the return.
+        # A Form 944 filer still files the 944 (the IRS letter says so); only
+        # the deposits move, so they're never sent to the schedule setting,
+        # which would swap the 944 for quarterly 941s (account-2 review S1).
         if schedule in (QUARTERLY, ANNUAL) and amount is not None and amount >= SMALL_LINE:
-            period = "This quarter’s" if schedule == QUARTERLY else f"{pd.year}’s"
-            sub += (f" {period} taxes have reached {money(SMALL_LINE)[:-3]}, so they can’t wait for the return: "
-                    f"switch to monthly deposits in How the church deposits, and ask your accountant.")
+            line = money(SMALL_LINE)[:-3]
+            if schedule == QUARTERLY:
+                where = "How the church deposits" if church else "How you deposit"
+                sub += (f" This quarter’s taxes have reached {line}, so they may need to be deposited monthly instead "
+                        f"of paid with the 941: ask your accountant, and switch to monthly in {where} if so.")
+            else:
+                sub += (f" {pd.year}’s taxes have reached {line}: deposit each month’s taxes by the 15th of the next "
+                        f"month from now on, and still file Form 944 for the year. Ask your accountant.")
         ev = _ev("deposit_federal", due, "IRS deposit", sub, amount=amount, key=key, status=status)
         ev["_for"] = about                         # the reminders' own words; never in the answer
         out.append(ev)
