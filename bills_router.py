@@ -26,6 +26,30 @@ import sb_clients
 from auth_supabase import AuthedUser, require_user
 import period_lock
 
+_UUID_RE = __import__("re").compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _contractor_of(business_id: str, contractor_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The contractor a bill names, checked to be this business's (M-6: a
+    bill paid to a 1099 person links to them, so their W-9 and draft 1099
+    find it). None for no contractor; 400 for an id that isn't one of
+    theirs; a read that fails is a 503, never a silent unlink."""
+    cid = (contractor_id or "").strip()
+    if not cid:
+        return None
+    if not _UUID_RE.fullmatch(cid):
+        raise HTTPException(400, "That contractor id isn't valid.")
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/contractors?id=eq.{cid}&business_id=eq.{business_id}&select=id,name,is_1099_eligible&limit=1")
+    except Exception:
+        raise HTTPException(503, "The contractors couldn't be read just now. Try again shortly.")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "The contractors couldn't be read just now. Try again shortly.")
+    if not rows:
+        raise HTTPException(400, "That contractor isn't one of this business's.")
+    return rows[0]
+
 
 def _bill_row(bill_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
@@ -194,6 +218,7 @@ def _generate_due_recurring_bills(business_id: str) -> int:
                     "recurrence_parent_id": t["id"],
                     "recurrence_index": n,
                     "is_1099_eligible": t.get("is_1099_eligible") or False,
+                    **({"contractor_id": t["contractor_id"]} if t.get("contractor_id") else {}),
                 }, prefer=None)
                 created += 1
             except Exception as e:
@@ -247,6 +272,9 @@ class BillBody(BaseModel):
     recurrence_end_value: Optional[str] = None
     is_1099_eligible: bool = False
     notes: Optional[str] = None
+    # A 1099 person on Contractors this bill pays (M-6). Linking makes the
+    # bill 1099-eligible and counts it toward their 1099-NEC.
+    contractor_id: Optional[str] = None
 
 
 @router.post("")
@@ -257,6 +285,7 @@ def create_bill(body: BillBody, user: AuthedUser = Depends(require_user)) -> Dic
         raise HTTPException(400, f"category must be one of {_BUCKETS}")
     if body.is_recurring and body.recurrence_frequency not in _FREQS:
         raise HTTPException(400, f"recurring bills need a frequency in {_FREQS}")
+    contractor = _contractor_of(body.business_id, body.contractor_id)
     payload = {
         "business_id": body.business_id,
         "vendor_name": body.vendor_name,
@@ -273,9 +302,11 @@ def create_bill(body: BillBody, user: AuthedUser = Depends(require_user)) -> Dic
         "recurrence_end_type": body.recurrence_end_type if body.is_recurring else None,
         "recurrence_end_value": body.recurrence_end_value if body.is_recurring else None,
         "recurrence_index": 0,
-        "is_1099_eligible": body.is_1099_eligible,
+        "is_1099_eligible": body.is_1099_eligible or bool(contractor),
         "notes": body.notes,
     }
+    if contractor:
+        payload["contractor_id"] = contractor["id"]
     res = sb_clients.sb_post_as_service("/bills", payload)
     row = (res or [None])[0] if isinstance(res, list) else res
     # Backfill any already-due instances for a new recurring template.
@@ -297,6 +328,9 @@ class BillPatchBody(BaseModel):
     recurrence_paused: Optional[bool] = None
     notes: Optional[str] = None
     override_reason: Optional[str] = None     # required to edit a closed-period bill
+    # A contractor's id links the bill to them (and makes it 1099-eligible);
+    # "" unlinks it. Absent: unchanged.
+    contractor_id: Optional[str] = None
 
 
 @router.patch("/{bill_id}")
@@ -325,6 +359,11 @@ def update_bill(bill_id: str, body: BillPatchBody,
         if body.status not in ("draft", "pending", "scheduled", "paid", "overdue", "cancelled"):
             raise HTTPException(400, "invalid status")
         patch["status"] = body.status
+    if body.contractor_id is not None:
+        contractor = _contractor_of(body.business_id, body.contractor_id)
+        patch["contractor_id"] = contractor["id"] if contractor else None
+        if contractor:
+            patch["is_1099_eligible"] = True
     sb_clients.sb_patch_as_service(
         f"/bills?id=eq.{bill_id}&business_id=eq.{body.business_id}", patch)
     return {"ok": True}

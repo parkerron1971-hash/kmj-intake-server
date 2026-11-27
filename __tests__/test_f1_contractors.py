@@ -188,3 +188,88 @@ def test_contractor_records_stay_open_to_every_business(fake):
     fake.platform.clear()
     out = cr.list_contractors("biz1", user=_U())
     assert out["ok"] and out["contractors"][0]["id"] == "con1"
+
+
+# ─── Bills linked to a 1099 person (M-6, 2026-11-27) ─────────────────
+
+SPEAKER = "5f0c2a1e-1b7d-4c3e-9a8b-2d4e6f8a0b1c"
+
+
+def _speaker(fake, biz="biz1"):
+    fake.rows("contractors").append({"id": SPEAKER, "business_id": biz, "name": "Rev. Ada Brooks",
+                                     "email": None, "stripe_account_id": None, "onboarding_status": "invited",
+                                     "is_1099_eligible": True, "default_category": "operating"})
+
+
+def _bill(fake, vendor, amount, *, is1099=True, contractor=None, biz="biz1"):
+    fake.rows("bills").append({"id": f"bill-{len(fake.rows('bills')) + 1:03d}", "business_id": biz,
+                               "vendor_name": vendor, "amount": amount, "paid_amount": amount, "status": "paid",
+                               "paid_at": "2026-05-03T12:00:00Z", "is_1099_eligible": is1099,
+                               "contractor_id": contractor})
+
+
+def test_typed_in_speaker_bills_link_to_the_contractor_and_count_for_their_1099(fake):
+    """The review's dead end: a guest speaker paid by check, entered as a
+    1099 bill, got 'Manual 1099 needed' and could never get a W-9 or draft."""
+    _speaker(fake)
+    _bill(fake, "Rev. Ada Brooks", 1500.0)
+    _bill(fake, "  rev. ada brooks ", 900.0)                 # same name, other case and spaces
+    _bill(fake, "Rev. Ada Brooks", 50.0, is1099=False)       # not a 1099 bill: left alone
+    _bill(fake, "Office Depot", 300.0)                       # someone else: left alone
+    _bill(fake, "Rev. Ada Brooks", 700.0, biz="biz2")        # another business: never touched
+    before = {r["name"]: r for r in _summary_1099("biz1", 2026)["rows"]}
+    assert before["Rev. Ada Brooks"]["contractor_id"] is None
+    out = cr.link_bills(SPEAKER, cr.LinkBillsBody(business_id="biz1", vendor_name="Rev. Ada Brooks"), user=_U())
+    assert out == {"ok": True, "linked": 2}
+    linked = {b["id"] for b in fake.rows("bills") if b.get("contractor_id") == SPEAKER}
+    assert len(linked) == 2 and all(b["business_id"] == "biz1" for b in fake.rows("bills") if b["id"] in linked)
+    row = {r["name"]: r for r in _summary_1099("biz1", 2026)["rows"]}["Rev. Ada Brooks"]
+    assert row["contractor_id"] == SPEAKER and row["total_paid"] == 2400.0 and row["reaches_threshold"] is True
+    assert row["stripe_managed"] is False                  # a manual 1099: the drafts can now be made
+    # Twice is harmless: nothing left to link.
+    again = cr.link_bills(SPEAKER, cr.LinkBillsBody(business_id="biz1", vendor_name="Rev. Ada Brooks"), user=_U())
+    assert again["linked"] == 0
+
+
+def test_link_bills_refuses_another_business_and_a_blank_name(fake):
+    from fastapi import HTTPException
+    _speaker(fake)
+    with pytest.raises(HTTPException) as e:
+        cr.link_bills(SPEAKER, cr.LinkBillsBody(business_id="biz2", vendor_name="Rev. Ada Brooks"), user=_U())
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        cr.link_bills(SPEAKER, cr.LinkBillsBody(business_id="biz1", vendor_name="  "), user=_U())
+    assert e.value.status_code == 400
+
+
+def test_a_bill_names_its_contractor_only_if_it_is_this_business_s(fake):
+    from fastapi import HTTPException
+    import bills_router as br
+    _speaker(fake)
+    assert br._contractor_of("biz1", None) is None and br._contractor_of("biz1", "") is None
+    assert br._contractor_of("biz1", SPEAKER)["name"] == "Rev. Ada Brooks"
+    for bad, code in (("con1", 400), ("not-a-uuid&business_id=eq.x", 400),
+                      ("00000000-0000-4000-8000-000000000000", 400)):
+        with pytest.raises(HTTPException) as e:
+            br._contractor_of("biz1", bad)
+        assert e.value.status_code == code, bad
+    with pytest.raises(HTTPException) as e:
+        br._contractor_of("biz2", SPEAKER)                   # another business's contractor
+    assert e.value.status_code == 400
+
+
+def test_a_new_bill_for_a_contractor_is_linked_and_1099_and_can_be_unlinked(fake, monkeypatch):
+    import bills_router as br
+    import period_lock
+    monkeypatch.setattr(period_lock, "guard", lambda *a, **k: None)
+    _speaker(fake)
+    out = br.create_bill(br.BillBody(business_id="biz1", vendor_name="Rev. Ada Brooks", amount=400,
+                                     status="paid", contractor_id=SPEAKER), user=_U())
+    bill = out["bill"]
+    assert bill["contractor_id"] == SPEAKER and bill["is_1099_eligible"] is True
+    br.update_bill(bill["id"], br.BillPatchBody(business_id="biz1", contractor_id=""), user=_U())
+    row = next(b for b in fake.rows("bills") if b["id"] == bill["id"])
+    assert row["contractor_id"] is None
+    # A bill without one is as before.
+    plain = br.create_bill(br.BillBody(business_id="biz1", vendor_name="Office Depot", amount=30), user=_U())["bill"]
+    assert "contractor_id" not in plain and plain["is_1099_eligible"] is False

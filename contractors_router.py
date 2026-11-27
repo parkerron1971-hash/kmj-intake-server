@@ -374,6 +374,45 @@ async def pay(contractor_id: str, body: PayBody, request: Request,
             "amount": round(body.amount, 2)}
 
 
+class LinkBillsBody(BaseModel):
+    business_id: str
+    vendor_name: str
+
+
+@router.post("/{contractor_id}/link-bills")
+def link_bills(contractor_id: str, body: LinkBillsBody,
+               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Link the 1099 bills typed in under a vendor's name to this contractor
+    (M-6, 2026-11-27). A church that paid its guest speaker by check and
+    entered a 1099 bill got a "Manual 1099 needed" row that could never get
+    a W-9 or a draft: the bill named no contractor. This links every
+    1099-eligible bill of this business with no contractor whose vendor
+    name is the same, ignoring case and spaces at the ends, so the 1099
+    summary counts them under the contractor and the draft can be made.
+    Nothing about the money changes: amounts, dates and the books stay."""
+    c = _owner_for_contractor(contractor_id, user, min_role="manager")
+    if str(c["business_id"]) != str(body.business_id):
+        raise HTTPException(403, "contractor belongs to a different business")
+    name = (body.vendor_name or "").strip().lower()
+    if not name:
+        raise HTTPException(400, "vendor_name is required")
+    biz = str(c["business_id"])
+    try:
+        rows = sb_clients.sb_get_all_as_service(
+            f"/bills?business_id=eq.{biz}&is_1099_eligible=eq.true&contractor_id=is.null"
+            f"&select=id,vendor_name", strict=True) or []
+    except sb_clients.PartialRead:
+        raise HTTPException(503, "The bills couldn't all be read just now, so none were linked. Try again shortly.")
+    ids = [str(r["id"]) for r in rows if (r.get("vendor_name") or "").strip().lower() == name]
+    for n in range(0, len(ids), 60):
+        chunk = ",".join(ids[n:n + 60])
+        sb_clients.sb_patch_as_service(
+            f"/bills?business_id=eq.{biz}&contractor_id=is.null&id=in.({chunk})",
+            {"contractor_id": str(contractor_id), "updated_at": _now_iso()})
+    logger.info(f"[f1] linked {len(ids)} bill(s) to contractor={str(contractor_id)[:8]} biz={biz[:8]}")
+    return {"ok": True, "linked": len(ids)}
+
+
 @router.get("/transfers")
 def list_transfers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
