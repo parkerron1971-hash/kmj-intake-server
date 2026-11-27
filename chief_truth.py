@@ -202,6 +202,10 @@ Estimates/hypotheticals need explicit labels and supplied assumptions; check ari
 An action claim asserts an operation was performed or started. A capability statement
 ("I can text an invoice"), conditional offer or clarification question is NOT an
 executed action: classify any capability assertion as fact and check capability sources.
+An offer of work to come ("give me the amounts and I'll record them", "want me to match
+them?") is supported by a capability source that names that action; the details the person
+will give need not exist yet. Any person, record or status the offer names ("Maria's overdue
+invoice", "the open count") is a fact that needs its own source.
 An explicit statement that no action ran is a fact supported by turn execution state.
 What a saved record holds now ("your FAQ has...", "both are in that answer", and "yes" when
 that is what it means) is a fact: cite the record and quote it, even when the owner asked
@@ -268,6 +272,83 @@ CAPABILITY_EVIDENCE = (
     'An identifiable invoice and a contact phone are required for SMS delivery. '
     'Capability does not establish that any action ran or that an account is configured.'
 )
+
+# What Chief can do, for the review (2026-11-27). Kevin, on a held-back offer: "when i said what said it
+# said it could[n't] verify it's answer. that needs to be fixed in general". Chief offered to record the
+# 22nd's gifts once it had them; the review held it back: "Nothing in the supplied sources shows ... that
+# Chief can record offerings". The only capability sources were invoice delivery and Chief's computer, so
+# any offer of any other action had nothing to stand on. Now the actions THIS login may use whose words
+# the draft shares are a capability source, each with what it does (action_registry): an honest offer
+# is supported, and it still proves nothing ran, is set up, or what a record holds.
+CAPABILITY_ACTIONS_MAX = 10
+# A claim that reads as an ability or an offer: the only kind the list of actions backs.
+_ABILITY_OR_OFFER = re.compile(
+    r"\b(?:can|could|able to|support|supports|i['\u2019]ll|i will|i would|i['\u2019]d|want me to|shall i|should i|"
+    r"would you like|do you want|let me know|tell me|give me|send me|once you|if you|when you|whenever you|"
+    r"as soon as you|happy to|glad to)\b", re.I)
+# Descriptions written for engineers, never for the person in the chat or a repaired reply.
+_INTERNAL_WORDS = re.compile(
+    r"\b(?:stripe|telnyx|twilio|github|claude|docstring|model spend|frontend|backend|class [abc]|builder bridge|"
+    r"agent surface|chief_only|rls|jwt|webhook)\b", re.I)
+_CAPABILITY_STOP = frozenset((
+    "the a an and or of to in on for with by from at as is are be it its this that one any all "
+    "your you their them they his her our we i chief what when how who which not no can will "
+    "reads read lists list returns shows writes row rows business businesses owner name names person "
+    "people only never each per via also want should about would like just there here then them into".split()))
+
+
+_CAP_SAME = {"sms": "text", "messag": "text", "message": "text", "appoint": "book", "session": "book"}
+
+
+def _cap_stem(word):
+    """book/booking/booked, assign/assignment, text/texting: one word each (_stem strips only a plural s)."""
+    for end in ("ments", "ment", "ings", "ing", "ed", "es", "s"):
+        if len(word) > len(end) + 3 and word.endswith(end):
+            word = word[: -len(end)]
+            break
+    return _CAP_SAME.get(word, word)
+
+
+def _capability_terms(text):
+    return {_cap_stem(w) for w in _words(text) if len(w) > 2 and w not in _CAPABILITY_STOP}
+
+
+def actions_capability(reply, scope=None, *, handlers=None):
+    """A capability source: the actions this login may use that the draft's words point at, with what each
+    does. '' when none do. `scope` is the login's lane (chief_areas.TURN; None is every action)."""
+    try:
+        import action_registry
+        import chief_areas
+        if handlers is None:
+            import chief_of_staff
+            handlers = chief_of_staff.ACTION_HANDLERS
+        want = _capability_terms(reply)
+        if not want:
+            return ''
+        scored = []
+        for verb in sorted(handlers):
+            cls = action_registry.classification(verb) or {}
+            why = str(cls.get('why') or '').strip()
+            if not why or cls.get('effect') == 'ui' or _INTERNAL_WORDS.search(why):
+                continue
+            hits = want & _capability_terms(verb + ' ' + why)
+            named = want & _capability_terms(verb)
+            # The action's own name shares a word with the draft, or its description shares three.
+            if not named and len(hits) < 3:
+                continue
+            if chief_areas.refusal(verb, {}, scope) is not None:
+                continue
+            scored.append((-(len(hits) + 2 * len(named)), verb, why))
+        scored.sort()
+        lines = [f"- {verb}: {why[:220]}" for _, verb, why in scored[:CAPABILITY_ACTIONS_MAX]]
+        if not lines:
+            return ''
+        return ("Actions Chief can use for the person in this chat, each with what it does. This is a capability: "
+                "it supports 'I can ...' and offers of work to come, never that anything ran, that anything is "
+                "set up, or what a record holds.\n" + "\n".join(lines))
+    except Exception:  # noqa: BLE001 — no capability source is today's review
+        return ''
+
 
 def computer_capability(business_id) -> str:
     """What Chief's computer can do, for the reviewer: a true sentence about
@@ -864,6 +945,15 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                     return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
                 return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
+            # A capability says what Chief CAN do. It never backs work done, whatever kind the reviewer
+            # gave the claim (2026-11-27: "I recorded the gifts", filed as a fact citing an action's
+            # description, passed). The list of actions (system:chief_actions) backs only a claim that
+            # reads as an ability or an offer, never one about how things stand.
+            if source['kind'] == 'capability':
+                if _DONE_CLAIM.search(text_) or has_completion_claim(text_):
+                    return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
+                if sid == 'system:chief_actions' and not _ABILITY_OR_OFFER.search(text_):
+                    return 'unsupported', [], _claim_fail('a capability supports only what Chief can do', text_)
             # A reviewer cannot bless a fabricated number with an unrelated
             # real quote.
             if claim['kind'] != 'estimate':
@@ -2957,6 +3047,13 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
     sources['system:invoice_delivery'] = {'kind': 'capability', 'text': CAPABILITY_EVIDENCE, 'complete': True}
     sources['system:chief_computer'] = {'kind': 'capability', 'complete': True,
                                         'text': computer_capability(((ctx or {}).get('business') or {}).get('id'))}
+    try:
+        import chief_areas
+        _can = actions_capability(reply, chief_areas.TURN.get())
+    except Exception:  # noqa: BLE001
+        _can = ''
+    if _can:
+        sources['system:chief_actions'] = {'kind': 'capability', 'complete': True, 'text': _can}
     if not receipts:
         sources['turn:execution'] = {'kind': 'record', 'text': 'No action ran in this request.', 'complete': True}
     logger.info('reply review input: message_chars=%d history_turns=%d sources=%d draft_chars=%d',
@@ -3011,7 +3108,7 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
                 raw, (verdict, cited, reason) = raw2, second
     # A vacuous reviewer verdict cannot clear a recognizable completion claim.
     if verdict == 'supported' and has_completion_claim(reply) and (
-            not cited or all(sources[sid]['kind'] == 'conversation' for sid in cited)):
+            not cited or all(sources[sid]['kind'] in ('conversation', 'capability') for sid in cited)):
         verdict, reason = 'unsupported', 'completion claim without a receipt'
     # One figure it cannot back should not cost the whole answer. Cut the
     # sentence(s) carrying the failed claim, re-check the rest with the
