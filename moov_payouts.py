@@ -776,7 +776,7 @@ def pay(body: PayBody, request: Request, user: AuthedUser = Depends(require_user
         "description": description, "status": "created", "idempotency_key": key,
         "source_account_id": church["moov_account_id"], "source_payment_method_id": routes["source"],
         "destination_account_id": payee["moov_account_id"], "destination_payment_method_id": dest,
-        "approved_by": str(user.id),
+        "approved_by": str(user.id), "created_at": _now_iso(),
         "bill_id": str(bill["id"]) if bill else None, "bill_was_status": (bill or {}).get("status"),
     }, redact=True))
     if not p:
