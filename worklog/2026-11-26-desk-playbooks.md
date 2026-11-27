@@ -4,7 +4,7 @@ date: 2026-11-26
 agent: Claude Code (Claude Opus 5.5)
 asked: "specialist desks: KAI attaches a desk's playbook to every worker it opens in that area"
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#2094]
 migrations: []
 left_undone: ["Solution Space does not attach docs/desks/<id>.md to a worker's brief yet; that is KAI's side, in claude-bench"]
 decisions: ["nine fixed desk ids: member-app, church-office, chief, websites, money, messaging, live-media, system, tickets", "the playbooks are knowledge, not policy: CLAUDE.md and AGENTS.md win where they disagree", "tickets diagnoses and hands off; it never fixes code itself"]
