@@ -35,17 +35,18 @@ A card at **3 points or more** needs a look (`INBOUND_HOLD_AT`).
 
 | Code | Points | What staff read |
 |---|---|---|
-| junk_phone | 2 | The phone number isn't real (too short, one digit repeated, 1234567890, a digit and nine zeros, an area code starting with 0 or 1) |
+| junk_phone | 2 | The phone number isn't real (under 7 digits, one digit repeated, 1234567890, a digit and nine zeros, an area code starting with 0 or 1) |
+| short_phone | 1 | The phone number looks incomplete (7–9 digits: often a local number without its area code) |
 | link_foreign / link | 2 / 1 | Asks you to visit x.com (1 point when it is the sender's own domain or a social site; the church's own domains don't count) |
-| sales | 2 | Reads like a sales pitch (listing, catalogue, SEO, ranking, backlinks, website traffic, sponsorship, free trial, commission, …) |
+| sales | 2 | Reads like a sales pitch (listing, catalogue, SEO, ranking, backlinks, website traffic, sponsorship, free trial, commission, …). Not "Google Maps", "registration link" or a bare "advertisement": real seekers write those (review should-fix 4). |
 | money | 3 | Asks about money or gift cards (gift cards, wire transfer, crypto, "processing/customs/activation fee", …) |
 | payment_app | 1 | Mentions a payment app (Zelle, Venmo, Cash App or PayPal on its own; real people ask how to give) |
 | reply_yes | 1 | Asks you to reply 'yes' or click a link |
 | fake_follow_up | 1 | Says it wrote before; nothing from them is on file |
 | impersonation | 3 | Uses Kevin Carter's name from an address that isn't theirs (the church's leaders by name) |
 | name_email_mismatch | 1 | The name doesn't match the email address |
-| disposable / no_mx / new_domain | 2 / 2 / 1 | A throwaway email address / can't receive mail / the domain is N days old (RDAP; free mail is never looked up) |
-| seen_here | 2 | The same email, domain, phone or words as a card already held here in the last 14 days |
+| disposable / no_mx / new_domain | 2 / 2 / 1 | A throwaway email address / can't receive mail / the domain is N days old (RDAP, **off** unless `INBOUND_RDAP=on`, because the domain would go to rdap.org). Shared mail (free providers, ISPs like `*.rr.com`, juno.com, `yahoo.co.uk`, and bare public suffixes) is never looked up. |
+| seen_here | 2 | The same email, phone or words (or a throwaway/curated domain) as a card already held here in the last 14 days |
 | seen_elsewhere | 3 | The same long words at another church, or the same address at two or more, in 7 days |
 | shared_list | 3 | Other churches marked this sender as a scam |
 | scam_before | 3 | You marked this sender as a scam before |
@@ -61,7 +62,8 @@ never a prayer request. The model answers person, pitch or scam. It can only
 raise a card to needs_look, never clear one. It goes through the `llm_call`
 seam (metered, `task="inbound_second_opinion"`) and is skipped over the day's
 spend cap. A 4 s timeout or any error keeps the deterministic verdict.
-`INBOUND_SECOND_OPINION=off` turns it off.
+`INBOUND_SECOND_OPINION=off` turns it off. A card from a sender this church
+said is real is never sent to it (its own Real always wins).
 
 ## What a hold holds
 
@@ -86,27 +88,40 @@ always did.
 
 - **Real person** releases each held card, oldest first, exactly as it would
   have run (the follow-up, the Welcome Path with the card's own "Text me" yes,
-  or for a contact form, scoring and the nudge). This church remembers the
-  sender by email, phone and words, never by domain, so their next card is
-  clear.
-- **Not a guest** works on anyone, held or not. It marks them inactive, closes
-  their open follow-ups (through `church_follow_up.close_for_contact` from the
-  step-1 Fix, #2097, once that merges, or its own loop before then) and cancels
-  their queued Welcome Path texts.
+  or for a contact form, scoring and the nudge). A card released before and
+  put back reopens its own follow-up. This church remembers the sender by
+  email, phone and words, never by domain, so their next card is clear. The
+  "New connect card" alert is **not** replayed, on purpose: the person who
+  released the card has just read it.
+- **Not a guest** works on anyone, held or not. In this order: it cancels their
+  queued Welcome Path texts (marked `last_error = "Needs a look: marked not a
+  guest; not sent."`), closes their open follow-ups (through
+  `church_follow_up.close_for_contact` from #2097 once that merges, with an
+  office note, or its own loop before then), then marks them inactive. If the
+  person doesn't save, the texts and follow-ups go back and nothing changed.
+  #2097's `reopen_for_contact` only touches its own inactive closes and
+  texts, never these.
 - **Scam** does the same as Not a guest, and the sender's hashes count toward the
   shared list.
 
 Every tap writes an `inbound_decisions` row (what it changed) and an `audit_log`
-line (who, when, which signal codes, never the words). Undo works for a week:
-the person waits for a look again, the follow-ups it closed reopen, the texts it
-cancelled are queued again if their time hasn't passed, and the sender memory
-goes back to what it was.
+line (who, when, which signal codes, never the words). Undo works for a week,
+on a person's **latest** tap only, and once. The row is claimed before anything
+moves, so two screens can't both put it back. It restores exactly what that tap
+took, by the ids it recorded: the follow-ups it closed reopen, the texts it
+cancelled are queued again if their time hasn't passed, the status and the
+sender memory go back, and after a Real the Welcome Path state is put back so
+it can start again.
 
 ## The shared list (§4.4)
 
-- Only salted HMAC-SHA256 hashes (email, email domain except free mail, phone
-  except junk, and a fingerprint of the words with names, addresses, links and
-  numbers taken out). The salt is `INBOUND_HASH_SALT`, otherwise one derived
+- Only salted HMAC-SHA256 hashes: the email address, the phone (never a junk
+  one), and a fingerprint of what they wrote in their own words (the message
+  and notes, never the ticked choices), with names, addresses, links and
+  numbers taken out. **A domain is never remembered or shared**, except a
+  throwaway inbox or one on the curated abusive list (`INBOUND_ABUSIVE_DOMAINS`).
+  An ISP, a free provider or a company's mail would hold every real person who
+  shares it (review must-fix 2). The salt is `INBOUND_HASH_SALT`, otherwise one derived
   from the service key. Changing it starts the lists over.
 - A sender goes on the list when **two different churches** tap Scam within 30
   days, or when the platform owner adds them (`share: true` on their own Scam
@@ -139,7 +154,9 @@ goes back to what it was.
 | `on` | On for every business |
 | `<id>,<id>` | On for the listed businesses only |
 
-`INBOUND_RDAP=off` skips the domain-age lookup.
+`INBOUND_RDAP=on` turns the domain-age lookup on (off by default; name rdap.org
+on the privacy page first). `INBOUND_ABUSIVE_DOMAINS=a.com,b.net` is the curated
+list of abuse-only domains.
 
 ## API contract (for the front end)
 

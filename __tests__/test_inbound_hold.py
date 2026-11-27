@@ -34,7 +34,8 @@ PKS = {"inbound_senders": ("business_id", "kind", "hash"), "inbound_shared_list"
 
 
 def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Microseconds, as Postgres keeps them: two rows a moment apart order.
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _split(s, sep=","):

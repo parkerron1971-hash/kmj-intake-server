@@ -38,6 +38,7 @@ Before the file is applied every write here fails, and a card is never held
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -184,7 +185,8 @@ def held_count(business_id: str) -> Optional[int]:
                  "&select=contact_id&limit=500")
     if rows is None:
         return None
-    return len({str(r.get("contact_id") or r.get("id")) for r in rows})
+    # A row whose contact isn't attached yet (or was deleted) is nobody to look at.
+    return len({str(r["contact_id"]) for r in rows if r.get("contact_id")})
 
 
 def signal_words(n: int, church: bool = True) -> Tuple[str, str]:
@@ -419,12 +421,13 @@ def shared_list_review(prints: Dict[str, List[str]], *, now: Optional[datetime] 
 
 def _close_follow_ups(biz: str, cid: str, by_user: str, by_name: str) -> List[str]:
     """Close every open follow-up for this person (the volunteer call and its
-    "still waiting" alerts stop). The closed ones' ids, for undo."""
+    "still waiting" alerts stop). The closed ones' ids, for undo. Their
+    queued texts are cancelled BEFORE this (_cancel_welcome_texts), so the
+    ids undo needs are this decision's own, whatever the helper below also
+    does (#2097's close_for_contact takes them off the Welcome Path too)."""
     import church_follow_up as cfu
     shared = getattr(cfu, "close_for_contact", None)
     if callable(shared):
-        # The step-1 Fix's one helper (church-office: marking someone inactive
-        # closes their follow-ups); it also takes them off the Welcome Path.
         got = shared(biz, cid, by_user=by_user, by_name=by_name, why="Not a guest: closed by the office.")
         if got is None:
             raise HTTPException(503, "Their follow-ups couldn't be read just now. Nothing changed. Try again.")
@@ -445,12 +448,29 @@ def _close_follow_ups(biz: str, cid: str, by_user: str, by_name: str) -> List[st
 
 
 def _cancel_welcome_texts(biz: str, cid: str) -> List[str]:
-    """Take them off the Welcome Path: every queued text for them cancelled."""
+    """Take them off the Welcome Path: every queued text for them cancelled,
+    marked as this hold's (last_error), so undo puts back exactly these."""
     rows = sb_clients.sb_patch_as_service(
         f"/chief_scheduled_actions?business_id=eq.{_q(biz)}&status=eq.queued"
         f"&action->>type=eq.{NEW_HERE_KIND}&action->>contact_id=eq.{_q(cid)}",
-        {"status": "cancelled"})
-    return [str(r["id"]) for r in rows if r.get("id")] if isinstance(rows, list) else []
+        {"status": "cancelled", "last_error": "Needs a look: marked not a guest; not sent."})
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Their welcome texts couldn't be read just now. Nothing changed. Try again.")
+    return [str(r["id"]) for r in rows if r.get("id")]
+
+
+def _reopen(biz: str, follow_ups: List[str], texts: List[str]) -> None:
+    """Put back follow-ups this closed and texts this cancelled (a text whose
+    time has passed stays cancelled: it would arrive late and out of order)."""
+    now = _iso(_now())
+    for fid in follow_ups:
+        sb_clients.sb_patch_as_service(
+            f"/church_follow_ups?business_id=eq.{_q(biz)}&id=eq.{_q(fid)}&status=eq.closed",
+            {"status": "open", "done_at": None, "updated_at": now})
+    for sid in texts:
+        sb_clients.sb_patch_as_service(
+            f"/chief_scheduled_actions?business_id=eq.{_q(biz)}&id=eq.{_q(sid)}&status=eq.cancelled"
+            f"&run_at=gt.{now}", {"status": "queued", "last_error": None})
 
 
 def _event_data(biz: str, receipt: str) -> Optional[Dict[str, Any]]:
@@ -461,39 +481,64 @@ def _event_data(biz: str, receipt: str) -> Optional[Dict[str, Any]]:
 
 
 def _release(biz: str, cid: str, contact: Dict[str, Any], checks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Run what each held card would have run, oldest first."""
+    """Run what each held card would have run, oldest first. Never raises: a
+    card that couldn't run is counted, and the decision is still recorded.
+
+    The "New connect card" alert is NOT replayed, on purpose: its job is to
+    say a card waits in Members, and the person releasing it has just read
+    it there. The follow-up's own hand-off tells its leader."""
     opened: List[str] = []
     nudge = False
+    failed = 0
     for c in checks:
-        pending = c.get("pending") if isinstance(c.get("pending"), dict) else {}
-        receipt = str(pending.get("receipt") or c.get("receipt") or "")
-        data = _event_data(biz, receipt) if receipt else None
-        if data is None:
-            continue
-        if c.get("door") == "connect_card":
-            import church_follow_up
-            row = church_follow_up.on_connect_card(biz, cid, data, receipt,
-                                                   texts_ok=bool(pending.get("texts_ok")))
-            if row and row.get("id"):
-                opened.append(str(row["id"]))
-        elif c.get("door") == "contact_form":
-            try:
+        try:
+            pending = c.get("pending") if isinstance(c.get("pending"), dict) else {}
+            receipt = str(pending.get("receipt") or c.get("receipt") or "")
+            data = _event_data(biz, receipt) if receipt else None
+            if data is None:
+                failed += 1
+                continue
+            if c.get("door") == "connect_card":
+                import church_follow_up
+                # Released before and put back since: its follow-up is closed,
+                # and start() would see the card's receipt and open nothing.
+                had = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&source_event=eq.{_q(receipt)}"
+                            "&select=id,status&limit=1") or []
+                if had and had[0].get("status") == "closed":
+                    _reopen(biz, [str(had[0]["id"])], [])
+                    opened.append(str(had[0]["id"]))
+                row = church_follow_up.on_connect_card(biz, cid, data, receipt,
+                                                       texts_ok=bool(pending.get("texts_ok")))
+                if row and row.get("id"):
+                    opened.append(str(row["id"]))
+            elif c.get("door") == "contact_form":
                 import lead_scoring
                 email = str(data.get("email") or contact.get("email") or "").strip().lower()
                 lead_scoring.score_in_background(
                     biz, cid, {"name": data.get("name"), "email": email, "phone": data.get("phone"),
                                "message": data.get("message")},
                     source="website_contact_form", email=email, phone=contact.get("phone"))
-            except Exception as e:  # noqa: BLE001
-                print(f"[inbound_hold] lead scoring after release skipped: {type(e).__name__}", flush=True)
-            nudge = True
-    return {"opened": opened, "nudge": nudge}
+                nudge = True
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"[inbound_hold] {biz[:8]}: a held card didn't run on release ({type(e).__name__})", flush=True)
+    return {"opened": opened, "nudge": nudge, "failed": failed}
+
+
+def _soft(what: str, biz: str, fn, *a, **kw):
+    """A step after the person's own change: its failure is logged, and the
+    decision is still recorded (so it can be put back)."""
+    try:
+        return fn(*a, **kw)
+    except Exception as e:  # noqa: BLE001
+        print(f"[inbound_hold] {biz[:8]}: {what} skipped ({type(e).__name__})", flush=True)
+        return None
 
 
 def decide(business_id: str, contact_id: str, verdict: str, *, by_user: str, by_name: str = "",
            via: str = "app", share: bool = False) -> Dict[str, Any]:
     """Real person, Not a guest or Scam for one person. Sync. Raises
-    HTTPException with words a person reads."""
+    HTTPException with words a person reads (and then nothing changed)."""
     if verdict not in DECISIONS:
         raise HTTPException(400, "Choose Real person, Not a guest or Scam.")
     biz, cid = str(business_id), _uuid(contact_id)
@@ -509,36 +554,49 @@ def decide(business_id: str, contact_id: str, verdict: str, *, by_user: str, by_
     stamp = {"verdict": verdict, "at": _iso(_now()), "by": by_name or "the office", "decision_id": did}
 
     if verdict == REAL:
+        # Their Welcome Path state as it was, so an undo leaves them able to
+        # start it again (enroll() won't restart a path begun this week).
+        before["new_here"] = meta0.get("new_here")
+
         def change(row):
             meta = dict(row.get("metadata") or {})
             meta.pop("inbound_hold", None)
             meta["inbound_decision"] = stamp
             return meta, {}
         _patch_contact(biz, cid, change)
-        _set_checks(biz, before["checks"], RELEASED)
-        before["senders"] = _remember(biz, prints, "real", did)
+        _soft("checks released", biz, _set_checks, biz, before["checks"], RELEASED)
+        before["senders"] = _soft("sender remembered", biz, _remember, biz, prints, "real", did) or []
         ran = _release(biz, cid, contact, checks)
         before["opened"] = ran["opened"]
         done = {"released": len(checks), "follow_ups_opened": len(ran["opened"]), "nudge": ran["nudge"]}
     else:
+        # What this takes away, in an order undo can put back exactly: the
+        # queued texts first (their ids, before any helper cancels them as
+        # well), then the follow-ups, then the person. A person that doesn't
+        # save puts the first two back, and nothing changed.
+        cancelled = _cancel_welcome_texts(biz, cid)
+        try:
+            closed = _close_follow_ups(biz, cid, by_user, by_name)
+        except HTTPException:
+            _reopen(biz, [], cancelled)
+            raise
+
         def change(row):
             meta = dict(row.get("metadata") or {})
             meta.pop("inbound_hold", None)
             meta["inbound_decision"] = stamp
             return meta, {"status": "inactive"}
-        # The person first: a save that fails changes nothing. Inactive, the
-        # follow-up sweep would close what's open anyway (church_follow_up).
-        _patch_contact(biz, cid, change)
-        _set_checks(biz, before["checks"], CLOSED)
         try:
-            closed = _close_follow_ups(biz, cid, by_user, by_name)
+            _patch_contact(biz, cid, change)
         except HTTPException:
-            closed = []         # said below; the record is still written, so undo still works
-            print(f"[inbound_hold] {biz[:8]}: follow-ups not closed now; the inactive sweep will", flush=True)
-        cancelled = _cancel_welcome_texts(biz, cid)
+            _reopen(biz, closed, cancelled)
+            raise
+        _soft("checks closed", biz, _set_checks, biz, before["checks"], CLOSED)
         before.update(closed=closed, cancelled=cancelled)
-        before["senders"] = _remember(biz, prints, "scam", did) if verdict == SCAM else []
-        listed = shared_list_review(prints, by_platform=share) if verdict == SCAM else 0
+        before["senders"] = (_soft("sender remembered", biz, _remember, biz, prints, "scam", did) or []
+                             if verdict == SCAM else [])
+        listed = (_soft("shared list", biz, shared_list_review, prints, by_platform=share) or 0
+                  if verdict == SCAM else 0)
         done = {"follow_ups_closed": len(closed), "texts_cancelled": len(cancelled), "shared": listed > 0}
 
     saved = sb_clients.sb_post_as_service("/inbound_decisions", {
@@ -577,7 +635,9 @@ def said_for(verdict: str, name: str, done: Dict[str, Any]) -> str:
 
 
 def undo(business_id: str, decision_id: str, *, by_user: str) -> Dict[str, Any]:
-    """Put a decision back: the person waits for a look again."""
+    """Put a decision back: exactly what it took away, and the person waits
+    for a look again. Only a person's latest tap, once: the row is claimed
+    first, so two presses (or two screens) can't both put it back."""
     biz = str(business_id)
     try:
         did = str(uuid.UUID(str(decision_id)))
@@ -598,47 +658,60 @@ def undo(business_id: str, decision_id: str, *, by_user: str) -> Dict[str, Any]:
     except ValueError:
         pass
     cid, verdict = str(d["contact_id"]), d.get("verdict")
-    before = d.get("before") if isinstance(d.get("before"), dict) else {}
+    latest = _rows(f"/inbound_decisions?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}&undone_at=is.null"
+                   "&select=id,created_at&order=created_at.desc&limit=1")
+    if latest is None:
+        raise HTTPException(503, "That couldn't be read just now. Try again in a minute.")
+    if latest and str(latest[0].get("id")) != did:
+        raise HTTPException(409, "A later tap on them came after this one. Put that one back first.")
     now = _iso(_now())
-    if verdict == REAL:
-        for fid in before.get("opened") or []:
-            sb_clients.sb_patch_as_service(
-                f"/church_follow_ups?business_id=eq.{_q(biz)}&id=eq.{_q(fid)}&status=in.(open,handed_back)",
-                {"status": "closed", "done_at": now, "updated_at": now})
-        _cancel_welcome_texts(biz, cid)
-    else:
-        for fid in before.get("closed") or []:
-            sb_clients.sb_patch_as_service(
-                f"/church_follow_ups?business_id=eq.{_q(biz)}&id=eq.{_q(fid)}&status=eq.closed",
-                {"status": "open", "done_at": None, "updated_at": now})
-        for sid in before.get("cancelled") or []:
-            sb_clients.sb_patch_as_service(
-                f"/chief_scheduled_actions?business_id=eq.{_q(biz)}&id=eq.{_q(sid)}&status=eq.cancelled"
-                f"&run_at=gt.{now}", {"status": "queued"})
-    _forget(biz, did, before.get("senders") or [])
+    claimed = sb_clients.sb_patch_as_service(
+        f"/inbound_decisions?business_id=eq.{_q(biz)}&id=eq.{_q(did)}&undone_at=is.null",
+        {"undone_at": now, "undone_by": by_user or None})
+    if claimed == []:
+        raise HTTPException(409, "That one was already put back.")
+    if not isinstance(claimed, list):
+        raise HTTPException(503, "That didn't go back. Nothing changed. Try again.")
+    before = d.get("before") if isinstance(d.get("before"), dict) else {}
+    try:
+        if verdict == REAL:
+            for fid in before.get("opened") or []:
+                sb_clients.sb_patch_as_service(
+                    f"/church_follow_ups?business_id=eq.{_q(biz)}&id=eq.{_q(fid)}&status=in.(open,handed_back)",
+                    {"status": "closed", "done_at": now, "updated_at": now})
+            _cancel_welcome_texts(biz, cid)
+        else:
+            _reopen(biz, [str(x) for x in before.get("closed") or []],
+                    [str(x) for x in before.get("cancelled") or []])
+        _forget(biz, did, before.get("senders") or [])
 
-    def change(row):
-        meta = dict(row.get("metadata") or {})
-        meta.pop("inbound_decision", None)
-        if before.get("decision"):
-            meta["inbound_decision"] = before["decision"]
-        if before.get("mark"):
-            meta["inbound_hold"] = before["mark"]
-        extra = {"status": before["status"]} if verdict != REAL and before.get("status") else {}
-        return meta, extra
-    _patch_contact(biz, cid, change)
-    if before.get("checks"):
-        sb_clients.sb_patch_as_service(
-            f"/inbound_checks?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in before['checks'])})",
-            {"state": HELD, "decided_at": None})
-    if verdict == SCAM:
-        try:
+        def change(row):
+            meta = dict(row.get("metadata") or {})
+            meta.pop("inbound_decision", None)
+            if before.get("decision"):
+                meta["inbound_decision"] = before["decision"]
+            if before.get("mark"):
+                meta["inbound_hold"] = before["mark"]
+            if verdict == REAL and "new_here" in before:
+                if before["new_here"] is None:
+                    meta.pop("new_here", None)
+                else:
+                    meta["new_here"] = before["new_here"]
+            extra = {"status": before["status"]} if verdict != REAL and before.get("status") else {}
+            return meta, extra
+        _patch_contact(biz, cid, change)
+        if before.get("checks"):
+            sb_clients.sb_patch_as_service(
+                f"/inbound_checks?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in before['checks'])})",
+                {"state": HELD, "decided_at": None})
+        if verdict == SCAM:
             contact = _contact(biz, cid)
             shared_list_review(prints_of(contact, _checks_of(biz, cid, (HELD, CLEAR, WATCHED, RELEASED, CLOSED))))
-        except HTTPException:
-            pass
-    sb_clients.sb_patch_as_service(f"/inbound_decisions?business_id=eq.{_q(biz)}&id=eq.{_q(did)}",
-                                   {"undone_at": now, "undone_by": by_user or None})
+    except Exception as e:  # noqa: BLE001 — let it be tried again
+        sb_clients.sb_patch_as_service(f"/inbound_decisions?business_id=eq.{_q(biz)}&id=eq.{_q(did)}",
+                                       {"undone_at": None, "undone_by": None})
+        print(f"[inbound_hold] {biz[:8]}: undo didn't finish ({type(e).__name__})", flush=True)
+        raise HTTPException(503, "That didn't fully go back. Try again in a minute.")
     try:
         import audit_log
         audit_log.record(biz, actor_type="user", actor_id=by_user or None, verb="inbound:undo",
@@ -672,10 +745,17 @@ def flagged(business_id: str, contact_id: str) -> Optional[str]:
     return None
 
 
+_NAME_KEYS = ("contact_name", "name", "to_name", "recipient", "recipient_name", "person")
+_ADDRESS_KEYS = ("to", "email", "phone", "recipient", "to_email", "to_phone")
+_NUMBERISH = re.compile(r"[+\d\s().-]{7,}")
+
+
 def flagged_recipient(business_id: Any, action: Dict[str, Any]) -> Optional[str]:
     """For Chief's send gate: the reason a class-C send to this action's person
-    needs the practitioner's own go-ahead, or None. One read, only while the
-    feature is in use; any failure is None (the send gate stays as it was)."""
+    needs the practitioner's own go-ahead, or None. Every way a send names its
+    person is checked (an id, a name under any of its keys, a `to` phone or
+    email); only while the feature is in use; any failure is None (the send
+    gate stays as it was)."""
     try:
         if risk.mode() == "off" or not business_id or not isinstance(action, dict):
             return None
@@ -684,28 +764,36 @@ def flagged_recipient(business_id: Any, action: Dict[str, Any]) -> Optional[str]
             v = action.get(key)
             if v:
                 try:
-                    return flagged(biz, str(uuid.UUID(str(v))))
+                    why = flagged(biz, str(uuid.UUID(str(v))))
                 except ValueError:
-                    return None
-        # By who it names: a contact_name, or a `to` phone or email.
-        name = _plain(action.get("contact_name"))
-        to = str(action.get("to") or action.get("email") or action.get("phone") or "").strip()
-        path = None
-        if name:
-            path = f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(name.replace('*', ''))}&select=id&limit=2"
-        elif "@" in to:
-            path = f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(to.lower())}&select=id&limit=2"
-        elif to:
-            from sms_service import normalize_phone
-            phone = normalize_phone(to)
-            if phone:
-                path = f"/contacts?business_id=eq.{_q(biz)}&phone=eq.{_q(phone)}&select=id&limit=2"
-        if not path:
-            return None
-        for row in _rows(path) or []:
-            why = flagged(biz, str(row.get("id")))
-            if why:
-                return why
+                    why = None
+                if why:
+                    return why
+        paths: List[str] = []
+        for key in _NAME_KEYS:
+            name = _plain(action.get(key))
+            if name and "@" not in name and not _NUMBERISH.fullmatch(name):
+                paths.append(f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(name.replace('*', ''))}"
+                             "&select=id&limit=3")
+        from sms_service import normalize_phone
+        for key in _ADDRESS_KEYS:
+            to = _plain(action.get(key))
+            if "@" in to:
+                paths.append(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(to.lower())}&select=id&limit=3")
+            elif to:
+                phone = normalize_phone(to)
+                if phone:
+                    paths.append(f"/contacts?business_id=eq.{_q(biz)}&phone=eq.{_q(phone)}&select=id&limit=3")
+        seen: set = set()
+        for path in dict.fromkeys(paths):
+            for row in _rows(path) or []:
+                rid = str(row.get("id"))
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                why = flagged(biz, rid)
+                if why:
+                    return why
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -777,7 +865,7 @@ def needs_a_look(business_id: str, biz: Dict[str, Any] = Depends(business_access
 
 @router.post("/inbound/{business_id}/people/{contact_id}/{decision}")
 async def decide_route(business_id: str, contact_id: str, decision: str,
-                       body: Dict[str, Any] = Body(default={}),
+                       body: Any = Body(default=None),
                        biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
                        session: UserSession = Depends(sb_clients.authed_request)):
     """Real person (`real`), Not a guest (`not-a-guest`) or Scam (`scam`)."""
@@ -785,7 +873,7 @@ async def decide_route(business_id: str, contact_id: str, decision: str,
     if not verdict:
         raise HTTPException(404, "Choose real, not-a-guest or scam.")
     uid, name = _who(session)
-    share = bool((body or {}).get("share")) and _is_platform_owner(session)
+    share = isinstance(body, dict) and body.get("share") is True and _is_platform_owner(session)
     out = await asyncio.to_thread(decide, str(biz["id"]), contact_id, verdict, by_user=uid, by_name=name,
                                   via="app", share=share)
     if out.get("nudge"):

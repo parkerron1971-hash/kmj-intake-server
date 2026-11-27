@@ -171,7 +171,7 @@ def test_bots():
 
 @pytest.mark.parametrize("phone,junk", [
     ("1000000000", True), ("+1 (000) 000-0000", True), ("123-456-7890", True), ("5555555555", True),
-    ("555-1234", True), ("0123456789", True), ("", False), ("(704) 555-0182", False),
+    ("555-12", True), ("555-1234", False), ("0123456789", True), ("", False), ("(704) 555-0182", False),
     ("+1 704 555 0182", False), ("+44 20 7946 0958", False),
 ])
 def test_junk_phones(phone, junk):
@@ -199,7 +199,9 @@ def test_fingerprints_are_salted_hashes_and_catch_a_rotated_template():
     p1 = R.fingerprints(SOFIA)
     blob = json.dumps(p1)
     assert "sara" not in blob and "tourist" not in blob and "1000000000" not in blob
-    assert set(p1) == {"email", "domain", "text"}          # a junk phone is never a fingerprint
+    # A junk phone is never a fingerprint, and nor is a domain unless it's a
+    # throwaway or on the curated abusive list (review must-fix 2).
+    assert set(p1) == {"email", "text"}
     assert all(len(h) == 64 for h in p1.values())
     other = R.Card(door="connect_card", name="Lena Brooks", email="lena@other-tourist.example.org", phone="1",
                    text=SOFIA.text.replace("examplechurch.org", "gracechapel.org")
@@ -337,3 +339,81 @@ def test_the_second_opinion_reads_the_models_verdict_and_meters_through_the_seam
     monkeypatch.setattr(spend_guard, "over_budget", lambda b=None: True)
     seen.clear()
     assert asyncio.run(R.second_opinion("biz-1", R.Card(door="connect_card", text="x"))) is None and not seen
+
+
+def test_a_short_phone_is_its_own_smaller_signal():
+    card = R.Card(door="connect_card", name="Dana Rivers", email="dana@gmail.com", phone="555-0182")
+    v = R.assess(card, facts())
+    assert v["score"] == 1 and "The phone number looks incomplete" in R.words_of(v)
+    assert R.short_phone("555-0182") and not R.junk_phone("555-0182")
+
+
+# The review's false positives (should-fix 4): each is a real seeker.
+REVIEW_SEEKERS = [
+    dict(text="Found you on Google Maps, we just moved here", email="bigmike72@gmail.com", phone="(704) 555-0182"),
+    dict(text="Following up on my visit last Sunday, when is the next newcomers lunch?", email="dana@gmail.com",
+         phone="555-0182"),
+    dict(text="I saw your advertisement in the paper and would like to visit", email="dana@gmail.com",
+         phone="555-0182"),
+    dict(text="Can you send me the registration link for VBS?", email="dana@gmail.com", phone="(704) 555-0182"),
+]
+
+
+@pytest.mark.parametrize("c", REVIEW_SEEKERS)
+def test_the_reviews_seekers_stay_clear(c):
+    card = R.Card(door="connect_card", name="Dana Rivers", **c)
+    v = R.assess(card, facts())
+    assert v["verdict"] == R.CLEAR, v["reasons"]
+    assert "sales" not in codes(v)
+
+
+@pytest.mark.parametrize("domain", [
+    "yahoo.co.uk", "btinternet.com", "nc.rr.com", "triad.rr.com", "juno.com", "aim.com", "centurylink.net",
+    "bigpond.com", "optusnet.com.au", "co.uk", "com.au",
+])
+def test_shared_mail_is_never_a_fingerprint_or_looked_up(domain, monkeypatch):
+    assert R.shared_mail(domain)
+    assert not R.curated_domain(domain)
+    card = R.Card(door="connect_card", name="Ann Lee", email=f"ann@{domain}", text="hello there")
+    assert "domain" not in R.fingerprints(card)
+    called = []
+    monkeypatch.setattr(R, "_no_mx", lambda d: called.append(d) or True)
+    assert R.domain_facts(domain) == (False, None) and called == []
+
+
+def test_only_a_throwaway_or_curated_domain_is_a_fingerprint(monkeypatch):
+    throwaway = R.Card(door="connect_card", name="Ann", email="ann@mailinator.com")
+    assert "domain" in R.fingerprints(throwaway)
+    company = R.Card(door="connect_card", name="Ann", email="ann@acme-widgets.com")
+    assert "domain" not in R.fingerprints(company)
+    monkeypatch.setenv("INBOUND_ABUSIVE_DOMAINS", "acme-widgets.com")
+    assert "domain" in R.fingerprints(company)
+
+
+def test_the_registrable_name_respects_two_part_suffixes():
+    assert R._root("news.bbc.co.uk") == "bbc.co.uk"
+    assert R._root("www.example.com") == "example.com"
+    # Two different .co.uk sites are not one sender's own site.
+    card = R.Card(door="connect_card", name="Ann", email="ann@smith-plumbing.co.uk", text="see bestdeals.co.uk")
+    assert "link_foreign" in codes(R.assess(card, facts()))
+
+
+def test_a_churchs_own_real_is_never_sent_to_the_second_opinion():
+    v = R.assess(JULIEN, facts(real_before=True))
+    assert v["verdict"] == R.CLEAR and v["mid"] is False
+
+
+def test_the_text_fingerprint_is_their_own_words_not_the_ticked_choices():
+    a = R.Card(door="connect_card", name="Ann Lee", email="ann@gmail.com",
+               text=R.card_text("", {"visits": "This is my first time", "heard_from": "Facebook",
+                                     "interests": ["Kids", "Small groups", "Serving"], "notes": "Hi!"}),
+               print_text=R.own_words("", {"visits": "This is my first time", "notes": "Hi!"}))
+    assert "text" not in R.fingerprints(a)          # "Hi!" is too short to be a template
+    assert R.own_words("Hello", {"notes": "My note", "heard_from": "Facebook"}) == "Hello" + chr(10) + "My note"
+
+
+def test_rdap_is_off_unless_switched_on(monkeypatch):
+    monkeypatch.delenv("INBOUND_RDAP", raising=False)
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("rdap called")))
+    assert R._domain_age("freshsite.example.com") is None

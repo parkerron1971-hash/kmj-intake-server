@@ -38,6 +38,10 @@ THE SWITCH (INBOUND_SAFETY on kmj-intake-server)
     on         on for every business
     <ids>      a comma-separated list of business ids, on for those only
 INBOUND_SECOND_OPINION=off turns the model check off (on by default).
+INBOUND_RDAP=on looks up how old a sender's domain is (off by default: the
+domain would go to rdap.org). INBOUND_ABUSIVE_DOMAINS=a.com,b.net is the
+curated list of domains that are only ever abuse: the only domains (with the
+throwaway inboxes) a Scam remembers or the shared list carries.
 INBOUND_RISK_WEIGHTS='{"sales": 2, ...}' overrides any weight; INBOUND_HOLD_AT
 the threshold (3).
 """
@@ -63,6 +67,7 @@ DOORS = ("connect_card", "contact_form", "prayer_request")
 # ─── Weights (a starting point: tune against real cards) ─────────────
 WEIGHTS: Dict[str, int] = {
     "junk_phone": 2,
+    "short_phone": 1,       # 7-9 digits: often a real person who left off the area code
     "link": 1,              # a link to the sender's own domain or a social site
     "link_foreign": 2,      # a link anywhere else
     "sales": 2,
@@ -94,12 +99,60 @@ TEXT_ELSEWHERE_MIN = 80
 KNOWN_STATUSES = frozenset({"member", "active", "leader", "vip", "customer", "client", "regular",
                             "attender", "volunteer", "staff"})
 
+# Mail many people share: free providers and the ISPs older members still
+# use. Never looked up, never a fingerprint, never "the sender's own site".
 FREE_MAIL = frozenset("""
 gmail.com googlemail.com yahoo.com ymail.com rocketmail.com outlook.com hotmail.com live.com msn.com
-icloud.com me.com mac.com aol.com proton.me protonmail.com pm.me gmx.com gmx.net mail.com zoho.com
+icloud.com me.com mac.com aol.com aim.com proton.me protonmail.com pm.me gmx.com gmx.net mail.com zoho.com
 yandex.com fastmail.com hey.com comcast.net att.net sbcglobal.net verizon.net bellsouth.net cox.net
-charter.net earthlink.net optonline.net frontier.com windstream.net
+charter.net earthlink.net optonline.net frontier.com windstream.net rr.com roadrunner.com spectrum.net
+juno.com netzero.net netzero.com centurylink.net embarqmail.com q.com mchsi.com suddenlink.net
+optimum.net frontiernet.net ptd.net tds.net hughes.net wildblue.net cableone.net wowway.com
+mail.ru inbox.com yahoo.co.uk btinternet.com btopenworld.com sky.com talktalk.net virginmedia.com
+ntlworld.com blueyonder.co.uk hotmail.co.uk live.co.uk outlook.co.uk yahoo.ca shaw.ca rogers.com
+sympatico.ca telus.net bigpond.com optusnet.com.au xtra.co.nz web.de t-online.de orange.fr free.fr
+laposte.net libero.it
 """.split())
+
+# Two-part public suffixes: under these the registrable name is three labels
+# (bbc.co.uk, not co.uk). Enough for the mail churches see; not the full list.
+_PUBLIC_2 = frozenset("""
+co.uk org.uk me.uk ltd.uk plc.uk net.uk ac.uk gov.uk sch.uk nhs.uk com.au net.au org.au edu.au gov.au asn.au
+co.nz org.nz net.nz ac.nz govt.nz co.za org.za com.br com.mx com.ar co.jp ne.jp or.jp co.kr co.in net.in org.in
+com.sg com.my com.ph com.hk com.tw com.cn com.ng com.gh co.ke co.il com.tr
+""".split())
+
+
+def shared_mail(domain: str) -> bool:
+    """A domain many unrelated people send from: free mail, an ISP (and its
+    regional subdomains, nc.rr.com), or a bare public suffix."""
+    d = _bare(domain)
+    if not d:
+        return True
+    if d in _PUBLIC_2 or "." not in d:
+        return True
+    return any(d == f or d.endswith("." + f) for f in FREE_MAIL)
+
+
+# Domains that only ever send abuse: the throwaway inboxes (no_card_trial) and
+# a curated list the platform owner keeps (INBOUND_ABUSIVE_DOMAINS=a.com,b.net).
+# Only these are ever remembered or shared as a domain; a Scam otherwise
+# remembers the address, never the domain everyone at that company shares.
+ABUSIVE_DOMAINS = frozenset()
+
+
+def curated_domain(domain: str) -> bool:
+    d = _bare(domain)
+    if not d or shared_mail(d):
+        return False
+    extra = {x.strip().lower() for x in (os.environ.get("INBOUND_ABUSIVE_DOMAINS") or "").split(",") if x.strip()}
+    if d in ABUSIVE_DOMAINS or d in extra or _root(d) in extra:
+        return True
+    try:
+        import no_card_trial
+        return bool(no_card_trial.disposable_email("x@" + d))
+    except Exception:  # noqa: BLE001
+        return False
 
 SOCIAL = frozenset("""
 facebook.com fb.com fb.me instagram.com youtube.com youtu.be tiktok.com x.com twitter.com linkedin.com
@@ -120,9 +173,9 @@ _SALES_RE = re.compile(
     r"\b(listings?|catalog(?:ue)?s?|seo|search engine|rankings?|backlinks?|(?:website|web|more|organic) traffic|"
     r"web ?design|website redesign|redesign (?:of )?your (?:web)?site|sponsorships?|sponsored posts?|guest posts?|"
     r"free trial|commissions?|partnership (?:offer|opportunity|proposal)|business proposal|marketing services|"
-    r"lead generation|first page of google|google (?:my business|maps)|boost your|"
+    r"lead generation|first page of google|google my business (?:listing|profile|page)|boost your|"
     r"grow your (?:business|church|audience|followers)|increase your (?:sales|traffic|visibility|followers)|"
-    r"promote your|advertis(?:e|ing|ement)|registration link|register yourself|travel offers?|"
+    r"promote your|advertis(?:e|ing) (?:with us|on our|your)|register yourself|travel offers?|"
     r"exclusive offer|limited (?:time )?offer|special offer|add (?:you|your \w+) to (?:our|the))\b", re.I)
 _MONEY_RE = re.compile(
     r"\b(gift ?cards?|itunes cards?|google play cards?|steam cards?|apple cards?|wire transfer|western union|"
@@ -174,6 +227,10 @@ class Card:
     email: str = ""
     phone: str = ""
     text: str = ""          # everything they wrote, in one string (message + answers)
+    # What a fingerprint is taken from: only what they wrote in their own
+    # words (the message, the notes), never the card's ticked choices, which
+    # two real families answer alike. Empty: the text.
+    print_text: str = ""
     honeypot: Optional[str] = None
     elapsed_s: Optional[float] = None
 
@@ -199,6 +256,13 @@ class Facts:
     own_domains: Set[str] = field(default_factory=set)          # the business's own web addresses
 
 
+def own_words(message: Any = "", fields: Optional[Dict[str, Any]] = None) -> str:
+    """What they wrote in their own words: the message, the notes, the request."""
+    f = fields or {}
+    parts = [str(message or "")] + [str(f.get(k) or "") for k in ("notes", "request") if isinstance(f.get(k), str)]
+    return chr(10).join(p for p in parts if p.strip())
+
+
 def card_text(message: Any = "", fields: Optional[Dict[str, Any]] = None) -> str:
     """The words of a submission, one string: the message and every free answer."""
     parts = [str(message or "")]
@@ -221,15 +285,25 @@ def phone_digits(phone: Any) -> str:
     return d
 
 
+def short_phone(phone: Any) -> bool:
+    """Seven to nine digits: a local number without its area code, which real
+    people type. Its own, smaller signal (junk_phone says no)."""
+    d = phone_digits(phone)
+    return 7 <= len(d) < 10 and len(set(d)) > 1
+
+
 def junk_phone(phone: Any) -> bool:
-    """A phone that can't be anyone's: too short, one digit over and over, a
-    counting run, or a digit and nine zeros. No phone at all is not junk."""
+    """A phone that can't be anyone's: under seven digits, one digit over and
+    over, a counting run, or a digit and nine zeros. No phone is not junk, and
+    a seven-to-nine digit one is short_phone, not junk."""
     raw = str(phone or "").strip()
     if not raw:
         return False
     d = phone_digits(raw)
-    if len(d) < 10:
+    if len(d) < 7:
         return True
+    if len(d) < 10:
+        return len(set(d)) == 1
     if len(set(d)) == 1:
         return True
     if d in ("1234567890", "0123456789", "9876543210", "1231231234", "5555555555"):
@@ -248,7 +322,10 @@ def _bare(host: str) -> str:
 
 
 def _root(host: str) -> str:
+    """The registrable name: example.com, bbc.co.uk (never co.uk)."""
     parts = _bare(host).split(".")
+    if len(parts) >= 3 and ".".join(parts[-2:]) in _PUBLIC_2:
+        return ".".join(parts[-3:])
     return ".".join(parts[-2:]) if len(parts) >= 2 else _bare(host)
 
 
@@ -314,6 +391,8 @@ def assess(card: Card, facts: Optional[Facts] = None, weights: Optional[Dict[str
 
     if junk_phone(card.phone):
         add("junk_phone", "The phone number isn't real")
+    elif short_phone(card.phone):
+        add("short_phone", "The phone number looks incomplete")
 
     own = {_root(d) for d in f.own_domains if d}
     sender_root = _root(card.domain) if card.domain else ""
@@ -322,7 +401,7 @@ def assess(card: Card, facts: Optional[Facts] = None, weights: Optional[Dict[str
         r = _root(host)
         if r in own:
             continue
-        if r in SOCIAL or (sender_root and r == sender_root and sender_root not in FREE_MAIL):
+        if r in SOCIAL or (sender_root and r == sender_root and not shared_mail(card.domain)):
             homely.append(host)
         else:
             foreign.append(host)
@@ -358,7 +437,7 @@ def assess(card: Card, facts: Optional[Facts] = None, weights: Optional[Dict[str
     if card.email and name_email_mismatch(card.name, card.email):
         add("name_email_mismatch", "The name doesn't match the email address")
 
-    if card.domain and card.domain not in FREE_MAIL:
+    if card.domain and not shared_mail(card.domain):
         try:
             import no_card_trial
             disposable = no_card_trial.disposable_email(card.email)
@@ -394,7 +473,8 @@ def assess(card: Card, facts: Optional[Facts] = None, weights: Optional[Dict[str
         verdict = NEEDS_LOOK if score >= at else CLEAR
     shown = [r for r in reasons if r["points"] > 0]
     return {"verdict": verdict, "score": score, "reasons": shown if verdict != CLEAR else reasons,
-            "hold": verdict != CLEAR, "mid": verdict == CLEAR and 1 <= score < at}
+            # A church's own Real is never second-guessed by the model.
+            "hold": verdict != CLEAR, "mid": verdict == CLEAR and not f.real_before and 1 <= score < at}
 
 
 def words_of(verdict: Optional[Dict[str, Any]]) -> List[str]:
@@ -447,15 +527,17 @@ def fingerprints(card: Card) -> Dict[str, str]:
         h = salted("email", email)
         if h:
             out["email"] = h
-        if card.domain and card.domain not in FREE_MAIL:
-            h = salted("domain", _root(card.domain))
+        # Never a domain many people share (yahoo.co.uk, nc.rr.com, a company's
+        # mail): only a throwaway or curated abusive one is a fingerprint.
+        if card.domain and curated_domain(card.domain):
+            h = salted("domain", _bare(card.domain))
             if h:
                 out["domain"] = h
     if card.phone and not junk_phone(card.phone):
         h = salted("phone", phone_digits(card.phone))
         if h:
             out["phone"] = h
-    key = text_key(card.text, card.name)
+    key = text_key(card.print_text or card.text, card.name)
     if len(key) >= TEXT_FINGERPRINT_MIN:
         h = salted("text", key)
         if h:
@@ -553,8 +635,9 @@ def _no_mx(domain: str) -> bool:
 
 def _domain_age(domain: str) -> Optional[int]:
     """Days since the domain was registered (RDAP), or None. Only the domain
-    leaves the server. INBOUND_RDAP=off skips it."""
-    if (os.environ.get("INBOUND_RDAP") or "on").strip().lower() == "off":
+    leaves the server, to rdap.org. Off unless INBOUND_RDAP=on (the privacy
+    page would have to name it first)."""
+    if (os.environ.get("INBOUND_RDAP") or "off").strip().lower() != "on":
         return None
     try:
         import httpx
@@ -573,7 +656,7 @@ def _domain_age(domain: str) -> Optional[int]:
 def domain_facts(domain: str) -> Tuple[bool, Optional[int]]:
     """(no_mx, age_days) for a non-free domain, cached a day per replica."""
     d = _root(domain)
-    if not d or d in FREE_MAIL:
+    if not d or shared_mail(d):
         return False, None
     hit = _DOMAIN_CACHE.get(d)
     if hit and time.monotonic() - hit[0] < _DOMAIN_TTL:
@@ -661,7 +744,7 @@ def gather(business_id: str, card: Card, prints: Optional[Dict[str, str]] = None
         by_text: Set[str] = set()
         by_address: Set[str] = set()
         week = now - timedelta(days=SEEN_ELSEWHERE_DAYS)
-        long_text = len(text_key(card.text, card.name)) >= TEXT_ELSEWHERE_MIN
+        long_text = len(text_key(card.print_text or card.text, card.name)) >= TEXT_ELSEWHERE_MIN
         for row in seen:
             kinds = [k for k, v in prints.items() if row.get(f"{k}_hash") == v]
             if not kinds:
@@ -687,7 +770,7 @@ def gather(business_id: str, card: Card, prints: Optional[Dict[str, str]] = None
         # at two or more it's a list.
         if by_text or len(by_address) >= 2:
             f.seen_elsewhere = len(by_text | by_address)
-    if card.domain and card.domain not in FREE_MAIL:
+    if card.domain and not shared_mail(card.domain):
         f.no_mx, f.domain_age_days = domain_facts(card.domain)
     return f
 
@@ -776,7 +859,8 @@ async def check(business_id: str, *, door: str, name: str = "", email: str = "",
         if not enforce and mode() != "watch":
             return None
         card = Card(door=door, name=name or "", email=email or "", phone=phone or "",
-                    text=card_text(message, fields), honeypot=honeypot, elapsed_s=elapsed_s)
+                    text=card_text(message, fields), print_text=own_words(message, fields),
+                    honeypot=honeypot, elapsed_s=elapsed_s)
         prints = await asyncio.to_thread(fingerprints, card)
         facts = await asyncio.to_thread(gather, business_id, card, prints)
         verdict = assess(card, facts)
