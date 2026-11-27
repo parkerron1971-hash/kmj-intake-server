@@ -194,6 +194,11 @@ def test_seen_follows_the_login_and_only_counts_what_they_may_see(app):
     assert next(e for e in got["updates"] if e["id"] == "2026-11-26-churches")["seen"] is True
     assert got["unseen"] == 3
     assert app.client.post(f"/updates/seen?business_id={BIZ}", json={"ids": [], "how": "card"}).status_code == 400
+    # Mark all seen: everything this login may see, never a draft, never twice.
+    r = app.client.post(f"/updates/seen?business_id={BIZ}", json={"all": True, "how": "all"})
+    assert r.status_code == 200 and r.json()["saved"] == 3
+    assert app.seen == {"2026-11-27-everyone", "2026-11-26-churches", "2026-11-25-owner", "2026-11-01-older"}
+    assert app.client.get(f"/updates/for-me?business_id={BIZ}").json()["unseen"] == 0
     assert app.client.post(f"/updates/seen?business_id={BIZ}", json={"ids": ["x"], "how": "shout"}).status_code == 400
 
 

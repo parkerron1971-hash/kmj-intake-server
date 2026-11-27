@@ -31,7 +31,7 @@ ROUTES
     GET  /updates/for-me?business_id=&pages=a:b,c:d&before=&limit=
            {church, card[], updates[], unseen, more}. `pages` is the pages
            this person opened lately (the app keeps them), only for ranking.
-    POST /updates/seen?business_id=   {ids[], how}
+    POST /updates/seen?business_id=   {ids[], how} or {all: true, how}
   The platform owner (lead_admin.require_owner):
     GET    /platform/updates?status=&q=&limit=      the queue, with warnings
     POST   /platform/updates                        a new draft
@@ -387,16 +387,25 @@ def mark_seen(business: Dict[str, Any] = Depends(business_access("viewer")),
               payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """Record that this login has seen these updates here. Only published
     updates they may see are recorded; seeing one twice keeps the first."""
-    ids = payload.get("ids") if isinstance(payload, dict) else None
-    how = payload.get("how") if isinstance(payload, dict) else None
-    if not isinstance(ids, list) or not ids:
-        raise HTTPException(400, "ids is a list of update ids")
+    body = payload if isinstance(payload, dict) else {}
+    ids, how, everything = body.get("ids"), body.get("how"), body.get("all") is True
+    if not everything and (not isinstance(ids, list) or not ids):
+        raise HTTPException(400, "ids is a list of update ids, or all is true")
     if how not in SEEN_HOW:
         raise HTTPException(400, f"how is one of {', '.join(SEEN_HOW)}")
     user_id = str(session.user.id)
     v = viewer_for(business, user_id)
-    mine = {e["id"] for e in for_viewer(published(), v)}
-    keep = [i for i in dict.fromkeys(str(x) for x in ids[:SEEN_MAX]) if i in mine]
+    mine = [e["id"] for e in for_viewer(published(), v)]
+    if everything:
+        # "Mark all seen": every update this login may see, the pages the app
+        # hasn't loaded yet too. What was seen already keeps its first row.
+        already = seen_ids(user_id, str(business["id"]))
+        if already is None:
+            raise HTTPException(503, "Couldn't save that just now.")
+        keep = [i for i in mine if i not in already]
+    else:
+        allowed = set(mine)
+        keep = [i for i in dict.fromkeys(str(x) for x in ids[:SEEN_MAX]) if i in allowed]
     if not keep:
         return {"ok": True, "saved": 0}
     rows = [{"user_id": user_id, "business_id": str(business["id"]), "update_id": i, "how": how} for i in keep]
