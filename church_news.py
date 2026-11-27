@@ -1084,6 +1084,35 @@ class PostIn(BaseModel):
     # too, not only those who chose Everything (news_alerts).
     important: bool = False
     attach: Dict[str, Any] = Field(default_factory=dict)
+    # "Also show on the screens" (the one Sunday hub, M-7): with SUNDAY_HUB
+    # on, the post goes on Sunday's announcements board too, by the board's
+    # own route and its rule (the Plan part).
+    also_screens: bool = False
+
+
+SCREENS_REFUSED = "Only the people who plan Sunday put announcements on the screens."
+
+
+def also_screens(biz_id: str, user: AuthedUser, post_id: str, title: str, text: str) -> Dict[str, Any]:
+    """Put a News post on Sunday's announcements board too: {announcement_id}
+    or {refused}. The board's own create route decides who may."""
+    import worship_announce_router as war
+    try:
+        made = war.create_announcement({"business_id": biz_id, "title": (title or text.split("\n")[0] or "News")[:80],
+                                        "body": text[:400],
+                                        # The screens in the building and online; phones have it from News.
+                                        "shows": {"room": True, "lobby": True, "online": True, "phones": False}},
+                                       user)
+    except HTTPException as e:
+        if e.status_code in (402, 403, 404):
+            return {"refused": SCREENS_REFUSED}
+        raise
+    aid = str(made["announcement"]["id"])
+    linked = sb_clients.sb_patch_as_service(f"/worship_announcements?id=eq.{_q(aid)}&business_id=eq.{_q(biz_id)}&select=id",
+                                            {"source": "news", "source_ref": post_id})
+    if not isinstance(linked, list) or not linked:
+        logger.warning("church news: announcement %s isn't linked to its post %s", aid, post_id)
+    return {"announcement_id": aid}
 
 
 @router.post("/church/news")
@@ -1123,7 +1152,12 @@ def create(body: PostIn, user: AuthedUser = Depends(require_user)):
         # It rings now (news_alerts); a scheduled one rings when its time comes.
         import news_alerts
         news_alerts.alert_later(business, row)
-    return {"ok": True, "post_id": row["id"], "scheduled": bool(when), "comments_open": comments_open(business)}
+    out = {"ok": True, "post_id": row["id"], "scheduled": bool(when), "comments_open": comments_open(business)}
+    if body.also_screens:
+        import sunday_hub
+        if sunday_hub.open_to(user):
+            out["screens"] = also_screens(biz_id, user, str(row["id"]), title, text)
+    return out
 
 
 @router.post("/church/news/photo")
