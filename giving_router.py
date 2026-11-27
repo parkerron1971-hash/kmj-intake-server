@@ -1312,6 +1312,10 @@ def render_give_page(
     logo_html = (f'<img class="gv-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
                  if logo_url else "")
     message_html = (f'<p class="gv-msg">{_esc(message)}</p>' if message else "")
+    # "Pastor will never ask you to give by text": the church's own choice
+    # (member_warning, off by default), here and in the member app's Give.
+    import member_warning
+    message_html += member_warning.give_line_html(business)
     app = app or None
     header_html = (app["top"] + message_html if app else
                    f'<header class="gv-header">{logo_html}<h1 class="gv-name">{_esc(name)}</h1>'
@@ -1486,7 +1490,9 @@ def render_give_embed(business: Dict[str, Any], slug: str, *, api_origin: str) -
                       f'<select id="gv-fund" class="gv-input">{opts}</select>')
     brand_vars = _brand_css_vars(business).replace(":root{", ".gv-embed{", 1)
     pay_block, ways_block, ways_css = _ways_blocks(business)
+    import member_warning
     return (f'<div class="gv-embed">{stripe_js}<style>{brand_vars}{_GIVE_EMBED_CSS}{ways_css}</style>'
+            f'{member_warning.give_line_html(business)}'
             f'{_give_body(preset_btns, fund_block, pay_note, pay_block=pay_block, ways_block=ways_block)}'
             f'{_give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, site=True)}</div>')
 
