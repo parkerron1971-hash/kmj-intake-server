@@ -346,6 +346,42 @@ class TestDesktopSessions:
         assert [n["text"] for n in fake.rows["t-desk"]["notes"]] == \
             ["screen two", "Ship it", "screen three"]
 
+    def test_what_the_agent_said_is_never_overwritten_by_a_screen(self, monkeypatch):
+        fake = _wire(monkeypatch, [DESKTOP])
+        _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen one", sender="session"), authorization="Bearer x"))
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="I fixed the rail. Want the PR?", sender="session",
+            state="ready", kind="said"), authorization="Bearer x"))
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen two", sender="session", live=True), authorization="Bearer x"))
+        notes = fake.rows["t-desk"]["notes"]
+        assert [n["text"] for n in notes] == ["screen one", "I fixed the rail. Want the PR?", "screen two"]
+        assert notes[1]["kind"] == "said" and notes[1]["state"] == "ready"
+        assert "kind" not in notes[0] and "kind" not in notes[2]
+
+    def test_kind_said_only_counts_from_a_session(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(WORKING, notes=[])])
+        _run(dev_bridge.bridge_status("t-working", dev_bridge.StatusBody(
+            status="working", note="Opening it", kind="said"), authorization="Bearer x"))
+        assert "kind" not in fake.rows["t-working"]["notes"][-1]
+
+    def test_the_lock_screen_reads_what_it_said(self, monkeypatch):
+        _wire(monkeypatch, [DESKTOP])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="## Done\n**The rail is amber now.** Want the PR?",
+            sender="session", state="ready", kind="said", away=True), authorization="Bearer x"))
+        assert sent and "your turn" in sent[0][1]
+        assert sent[0][2] == "The rail is amber now. Want the PR?"
+
+    def test_first_words_cut_on_a_word(self):
+        long = "word " * 60
+        out = dev_bridge._first_words(long)
+        assert out.endswith("…") and len(out) <= 161 and not out.endswith(" …")
+        assert dev_bridge._first_words("") == "It finished its turn."
+
     def test_a_dispatched_task_still_keeps_every_screen(self, monkeypatch):
         fake = _wire(monkeypatch, [dict(WORKING, notes=[])])
         for text in ("one", "two"):

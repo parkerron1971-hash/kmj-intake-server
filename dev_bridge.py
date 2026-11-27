@@ -29,6 +29,7 @@ import hashlib
 import dev_redact
 import logging
 import ntpath
+import re
 import os
 import secrets
 from datetime import datetime, timezone
@@ -549,6 +550,12 @@ class StatusBody(BaseModel):
     # question or a permission prompt) or 'ready' (its turn is over). Only
     # changes the words on the lock screen.
     state: Optional[str] = None
+    # 'said': the note is the agent's own last message at the end of its
+    # turn, not a capture of its screen. It is kept as a message of its own —
+    # a later screen never replaces it — so a conversation reads the same on
+    # the phone whether it started there or was handed off from the desk.
+    # A build that predates the field sends nothing and gets screens only.
+    kind: Optional[str] = None
 
 
 class ReportBody(BaseModel):
@@ -753,9 +760,13 @@ async def bridge_status(task_id: str, body: StatusBody,
             if status == "failed":
                 patch["finished_at"] = _now()
             await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
+        said = sender == "session" and (body.kind or "").strip().lower() == "said"
         if body.note:
             state = (body.state or "").strip().lower() or None
-            if sender == "session" and (task.get("origin") == "desktop" or body.live):
+            if said:
+                await _append_note(c, task, sender, body.note,
+                                   {"kind": "said", "state": "ready"})
+            elif sender == "session" and (task.get("origin") == "desktop" or body.live):
                 await _put_screen(c, task, body.note, state)
             else:
                 await _append_note(c, task, sender, body.note,
@@ -763,8 +774,24 @@ async def bridge_status(task_id: str, body: StatusBody,
         pushed = 0
         if (sender == "session" and body.away and not body.live and not settled
                 and not _is_work(task) and not _said_it_itself(task)):
-            pushed = await _tell_kevin(c, task, *_stopped_words(task, body.state))
+            words = _stopped_words(task, body.state)
+            if said and body.note:
+                words = (words[0], _first_words(body.note))
+            pushed = await _tell_kevin(c, task, *words)
     return {"ok": True, "pushed": pushed}
+
+
+def _first_words(text: str, limit: int = 160) -> str:
+    """The lock screen's line for what an agent said: its first real line,
+    cut on a word. Markdown marks are noise on a lock screen."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    # A heading ("## Done") says less than the sentence under it.
+    line = next((l for l in lines if not l.startswith("#")), lines[0] if lines else "")
+    line = re.sub(r"[#*`>_]+", "", line).strip()
+    if len(line) <= limit:
+        return line or "It finished its turn."
+    cut = line[:limit]
+    return cut[:max(cut.rfind(" "), limit // 2)].rstrip(",;: ") + "…"
 
 
 def _stopped_words(task: Dict[str, Any], state: Optional[str]) -> tuple:
@@ -812,7 +839,9 @@ async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str,
     # answers to a prompt it is stopped on.
     if state in _SCREEN_STATES:
         screen["state"] = state
-    if notes and notes[-1].get("from") == "session":
+    # What the agent said is a message, not a screen: the next screen goes
+    # after it rather than over it.
+    if notes and notes[-1].get("from") == "session" and notes[-1].get("kind") != "said":
         notes[-1] = screen
     else:
         notes.append(screen)
