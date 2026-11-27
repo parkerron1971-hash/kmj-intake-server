@@ -534,19 +534,20 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
     biz_id = str(business.get("id") or "")
     step = str(action.get("step") or "")
     contact_id, phone = str(action.get("contact_id") or ""), str(action.get("phone") or "")
-    if step not in PATH_STEPS or not contact_id or not phone:
+    if step not in PATH_STEPS + (CONFIRM,) or not contact_id or not phone:
         return True, "Not a New here text; nothing sent."
     fresh = await asyncio.to_thread(_business, biz_id)
     if not fresh:
         return False, "The church couldn't be read; not sent."
     settings = settings_of(fresh)
-    if not switched_on(biz_id) or not settings["on"] or (step != WELCOME and not settings[step]["on"]):
+    first = step in (WELCOME, CONFIRM)          # the path's first text: the welcome, or the YES question
+    if not switched_on(biz_id) or not settings["on"] or (not first and not settings[step]["on"]):
         return True, "New here, or this text, is off now; not sent."
     # A guest from a door that isn't a text is on the Welcome Path: turned
     # off, its texts stop too (the text door's go on as they always did).
     door = str(action.get("door") or "text")
     path = await asyncio.to_thread(path_on, biz_id)
-    if (step == WELCOME or door != "text") and not path:
+    if (first or door != "text") and not path:
         return True, "The Welcome Path is off now; not sent."
     if not sms_alerts.alerts_enabled():
         return True, "Automated texts are paused; not sent."
@@ -571,29 +572,38 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
             if kept is not None:
                 return kept
             # The hold was cleared a moment ago: the text goes on now.
-        if step != WELCOME:
+        if not first:
             why = gpw.limit_says(mine if isinstance(mine, dict) else {}, _now())
             if why:
                 return True, gpw.LIMIT_WORDS[why]
+    if step == CONFIRM:
+        # Asked once, and only while the answer is still waiting: a YES that
+        # came already, or another door that started the texts, needs no question.
+        mine = (people[0].get("metadata") or {}).get("new_here") or {}
+        if not isinstance(mine, dict) or mine.get("texts") != CONFIRM:
+            return True, "Already answered; the YES question isn't needed."
     import texting_hours
     local = _now().astimezone(tz_of(fresh))
     if not texting_hours.in_auto_window(fresh, local):
-        if step == WELCOME:
-            # The welcome never just goes missing: it waits for the morning.
+        if first:
+            # The welcome (or the YES question) never just goes missing: it waits for the morning.
             when = welcome_time(fresh, _now())
             row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/chief_scheduled_actions", {
-                "business_id": biz_id, "label": f"New here: {WELCOME}", "action": dict(action),
+                "business_id": biz_id, "label": f"New here: {step}", "action": dict(action),
                 "run_at": when.isoformat()})
+            what = "welcome" if step == WELCOME else "YES question"
             if not (isinstance(row, list) and row):
-                return False, "Outside the church's texting hours, and the welcome couldn't be moved."
-            return True, "Outside the church's texting hours; the welcome waits for the morning."
+                return False, f"Outside the church's texting hours, and the {what} couldn't be moved."
+            return True, f"Outside the church's texting hours; the {what} waits for the morning."
         return True, "Outside the church's texting hours; not sent."
     if step == "invite" and await asyncio.to_thread(
             _came_back, biz_id, contact_id, _parse(action.get("texted_at"))):
         return True, "They came back; the invite isn't needed."
     name = str(fresh.get("name") or "").strip()
     guest_name = first_name(people[0].get("name"))
-    if step == WELCOME:
+    if step == CONFIRM:
+        words = CONFIRM_WORDS.format(church=name or "the church")
+    elif step == WELCOME:
         code = str(((people[0].get("metadata") or {}).get("new_here") or {}).get("code") or "")
         if not code:
             return True, "The guest has no card to send; not sent."
@@ -615,7 +625,7 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
                                          telnyx_id=sid or "", sent_by="system")
         except Exception as e:  # noqa: BLE001
             return False, f"The text didn't go: {e}"[:240]
-    if gpw is not None:
+    if gpw is not None and step != CONFIRM:     # the question isn't one of the week's texts
         await asyncio.to_thread(gpw.log_sent, biz_id, contact_id, _now())
     return True, f"Sent the New here {step} text."
 
@@ -661,6 +671,26 @@ PATH_STEPS = (WELCOME,) + STEPS
 WELCOME_SPARE = timedelta(minutes=10)       # less than this left in the hours: the next morning's
 # sms_consents.source for a yes given at each door.
 YES_SOURCES = {"kids": "kids_checkin", "web": "connect_card", "form": "guest_form", "app": "member_app_new"}
+# A box ticked on a public web page (the website's connect card, a church's
+# guest card) is a request, not a yes (M-5, 2026-11-27): anyone can type
+# anyone's number. Those doors' texts start only once the phone itself
+# replies YES to one question (CONFIRM); the yes is kept then (on_yes). The
+# kids desk and the member app ask the person in front of them.
+CONFIRM = "confirm"                         # the one question, as a scheduled step
+CONFIRM_DOORS = ("web", "form")
+CONFIRM_DAYS = 7                            # a YES later than this starts nothing
+CONFIRM_WORDS = ("Reply YES to get texts from {church} about your visit and next steps, up to 4 msgs a "
+                 "week. Msg & data rates may apply. Reply STOP to end, HELP for help.")
+# The yes a phone gave by replying YES to that question: its own source, so a
+# carrier can always see the reply, and so it's told apart from a box ticked
+# on a web page (the review of #2100, must-fix 1).
+YES_REPLIED = {"web": "connect_card_yes", "form": "guest_form_yes"}
+# The yeses a door that asks first trusts: given by the person in front of a
+# leader (the kids desk), by a signed-in member (the member app), or by the
+# phone itself (a YES reply). A yes typed on any public page (the /texts page,
+# an event wait-list, a booking, a contact form, a connect card from before
+# the question) never skips it: anyone can type anyone's number there.
+VERIFIED_YES_SOURCES = ("kids_checkin", "member_app_new", "member_app") + tuple(YES_REPLIED.values())
 TEXT_ME = "Text me."
 TEXT_ME_WORDS = ("Yes, {church} may text me about my visit and next steps, up to 4 msgs a week. "
                  "Msg & data rates may apply. Reply STOP to end, HELP for help.")
@@ -675,6 +705,7 @@ WHY_NOT = {
     "no_number": "No church texting number",
     "stopped": "Said STOP",
     "unread": "Couldn't be checked or queued",
+    "confirm": "Asked to reply YES",
 }
 # A card that says they're a regular isn't a first-time guest's.
 _VISIT_Q = re.compile(r"visit|first time|been here|been before|attend|how (long|often)", re.I)
@@ -766,17 +797,27 @@ def text_me_for_form(business: Optional[Dict[str, Any]], form: Optional[Dict[str
         return ""
 
 
+def _asks_first(source: str) -> bool:
+    return str(source or "") in {YES_SOURCES[d] for d in CONFIRM_DOORS if d in YES_SOURCES}
+
+
 def keep_yes(business_id: Any, phone: Any, *, source: str, name: str = "", ip: str = "",
-             user_agent: str = "") -> bool:
+             user_agent: str = "", confirmed: bool = False) -> bool:
     """A guest's "Text me" yes, kept as an sms_consents row: the number,
     their name, where they said it (`source`, YES_SOURCES), when, and the
     address and browser the request came from where it has them. The same
     yes from the same door is kept once. False when there's no number a text
-    can go to, or it didn't save. Sync; never raises."""
+    can go to, or it didn't save. Sync; never raises.
+
+    A door that asks first (CONFIRM_DOORS: a box ticked on a web page) keeps
+    nothing here: True says only that there's a number to ask. Its yes is
+    kept when the phone replies YES (on_yes, `confirmed=True`)."""
     try:
         number = mobile(phone)
         if not number or not source:
             return False
+        if _asks_first(source) and not confirmed:
+            return True
         biz = str(business_id)
         had = _rows(f"/sms_consents?business_id=eq.{_q(biz)}&phone=eq.{_q(number)}&source=eq.{_q(source)}"
                     "&select=id&limit=1")
@@ -792,14 +833,85 @@ def keep_yes(business_id: Any, phone: Any, *, source: str, name: str = "", ip: s
         return False
 
 
-def has_yes(business_id: Any, phone: Any) -> Optional[bool]:
+def has_yes(business_id: Any, phone: Any, *, verified: bool = False) -> Optional[bool]:
     """Whether this number has a yes to this church's texts (an sms_consents
-    row of the church's). None when it couldn't be read."""
+    row of the church's); `verified`: only one a door that asks first trusts
+    (VERIFIED_YES_SOURCES). None when it couldn't be read."""
     number = mobile(phone)
     if not number:
         return False
-    rows = _rows(f"/sms_consents?business_id=eq.{_q(business_id)}&phone=eq.{_q(number)}&select=id&limit=1")
+    only = f"&source=in.({','.join(VERIFIED_YES_SOURCES)})" if verified else ""
+    rows = _rows(f"/sms_consents?business_id=eq.{_q(business_id)}&phone=eq.{_q(number)}{only}&select=id&limit=1")
     return None if rows is None else bool(rows)
+
+
+def on_yes(business_id: Any, phone: Any) -> Optional[Dict[str, Any]]:
+    """The phone replied YES (sms_routing, the church's own number): every
+    guest of this church asked about this number in the last CONFIRM_DAYS
+    has their yes kept (sms_consents, their door's source) and their
+    Welcome Path texts start now, as their door would have started them.
+    The guest is found by the number the question went to (confirm_phone),
+    which can differ from the number on their record.
+    {"contact_ids": [...], "welcome_at": the first welcome} for the ones
+    started, or None (nobody was asked, a STOP still stands, or it couldn't
+    be read). Sync; never raises."""
+    biz = str(business_id or "")
+    try:
+        number = mobile(phone)
+        if not biz or not number:
+            return None
+        people = _rows(f"/contacts?business_id=eq.{_q(biz)}&metadata->new_here->>confirm_phone=eq.{_q(number)}"
+                       f"&metadata->new_here->>texts=eq.{CONFIRM}&select=id,name,phone,status,metadata&limit=5")
+        if not people:
+            return None
+        business = _business(biz)
+        if not business or not is_church(business) or not path_on(biz):
+            return None
+        settings = settings_of(business)
+        now = _now()
+        started: List[str] = []
+        first_welcome: Optional[datetime] = None
+        for contact in people:
+            mine = dict((contact.get("metadata") or {}).get("new_here") or {})
+            asked = _parse(mine.get("confirm_at"))
+            if not asked or now - asked > timedelta(days=CONFIRM_DAYS):
+                continue
+            if str(contact.get("status") or "").strip().lower() in ("inactive", "churned"):
+                continue
+            door = str(mine.get("door") or "web")
+            why = _why_not(business, settings, number, True)
+            if why == "stopped":
+                continue                    # a STOP still stands: still asked, nothing starts
+            if not keep_yes(biz, number, source=YES_REPLIED.get(door, YES_REPLIED["web"]),
+                            name=str(contact.get("name") or ""), user_agent="Replied YES by text", confirmed=True):
+                continue
+            welcome = None if why else welcome_time(business, now)
+            mine.pop("confirm_at", None)
+            mine.update(texts_ok=True, yes_at=_iso(now))
+            if welcome:
+                mine.update(texts="on", welcome_at=_iso(welcome))
+            else:
+                mine["texts"] = why
+            if not _keep(biz, contact, mine):
+                continue
+            if welcome:
+                saved = _queue(business, str(contact["id"]), number,
+                               plan_path(business, now, settings, welcome=welcome),
+                               door=door, texted_at=now)
+                if WELCOME not in saved:
+                    mine["texts"] = "unread"
+                    mine.pop("welcome_at", None)
+                    _keep(biz, contact, mine)
+                    continue
+            started.append(str(contact["id"]))
+            if welcome and (first_welcome is None or welcome < first_welcome):
+                first_welcome = welcome
+        if not started:
+            return None
+        return {"contact_ids": started, "welcome_at": _iso(first_welcome) if first_welcome else None}
+    except Exception as e:  # noqa: BLE001: a YES is an ordinary text if this fails
+        print(f"[new_here] {biz[:8]}: a YES reply wasn't taken ({type(e).__name__})", flush=True)
+        return None
 
 
 def _stopped(business_id: str, phone: str) -> Optional[bool]:
@@ -929,25 +1041,49 @@ def enroll(business: Optional[Dict[str, Any]], contact: Optional[Dict[str, Any]]
         # for texts the earlier door had no yes for (a yes now), or couldn't
         # read (read again now).
         if on_path and (_texting(mine) or texts_ok is False
-                        or (texts_ok is None and mine.get("texts") != "unread")):
+                        or (texts_ok is None and mine.get("texts") != "unread")
+                        or (mine.get("texts") == CONFIRM and door in CONFIRM_DOORS)):
             return mine
         if not on_path:
             mine.update(door=door, texted_at=_iso(now), visits=int(mine.get("visits") or 0) + 1)
-            for key in ("texts", "welcome_at"):
+            for key in ("texts", "welcome_at", "confirm_at", "confirm_phone"):
                 mine.pop(key, None)
         mine["texts_ok"] = bool(texts_ok)
         mine["code"] = mine.get("code") or new_code()
         number = mobile(contact.get("phone") if phone is None else phone)
         settings = settings_of(business)
         why = _why_not(business, settings, number, texts_ok)
-        welcome = None if why else welcome_time(business, now)
+        ask = None
+        if not why and door in CONFIRM_DOORS:
+            # Typed on a web page: ask the phone first, unless this number
+            # already said yes to the church (texted the word, the kids desk,
+            # a YES before). A yes that can't be read is never a no.
+            had = has_yes(biz, number, verified=True)
+            if had is None:
+                why = "unread"
+            elif not had:
+                ask = welcome_time(business, now)
+        welcome = None if (why or ask) else welcome_time(business, now)
         if welcome:
             mine.update(texts="on", welcome_at=_iso(welcome))
+        elif ask:
+            mine.update(texts=CONFIRM, confirm_at=_iso(ask), confirm_phone=number)
         else:
             mine["texts"] = why
         if not _keep(biz, contact, mine):
             print(f"[new_here] {biz[:8]}: a guest from the {door} door wasn't saved to the path", flush=True)
             return None
+        if ask:
+            saved = _queue(business, str(contact["id"]), number, {CONFIRM: ask},
+                           door=str(mine.get("door") or door), texted_at=now)
+            if CONFIRM not in saved:
+                print(f"[new_here] {biz[:8]}: the YES question for a guest from the {door} door wasn't queued",
+                      flush=True)
+                mine["texts"] = "unread"
+                mine.pop("confirm_at", None)
+                mine.pop("confirm_phone", None)
+                _keep(biz, contact, mine)
+            return mine
         if welcome:
             saved = _queue(business, str(contact["id"]), number,
                            plan_path(business, now, settings, welcome=welcome, visit_at=visit_at),

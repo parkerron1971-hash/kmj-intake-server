@@ -337,6 +337,26 @@ async def _ensure_contact(client: httpx.AsyncClient, business_id: str, phone: st
 
 # ─── The inbound router (called by the Twilio webhook) ────────────────
 
+YES_THANKS = "Thanks, you're in. Your first text comes when our texting hours open. Reply STOP to end, HELP for help."
+
+
+async def _yes_thanks(client: httpx.AsyncClient, business_id: str, confirmed: Dict[str, Any]) -> Optional[str]:
+    """The reply to a YES to the Welcome Path's question: None when the
+    welcome goes within a few minutes (it says it all), else one line that
+    they're in, under the church's name as New here's welcome is."""
+    when = None
+    try:
+        raw = str((confirmed or {}).get("welcome_at") or "")
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else None
+    except ValueError:
+        when = None
+    if when is None or when <= datetime.now(timezone.utc) + timedelta(minutes=10):
+        return None
+    name = await _biz_name(client, business_id)
+    own_name = await own_registration(client, business_id)
+    return (f"{name}: " if own_name else f"{sender_brand()} for {name}: ") + YES_THANKS
+
+
 async def route_inbound(
     *,
     from_number: str,
@@ -370,7 +390,13 @@ async def route_inbound(
                     "phone": phone, "business_id": business_id,
                 })
                 return {"action": "opt_out", "business_id": business_id, "reply": None}
+            # The Welcome Path's one question (new_here CONFIRM, M-5): a box
+            # ticked on a web page starts no texts until the phone itself
+            # says YES. "Yes!", "y" count too, but only as that answer.
+            yes_word = re.sub(r"[^A-Z]", "", first_word)
             if first_word in START_WORDS:
+                # Cleared FIRST: a YES after a STOP is a yes to the question
+                # too (otherwise the question would read "Said STOP").
                 logger.info(f"[ROUTE] START from {phone} on biz {business_id[:8]}'s own number — scoped opt-out cleared")
                 try:
                     await client.delete(
@@ -380,6 +406,23 @@ async def route_inbound(
                     )
                 except Exception as e:
                     logger.warning(f"[ROUTE] scoped opt-out clear failed: {e}")
+            confirmed = None
+            if len(body.split()) <= 3 and (yes_word in START_WORDS or yes_word == "Y"):
+                import new_here
+                confirmed = await asyncio.to_thread(new_here.on_yes, business_id, phone)
+            if confirmed:
+                # Their welcome is queued (inside the church's hours); the YES
+                # itself shows in the church's Text room. When the welcome
+                # waits for the morning, one line says they're in.
+                logger.info(f"[ROUTE] New here YES from {phone} on biz {business_id[:8]}'s own number")
+                await _bind(client, phone, business_id)
+                await record_inbound_sms(
+                    client, from_number=phone, text=body,
+                    provider_id=provider_id, media=media, business_id=business_id,
+                )
+                return {"action": "new_here_yes", "business_id": business_id,
+                        "reply": await _yes_thanks(client, business_id, confirmed)}
+            if first_word in START_WORDS:
                 return {"action": "opt_in", "business_id": business_id, "reply": None}
             if first_word in HELP_WORDS:
                 name = await _biz_name(client, business_id)

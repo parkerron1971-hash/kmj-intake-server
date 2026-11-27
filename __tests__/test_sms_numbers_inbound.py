@@ -356,3 +356,74 @@ def test_daily_with_nothing_to_send_is_just_a_message(routed, giving, daily):
     assert res["action"] == "routed_direct"
     _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=PLATFORM))
     assert daily["asked"] == [(BIZ_A, CUSTOMER)]          # never on the shared number
+
+
+# ─── 7. YES to the Welcome Path's question (M-5, 2026-11-27) ──────────
+
+@pytest.fixture
+def asked(routed, monkeypatch):
+    import new_here
+    seen = []
+
+    def on_yes(biz, phone):
+        seen.append((biz, phone))
+        return {"contact_ids": ["c1"]} if phone == CUSTOMER else None
+    monkeypatch.setattr(new_here, "on_yes", on_yes)
+    return seen
+
+
+@pytest.mark.parametrize("text", ["YES", "yes", "Yes!", "Y", "yes please"])
+def test_yes_to_the_question_starts_the_path_and_shows_in_the_thread(routed, asked, text):
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text=text, to_number=OWN_A))
+    assert res == {"action": "new_here_yes", "business_id": BIZ_A, "reply": None}
+    assert asked == [(BIZ_A, CUSTOMER)]
+    assert routed["inbound"][0]["text"] == text and routed["bind"] == [(CUSTOMER, BIZ_A)]
+
+
+def test_yes_from_someone_nobody_asked_is_the_old_start(routed, asked, monkeypatch):
+    res = _run(sms_routing.route_inbound(from_number="+15550001111", text="YES", to_number=OWN_A))
+    assert res["action"] == "opt_in" and routed["inbound"] == []
+
+
+def test_a_sentence_that_starts_with_yes_is_a_message(routed, asked):
+    res = _run(sms_routing.route_inbound(
+        from_number=CUSTOMER, text="Yes! We loved it and will be back Sunday", to_number=OWN_A))
+    assert res["action"] != "new_here_yes" and asked == []
+
+
+def test_a_yes_after_stop_clears_the_stop_before_the_question_is_answered(routed, monkeypatch):
+    """The review of #2100, should-fix 5: the scoped STOP is cleared first,
+    so on_yes doesn't read a STOP the same text is taking back."""
+    import new_here
+    order = []
+
+    class _Client:
+        async def delete(self, url, **kw):
+            order.append("clear")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+    monkeypatch.setattr(sms_routing.httpx, "AsyncClient", lambda *a, **kw: _Client())
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: order.append("yes") or {"contact_ids": ["c1"]})
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="YES", to_number=OWN_A))
+    assert res["action"] == "new_here_yes" and order == ["clear", "yes"]
+
+
+def test_a_yes_whose_welcome_waits_is_told_they_are_in(routed, monkeypatch):
+    import new_here
+    from datetime import datetime, timedelta, timezone
+
+    async def own(client, biz):
+        return False
+    monkeypatch.setattr(sms_routing, "own_registration", own)
+    later = (datetime.now(timezone.utc) + timedelta(hours=9)).isoformat()
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: {"contact_ids": ["c1"], "welcome_at": later})
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="yes", to_number=OWN_A))
+    assert res["reply"].endswith(sms_routing.YES_THANKS) and "Glow Studio" in res["reply"]
+    assert "HELP" in res["reply"] and "STOP" in res["reply"]
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    monkeypatch.setattr(new_here, "on_yes", lambda biz, phone: {"contact_ids": ["c1"], "welcome_at": soon})
+    assert _run(sms_routing.route_inbound(from_number=CUSTOMER, text="yes", to_number=OWN_A))["reply"] is None
