@@ -300,6 +300,15 @@ def _contact(biz: str, cid: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def _forget_roll(biz: str) -> None:
+    """The Members roll is kept a little while per replica: show the change now."""
+    try:
+        import church_roll
+        church_roll._cache.pop(str(biz), None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _patch_contact(biz: str, cid: str, change) -> Dict[str, Any]:
     """Change one contact under its updated_at guard (a card arriving at the
     same moment is never lost). `change(row)` -> (metadata, extra columns)."""
@@ -313,6 +322,7 @@ def _patch_contact(biz: str, cid: str, change) -> Dict[str, Any]:
             f"/contacts?id=eq.{_q(cid)}&business_id=eq.{_q(biz)}&updated_at={guard}",
             dict(extra or {}, metadata=meta, updated_at=now))
         if isinstance(saved, list) and saved:
+            _forget_roll(biz)
             return saved[0]
         if saved != []:
             break
@@ -510,16 +520,21 @@ def decide(business_id: str, contact_id: str, verdict: str, *, by_user: str, by_
         before["opened"] = ran["opened"]
         done = {"released": len(checks), "follow_ups_opened": len(ran["opened"]), "nudge": ran["nudge"]}
     else:
-        closed = _close_follow_ups(biz, cid, by_user, by_name)
-        cancelled = _cancel_welcome_texts(biz, cid)
-
         def change(row):
             meta = dict(row.get("metadata") or {})
             meta.pop("inbound_hold", None)
             meta["inbound_decision"] = stamp
             return meta, {"status": "inactive"}
+        # The person first: a save that fails changes nothing. Inactive, the
+        # follow-up sweep would close what's open anyway (church_follow_up).
         _patch_contact(biz, cid, change)
         _set_checks(biz, before["checks"], CLOSED)
+        try:
+            closed = _close_follow_ups(biz, cid, by_user, by_name)
+        except HTTPException:
+            closed = []         # said below; the record is still written, so undo still works
+            print(f"[inbound_hold] {biz[:8]}: follow-ups not closed now; the inactive sweep will", flush=True)
+        cancelled = _cancel_welcome_texts(biz, cid)
         before.update(closed=closed, cancelled=cancelled)
         before["senders"] = _remember(biz, prints, "scam", did) if verdict == SCAM else []
         listed = shared_list_review(prints, by_platform=share) if verdict == SCAM else 0
@@ -663,13 +678,33 @@ def flagged_recipient(business_id: Any, action: Dict[str, Any]) -> Optional[str]
     try:
         if risk.mode() == "off" or not business_id or not isinstance(action, dict):
             return None
+        biz = str(business_id)
         for key in ("contact_id", "recipient_contact_id", "to_contact_id"):
             v = action.get(key)
             if v:
                 try:
-                    return flagged(str(business_id), str(uuid.UUID(str(v))))
+                    return flagged(biz, str(uuid.UUID(str(v))))
                 except ValueError:
                     return None
+        # By who it names: a contact_name, or a `to` phone or email.
+        name = _plain(action.get("contact_name"))
+        to = str(action.get("to") or action.get("email") or action.get("phone") or "").strip()
+        path = None
+        if name:
+            path = f"/contacts?business_id=eq.{_q(biz)}&name=ilike.{_q(name.replace('*', ''))}&select=id&limit=2"
+        elif "@" in to:
+            path = f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(to.lower())}&select=id&limit=2"
+        elif to:
+            from sms_service import normalize_phone
+            phone = normalize_phone(to)
+            if phone:
+                path = f"/contacts?business_id=eq.{_q(biz)}&phone=eq.{_q(phone)}&select=id&limit=2"
+        if not path:
+            return None
+        for row in _rows(path) or []:
+            why = flagged(biz, str(row.get("id")))
+            if why:
+                return why
         return None
     except Exception:  # noqa: BLE001
         return None
