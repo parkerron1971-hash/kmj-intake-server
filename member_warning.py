@@ -21,17 +21,19 @@ member app's Give) when the church turns it on.
 OFF BY DEFAULT for every church. Nothing here sends anything, and nothing
 shows on a Give page until the church saves give_line on.
 
-    settings.member_warning = {on, pastor, give_line, sent_at, sent_by, sent}
+    settings.member_warning = {on, pastor, give_line, sent_at, sent_by, sent,
+                               declined}
 
 ROUTES (a Manager seat and up, as an announcement)
     GET /church/member-warning?business_id=    the choice, the words, the
                                                suggested pastor's name
     PUT /church/member-warning?business_id=    {on?, pastor?, give_line?,
-                                               sent?: [parts sent]}
+                                               sent?: [parts sent], declined?}
 
-CHIEF offers it (turn_line): only at a church that hasn't sent one, only on a
-turn that talks about scams, fake messages or gift cards. It points to the
-page; it never sends.
+CHIEF offers it (turn_line): only at a church that hasn't sent one or said
+"don't offer this again" (declined), only on a turn that talks about scams,
+fake messages or gift cards, and not when gift cards come up only as giving
+to record. It points to the page; it never sends.
 """
 from __future__ import annotations
 
@@ -71,6 +73,7 @@ def settings_of(business: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "sent_at": s.get("sent_at") if isinstance(s.get("sent_at"), str) else None,
         "sent_by": _plain(s.get("sent_by"))[:120],
         "sent": [p for p in sent if p in PARTS],
+        "declined": s.get("declined") is True,
     }
 
 
@@ -162,7 +165,14 @@ def get_warning(business_id: str = Query(...), biz: Dict[str, Any] = Depends(bus
 def put_warning(business_id: str = Query(...), body: Any = Body(default=None),
                 biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
                 session: UserSession = Depends(sb_clients.authed_request)):
-    """Save the church's choice, the name, the Give line, or that it was sent."""
+    """Save the church's choice, the name, the Give line, "don't offer this
+    again", or that it was sent.
+
+    `sent` is the office's own screen reporting which parts it posted (each
+    through its own route, with its own gate). Nothing here checks that they
+    were delivered: it is a record that stops Chief offering the warning and
+    tells the office when it went, never proof that a member got it. Each
+    `sent` replaces the list, so the screen sends every part that has gone."""
     import business_settings
     import church_follow_up as cfu
     bid = str(biz["id"])
@@ -182,6 +192,8 @@ def put_warning(business_id: str = Query(...), body: Any = Body(default=None),
         cur["pastor"] = name
     if "give_line" in b:
         cur["give_line"] = b["give_line"] is True
+    if "declined" in b:
+        cur["declined"] = b["declined"] is True
     if isinstance(b.get("sent"), list):
         parts = [p for p in b["sent"] if p in PARTS]
         if parts:
@@ -201,6 +213,24 @@ _SCAM_TALK = re.compile(
     r"\b(scams?|scammers?|scammed|phish\w*|fraud\w*|fake (?:text|message|email|number|account)s?|"
     r"gift ?cards?|impersonat\w*|pretend\w* to be|spoof\w*|someone (?:is )?using (?:my|the pastor'?s|pastor'?s) name)\b",
     re.I)
+_GIFT_CARD = re.compile(r"\bgift ?cards?\b", re.I)
+# Gift cards as giving to record ("how do we record gift-card offerings?"),
+# not as a scam.
+_GIVING_TALK = re.compile(
+    r"\b(record\w*|log(?:ged|ging)?|enter\w*|count\w*|deposit\w*|receipt\w*|offerings?|tithes?|donat\w*|"
+    r"contribution\w*|bookkeep\w*|categor\w*|funds?|statements?)\b", re.I)
+
+
+def scam_talk(message: str) -> bool:
+    """A turn about scams. Gift cards alone, in a turn about recording
+    giving, isn't one."""
+    m = message or ""
+    if not _SCAM_TALK.search(m):
+        return False
+    if _SCAM_TALK.search(_GIFT_CARD.sub(" ", m)):
+        return True
+    return not _GIVING_TALK.search(m)
+
 
 BLOCK = (
     "MEMBER WARNING (this church hasn't sent one): when this conversation is about scams, fake messages using the "
@@ -216,12 +246,13 @@ def turn_line(business: Dict[str, Any], user_id: Any, message: str) -> str:
     """The offer, for the turn's tail; '' unless it fits (a church, not sent
     yet, a turn about scams) or on any failure."""
     try:
-        if not user_id or not _SCAM_TALK.search(message or ""):
+        if not user_id or not scam_talk(message):
             return ""
         import church_follow_up as cfu
         if not cfu.is_church(business or {}):
             return ""
-        if settings_of(business)["sent_at"]:
+        s = settings_of(business)
+        if s["sent_at"] or s["declined"]:
             return ""
         return BLOCK
     except Exception:  # noqa: BLE001

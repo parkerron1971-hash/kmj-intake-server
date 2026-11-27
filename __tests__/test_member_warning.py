@@ -32,7 +32,8 @@ def pastor(monkeypatch):
 def test_off_by_default_and_no_give_line():
     b = church()
     s = MW.settings_of(b)
-    assert s == {"on": False, "pastor": "", "give_line": False, "sent_at": None, "sent_by": "", "sent": []}
+    assert s == {"on": False, "pastor": "", "give_line": False, "sent_at": None, "sent_by": "", "sent": [],
+                 "declined": False}
     assert MW.give_line_html(b) == ""
     # Turned on but the Give line not chosen: still nothing on the Give page.
     assert MW.give_line_html(church(member_warning={"on": True})) == ""
@@ -138,3 +139,20 @@ def test_chief_offers_it_only_on_a_turn_about_scams():
     assert MW.turn_line(church(member_warning={"sent_at": "2026-11-27T10:00:00Z"}), OWNER, "is this a scam?") == ""
     assert MW.turn_line({**b, "type": "coach"}, OWNER, "is this a scam?") == ""
     assert MW.turn_line(b, "", "is this a scam?") == ""
+
+
+def test_chief_stops_offering_once_declined_and_on_gift_cards_as_giving(office):
+    """#2102 nits: "no thanks" is saved (declined) and quiets the offer, and
+    gift cards that come up only as giving to record aren't scam talk."""
+    b = church()
+    for giving in ("How do we record gift-card offerings?", "Someone gave a gift card in the offering, which fund?",
+                   "Log a $50 gift card donation from the Smiths"):
+        assert MW.turn_line(b, OWNER, giving) == "", giving
+    for scam in ("Someone texted asking our members for gift cards", "Is this gift card text a scam?",
+                 "a fake text asked for gift cards; how do I record what happened?"):
+        assert MW.turn_line(b, OWNER, scam).startswith("MEMBER WARNING"), scam
+    r = office.client.put(f"/church/member-warning?business_id={BIZ}", json={"declined": True})
+    assert r.status_code == 200 and r.json()["declined"] is True and r.json()["on"] is False
+    assert office.merges[-1]["member_warning"]["declined"] is True
+    assert MW.turn_line(church(member_warning={"declined": True}), OWNER, "is this a scam?") == ""
+    assert MW.settings_of(church())["declined"] is False

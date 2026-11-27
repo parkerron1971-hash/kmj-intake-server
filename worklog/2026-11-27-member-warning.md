@@ -16,6 +16,7 @@ decisions:
   - "The Give-page line shows only when on AND give_line, escaped, on the hosted /give, a hand-built site's give form and the member app's Give (one helper, give_line_html)"
   - "Chief offers it (turn_line in the turn's tail): only at a church that hasn't sent one, only on a turn whose words are about scams, fake messages, impersonation or gift cards; it opens Members with navigate and never says it was sent"
   - "Routes GET/PUT /church/member-warning?business_id=, a Manager seat and up (business_access), churches only"
+  - "Account-2 review nits (clear at 3310bbe5): a church can say don't offer this again (declined, saved by PUT; the sheet's own link), and Chief's offer skips a turn where gift cards come up only as giving to record (scam_talk). put_warning's docstring says sent is the office screen's report, never proof of delivery"
 related: [2026-11-27-needs-a-look-backend.md]
 ---
 The member warning (inbound-safety proposal L7). The most common church scam
