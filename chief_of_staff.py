@@ -4135,6 +4135,24 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
     return parts[0] + "\n" + parts[1]
 
 
+def _notification_lines(notifications: List[Dict[str, Any]]) -> List[str]:
+    """The NOTIFICATIONS block's lines. A title and its suggestion carry
+    words a stranger chose (a form's name: "Sofia Marino is still waiting";
+    a texter's name; an email's subject), so both are defused like every
+    other third-party text, and an attempt marks the turn (M-5, 2026-11-27)."""
+    lines = []
+    for n in notifications or []:
+        days = _days_since(n.get("created_at"))
+        when = f"{days}d ago" if days and days >= 1 else "today"
+        said = _neutralize_untrusted(n.get("suggested_action") or "")
+        suggestion = f" → suggested: {said}" if said else ""
+        lines.append(
+            f"  - [{(n.get('type') or '').upper()} {n.get('priority', 'normal')}] "
+            f"\"{_neutralize_untrusted(n.get('title') or '')}\" ({when}){suggestion}"
+        )
+    return lines
+
+
 def _format_context_parts(ctx: Dict[str, Any]):
     """(stable, live): the snapshot that holds still between messages, for
     the cached state segment, and the part that moves, for the per-message
@@ -4275,15 +4293,7 @@ def _format_context_parts(ctx: Dict[str, Any]):
     ]
 
     # Recent unread notifications
-    notif_lines = []
-    for n in (ctx.get("notifications") or []):
-        days = _days_since(n.get("created_at"))
-        when = f"{days}d ago" if days and days >= 1 else "today"
-        suggestion = f" → suggested: {n['suggested_action']}" if n.get("suggested_action") else ""
-        notif_lines.append(
-            f"  - [{(n.get('type') or '').upper()} {n.get('priority', 'normal')}] "
-            f"\"{n.get('title')}\" ({when}){suggestion}"
-        )
+    notif_lines = _notification_lines(ctx.get("notifications") or [])
 
     # Email templates + signature snapshot so the Chief uses them when drafting
     et = (biz.get('settings') or {}).get('email_templates') or {}
@@ -7681,6 +7691,22 @@ async def _count_payment_reminders(client, biz_id: str, invoice_id: Optional[str
         return 0
 
 
+def _inbound_flagged(draft: Optional[Dict[str, Any]]) -> bool:
+    """Whether a draft came from inbound words that a person must look at
+    first: intake's `inbound_flags` (action-tag syntax, injection shapes),
+    or a Needs-a-look hold (`needs_a_look` / `inbound_hold`) or `tainted`
+    set by whatever wrote it. Unreadable data is read as not flagged."""
+    data = (draft or {}).get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return False
+    if not isinstance(data, dict):
+        return False
+    return any(bool(data.get(k)) for k in ("inbound_flags", "needs_a_look", "inbound_hold", "tainted"))
+
+
 async def _should_auto_approve(
     client,
     biz: Dict[str, Any],
@@ -7699,7 +7725,13 @@ async def _should_auto_approve(
     not contact clients on its own while this function did exactly that.
     The policy engine is checked FIRST, before autopilot level, because
     a regulated practice on "full" is precisely the dangerous case.
+
+    M-5 (2026-11-27): before either, a draft written from a stranger's
+    submission that tried to instruct (intake's inbound_flags), or one the
+    inbound check put on hold, never sends unattended, on any level.
     """
+    if _inbound_flagged(draft):
+        return False, "inbound_flagged"
     try:
         import policy_engine
         # approve_draft sends, so it is class C: the engine lets it run
