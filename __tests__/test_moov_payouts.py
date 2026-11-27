@@ -257,6 +257,15 @@ def test_live_mode_is_refused_in_this_build(env, monkeypatch):
     assert env.moov.calls == []
 
 
+def test_the_contractors_slot_shows_only_where_the_switch_and_the_gate_both_open(env, monkeypatch):
+    assert mp.shows_for(CHURCH, u(OWNER)) and mp.shows_for(CHURCH, u(ACCOUNTANT))
+    assert not mp.shows_for(CHURCH, u(MEMBER))
+    assert not mp.shows_for(SHOP, u(OWNER))
+    assert not mp.shows_for("not-a-uuid", u(OWNER))                   # never raises
+    monkeypatch.setenv("MOOV_PAYOUTS", "off")
+    assert not mp.shows_for(CHURCH, u(OWNER))
+
+
 # ─── Who ──────────────────────────────────────────────────────────────
 
 def test_only_the_owner_sets_up_and_only_the_owner_or_an_admin_sends(env):

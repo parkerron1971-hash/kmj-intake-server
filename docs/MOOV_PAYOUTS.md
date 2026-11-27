@@ -99,6 +99,23 @@ Refusals come back as plain sentences in `detail`, ready to show:
 The frontend generates the `idempotency_key` once per press of Send (a
 UUID), and reuses it for retries of that same press.
 
+### W5's slot (FE #1719 `ContractorSendSlot`)
+
+The slot draws only when `GET /contractors` returns `payouts.moov: true`.
+That `payouts` map arrives with kmj-intake-server #2105, which is still open,
+so this PR leaves `contractors_router` alone and provides the answer instead:
+`moov_payouts.shows_for(biz, user)`. Once #2105 merges, a one-line
+follow-up adds it:
+
+```python
+"payouts": {"stripe": payouts_open(biz), "moov": moov_payouts.shows_for(biz, user)}
+```
+
+Inside the slot: read `GET /moov/status?biz=`. Then show, in order:
+1. the owner's opt-in and Moov's form, while the church isn't ready;
+2. "Invite to Moov" until the person is ready;
+3. Send: quote, pick a speed with its fee, confirm the password, then pay.
+
 ## Go live (what Kevin does)
 
 1. **Create the Moov account** at moov.io as Solutionist, the partner or

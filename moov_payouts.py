@@ -283,6 +283,24 @@ def _speeds(amount: float) -> List[Dict[str, Any]]:
              "default": s == moov_client.DEFAULT_SPEED} for s in moov_client.SPEEDS]
 
 
+# ─── The Contractors page's slot ──────────────────────────────────────
+
+def shows_for(biz: Any, user: Any) -> bool:
+    """`payouts.moov` on GET /contractors (W5's ContractorSendSlot, FE #1719):
+    whether this church's Contractors page should draw the Moov part at all.
+    The switch opens it for this church and the person may see payouts. Never
+    raises: a read that fails is a no. The slot then reads /moov/status."""
+    try:
+        if not open_for(biz):
+            return False
+        row = _business(_uuid(biz, "biz"))
+        import church_follow_up
+        return bool(church_follow_up.is_church(row)
+                    and church_money_gate.may_money(row["id"], user, "see", "send", business=row))
+    except Exception:  # noqa: BLE001 — unread is not a yes
+        return False
+
+
 # ─── Status ───────────────────────────────────────────────────────────
 
 @router.get("/status")
