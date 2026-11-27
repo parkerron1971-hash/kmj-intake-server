@@ -303,6 +303,87 @@ def service_word(biz: str) -> Dict[str, Any]:
         return {"service_word": "Sunday", "service_word_set": False}
 
 
+# ─── shared by the hub's parts ───────────────────────────────────────
+# Read only with the hub on, which goes on only after the migration
+# (supabase/APPLY-2026-11-27-sunday-hub.sql). A column not there yet reads as
+# its default, never as an error a page would show.
+
+# The kinds of plan item (worship_show.ITEM_KINDS) and whose each is by
+# default: songs the worship team's; what goes on the screens media & tech's;
+# the rest the planner's (no team).
+AREA_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown", "loop", "third")
+_WORSHIP_KINDS = ("song",)
+_PRODUCTION_KINDS = ("announcement", "media", "countdown", "loop", "third")
+
+
+def live_ok(biz: str, sid: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Whether the pastor opened this Sunday for live changes, and until
+    when: {on, until, by: {name} | None}. Before the migration, or on a read
+    that fails, it reads as not open: never as open."""
+    rows = sb_clients.sb_get_as_service(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}"
+                                        "&select=live_ok_until,live_ok_by&limit=1")
+    row = rows[0] if isinstance(rows, list) and rows else {}
+    until = row.get("live_ok_until")
+    try:
+        at = datetime.fromisoformat(str(until).replace("Z", "+00:00")) if until else None
+    except ValueError:
+        at = None
+    on = bool(at and at > (now or datetime.now(timezone.utc)))
+    by = None
+    if on and row.get("live_ok_by"):
+        by = {"name": login_name(biz, str(row["live_ok_by"]))}
+    return {"on": on, "until": at.isoformat() if on and at else None, "by": by}
+
+
+def login_name(biz: str, uid: str) -> str:
+    """How a login is named to the church: its seat's name, "The owner" for
+    the owner, else "The pastor"."""
+    b = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=owner_id&limit=1") or []
+    if b and str(b[0].get("owner_id")) == uid:
+        return "The owner"
+    seats = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
+                                         "&select=name&limit=1") or []
+    name = (seats[0].get("name") or "").strip() if seats else ""
+    return name or "The pastor"
+
+
+def team_areas(biz: str, teams: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Optional[str]]:
+    """Whose each kind of plan item is: {kind: group_id | None}. The
+    church's own choice (worship_settings.team_areas) where it made one and
+    the team is still a Sunday team; else songs the worship team's and the
+    screens' items the media & tech team's, by name; else nobody's."""
+    teams = teams if teams is not None else sunday_teams(biz)
+    ids = {t["group_id"] for t in teams}
+    rows = sb_clients.sb_get_as_service(f"/worship_settings?business_id=eq.{_q(biz)}&select=team_areas&limit=1")
+    chosen = (rows[0].get("team_areas") if isinstance(rows, list) and rows else None) or {}
+    w, p = worship_team(teams), production_team(teams)
+    out: Dict[str, Optional[str]] = {}
+    for kind in AREA_KINDS:
+        if isinstance(chosen, dict) and kind in chosen:
+            gid = chosen.get(kind)
+            out[kind] = str(gid) if gid and str(gid) in ids else None
+        elif kind in _WORSHIP_KINDS:
+            out[kind] = w["group_id"] if w else None
+        elif kind in _PRODUCTION_KINDS:
+            out[kind] = p["group_id"] if p else None
+        else:
+            out[kind] = None
+    return out
+
+
+def item_team(item: Dict[str, Any], areas: Dict[str, Optional[str]]) -> Optional[str]:
+    """Whose one plan item is: its own `team`, else its kind's area."""
+    own = item.get("team")
+    return str(own) if own else areas.get(str(item.get("kind") or ""))
+
+
+def open_to_ops(biz: str) -> Set[str]:
+    """The Sunday teams opened to ministry operations (serve_teams.open_to_ops).
+    Before the migration, or on a read that fails: none (closed is safe)."""
+    rows = sb_clients.sb_get_as_service(f"/serve_teams?business_id=eq.{_q(biz)}&open_to_ops=eq.true&select=group_id")
+    return {str(r["group_id"]) for r in rows} if isinstance(rows, list) else set()
+
+
 # ─── what /worship/status carries ────────────────────────────────────
 
 
