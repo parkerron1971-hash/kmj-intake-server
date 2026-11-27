@@ -4,7 +4,7 @@ date: 2026-11-27
 agent: Claude Code (Claude Opus 5.5)
 asked: "F2: the intake draft defuses the submission, and autopilot 'full' skips drafts from flagged or tainted submissions; F3: notification titles are defused before Chief's prompt" (M-5 step 1, relayed by KAI)
 status: in progress
-prs: []
+prs: [kmj-intake-server#2099]
 migrations: []
 left_undone: []
 decisions: ["intake isn't a Chief turn, so its flags ride on the draft (agent_queue.data.inbound_flags) instead of a turn's taint", "autopilot refuses any draft whose data says inbound_flags, needs_a_look, inbound_hold or tainted, before the policy engine and on every level", "a flagged draft is still written; a person can read it and send it"]
