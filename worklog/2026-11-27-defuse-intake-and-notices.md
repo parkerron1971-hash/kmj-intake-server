@@ -2,7 +2,7 @@
 title: The intake draft reads a submission as data; autopilot skips flagged ones; notification titles defused
 date: 2026-11-27
 agent: Claude Code (Claude Opus 5.5)
-asked: "F2: the intake draft defuses the submission, and autopilot 'full' skips drafts from flagged or tainted submissions; F3: notification titles are defused before Chief's prompt" (M-5 step 1, relayed by KAI)
+asked: "M-5 step 1, relayed by KAI: F2, the intake draft defuses the submission, and autopilot 'full' skips drafts from flagged or tainted submissions; F3, notification titles are defused before Chief's prompt"
 status: in progress
 prs: [kmj-intake-server#2099]
 migrations: []
