@@ -116,13 +116,13 @@ def app(monkeypatch):
                                up("2026-11-20-draft", status="draft")],
                          seen=set(), posts=[], patches=[], biz={"id": BIZ, "name": "Grace Street", "type": "church",
                                                                 "owner_id": OWNER, "created_at": "2026-08-10T00:00:00Z"},
-                         seen_fails=False)
+                         seen_fails=False, seat_fails=False)
 
     def get(path, **kw):
         if path.startswith("/businesses?"):
             return [copy.deepcopy(st.biz)]
         if path.startswith("/business_users?"):
-            return [{"accepted_at": "2026-11-02T00:00:00Z"}]
+            return None if st.seat_fails else [{"accepted_at": "2026-11-02T00:00:00Z"}]
         if path.startswith("/platform_updates?id=eq."):
             uid = path.split("id=eq.")[1].split("&")[0]
             return [copy.deepcopy(r) for r in st.rows if r["id"] == uid]
@@ -201,6 +201,27 @@ def test_an_admin_seat_sees_from_the_day_it_joined_and_no_owner_news(app):
     app.who.id = SEAT
     got = app.client.get(f"/updates/for-me?business_id={BIZ}").json()
     assert [e["id"] for e in got["updates"]] == ["2026-11-27-everyone", "2026-11-26-churches"]
+
+
+def test_reads_that_fail_never_widen_what_a_seat_sees(app, monkeypatch):
+    import church_areas
+    app.who.id = SEAT
+    # The seat's own row can't be read: its day is today, so nothing older shows.
+    app.seat_fails = True
+    assert app.client.get(f"/updates/for-me?business_id={BIZ}").json()["updates"] == []
+    app.seat_fails = False
+    # Its areas can't be read while the switch is on: an update for an area is
+    # hidden, one for everyone still shows.
+    app.rows.append(up("2026-11-24-giving", date="2026-11-24", areas=["giving_money"]))
+    PU.forget_cache()
+    monkeypatch.setattr(church_areas, "my_areas", lambda b, u, r: None)
+    monkeypatch.setattr(church_areas, "mode", lambda: "on")
+    ids = [e["id"] for e in app.client.get(f"/updates/for-me?business_id={BIZ}").json()["updates"]]
+    assert "2026-11-24-giving" not in ids and "2026-11-27-everyone" in ids
+    # With the switch off, None is the whole church, as before.
+    monkeypatch.setattr(church_areas, "mode", lambda: "off")
+    ids = [e["id"] for e in app.client.get(f"/updates/for-me?business_id={BIZ}").json()["updates"]]
+    assert "2026-11-24-giving" in ids
 
 
 def test_seen_that_cannot_be_read_shows_nothing_as_new(app):

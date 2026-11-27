@@ -290,17 +290,20 @@ def seen_ids(user_id: str, business_id: str) -> Optional[Set[str]]:
 
 
 def joined_day(business: Dict[str, Any], user_id: str, role: Optional[str]) -> str:
-    """The day this login joined this business ('' when unknown): the
-    business's own day for the owner, the seat's for everyone else."""
+    """The day this login joined this business: the business's own day for
+    the owner, the seat's for everyone else. When the seat can't be read, or
+    has no day, it is today: nothing older shows, rather than everything."""
     if role == "owner":
-        return str(business.get("created_at") or "")[:10]
+        return str(business.get("created_at") or "")[:10] or _today()
     rows = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{_q(business.get('id'))}&user_id=eq.{_q(user_id)}"
-        f"&status=eq.active&select=*&limit=1") or []
-    if rows:
+        f"&status=eq.active&select=*&limit=1")
+    if isinstance(rows, list) and rows:
         r = rows[0]
-        return str(r.get("accepted_at") or r.get("created_at") or r.get("invited_at") or "")[:10]
-    return ""
+        day = str(r.get("accepted_at") or r.get("created_at") or r.get("invited_at") or "")[:10]
+        if day:
+            return day
+    return _today()
 
 
 def viewer_for(business: Dict[str, Any], user_id: str, *, pages: Iterable[str] = (),
@@ -317,7 +320,13 @@ def viewer_for(business: Dict[str, Any], user_id: str, *, pages: Iterable[str] =
         try:
             import church_areas
             view = church_areas.my_areas(str(business.get("id")), str(user_id), role)
-            if view is not None and isinstance(view.get("areas"), list):
+            if view is None:
+                # None is "the switch is off" (the whole church, as before) or
+                # "the read failed". With the switch on it can only be the
+                # second, and that narrows to nothing rather than widening.
+                if church_areas.mode() == "on":
+                    areas = []
+            elif isinstance(view.get("areas"), list):
                 areas = view["areas"]
         except Exception as e:  # noqa: BLE001: the areas narrow; failing to read them never widens
             logger.warning(f"[updates] areas not read: {type(e).__name__}")
