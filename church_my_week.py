@@ -109,6 +109,7 @@ DOOR = {
     "devotionals": {"area": "build", "id": "devotionals", "label": "Open Devotionals"},
     # Sunday & Serving: the volunteers.
     "serve_schedule": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
+    "ministry_ops": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
     "serve_teams": {"area": "operate", "id": "serve-teams", "label": "Open Teams"},
     "new_volunteers": {"area": "operate", "id": "serve-teams", "label": "Open Teams"},
     "background_checks": {"area": "operate", "id": "serving", "label": "Open Serving"},
