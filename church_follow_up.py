@@ -451,11 +451,12 @@ def _contacts(biz: str, ids: Iterable[str]) -> Optional[Dict[str, Dict[str, Any]
     if not ids:
         return {}
     rows = _rows(f"/contacts?business_id=eq.{_q(biz)}&id=in.({','.join(_q(i) for i in ids)})"
-                 "&select=id,name,email,phone")
+                 "&select=id,name,email,phone,status")
     if rows is None:
         return None
     return {str(r["id"]): {"id": str(r["id"]), "name": _plain(r.get("name")) or "Someone",
-                           "email": r.get("email") or "", "phone": r.get("phone") or ""} for r in rows}
+                           "email": r.get("email") or "", "phone": r.get("phone") or "",
+                           "status": str(r.get("status") or "")} for r in rows}
 
 
 def roles(business_id: str) -> Optional[List[Dict[str, Any]]]:
@@ -1035,6 +1036,34 @@ def office_note(business_id: str, follow_up_id: str, text: str, *, pastors_only:
     if kind in REACHED and row.get("status") == "open" and int(row.get("step") or 0) == 0:
         advance(biz, fid, author_kind="office", author_user_id=by_user, author_name=by_name)
     return note
+
+
+def close_for_contact(business_id: str, contact_id: str, *, by_user: str = "", by_name: str = "",
+                      why: str = "") -> Optional[List[str]]:
+    """Close every open follow-up for one person and take them off the
+    Welcome Path: for "Not a guest" and "Scam" (Needs a look), or anything
+    else that settles that nobody should call them. `by_user` set: the
+    office's note ("Closed by the office." or `why`); none: Chief's. The ids
+    closed; None when their follow-ups couldn't be read. Sync."""
+    import new_here
+    biz, cid = _uid(business_id, "business"), _uid(contact_id, "person")
+    rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
+                 "&status=in.(open,handed_back)&select=id&limit=50")
+    if rows is None:
+        return None
+    words = _plain(why)[:MAX_NOTE] or ("Closed by the office." if by_user else "Closed: nobody needs to call.")
+    closed: List[str] = []
+    for r in rows:
+        fid = str(r["id"])
+        try:
+            _patch(biz, fid, {"status": "closed", "done_at": _iso(_now())})
+        except HTTPException:
+            continue                    # didn't save: still open, the next sweep closes it
+        closed.append(fid)
+        _note(biz, fid, "office" if by_user else "chief", "done", words,
+              author_user_id=by_user or None, author_name=by_name)
+    new_here.leave_path(biz, cid)
+    return closed
 
 
 def close(business_id: str, follow_up_id: str, *, by_user: str, by_name: str = "") -> Dict[str, Any]:
@@ -1801,6 +1830,19 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
     people = await asyncio.to_thread(_contacts, biz_id, ids)
     if people is None:
         return
+    # Marked inactive (M-5, 2026-11-27): someone the office marked inactive,
+    # or "Not a guest", is nobody's to call. Their open follow-up closes here,
+    # before anyone is told or nudged, and their queued texts are cancelled.
+    # The status is read here because some screens change it straight in the
+    # database: a sales pitch marked inactive at Love City kept climbing.
+    import new_here
+    off = [r for r in items if r.get("status") == "open"
+           and new_here.off_path(people.get(str(r["contact_id"])))]
+    for pid in sorted({str(r["contact_id"]) for r in off}):
+        words = f"Closed: {first_name(people[pid].get('name'))} is marked inactive, so nobody needs to call."
+        closed = await asyncio.to_thread(close_for_contact, biz_id, pid, why=words)
+        stats["closed_inactive"] = stats.get("closed_inactive", 0) + len(closed or [])
+    items = [r for r in items if r not in off]     # a close that didn't save waits, never nudged
     origin = await asyncio.to_thread(site_origin, biz_id)
     lead_link = f"{origin}/my/lead" if origin else ""
     church = _plain(biz.get("name")) or "Your church"

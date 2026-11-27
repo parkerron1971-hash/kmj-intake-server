@@ -776,3 +776,84 @@ def test_a_sweep_that_cannot_read_a_churchs_roles_returns_nothing(db, outbox, mo
                         lambda path, **kw: None if path.startswith("/church_leader_roles") else real(path, **kw))
     assert asyncio.run(cfu._sweep_handed()) == 0
     assert cfu._one(BIZ, f["id"])["leader_contact_id"] == TASHA, "a failed read is never 'nobody holds anything'"
+
+
+# ─── Marked inactive: nobody is asked to call (M-5, 2026-11-27) ───────
+#
+# A website connect card that was a sales pitch ("Julien Mercier", Love City,
+# 11-22) was marked inactive by the office the next day. His follow-up stayed
+# open, and the sweep kept climbing it: "hasn't been reached" two days later,
+# to the leader and the office, for someone who was never a guest.
+
+@pytest.fixture
+def left(monkeypatch):
+    import new_here
+    calls = []
+    monkeypatch.setattr(new_here, "leave_path", lambda biz, contact: calls.append((biz, contact)) or 0)
+    return calls
+
+
+def _mark(db, person, status):
+    next(c for c in db.t["contacts"] if c["id"] == person)["status"] = status
+
+
+@pytest.mark.parametrize("status", ["inactive", "churned"])
+def test_a_guest_marked_inactive_is_closed_never_handed_to_a_caller(db, outbox, left, status):
+    f = _open(db)
+    _mark(db, DANA, status)
+    asyncio.run(cfu.sweep())
+    assert outbox["email"] == [] and outbox["alert"] == [], "nobody is told to call them"
+    row = cfu._one(BIZ, f["id"])
+    assert row["status"] == "closed" and row["done_at"]
+    [note] = [n for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"] and n["kind"] == "done"]
+    assert "inactive" in note["body"] and note["author_kind"] == "chief"
+    assert left == [(BIZ, DANA)], "and they're off the Welcome Path"
+    asyncio.run(cfu.sweep())
+    assert outbox["email"] == [] and outbox["alert"] == [] and left == [(BIZ, DANA)], "once"
+
+
+def test_marked_inactive_after_the_hand_off_the_late_ladder_stops(db, outbox, left):
+    """Julien's case: the caller was told, he was marked inactive, and the
+    follow-up went on climbing as late."""
+    f = _open(db)
+    asyncio.run(cfu.sweep())
+    assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"]
+    _mark(db, DANA, "inactive")
+    due = cfu._parse(cfu._one(BIZ, f["id"])["due_at"])
+    for days in (0, 1, 3):
+        asyncio.run(cfu.sweep(now=due + timedelta(days=days, hours=1)))
+    assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"], "no nudge, no climb"
+    assert outbox["alert"] == []
+    assert cfu._one(BIZ, f["id"])["status"] == "closed" and not cfu._one(BIZ, f["id"]).get("late_level")
+
+
+def test_someone_still_active_is_handed_on_as_before(db, outbox, left):
+    _open(db)
+    _mark(db, DANA, "lead")
+    asyncio.run(cfu.sweep())
+    assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"] and left == []
+
+
+def test_closing_everything_for_one_person_is_what_not_a_guest_calls(db, left):
+    """church_follow_up.close_for_contact: every open follow-up for one
+    person closes with the office's note, nobody else's, and they're off the
+    Welcome Path (Needs a look's "Not a guest" and "Scam" call this)."""
+    a = _open(db)
+    b = _open(db, BAPTISM, DANA, faith="Yes", before="No")
+    other = _open(db, SERVE, ANDRE, team="Hospitality Team")
+    assert a["id"] != b["id"]
+    closed = cfu.close_for_contact(BIZ, DANA, by_user=OWNER, by_name="Kevin", why="Not a guest: a sales pitch.")
+    assert sorted(closed) == sorted([a["id"], b["id"]])
+    assert {cfu._one(BIZ, i)["status"] for i in closed} == {"closed"}
+    assert cfu._one(BIZ, other["id"])["status"] == "open"
+    notes = [n for n in db.t["church_follow_up_notes"] if n["follow_up_id"] in closed and n["kind"] == "done"]
+    assert len(notes) == 2 and all(n["author_kind"] == "office" and n["body"] == "Not a guest: a sales pitch."
+                                   for n in notes)
+    assert left == [(BIZ, DANA)]
+    assert cfu.close_for_contact(BIZ, DANA) == [], "nothing open is nothing closed"
+
+
+def test_closing_for_one_person_says_so_when_it_cannot_read(db, left, monkeypatch):
+    _open(db)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: None)
+    assert cfu.close_for_contact(BIZ, DANA) is None and left == []
