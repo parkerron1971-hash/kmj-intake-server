@@ -857,6 +857,13 @@ def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
     # practitioner checking their own draft does not pollute their
     # numbers.
     html = _inject_traffic_beacon(html, business_id)
+    # And the form door's token (site_form_guard, M-5): the script puts it on
+    # each contact-submit the page sends, frozen form scripts included.
+    try:
+        import site_form_guard
+        html = site_form_guard.inject(html, business_id)
+    except Exception:  # noqa: BLE001: a page always renders
+        pass
     if not business_id:
         return html
     try:
@@ -2413,21 +2420,21 @@ async def layout_override_endpoint(business_id: str, body: Dict[str, Any], user:
 
 # ─── Pass 3.6: contact-form submission via Resend ──────────────────────
 
-# In-memory rate limiter — 5 submissions per minute per IP. Acceptable
-# for v1; restarts reset state.
-_contact_rate: Dict[str, List[float]] = {}
+def _check_contact_rate(key: str) -> bool:
+    """The form door's limit per church and visitor address (`key` is
+    "<business id>:<ip>"), shared by every replica and fail-open
+    (rate_limit "site_contact", M-5, 2026-11-27). It was a dict in each
+    process, so the real limit was 5 a minute times the replicas."""
+    import rate_limit
+    return rate_limit.allow_shared("site_contact", key or "unknown")
 
 
-def _check_contact_rate(ip: str) -> bool:
-    now = time.time()
-    cutoff = now - 60
-    bucket = [t for t in _contact_rate.get(ip, []) if t > cutoff]
-    if len(bucket) >= 5:
-        _contact_rate[ip] = bucket
-        return False
-    bucket.append(now)
-    _contact_rate[ip] = bucket
-    return True
+def _check_contact_email(business_id: str, body: Any) -> bool:
+    """One email address sending this church's form again and again
+    (rate_limit "site_contact_email", in-process, fail-open)."""
+    import rate_limit
+    email = str((body or {}).get("email") or "").strip().lower()[:200] if isinstance(body, dict) else ""
+    return True if not email else rate_limit.allow("site_contact_email", f"{business_id}:{email}")
 
 
 def _record_website_sms_consent(business_id: str, phone_raw: str,
@@ -2458,11 +2465,15 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                                attribution: Optional[Dict[str, Any]] = None,
                                form: str = "", fields: Optional[Dict[str, Any]] = None,
                                submission_id: str = "", receipt: Optional[str] = None,
-                               texts_ok: bool = False) -> Optional[str]:
+                               texts_ok: bool = False,
+                               hold: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Bound recent metadata; retain each complete submission in an immutable event.
     Conditional updates protect concurrent cards, and receipt ids make retries safe.
     Called in a worker thread, including the synchronous database operations.
     `texts_ok`: a church connect card's "Text me" yes (the Welcome Path).
+    `hold`: the card needs a look (inbound_hold.begin): the contact carries the
+    mark, and nothing runs on its own (no follow-up, Welcome Path or scoring)
+    until a person says it's real.
     """
     import urllib.parse
     import uuid
@@ -2501,6 +2512,8 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
             meta["website_form_messages"] = (history + [entry])[-website_forms.HISTORY_LIMIT:]
             if form == "connect_card":
                 meta["website_connect_card"] = dict(fields or {}, source=source)
+            if hold:
+                meta["inbound_hold"] = hold
             if existing:
                 cid = existing["id"]
                 path = (f"/contacts?id=eq.{urllib.parse.quote(str(cid), safe='')}"
@@ -2548,6 +2561,9 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
     except Exception as exc:
         print(f"[contact-submit] contact/note storage failed biz={business_id[:8]}: {exc!r}", flush=True)
         return None
+    if hold:
+        # Needs a look: saved and marked; what it would start waits (inbound_hold.decide).
+        return contact_id
     if form == "connect_card":
         # No lead scoring or automated outreach for church cards: a person
         # follows up instead. Chief hands them to a leader (church_follow_up).
@@ -2582,7 +2598,21 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     def failure(status, error):
         return JSONResponse(status_code=status, content={"ok": False, "error": error})
 
-    if not _check_contact_rate(rate_limit.trusted_client_ip(request)):
+    if not _check_contact_rate(f"{business_id}:{rate_limit.trusted_client_ip(request)}"):
+        return failure(429, "Too many submissions. Please try again later.")
+    # A bot (site_form_guard: the hidden field filled, a token that isn't
+    # this church's, or sent faster than a person could): thanked like a
+    # person, and nothing is read, stored, alerted or mailed. Never logs
+    # what it said. A card with no token goes on: old pages don't send one.
+    import site_form_guard
+    bot = site_form_guard.verdict(business_id, body)
+    kind_seen = site_form_guard.form_kind(body) if isinstance(body, dict) else ""
+    if bot:
+        print(f"[contact-submit] bot dropped biz={business_id[:8]} form={kind_seen or '-'} why={bot}", flush=True)
+        return {"ok": True}
+    if isinstance(body, dict) and not body.get(site_form_guard.TOKEN_KEY):
+        print(f"[contact-submit] no form token biz={business_id[:8]} form={kind_seen or '-'}", flush=True)
+    if not _check_contact_email(business_id, body):
         return failure(429, "Too many submissions. Please try again later.")
     # A sample church (sample_church.py) takes no submissions: nothing in it
     # is real, so nothing is stored, alerted or mailed. The write guard
@@ -2625,21 +2655,34 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
             texts_ok = await asyncio.to_thread(
                 new_here.keep_yes, business_id, data["phone"], source=new_here.YES_SOURCES["web"], name=name,
                 ip=rate_limit.trusted_client_ip(request) or "", user_agent=request.headers.get("user-agent") or "")
+    # Needs a look (inbound_risk, inbound_hold): one verdict for the card. A held
+    # card is saved as usual and marked; what it would start on its own waits for
+    # a person. Prayer is never held (it may carry a "may not be genuine" mark).
+    import inbound_risk
+    import inbound_hold
+    risk = await inbound_risk.check(
+        business_id, door=kind if church_form else "contact_form", name=name, email=email,
+        phone=data["phone"], message=message, fields=fields)
+    hold = await asyncio.to_thread(inbound_hold.begin, business_id, receipt, risk,
+                                   pending={"texts_ok": texts_ok}) if risk else None
     stored = False
+    contact_id = None
     try:
         if kind == "prayer_request":
             # No contacts, consent, attribution, lead events or scoring.
-            await asyncio.to_thread(website_forms.save_prayer, business_id, data, receipt)
+            await asyncio.to_thread(website_forms.save_prayer, business_id, data, receipt,
+                                    flag=inbound_hold.prayer_flag(risk))
             stored = True
         else:
             import lead_attribution
             # Connect-card attribution is intentionally omitted: ministry interest
             # must not enter marketing analytics or automated lead workflows.
             attribution = lead_attribution.capture(request, body) if not church_form else None
-            stored = bool(await asyncio.to_thread(
+            contact_id = await asyncio.to_thread(
                 _capture_contact_from_form, business_id, name, email, data["phone"], message,
                 attribution=attribution, form=kind, fields=fields,
-                submission_id=data["submission_id"], receipt=receipt, texts_ok=texts_ok))
+                submission_id=data["submission_id"], receipt=receipt, texts_ok=texts_ok, hold=hold)
+            stored = bool(contact_id)
             if not stored:
                 raise RuntimeError("contact capture did not confirm storage")
     except Exception as exc:
@@ -2647,7 +2690,12 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     if church_form and not stored:
         return failure(503, "Your submission could not be fully saved. Please try again.")
 
-    if stored and not church_form:
+    if risk and contact_id:
+        await asyncio.to_thread(inbound_hold.attach, business_id, receipt, contact_id)
+    if hold and stored:
+        # One quiet line in place of the guest alert and the lead nudge.
+        await inbound_hold.signal(business_id, church=church_form)
+    elif stored and not church_form:
         try:
             # The nudge schedules work on this loop; synchronous storage ran off it.
             import chief_agent
@@ -2655,7 +2703,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         except Exception as exc:
             print(f"[contact-submit] optional lead nudge failed: {exc!r}", flush=True)
 
-    if church_form:
+    if church_form and not hold:
         try:
             await website_forms.alert_church(business_id, kind, receipt)
         except Exception as exc:
@@ -2737,6 +2785,15 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         f'<p style="font-size:0.85em;color:#666;">Sent via your {_esc(business_name)} website.</p>'
     )
 
+    if hold:
+        # The inbox copy says so too, and a quick reply can't confirm a live inbox.
+        subject = f"[Needs a look] {subject}"[:200]
+        reasons = "".join(f"<li>{_esc(w)}</li>" for w in hold.get("reasons") or [])
+        html_body = ('<p style="padding:10px;border:1px solid #d9a400;background:#fff8e1;">'
+                     "<strong>This card needs a look.</strong> Nothing went out automatically. "
+                     "Don't reply 'yes' or open links in it until you know who sent it."
+                     + (f"<ul>{reasons}</ul>" if reasons else " ")
+                     + "Open Members to mark it Real person, Not a guest or Scam.</p>" + html_body)
     private_notice = kind == "prayer_request" and not website_forms.PRAYER_EMAIL_INCLUDE_CONTENT
     if private_notice:
         subject = f"[{business_name}] New prayer request"[:200]
@@ -2745,7 +2802,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
                      'Client Forms → Private prayer and care requests.</p>')
     mail = {"from": "noreply@mysolutionist.app", "to": [target_email],
             "subject": subject, "html": html_body}
-    if not private_notice:
+    if not private_notice and not hold:
         mail["reply_to"] = email
 
     try:

@@ -723,6 +723,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                             "undo_duty puts it back"), "chief_only": True},
     "undo_duty": {**_w("A", "puts the last change to one church duty back from its log (the same people, the same "
                             "rule); the put-back is logged too"), "chief_only": True},
+    # Needs a look (chief_inbound, inbound_hold): the office's verdict on a card that was held before anything ran.
+    # A: undo_inbound_decision puts either back (the person waits for a look again). Scam is never Chief's (it
+    # reaches other churches through the shared list).
+    "mark_real_person": {**_w("A", "says a held card is a real person: what it held runs now (their follow-up and "
+                                   "Welcome Path, as if it never waited) and this church remembers the sender; "
+                                   "undo_inbound_decision puts them back to waiting"), "chief_only": True},
+    "mark_not_a_guest": {**_w("A", "says someone is not a guest: closes their open follow-ups, cancels their queued "
+                                   "welcome texts and marks them inactive; undo_inbound_decision reopens and "
+                                   "requeues what it closed"), "chief_only": True},
+    "undo_inbound_decision": {**_w("A", "puts back a Real person or Not a guest decision from its record (the "
+                                        "person waits for a look again)"), "chief_only": True},
     # The office team's week and the monthly report's draft (chief_office): staff by name, read for the signed-in
     # person behind the pages' own gates, so Chief's alone.
     "team_week": {**_r("reads a church's office team this week as its Office team page does: each Manager login's "

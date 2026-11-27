@@ -263,6 +263,7 @@ from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_schedule as _church_schedule  # the leaders schedule: who is away, asks, what repeats
 import chief_serving_spots as _serving_spots  # an open serving spot: ask, offer, take back, fill (the page's routes)
+import chief_inbound as _inbound  # needs a look: a held card is a real person, or not a guest (inbound_hold)
 import chief_event_volunteers as _event_volunteers  # an event's volunteers and flyer: the serving teams' ask, how full
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
@@ -431,6 +432,7 @@ _ACTION_PHRASES = {
     **_church_schedule.PROGRESS,
     **_event_volunteers.PROGRESS,
     **_serving_spots.PROGRESS,
+    **_inbound.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
     **_church_structure.PROGRESS,
@@ -4135,6 +4137,24 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
     return parts[0] + "\n" + parts[1]
 
 
+def _notification_lines(notifications: List[Dict[str, Any]]) -> List[str]:
+    """The NOTIFICATIONS block's lines. A title and its suggestion carry
+    words a stranger chose (a form's name: "Sofia Marino is still waiting";
+    a texter's name; an email's subject), so both are defused like every
+    other third-party text, and an attempt marks the turn (M-5, 2026-11-27)."""
+    lines = []
+    for n in notifications or []:
+        days = _days_since(n.get("created_at"))
+        when = f"{days}d ago" if days and days >= 1 else "today"
+        said = _neutralize_untrusted(n.get("suggested_action") or "")
+        suggestion = f" → suggested: {said}" if said else ""
+        lines.append(
+            f"  - [{(n.get('type') or '').upper()} {n.get('priority', 'normal')}] "
+            f"\"{_neutralize_untrusted(n.get('title') or '')}\" ({when}){suggestion}"
+        )
+    return lines
+
+
 def _format_context_parts(ctx: Dict[str, Any]):
     """(stable, live): the snapshot that holds still between messages, for
     the cached state segment, and the part that moves, for the per-message
@@ -4275,15 +4295,7 @@ def _format_context_parts(ctx: Dict[str, Any]):
     ]
 
     # Recent unread notifications
-    notif_lines = []
-    for n in (ctx.get("notifications") or []):
-        days = _days_since(n.get("created_at"))
-        when = f"{days}d ago" if days and days >= 1 else "today"
-        suggestion = f" → suggested: {n['suggested_action']}" if n.get("suggested_action") else ""
-        notif_lines.append(
-            f"  - [{(n.get('type') or '').upper()} {n.get('priority', 'normal')}] "
-            f"\"{n.get('title')}\" ({when}){suggestion}"
-        )
+    notif_lines = _notification_lines(ctx.get("notifications") or [])
 
     # Email templates + signature snapshot so the Chief uses them when drafting
     et = (biz.get('settings') or {}).get('email_templates') or {}
@@ -7681,6 +7693,22 @@ async def _count_payment_reminders(client, biz_id: str, invoice_id: Optional[str
         return 0
 
 
+def _inbound_flagged(draft: Optional[Dict[str, Any]]) -> bool:
+    """Whether a draft came from inbound words that a person must look at
+    first: intake's `inbound_flags` (action-tag syntax, injection shapes),
+    or a Needs-a-look hold (`needs_a_look` / `inbound_hold`) or `tainted`
+    set by whatever wrote it. Unreadable data is read as not flagged."""
+    data = (draft or {}).get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return False
+    if not isinstance(data, dict):
+        return False
+    return any(bool(data.get(k)) for k in ("inbound_flags", "needs_a_look", "inbound_hold", "tainted"))
+
+
 async def _should_auto_approve(
     client,
     biz: Dict[str, Any],
@@ -7699,7 +7727,13 @@ async def _should_auto_approve(
     not contact clients on its own while this function did exactly that.
     The policy engine is checked FIRST, before autopilot level, because
     a regulated practice on "full" is precisely the dangerous case.
+
+    M-5 (2026-11-27): before either, a draft written from a stranger's
+    submission that tried to instruct (intake's inbound_flags), or one the
+    inbound check put on hold, never sends unattended, on any level.
     """
+    if _inbound_flagged(draft):
+        return False, "inbound_flagged"
     try:
         import policy_engine
         # approve_draft sends, so it is class C: the engine lets it run
@@ -12656,6 +12690,8 @@ ACTION_HANDLERS = {
     **_event_volunteers.HANDLERS,
     # An open serving spot (chief_serving_spots): the serving page's own ask, offer, take back and fill.
     **_serving_spots.HANDLERS,
+    # Needs a look (chief_inbound): Real person / Not a guest for a held card, and putting either back.
+    **_inbound.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
     **_church_structure.HANDLERS,
@@ -13665,6 +13701,29 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
                 "hold_what": what.lower(), "hold_target": target,
                 "hold_ask": " I need your spoken go-ahead — nothing has run yet. "
                             "Say \"go ahead\" or \"send it\" and I will do it.",
+                "nav": None, "failed": True,
+            }
+        # A send to someone whose card waits for a look, or whom the office
+        # marked Not a guest or Scam (inbound_hold): only the practitioner's own
+        # go-ahead sends it (released above, the same as a tainted turn's).
+        import inbound_hold as _inbound_hold
+        _flag = await asyncio.to_thread(_inbound_hold.flagged_recipient, _hold_biz, action)
+        if _flag:
+            chief_holds.remember(_hold_user, _hold_biz, atype, action)
+            what = _humanize_action_type(atype).lower()
+            target = _confirmation_subject(action)
+            ask = (f" I need your go-ahead first: {_flag}. Nothing has run yet. "
+                   "Say \"go ahead\" in your own words and I will do it.")
+            return "handled", {
+                "type": atype,
+                "result": (
+                    f"Failed: HELD — {_flag}. Don't suggest reaching out. Read back exactly what you were "
+                    "about to do" + (f" ({target})" if target else "")
+                    + " and ask them to say \"go ahead\" if they still want it. When they do, emit this same "
+                    "action again and it will run. Do NOT tell them it is done."),
+                "label": f"Before I {what}" + (f" ({target})" if target else "") + ask,
+                "needs_confirmation": True,
+                "hold_what": what, "hold_target": target, "hold_ask": ask,
                 "nav": None, "failed": True,
             }
         if untrusted_taint():
@@ -16285,6 +16344,14 @@ async def chief_chat(
                 # church (its switch, Love City first) and the login has an office seat; the page decides
                 # who may schedule which team. A read that fails adds nothing.
                 _login_block += await asyncio.to_thread(_serving_spots.turn_line, biz, str(user_session.user.id))
+            # NEEDS A LOOK (inbound_hold): cards held before anything ran, with their plain reasons, so Chief
+            # never suggests welcoming one. Only where the switch is on and someone waits; the tail, never a
+            # cached segment. A read that fails adds nothing.
+            import inbound_hold as _inbound_hold
+            _held_line = await asyncio.to_thread(_inbound_hold.turn_line, biz, str(user_session.user.id))
+            if _held_line:
+                chief_truth.record('context:needs_a_look', _held_line, kind='context')
+                _login_block += _held_line
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the
