@@ -87,6 +87,12 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A church's New here card (new_here.py): anonymous, behind a code a
     # guest was texted; strict and per IP like the sign-ups above.
     "new_here_card": (int(os.environ.get("RL_NEW_HERE_CARD_PER_HOUR", "10")), 3600),
+    # The website form door (public_site contact-submit: connect cards,
+    # prayer requests, contact forms), per visitor address, strict and
+    # shared (M-5, 2026-11-27); it was 5 a minute in each replica. 10 a
+    # minute, because a church's Sunday QR connect cards can share one
+    # building wifi address.
+    "site_contact": (int(os.environ.get("RL_SITE_CONTACT_PER_MIN", "10")), 60),
     # The no-card trial's phone check (no_card_trial.py). Sending a code
     # costs a text and is the classic SMS-pumping target, so few per
     # business per hour; checking a code is the brute-force target for a
