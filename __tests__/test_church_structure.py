@@ -1474,12 +1474,12 @@ def test_an_admin_moved_down_onto_a_church_job_keeps_nothing(db):
 
 
 def test_a_manager_who_saw_everything_keeps_only_the_duties_in_the_areas_they_are_left_with(db):
-    """Proven in review: a holder put a Manager nothing placed (42 duties) on
-    a church job with one area, and she had 42 before and after."""
+    """Proven in review: a holder put a Manager nothing placed (43 duties since
+    ministry_ops, M-7) on a church job with one area, and she kept them all."""
     _office(db)
     job = _greeter(db)
     before = _held(db, LOOSE)[0]
-    assert len(before) == 42 and not before & set(cd.OVERSIGHT)
+    assert len(before) == 43 and not before & set(cd.OVERSIGHT)
     asked = []
     got = cs.change(_biz(db), HOLDER, LOOSE, {"job": job["key"], "areas": ["people_care"]},
                     widening=lambda: asked.append(1))
@@ -1487,7 +1487,7 @@ def test_a_manager_who_saw_everything_keeps_only_the_duties_in_the_areas_they_ar
     assert after == CARE and all(cd.CATALOG[k]["area"] == "people_care" for k in after)
     assert asked == [] and not got["widens"]
     detail = db.t["church_sheet_changes"][-1]["detail"]
-    assert set(detail["kept_by_name"]) == CARE and len(detail["less"]["duties"]) == 42 - len(CARE)
+    assert set(detail["kept_by_name"]) == CARE and len(detail["less"]["duties"]) == 43 - len(CARE)
     assert "kept “First-time guests and welcome calls”" in got["summary"] and "by name" in got["summary"]
     assert "took away" in got["summary"] and "took off" in got["summary"]
     # Left seeing the whole church (a job, and no areas picked): nothing is kept at all.

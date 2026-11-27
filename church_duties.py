@@ -233,6 +233,16 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "Every spot on the volunteer teams has a yes: greeters, ushers, kids workers, parking, hospitality, "
         "outreach. Worship and production are ChurchSavvy's.",
         ["Who serves when: the volunteer teams"]),
+    # Ministry operations (M-7, Kevin 2026-11-27): every Sunday team's serving
+    # seen in one place. The volunteer teams are changed as serve_schedule
+    # does; worship and production only where their leader or the pastor has
+    # opened the team to ministry operations (serve_teams.open_to_ops). With
+    # SUNDAY_HUB off it opens nothing new.
+    "ministry_ops": _duty(
+        "Every team's serving", "worship_media", ["sunday_serving"], "as needed",
+        "Who serves on every Sunday team is seen in one place: the volunteer teams filled, and worship and "
+        "production's spots too once their leader opens them.",
+        ["Who serves when: every team"]),
     "serve_teams": _duty(
         "Teams and team leaders", "worship_media", ["sunday_serving"], "monthly",
         "Each volunteer team has a leader and its places.",
