@@ -16243,6 +16243,12 @@ async def chief_chat(
             _church_skills.begin_turn(_skills_turn, chief_areas.TURN.get())
             if not is_coach_mode:
                 _job_steps = _church_skills.turn_block(_skills_turn, req.message or "", chief_areas.TURN.get())
+                if not _job_steps and _skills_turn.on:
+                    # A follow-up of the same job ("ok, now record it"): its steps carried a turn or two,
+                    # bounded by turns, time and a change of topic (church_skills.carried_block).
+                    _job_steps = await asyncio.to_thread(
+                        _church_skills.carried_block, _skills_turn, req.message or "", req.conversation_history,
+                        chief_areas.TURN.get(), str(user_session.user.id))
                 if _job_steps:
                     chief_truth.record('context:church_job_steps', _job_steps, kind='conversation')
                     growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _job_steps).strip() + "\n"
