@@ -352,3 +352,37 @@ def test_a_read_that_fails_is_never_a_worksheet_of_zeros(db):
         pf.quarter(_biz(db), 2026, 4, today=TODAY)
     with pytest.raises(pf.Unavailable):
         pf.year(_biz(db), 2026, today=TODAY)
+
+
+def test_a_form_944_filer_s_quarter_says_it_is_a_share_of_the_944(db):
+    _biz(db)["settings"]["payroll"] = {"deposit_schedule": "annual"}
+    _q4(db)
+    _deposit(db, "federal:2026", 1912.0)              # the year's one payment, with the 944
+    q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
+    assert q["schedule"] == "annual" and q["due"] == "2027-02-01"
+    assert any(n.startswith("You file Form 944 for the whole year, not a 941 each quarter") for n in q["notes"])
+    assert q["deposited"] == 1912.0 and [d["key"] for d in q["deposits"]] == ["federal:2026"]
+    assert pf.quarter(_biz(db), 2026, 3, today=TODAY)["deposited"] == 0.0     # counted once, in Q4
+    assert pf.quarter_pdf(_biz(db), q)[:4] == b"%PDF"
+
+
+def test_paying_with_the_941_says_tick_the_line_16_box(db):
+    _biz(db)["settings"]["payroll"] = {"deposit_schedule": "quarterly"}
+    _q4(db)
+    _deposit(db, "federal:2026Q4", 1912.0)
+    q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
+    assert any("line 12 is less than $2,500" in n for n in q["notes"])
+    assert not any("$2,500 or more" in n for n in q["notes"])
+    assert q["deposited"] == 1912.0
+    assert pf.quarter_pdf(_biz(db), q)[:4] == b"%PDF"
+
+
+def test_a_quarter_at_2500_or_more_never_says_under_2500(db):
+    """Account-2 review S1: the line 16 note only when line 12 is under $2,500."""
+    _biz(db)["settings"]["payroll"] = {"deposit_schedule": "quarterly"}
+    for pd in ("2026-10-30", "2026-11-30", "2026-12-15"):
+        run(db, pd, "paid", lines=standard_lines())            # $956 each: $2,868
+    q = pf.quarter(_biz(db), 2026, 4, today=TODAY)
+    assert q["lines"]["12"] >= 2500
+    assert not any("less than $2,500" in n or "under $2,500" in n for n in q["notes"])
+    assert any("$2,500 or more, so they may need to have been deposited monthly" in n for n in q["notes"])

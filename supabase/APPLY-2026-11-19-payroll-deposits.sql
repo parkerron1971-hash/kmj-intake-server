@@ -12,7 +12,9 @@
 -- that the church marked sent itself.
 --   key          federal:YYYY-MM (a monthly depositor's month),
 --                federal:YYYY-MM-DD (a semiweekly depositor's pay date),
---                state:YYYY-MM, forms:941:YYYYQn, forms:w2:YYYY
+--                federal:YYYYQn (paid with the quarter's 941, M-6),
+--                federal:YYYY (a Form 944 filer's year, M-6),
+--                state:YYYY-MM, forms:941:YYYYQn, forms:944:YYYY, forms:w2:YYYY
 --   kind         federal | state | forms
 --   period       the part of the key after its kind ("2026-11", "2026Q4")
 --   amount       what was sent, as the church typed it
@@ -58,7 +60,7 @@ create table if not exists public.payroll_deposits(
   marked_by uuid,
   marked_at timestamptz not null default now(),
   constraint payroll_deposits_key_shape check (
-    key ~ '^(federal:[0-9]{4}-[0-9]{2}(-[0-9]{2})?|state:[0-9]{4}-[0-9]{2}|forms:941:[0-9]{4}Q[1-4]|forms:w2:[0-9]{4})$'),
+    key ~ '^(federal:[0-9]{4}-[0-9]{2}(-[0-9]{2})?|federal:[0-9]{4}(Q[1-4])?|state:[0-9]{4}-[0-9]{2}|forms:941:[0-9]{4}Q[1-4]|forms:944:[0-9]{4}|forms:w2:[0-9]{4})$'),
   constraint payroll_deposits_one_a_key unique (business_id, key)
 );
 

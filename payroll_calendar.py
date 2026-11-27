@@ -10,7 +10,8 @@ runs, and the payroll settings those dates depend on.
     THE DATES ...... pure functions, each citing where its rule comes from:
                      bank days (Federal Reserve holidays), IRS days (legal
                      holidays in the District of Columbia), the monthly and
-                     semiweekly deposit rules, Form 941 and the January forms
+                     semiweekly deposit rules, paying with the 941 or the 944
+                     (M-6), Form 941, Form 944 and the January forms
     THE SETTINGS ... businesses.settings.payroll {deposit_schedule, state_day,
                      state_label}, written by the server alone through
                      business_settings.merge (never a client's settings blob)
@@ -32,7 +33,13 @@ from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 MONTHLY, SEMIWEEKLY = "monthly", "semiweekly"
-SCHEDULES = (MONTHLY, SEMIWEEKLY)
+# M-6 (2026-11-27): the two a very small employer is often on (Publication 15,
+# "Payment with return"). QUARTERLY: under $2,500 of tax a quarter, paid with
+# the Form 941 by its due date. ANNUAL: the IRS told the employer to file Form
+# 944 (about $1,000 or less a year), paid with the 944 by January 31.
+QUARTERLY, ANNUAL = "quarterly", "annual"
+SCHEDULES = (MONTHLY, SEMIWEEKLY, QUARTERLY, ANNUAL)
+SMALL_LINE = 2500.0          # from here, the tax can't wait for the return
 SETTINGS_KEY = "payroll"
 DEFAULT_SETTINGS = {"deposit_schedule": MONTHLY, "state_day": None, "state_label": None}
 
@@ -53,8 +60,8 @@ LATER_MAX = 6
 NEXT_DAYS = 400              # `next` looks this far ahead (a January form from February)
 
 # fullmatch only: "$" would let a trailing newline by.
-KEY_RE = re.compile(r"(federal:[0-9]{4}-[0-9]{2}(?:-[0-9]{2})?|state:[0-9]{4}-[0-9]{2}|forms:941:[0-9]{4}Q[1-4]"
-                    r"|forms:w2:[0-9]{4})")
+KEY_RE = re.compile(r"(federal:[0-9]{4}-[0-9]{2}(?:-[0-9]{2})?|federal:[0-9]{4}(?:Q[1-4])?"
+                    r"|state:[0-9]{4}-[0-9]{2}|forms:941:[0-9]{4}Q[1-4]|forms:944:[0-9]{4}|forms:w2:[0-9]{4})")
 
 
 # ─── Words ────────────────────────────────────────────────────────────
@@ -305,6 +312,13 @@ def year_end_due(year: int) -> date:
     return roll(year_end_raw(year))
 
 
+def form_944_due(year: int) -> date:
+    """Form 944, and the year's tax paid with it, is due January 31 of the next
+    year (Instructions for Form 944, "When Must You File?"), rolled like the
+    W-2s."""
+    return year_end_due(year)
+
+
 def rolled_words(raw: date, due: date, it: str = "it’s") -> str:
     """"January 31 is a Sunday, so they’re due Monday, Feb 1.", or "" when it
     didn't move."""
@@ -317,7 +331,24 @@ def rolled_words(raw: date, due: date, it: str = "it’s") -> str:
 # ─── Keys ─────────────────────────────────────────────────────────────
 
 def federal_key(schedule: str, pay_date: date) -> str:
-    return f"federal:{pay_date.isoformat()}" if schedule == SEMIWEEKLY else f"federal:{pay_date:%Y-%m}"
+    if schedule == SEMIWEEKLY:
+        return f"federal:{pay_date.isoformat()}"
+    if schedule == QUARTERLY:
+        return f"federal:{pay_date.year}Q{quarter_of(pay_date)}"
+    if schedule == ANNUAL:
+        return f"federal:{pay_date.year}"
+    return f"federal:{pay_date:%Y-%m}"
+
+
+def federal_due(schedule: str, pay_date: date) -> date:
+    """When the federal deposit for a payday is due, on this schedule."""
+    if schedule == SEMIWEEKLY:
+        return semiweekly_due(pay_date)
+    if schedule == QUARTERLY:
+        return form_941_due(pay_date.year, quarter_of(pay_date))
+    if schedule == ANNUAL:
+        return form_944_due(pay_date.year)
+    return monthly_due(pay_date.year, pay_date.month)
 
 
 def state_key(year: int, month: int) -> str:
@@ -326,6 +357,10 @@ def state_key(year: int, month: int) -> str:
 
 def forms_941_key(year: int, q: int) -> str:
     return f"forms:941:{year}Q{q}"
+
+
+def forms_944_key(year: int) -> str:
+    return f"forms:944:{year}"
 
 
 def forms_w2_key(year: int) -> str:
@@ -344,6 +379,11 @@ def parse_key(key: Any) -> Optional[Dict[str, Any]]:
             if len(rest) == 10:
                 d = date.fromisoformat(rest)
                 return {"kind": "federal", "period": rest, "pay_date": d, "schedule": SEMIWEEKLY}
+            if len(rest) == 6:
+                y, q = int(rest[:4]), int(rest[5])
+                return {"kind": "federal", "period": rest, "year": y, "q": q, "schedule": QUARTERLY}
+            if len(rest) == 4:
+                return {"kind": "federal", "period": rest, "year": int(rest), "schedule": ANNUAL}
             y, m = int(rest[:4]), int(rest[5:7])
             date(y, m, 1)
             return {"kind": "federal", "period": rest, "year": y, "month": m, "schedule": MONTHLY}
@@ -354,6 +394,9 @@ def parse_key(key: Any) -> Optional[Dict[str, Any]]:
         if k.startswith("forms:941:"):
             y, q = int(k[10:14]), int(k[15])
             return {"kind": "forms", "period": f"{y}Q{q}", "year": y, "q": q, "form": "941"}
+        if k.startswith("forms:944:"):
+            y = int(k[10:14])
+            return {"kind": "forms", "period": str(y), "year": y, "form": "944"}
         y = int(k[9:13])
         return {"kind": "forms", "period": str(y), "year": y, "form": "w2"}
     except ValueError:
@@ -365,12 +408,18 @@ def due_for(parsed: Dict[str, Any], settings: Dict[str, Any]) -> Optional[date]:
     if parsed["kind"] == "federal":
         if parsed["schedule"] == SEMIWEEKLY:
             return semiweekly_due(parsed["pay_date"])
+        if parsed["schedule"] == QUARTERLY:
+            return form_941_due(parsed["year"], parsed["q"])
+        if parsed["schedule"] == ANNUAL:
+            return form_944_due(parsed["year"])
         return monthly_due(parsed["year"], parsed["month"])
     if parsed["kind"] == "state":
         day = settings.get("state_day")
         return state_due(parsed["year"], parsed["month"], int(day)) if day else None
     if parsed.get("form") == "941":
         return form_941_due(parsed["year"], parsed["q"])
+    if parsed.get("form") == "944":
+        return form_944_due(parsed["year"])
     return year_end_due(parsed["year"])
 
 
@@ -404,7 +453,7 @@ def settings_patch(given: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     if "deposit_schedule" in given:
         if given["deposit_schedule"] not in SCHEDULES:
-            raise ValueError("deposit_schedule must be monthly or semiweekly")
+            raise ValueError("deposit_schedule must be monthly, semiweekly, quarterly or annual")
         out["deposit_schedule"] = given["deposit_schedule"]
     if "state_day" in given:
         day = given["state_day"]
@@ -548,14 +597,31 @@ def build_events(*, runs: List[Dict[str, Any]], settings: Dict[str, Any], marked
         groups.setdefault(federal_key(schedule, pd), {"pd": pd, "runs": [], "projected": True})
     for key, g in groups.items():
         pd = g["pd"]
-        due = semiweekly_due(pd) if schedule == SEMIWEEKLY else monthly_due(pd.year, pd.month)
+        due = federal_due(schedule, pd)
         final = [r for r in g["runs"] if r.get("status") in ("approved", "paid")]
         amount = _r(sum(_deposits_of(r)["federal"] for r in final)) if final else None
-        for_words = (f"for the {short_day(pd)} payday" if schedule == SEMIWEEKLY else f"for {MONTHS[pd.month - 1]}")
+        for_words = (f"for the {short_day(pd)} payday" if schedule == SEMIWEEKLY
+                     else f"for {QUARTER_WORDS[quarter_of(pd)]}, paid with the Form 941" if schedule == QUARTERLY
+                     else f"for {pd.year}, paid with Form 944" if schedule == ANNUAL
+                     else f"for {MONTHS[pd.month - 1]}")
         status = "sent" if key in marked else ("open" if g["runs"] else None)
         about = for_words + ("" if g["runs"] else ", projected")
-        ev = _ev("deposit_federal", due, "IRS deposit", f"{about}. {eftps_words(due)}", amount=amount, key=key,
-                 status=status)
+        sub = f"{about}. {eftps_words(due)}"
+        # Paying with the return is for small amounts (Publication 15). Once the
+        # period's tax reaches $2,500 it may need depositing before the return.
+        # A Form 944 filer still files the 944 (the IRS letter says so); only
+        # the deposits move, so they're never sent to the schedule setting,
+        # which would swap the 944 for quarterly 941s (account-2 review S1).
+        if schedule in (QUARTERLY, ANNUAL) and amount is not None and amount >= SMALL_LINE:
+            line = money(SMALL_LINE)[:-3]
+            if schedule == QUARTERLY:
+                where = "How the church deposits" if church else "How you deposit"
+                sub += (f" This quarter’s taxes have reached {line}, so they may need to be deposited monthly instead "
+                        f"of paid with the 941: ask your accountant, and switch to monthly in {where} if so.")
+            else:
+                sub += (f" {pd.year}’s taxes have reached {line}: deposit each month’s taxes by the 15th of the next "
+                        f"month from now on, and still file Form 944 for the year. Ask your accountant.")
+        ev = _ev("deposit_federal", due, "IRS deposit", sub, amount=amount, key=key, status=status)
         ev["_for"] = about                         # the reminders' own words; never in the answer
         out.append(ev)
 
@@ -584,6 +650,17 @@ def build_events(*, runs: List[Dict[str, Any]], settings: Dict[str, Any], marked
     for pd in projected:
         quarters.setdefault((pd.year, quarter_of(pd)), False)
         years.setdefault(pd.year, False)
+    # A Form 944 filer files once a year, not each quarter.
+    if schedule == ANNUAL:
+        for y, has_real in years.items():
+            key = forms_944_key(y)
+            raw, due = year_end_raw(y), form_944_due(y)
+            sub = (f"for {y}: the year’s income tax withheld, Social Security and Medicare, and the tax paid with "
+                   f"it" + ("" if has_real else ", projected"))
+            moved = rolled_words(raw, due)
+            out.append(_ev("forms", due, "Form 944", f"{sub}. {moved}" if moved else sub, key=key,
+                           status="sent" if key in marked else ("open" if has_real else None)))
+        quarters = {}
     for (y, q), has_real in quarters.items():
         key = forms_941_key(y, q)
         raw, due = form_941_raw(y, q), form_941_due(y, q)
