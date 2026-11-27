@@ -116,6 +116,8 @@ PARTS_FROM_DUTIES: Dict[str, Tuple[str, ...]] = {
     "production_schedule": ("planner",),
     "serve_schedule": ("scheduler",),
     "stream": ("media", "booth"),
+    # Ministry operations (the one Sunday hub, M-7): schedules, never plans.
+    "ministry_ops": ("scheduler",),
 }
 MAX_TEAM = 60
 INVITE_DAYS = 30

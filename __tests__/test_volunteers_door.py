@@ -152,6 +152,7 @@ def test_the_parts_table():
         "production_schedule": ("planner",),
         "serve_schedule": ("scheduler",),
         "stream": ("media", "booth"),
+        "ministry_ops": ("scheduler",),
     }
     assert wt.CAN["serve"] == {"admin", "planner", "scheduler"}
 
