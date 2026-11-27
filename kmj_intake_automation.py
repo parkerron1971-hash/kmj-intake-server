@@ -383,6 +383,8 @@ from worship_team import router as worship_team_router
 app.include_router(worship_team_router)
 # The one Sunday hub (M-7): who holds which Sunday role, "This Sunday" or
 # "Next service". SUNDAY_HUB=off|owner|on (default off) until the one launch.
+from sunday_live import router as sunday_live_router
+app.include_router(sunday_live_router)
 from sunday_hub import router as sunday_hub_router
 app.include_router(sunday_hub_router)
 # The map: every part of a church's system in one area, and who reaches it.
