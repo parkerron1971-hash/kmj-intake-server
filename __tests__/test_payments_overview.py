@@ -548,7 +548,7 @@ def test_the_accountant_reads_the_totals(db, stripe):
     out = overview(ACCOUNTANT)
     _no_bank(out)
     assert out["path"]["given"]["count"] == 5
-    assert out["going_out"]["pay_staff"] is None                  # payroll's own door wants a seat
+    assert out["going_out"]["pay_staff"]["people"] == 4         # the accountant reads payroll (M-6, #2110)
     assert out["going_out"]["bills"]["due_this_week"] == 2
 
 
