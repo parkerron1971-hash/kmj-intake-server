@@ -1038,19 +1038,36 @@ def office_note(business_id: str, follow_up_id: str, text: str, *, pastors_only:
     return note
 
 
+# The sweep's close for someone marked inactive says so in its note, so the
+# same sweep can open it again when they're put back (the review of #2097,
+# should-fix 1). Chief's "done" note with these words is the marker.
+INACTIVE_MARK = "is marked inactive"
+REOPEN_DAYS = 30                    # put back later than this: a new card starts a new follow-up
+
+
+def inactive_words(name: Any) -> str:
+    return (f"Closed: {first_name(name)} {INACTIVE_MARK}, so nobody needs to call. "
+            "Put them back to Guest and this opens again.")
+
+
 def close_for_contact(business_id: str, contact_id: str, *, by_user: str = "", by_name: str = "",
-                      why: str = "") -> Optional[List[str]]:
+                      why: str = "", only_guest: bool = False) -> Optional[List[str]]:
     """Close every open follow-up for one person and take them off the
     Welcome Path: for "Not a guest" and "Scam" (Needs a look), or anything
     else that settles that nobody should call them. `by_user` set: the
-    office's note ("Closed by the office." or `why`); none: Chief's. The ids
-    closed; None when their follow-ups couldn't be read. Sync."""
+    office's note ("Closed by the office." or `why`); none: Chief's.
+    `only_guest`: only a first-time guest's welcome follow-ups (the sweep's
+    inactive close; care, prayer and every other kind stay with the office).
+    The ids closed; None when their follow-ups couldn't be read. Sync."""
+    import guest_path
     import new_here
     biz, cid = _uid(business_id, "business"), _uid(contact_id, "person")
     rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
-                 "&status=in.(open,handed_back)&select=id&limit=50")
+                 "&status=in.(open,handed_back)&select=id,card_key,path_kind&limit=50")
     if rows is None:
         return None
+    if only_guest:
+        rows = [r for r in rows if guest_path.is_guest_follow_up(r)]
     words = _plain(why)[:MAX_NOTE] or ("Closed by the office." if by_user else "Closed: nobody needs to call.")
     closed: List[str] = []
     for r in rows:
@@ -1064,6 +1081,80 @@ def close_for_contact(business_id: str, contact_id: str, *, by_user: str = "", b
               author_user_id=by_user or None, author_name=by_name)
     new_here.leave_path(biz, cid)
     return closed
+
+
+def reopen_for_contact(business_id: str, contact_id: str, *, now: Optional[datetime] = None
+                       ) -> Optional[Dict[str, Any]]:
+    """Someone marked inactive was put back (to Guest, or as a member): the
+    follow-ups the sweep's inactive close shut in the last REOPEN_DAYS open
+    again, with their current step's clock started fresh and Chief's note,
+    and their Welcome Path texts still ahead are queued again
+    (new_here.rejoin_path). Only what an inactive close did is undone: a
+    follow-up the office closed, or one finished, stays as it is. Safe to
+    run again: closed→open and cancelled→queued only happen once.
+    {"follow_ups": [ids], "texts": n}, or None when it couldn't be read."""
+    import new_here
+    biz, cid = _uid(business_id, "business"), _uid(contact_id, "person")
+    now = now or _now()
+    since = _iso(now - timedelta(days=REOPEN_DAYS))
+    rows = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}&status=eq.closed"
+                 f"&done_at=gte.{_q(since)}&select=id,steps,step&limit=50")
+    if rows is None:
+        return None
+    ids = [str(r["id"]) for r in rows]
+    notes = _rows(f"/church_follow_up_notes?business_id=eq.{_q(biz)}&follow_up_id=in.({','.join(_q(i) for i in ids)})"
+                  "&kind=eq.done&author_kind=eq.chief&select=follow_up_id,body&limit=200") if ids else []
+    if notes is None:
+        return None
+    marked = {str(n["follow_up_id"]) for n in notes if INACTIVE_MARK in str(n.get("body") or "")}
+    opened: List[str] = []
+    for r in rows:
+        fid = str(r["id"])
+        if fid not in marked:
+            continue
+        steps, step = r.get("steps") or [], int(r.get("step") or 0)
+        days = int((steps[step] if step < len(steps) else {}).get("days") or 2)
+        saved = sb_clients.sb_patch_as_service(
+            f"/church_follow_ups?id=eq.{_q(fid)}&business_id=eq.{_q(biz)}&status=eq.closed",
+            {"status": "open", "done_at": None, "late_level": 0, "updated_at": _iso(now),
+             "due_at": _iso(now + timedelta(days=days))})
+        if isinstance(saved, list) and saved:
+            opened.append(fid)
+            _note(biz, fid, "chief", "note", "Opened again: they're no longer marked inactive.")
+    texts = new_here.rejoin_path(biz, cid, now=now)
+    return {"follow_ups": opened, "texts": texts or 0}
+
+
+async def _sweep_reopen(now: datetime) -> int:
+    """The sweep's other half: anyone whose follow-up the inactive close shut
+    in the last REOPEN_DAYS who isn't marked inactive any more is opened
+    again (reopen_for_contact). A read that fails opens nothing."""
+    import asyncio
+    import new_here
+    since = _iso(now - timedelta(days=REOPEN_DAYS))
+    notes = await asyncio.to_thread(
+        _rows, f"/church_follow_up_notes?kind=eq.done&author_kind=eq.chief&created_at=gte.{_q(since)}"
+               "&select=business_id,follow_up_id,body&limit=1000")
+    fids = sorted({str(n["follow_up_id"]) for n in notes or [] if INACTIVE_MARK in str(n.get("body") or "")})
+    if not fids:
+        return 0
+    rows = await asyncio.to_thread(
+        _rows, f"/church_follow_ups?id=in.({','.join(_q(i) for i in fids)})&status=eq.closed"
+               "&select=business_id,contact_id&limit=1000")
+    by_biz: Dict[str, set] = {}
+    for r in rows or []:
+        by_biz.setdefault(str(r["business_id"]), set()).add(str(r["contact_id"]))
+    n = 0
+    for biz, cids in by_biz.items():
+        people = await asyncio.to_thread(_contacts, biz, cids)
+        if people is None:
+            continue
+        for pid, person in people.items():
+            if new_here.off_path(person):
+                continue
+            got = await asyncio.to_thread(reopen_for_contact, biz, pid, now=now)
+            n += len((got or {}).get("follow_ups") or [])
+    return n
 
 
 def close(business_id: str, follow_up_id: str, *, by_user: str, by_name: str = "") -> Dict[str, Any]:
@@ -1542,6 +1633,10 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     except Exception:
         logger.warning("church hand-back sweep failed", exc_info=True)
     try:
+        stats["reopened"] = await _sweep_reopen(now)
+    except Exception:
+        logger.warning("church reopen sweep failed", exc_info=True)
+    try:
         import church_prayer
         stats["prayer"] = await church_prayer.sweep(now)
     except Exception:
@@ -1835,12 +1930,16 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
     # before anyone is told or nudged, and their queued texts are cancelled.
     # The status is read here because some screens change it straight in the
     # database: a sales pitch marked inactive at Love City kept climbing.
+    # Only a first-time guest's welcome follow-up (the review of #2097,
+    # should-fix 2): a care or prayer follow-up for a member marked inactive
+    # ("moved away") is the office's to settle, and goes on as before.
+    import guest_path
     import new_here
-    off = [r for r in items if r.get("status") == "open"
+    off = [r for r in items if r.get("status") == "open" and guest_path.is_guest_follow_up(r)
            and new_here.off_path(people.get(str(r["contact_id"])))]
     for pid in sorted({str(r["contact_id"]) for r in off}):
-        words = f"Closed: {first_name(people[pid].get('name'))} is marked inactive, so nobody needs to call."
-        closed = await asyncio.to_thread(close_for_contact, biz_id, pid, why=words)
+        words = inactive_words(people[pid].get("name"))
+        closed = await asyncio.to_thread(close_for_contact, biz_id, pid, why=words, only_guest=True)
         stats["closed_inactive"] = stats.get("closed_inactive", 0) + len(closed or [])
     items = [r for r in items if r not in off]     # a close that didn't save waits, never nudged
     origin = await asyncio.to_thread(site_origin, biz_id)

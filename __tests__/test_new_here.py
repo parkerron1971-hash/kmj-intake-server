@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # settings_merge_fake, run alone
 
 import new_here as nh  # noqa: E402
 
@@ -592,9 +593,30 @@ def test_leaving_the_path_cancels_only_their_queued_texts(db, monkeypatch):
     cancelled = [(p, r) for p, r in db["patches"] if p.startswith("/chief_scheduled_actions")]
     assert [p.split("id=eq.")[1].split("&")[0] for p, _ in cancelled] == ["s1", "s2"]
     assert all(f"business_id=eq.{BIZ}" in p and "status=eq.queued" in p for p, _ in cancelled)
-    assert all(r["status"] == "cancelled" and "inactive" in r["last_error"] for _, r in cancelled)
+    assert all(r["status"] == "cancelled" and r["last_error"] == nh.INACTIVE_TEXT for _, r in cancelled)
 
 
 def test_leaving_the_path_says_so_when_it_cannot_read(db, monkeypatch):
     monkeypatch.setattr(nh, "_rows", lambda path: None)
     assert nh.leave_path(BIZ, GUEST) is None and db["patches"] == []
+
+
+
+def test_put_back_their_texts_still_ahead_are_queued_again(db, monkeypatch):
+    """rejoin_path: only leave_path's own cancels, only those still ahead."""
+    real = nh._rows
+    seen = []
+
+    def rows(path):
+        if path.startswith("/chief_scheduled_actions"):
+            seen.append(path)
+            return [{"id": "s1", "last_error": nh.INACTIVE_TEXT}, {"id": "s2", "last_error": "Someone else's"}]
+        return real(path)
+    monkeypatch.setattr(nh, "_rows", rows)
+    assert nh.rejoin_path(BIZ, GUEST) == 1
+    [path] = seen
+    assert "status=eq.cancelled" in path and f"action->>contact_id=eq.{GUEST}" in path and "run_at=gt." in path
+    [(p, r)] = [(p, r) for p, r in db["patches"] if p.startswith("/chief_scheduled_actions")]
+    assert "id=eq.s1" in p and "status=eq.cancelled" in p and r == {"status": "queued", "last_error": None}
+    monkeypatch.setattr(nh, "_rows", lambda path: None)
+    assert nh.rejoin_path(BIZ, GUEST) is None

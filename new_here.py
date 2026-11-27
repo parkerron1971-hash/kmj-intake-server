@@ -450,6 +450,7 @@ def on_text(business_id: str, phone: str, body: str) -> Optional[Dict[str, str]]
 # and the follow-up sweep cancels what was queued (church_follow_up).
 
 OFF_STATUSES = ("inactive", "churned")
+INACTIVE_TEXT = "They're marked inactive; not sent."   # leave_path's mark; rejoin_path undoes it
 
 
 def off_path(person: Optional[Dict[str, Any]]) -> bool:
@@ -472,11 +473,40 @@ def leave_path(business_id: Any, contact_id: Any) -> Optional[int]:
         for r in rows:
             saved = sb_clients.sb_patch_as_service(
                 f"/chief_scheduled_actions?id=eq.{_q(r['id'])}&business_id=eq.{_q(biz)}&status=eq.queued",
-                {"status": "cancelled", "last_error": "They're marked inactive; not sent."})
+                {"status": "cancelled", "last_error": INACTIVE_TEXT})
             n += bool(isinstance(saved, list) and saved)
         return n
     except Exception as e:  # noqa: BLE001
         print(f"[new_here] {biz[:8]}: an inactive guest's texts weren't cancelled ({type(e).__name__})", flush=True)
+        return None
+
+
+def rejoin_path(business_id: Any, contact_id: Any, *, now: Optional[datetime] = None) -> Optional[int]:
+    """leave_path undone, for someone put back from inactive: their texts
+    leave_path cancelled whose time is still ahead are queued again (a text
+    whose time passed stays cancelled; the path doesn't replay). How many;
+    None when they couldn't be read. Sync; never raises."""
+    biz, cid = str(business_id or ""), str(contact_id or "")
+    try:
+        if not biz or not cid:
+            return 0
+        now = now or _now()
+        rows = _rows(f"/chief_scheduled_actions?business_id=eq.{_q(biz)}&status=eq.cancelled"
+                     f"&action->>type=eq.{_q(KIND)}&action->>contact_id=eq.{_q(cid)}"
+                     f"&run_at=gt.{_q(_iso(now))}&select=id,last_error&limit=50")
+        if rows is None:
+            return None
+        n = 0
+        for r in rows:
+            if r.get("last_error") != INACTIVE_TEXT:
+                continue                        # cancelled for another reason: not ours to undo
+            saved = sb_clients.sb_patch_as_service(
+                f"/chief_scheduled_actions?id=eq.{_q(r['id'])}&business_id=eq.{_q(biz)}&status=eq.cancelled",
+                {"status": "queued", "last_error": None})
+            n += bool(isinstance(saved, list) and saved)
+        return n
+    except Exception as e:  # noqa: BLE001
+        print(f"[new_here] {biz[:8]}: a guest's texts weren't queued again ({type(e).__name__})", flush=True)
         return None
 
 

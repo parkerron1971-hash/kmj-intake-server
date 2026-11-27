@@ -797,9 +797,14 @@ def _mark(db, person, status):
     next(c for c in db.t["contacts"] if c["id"] == person)["status"] = status
 
 
+def _guest(db, person=DANA):
+    """A first-time guest's welcome follow-up (a Plan your visit card)."""
+    return _open(db, VISIT, person, sunday="Oct 18")
+
+
 @pytest.mark.parametrize("status", ["inactive", "churned"])
 def test_a_guest_marked_inactive_is_closed_never_handed_to_a_caller(db, outbox, left, status):
-    f = _open(db)
+    f = _guest(db)
     _mark(db, DANA, status)
     asyncio.run(cfu.sweep())
     assert outbox["email"] == [] and outbox["alert"] == [], "nobody is told to call them"
@@ -815,7 +820,7 @@ def test_a_guest_marked_inactive_is_closed_never_handed_to_a_caller(db, outbox, 
 def test_marked_inactive_after_the_hand_off_the_late_ladder_stops(db, outbox, left):
     """Julien's case: the caller was told, he was marked inactive, and the
     follow-up went on climbing as late."""
-    f = _open(db)
+    f = _guest(db)
     asyncio.run(cfu.sweep())
     assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"]
     _mark(db, DANA, "inactive")
@@ -828,7 +833,7 @@ def test_marked_inactive_after_the_hand_off_the_late_ladder_stops(db, outbox, le
 
 
 def test_someone_still_active_is_handed_on_as_before(db, outbox, left):
-    _open(db)
+    _guest(db)
     _mark(db, DANA, "lead")
     asyncio.run(cfu.sweep())
     assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"] and left == []
@@ -857,3 +862,68 @@ def test_closing_for_one_person_says_so_when_it_cannot_read(db, left, monkeypatc
     _open(db)
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: None)
     assert cfu.close_for_contact(BIZ, DANA) is None and left == []
+
+
+
+# ─── The review of #2097 (account 2, 2026-11-27) ──────────────────────
+
+@pytest.fixture
+def rejoined(monkeypatch):
+    import new_here
+    calls = []
+    monkeypatch.setattr(new_here, "rejoin_path", lambda biz, contact, now=None: calls.append((biz, contact)) or 0)
+    return calls
+
+
+def test_a_members_serve_or_care_follow_up_stays_with_the_office(db, outbox, left):
+    """Should-fix 2: only a guest's welcome follow-up closes on its own; a
+    member marked inactive ("moved away") with a Serve card open keeps it."""
+    f = _open(db)                                   # Serve with us
+    _mark(db, DANA, "inactive")
+    asyncio.run(cfu.sweep())
+    assert cfu._one(BIZ, f["id"])["status"] == "open" and left == []
+    assert [s for _, s, _ in outbox["email"]] == ["Dana Rivers is yours to follow up"]
+
+
+def test_put_back_to_guest_the_follow_up_opens_again(db, outbox, left, rejoined):
+    """Should-fix 1: marked inactive by mistake and put back an hour later."""
+    f = _guest(db)
+    asyncio.run(cfu.sweep())
+    _mark(db, DANA, "inactive")
+    asyncio.run(cfu.sweep())
+    row = cfu._one(BIZ, f["id"])
+    assert row["status"] == "closed"
+    [note] = [n for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"] and n["kind"] == "done"]
+    assert cfu.INACTIVE_MARK in note["body"] and "Put them back to Guest" in note["body"]
+    _mark(db, DANA, "lead")
+    asyncio.run(cfu.sweep())
+    row = cfu._one(BIZ, f["id"])
+    assert row["status"] == "open" and row["done_at"] is None and row["late_level"] == 0
+    assert cfu._parse(row["due_at"]) > cfu._now(), "a fresh clock, not an overdue one"
+    assert rejoined == [(BIZ, DANA)], "and their texts still ahead are queued again"
+    reopened = [n for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"] and n["kind"] == "note"]
+    assert len(reopened) == 1 and "Opened again" in reopened[0]["body"]
+    asyncio.run(cfu.sweep())
+    assert len([n for n in db.t["church_follow_up_notes"]
+                if n["follow_up_id"] == f["id"] and n["kind"] == "note"]) == 1, "once"
+
+
+def test_only_what_the_inactive_close_did_is_undone(db, left, rejoined):
+    """A follow-up the office closed, or Not a guest's, stays closed."""
+    f = _guest(db)
+    cfu.close_for_contact(BIZ, DANA, by_user=OWNER, by_name="Kevin", why="Not a guest: a sales pitch.")
+    got = cfu.reopen_for_contact(BIZ, DANA)
+    assert got["follow_ups"] == [] and cfu._one(BIZ, f["id"])["status"] == "closed"
+
+
+def test_a_handed_back_follow_up_closes_too(db, left):
+    f = _guest(db)
+    db.t["church_follow_ups"][0]["status"] = "handed_back"
+    assert cfu.close_for_contact(BIZ, DANA, only_guest=True) == [f["id"]]
+    assert cfu._one(BIZ, f["id"])["status"] == "closed"
+
+
+def test_reopening_says_so_when_it_cannot_read(db, monkeypatch, rejoined):
+    _guest(db)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: None)
+    assert cfu.reopen_for_contact(BIZ, DANA) is None and rejoined == []

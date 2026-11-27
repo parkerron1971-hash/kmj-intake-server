@@ -2,13 +2,13 @@
 title: Marking someone inactive closes their follow-up and takes them off the Welcome Path
 date: 2026-11-27
 agent: Claude Code (Claude Opus 5.5)
-asked: "M-5 step 1, relayed by KAI: rank 1, marking a contact inactive or 'not a guest' closes their open church_follow_ups and takes them off the Welcome Path"
+asked: 'M-5 step 1, relayed by KAI: rank 1, marking a contact inactive or ''not a guest'' closes their open church_follow_ups and takes them off the Welcome Path'
 status: in progress
 prs: [kmj-intake-server#2097]
 migrations: []
-left_undone: ["Needs a look's 'Not a guest' / 'Scam' buttons (another worker, inbound_hold.py) should call church_follow_up.close_for_contact"]
-decisions: ["the status is read where it matters (the follow-up sweep, every scheduled New here text), not hooked on each screen that changes it: some screens write the contact straight to the database", "inactive and churned both count", "a close that doesn't save waits for the next sweep and is never nudged in between"]
-related: ["kai/reviews/inbound-safety-proposal.md (Solution Space)"]
+left_undone: ['Needs a look''s ''Not a guest'' / ''Scam'' buttons (another worker, inbound_hold.py) should call church_follow_up.close_for_contact']
+decisions: ['the status is read where it matters (the follow-up sweep, every scheduled New here text), not hooked on each screen that changes it: some screens write the contact straight to the database', inactive and churned both count, a close that doesn't save waits for the next sweep and is never nudged in between, 'review of #2097: reversible. The inactive close says so in Chief''s done note (INACTIVE_MARK); when the person is put back (any status but inactive/churned) within 30 days, the sweep opens those follow-ups again with a fresh clock and queues their cancelled texts still ahead (reopen_for_contact, new_here.rejoin_path). A follow-up the office closed, or Not a guest''s, is never reopened', 'review of #2097: the sweep closes only a first-time guest''s welcome follow-up (guest_path.is_guest_follow_up); a member''s care, prayer or serve follow-up stays with the office (Kevin''s call, recommended by the review)', the person stays listed in the New here room; only their call and texts stop]
+related: [kai/reviews/inbound-safety-proposal.md (Solution Space)]
 ---
 Two website connect cards at Love City (11-22 and 11-26) were one sales
 campaign, not guests. The office marked the first one inactive on 11-23, but
