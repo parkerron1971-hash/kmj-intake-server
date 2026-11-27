@@ -112,6 +112,18 @@ def _fresh_chief_turn():
 # module already imported is cleared: importing it here would bind it to
 # whatever sb_clients a test file had not stubbed yet.
 @pytest.fixture(autouse=True)
+def _fresh_rate_windows():
+    """Each test starts with empty in-process rate windows (rate_limit), so
+    one file's submissions never spend another's budget. M-5, 2026-11-27:
+    the website form door's per-email window made that visible."""
+    import sys as _sys
+    _rl = _sys.modules.get("rate_limit")
+    if _rl is not None:
+        _rl._buckets.clear()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_church_duties():
     import sys as _sys
     _cd = _sys.modules.get("church_duties")
