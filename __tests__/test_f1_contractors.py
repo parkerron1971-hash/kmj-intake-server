@@ -213,7 +213,7 @@ def test_the_owner_being_the_platform_owner_is_no_longer_enough(fake, monkeypatc
     assert cr.list_contractors("biz1", user=_U())["payouts"] == {"stripe": False}
 
 
-@pytest.mark.parametrize("kind", ["church", "ministry", "nonprofit"])
+@pytest.mark.parametrize("kind", ["church", "ministry", "nonprofit", "pastor"])
 def test_a_church_is_refused_even_when_named(fake, monkeypatch, kind):
     """A church's or nonprofit's money is its own: named in the list by
     mistake, it still never spends the platform balance, at every door."""

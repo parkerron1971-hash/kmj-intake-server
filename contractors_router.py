@@ -150,7 +150,12 @@ def _payout_verdict(biz: Any) -> Optional[str]:
     if not isinstance(rows, list) or not rows:
         return PLATFORM_MONEY_UNREAD
     import vertical_family
-    if vertical_family.is_nonprofit_like(rows[0].get("type")):
+    import vertical_registry
+    kind = rows[0].get("type")
+    # "Never a church" means what it means everywhere else: vertical_family's
+    # nonprofit list, and anything the registry resolves to a ministry or a
+    # nonprofit (the alias `pastor` is a church but isn't on that list).
+    if vertical_family.is_nonprofit_like(kind) or vertical_registry.resolve(kind or "") in ("ministry", "nonprofit"):
         return PLATFORM_MONEY_ONLY
     return None
 
