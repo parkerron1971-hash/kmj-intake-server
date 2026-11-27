@@ -447,13 +447,18 @@ def _close_follow_ups(biz: str, cid: str, by_user: str, by_name: str) -> List[st
     return closed
 
 
-def _cancel_welcome_texts(biz: str, cid: str) -> List[str]:
+NOT_SENT = "Needs a look: marked not a guest; not sent."
+REAL_PUT_BACK = "Needs a look: Real person put back; not sent."
+
+
+def _cancel_welcome_texts(biz: str, cid: str, why: str = NOT_SENT) -> List[str]:
     """Take them off the Welcome Path: every queued text for them cancelled,
-    marked as this hold's (last_error), so undo puts back exactly these."""
+    marked as this hold's (last_error, which says why), so undo puts back
+    exactly these."""
     rows = sb_clients.sb_patch_as_service(
         f"/chief_scheduled_actions?business_id=eq.{_q(biz)}&status=eq.queued"
         f"&action->>type=eq.{NEW_HERE_KIND}&action->>contact_id=eq.{_q(cid)}",
-        {"status": "cancelled", "last_error": "Needs a look: marked not a guest; not sent."})
+        {"status": "cancelled", "last_error": why})
     if not isinstance(rows, list):
         raise HTTPException(503, "Their welcome texts couldn't be read just now. Nothing changed. Try again.")
     return [str(r["id"]) for r in rows if r.get("id")]
@@ -536,9 +541,12 @@ def _soft(what: str, biz: str, fn, *a, **kw):
 
 
 def decide(business_id: str, contact_id: str, verdict: str, *, by_user: str, by_name: str = "",
-           via: str = "app", share: bool = False) -> Dict[str, Any]:
+           via: str = "app", share: bool = False, only_if_held: bool = False) -> Dict[str, Any]:
     """Real person, Not a guest or Scam for one person. Sync. Raises
-    HTTPException with words a person reads (and then nothing changed)."""
+    HTTPException with words a person reads (and then nothing changed).
+    `only_if_held` is a tap on a held card: when someone else already
+    decided (a second screen that hadn't reloaded), it's refused rather than
+    written as a second decision."""
     if verdict not in DECISIONS:
         raise HTTPException(400, "Choose Real person, Not a guest or Scam.")
     biz, cid = str(business_id), _uuid(contact_id)
@@ -546,6 +554,13 @@ def decide(business_id: str, contact_id: str, verdict: str, *, by_user: str, by_
     name = _plain(contact.get("name")) or "Someone"
     meta0 = contact.get("metadata") if isinstance(contact.get("metadata"), dict) else {}
     checks = _checks_of(biz, cid, (HELD,))
+    if only_if_held and not checks and not isinstance(meta0.get("inbound_hold"), dict):
+        dec = meta0.get("inbound_decision") if isinstance(meta0.get("inbound_decision"), dict) else {}
+        who = _plain(dec.get("by")) or "Someone"
+        who = who[:1].upper() + who[1:]
+        what = {REAL: "a real person", NOT_A_GUEST: "not a guest", SCAM: "a scam"}.get(dec.get("verdict"), "")
+        raise HTTPException(409, (f"{who} already marked {name} {what}. Nothing changed." if what
+                                  else f"{name} isn't waiting for a look any more. Nothing changed."))
     all_checks = _checks_of(biz, cid, (HELD, CLEAR, WATCHED, RELEASED, CLOSED))
     did = str(uuid.uuid4())
     before: Dict[str, Any] = {"status": contact.get("status"), "mark": meta0.get("inbound_hold"),
@@ -679,7 +694,7 @@ def undo(business_id: str, decision_id: str, *, by_user: str) -> Dict[str, Any]:
                 sb_clients.sb_patch_as_service(
                     f"/church_follow_ups?business_id=eq.{_q(biz)}&id=eq.{_q(fid)}&status=in.(open,handed_back)",
                     {"status": "closed", "done_at": now, "updated_at": now})
-            _cancel_welcome_texts(biz, cid)
+            _cancel_welcome_texts(biz, cid, REAL_PUT_BACK)
         else:
             _reopen(biz, [str(x) for x in before.get("closed") or []],
                     [str(x) for x in before.get("cancelled") or []])
@@ -804,8 +819,10 @@ def turn_line(business: Dict[str, Any], user_id: Any) -> str:
     reasons, and what Chief may offer. '' when nobody waits or on any failure."""
     try:
         bid = str((business or {}).get("id") or "")
-        if not bid or not user_id or not risk.switched_on(bid):
+        if not bid or not user_id or not (risk.switched_on(bid) or risk.mode() != "off"):
             return ""
+        # People already held are named while any are left, even for a
+        # church the switch no longer covers.
         people = held(bid, limit=8, previews=False)
         if not people:
             return ""
@@ -857,9 +874,14 @@ def needs_a_look(business_id: str, biz: Dict[str, Any] = Depends(business_access
     """The queue: everyone waiting for a look, newest first."""
     b = str(biz["id"])
     on = risk.switched_on(b)
-    people = held(b) if on or risk.mode() != "off" else []
+    # Everyone already held stays here while any are left, switch or no
+    # switch: a church taken off it still has people waiting, and their
+    # roll badge still shows. Off, a table that isn't there is nobody held.
+    people = held(b)
     if people is None:
-        raise HTTPException(503, "That couldn't be read just now. Try again in a minute.")
+        if on:
+            raise HTTPException(503, "That couldn't be read just now. Try again in a minute.")
+        people = []
     return {"on": on, "count": len(people), "people": people}
 
 
@@ -874,8 +896,9 @@ async def decide_route(business_id: str, contact_id: str, decision: str,
         raise HTTPException(404, "Choose real, not-a-guest or scam.")
     uid, name = _who(session)
     share = isinstance(body, dict) and body.get("share") is True and _is_platform_owner(session)
+    only_if_held = isinstance(body, dict) and body.get("held") is True
     out = await asyncio.to_thread(decide, str(biz["id"]), contact_id, verdict, by_user=uid, by_name=name,
-                                  via="app", share=share)
+                                  via="app", share=share, only_if_held=only_if_held)
     if out.get("nudge"):
         try:
             import chief_agent

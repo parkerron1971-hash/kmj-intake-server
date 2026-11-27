@@ -156,7 +156,15 @@ it can start again.
 
 `INBOUND_RDAP=on` turns the domain-age lookup on (off by default; name rdap.org
 on the privacy page first). `INBOUND_ABUSIVE_DOMAINS=a.com,b.net` is the curated
-list of abuse-only domains.
+list of abuse-only domains. It's read when the card comes in: a domain taken off
+the list later stays remembered for the Scams already tapped on it, until those
+Scams are put back (or the senders age out).
+
+Turning a church off the switch stops new holds, but anyone already held stays
+in the queue until the office taps them: their roll badge still shows, so the
+buttons have to be there too. While `INBOUND_SAFETY` is anything but `off`,
+Chief's block and its send gate keep naming them as well. `off` is the kill
+switch: the queue still lists them, and Chief goes quiet about them.
 
 ## API contract (for the front end)
 
@@ -184,7 +192,9 @@ gets the same 404 as "no such business" (`business_access`).
 ```
 
 Newest first, one row per person. `on` false means the switch is off for this
-business: show nothing.
+business, so no new card is held. Anyone held before stays in `people` until the
+office taps them. Hide the queue only when `on` is false **and** `people` is
+empty.
 
 ### The badge (Members)
 
@@ -198,8 +208,12 @@ business: show nothing.
 
 ### The buttons: `POST /inbound/{business_id}/people/{contact_id}/{decision}`
 
-`decision` is `real`, `not-a-guest` or `scam`. The body is optional: `{"share":
-true}` is honored only for the platform owner, on `scam`.
+`decision` is `real`, `not-a-guest` or `scam`. The body is optional:
+- `{"held": true}`: the tap came from a held card. If someone already decided
+  (a second screen that hadn't reloaded), it's a 409 with their words ("Kevin
+  already marked Sara Moreno a scam. Nothing changed.") instead of a second
+  decision. Chief and a person's page after a week leave it out.
+- `{"share": true}` is honored only for the platform owner, on `scam`.
 
 ```json
 // real
@@ -213,7 +227,8 @@ true}` is honored only for the platform owner, on `scam`.
 ```
 
 Show `said` as the confirmation. The errors are `{detail}` with words a person
-reads: 404 (not here / not allowed), 503 (couldn't save; nothing changed).
+reads: 404 (not here / not allowed), 409 (already decided, with `held: true`),
+503 (couldn't save; nothing changed).
 
 ### Undo: `POST /inbound/{business_id}/decisions/{decision_id}/undo`
 

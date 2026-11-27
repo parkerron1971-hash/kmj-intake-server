@@ -530,6 +530,68 @@ def test_the_queue_and_the_buttons(db, site, office):
     assert office.client.post(f"/inbound/{A}/people/{p['contact_id']}/maybe").status_code == 404
 
 
+def test_people_already_held_stay_in_the_queue_with_the_switch_off(db, site, office, monkeypatch):
+    """FE #1716 must-fix 1, the server's side: a church taken off the switch
+    still has people waiting (their roll badge shows), so the queue lists
+    them until the office taps each one."""
+    site.send(SOFIA)
+    for off in ("off", "watch", "11111111-2222-3333-4444-555555555555"):
+        monkeypatch.setenv("INBOUND_SAFETY", off)
+        q = office.client.get(f"/inbound/{A}/needs-a-look").json()
+        assert q["on"] is False and q["count"] == 1 and q["people"][0]["name"] == "Sara Moreno"
+    cid = q["people"][0]["contact_id"]
+    assert office.client.post(f"/inbound/{A}/people/{cid}/real").status_code == 200
+    assert office.client.get(f"/inbound/{A}/needs-a-look").json() == {"on": False, "count": 0, "people": []}
+    # Off and the table not there (the APPLY file not applied): nobody, not a 503.
+    monkeypatch.setenv("INBOUND_SAFETY", "off")
+    monkeypatch.setattr(H, "held", lambda *a, **kw: None)
+    assert office.client.get(f"/inbound/{A}/needs-a-look").json() == {"on": False, "count": 0, "people": []}
+    monkeypatch.setenv("INBOUND_SAFETY", "on")
+    assert office.client.get(f"/inbound/{A}/needs-a-look").status_code == 503
+
+
+def test_chief_still_names_people_held_once_the_church_is_off_the_list(db, site, monkeypatch):
+    site.send(SOFIA)
+    monkeypatch.setenv("INBOUND_SAFETY", "11111111-2222-3333-4444-555555555555")
+    assert "Sara Moreno" in H.turn_line({"id": A, "type": "ministry"}, OWNER)
+    monkeypatch.setenv("INBOUND_SAFETY", "off")                          # the kill switch
+    assert H.turn_line({"id": A, "type": "ministry"}, OWNER) == ""
+
+
+def test_a_tap_from_a_stale_held_card_is_refused_not_written_twice(db, site, office, monkeypatch):
+    """#2098 nit (plausible): two screens show the same held card. The second
+    tap (body held:true) finds someone already decided and changes nothing."""
+    import church_follow_up as cfu
+    monkeypatch.setattr(cfu, "close_for_contact", lambda *a, **kw: [], raising=False)
+    site.send(SOFIA)
+    cid = contact(db, SOFIA["email"])["id"]
+    first = office.client.post(f"/inbound/{A}/people/{cid}/scam", json={"held": True})
+    assert first.status_code == 200
+    again = office.client.post(f"/inbound/{A}/people/{cid}/real", json={"held": True})
+    assert again.status_code == 409 and "already marked Sara Moreno a scam" in again.json()["detail"]
+    assert len(db.rows("inbound_decisions")) == 1
+    assert contact(db, SOFIA["email"])["status"] == "inactive"
+    # Without held:true (Chief, or a deliberate change later) it is a new decision.
+    assert office.client.post(f"/inbound/{A}/people/{cid}/real").status_code == 200
+    assert len(db.rows("inbound_decisions")) == 2
+
+
+def test_undoing_a_real_says_why_its_texts_stopped(db, site, monkeypatch):
+    """#2098 nit: a Real put back cancels the welcome texts it let run, and
+    their last_error says Real was put back, not "marked not a guest"."""
+    site.send(SOFIA)
+    cid = contact(db, SOFIA["email"])["id"]
+    out = H.decide(A, cid, H.REAL, by_user=OWNER)
+    later = (H._now() + H.timedelta(days=1)).isoformat()
+    db.rows("chief_scheduled_actions").append({
+        "id": "sa-1", "business_id": A, "status": "queued", "run_at": later, "last_error": None,
+        "action": {"type": H.NEW_HERE_KIND, "contact_id": cid}})
+    H.undo(A, out["decision_id"], by_user=OWNER)
+    (sa,) = db.rows("chief_scheduled_actions")
+    assert sa["status"] == "cancelled" and sa["last_error"] == H.REAL_PUT_BACK
+    assert "not a guest" not in sa["last_error"]
+
+
 def test_a_viewer_cannot_tap_and_only_the_platform_owner_shares(db, site, office, monkeypatch):
     site.send(SOFIA)
     cid = contact(db, SOFIA["email"])["id"]
