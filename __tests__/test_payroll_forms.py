@@ -352,3 +352,87 @@ def test_a_read_that_fails_is_never_a_worksheet_of_zeros(db):
         pf.quarter(_biz(db), 2026, 4, today=TODAY)
     with pytest.raises(pf.Unavailable):
         pf.year(_biz(db), 2026, today=TODAY)
+
+
+# ─── An honest year-end check: active staff count before they're paid (M-6) ──
+
+def _new_hire(db, hired: str = "2026-11-27", **extra):
+    eid = uid()
+    db.rows("employees").append({"id": eid, "business_id": CHURCH, "first_name": "Jo", "last_name": "Tran",
+                                 "status": "active", "pay_type": "hourly", "pay_rate": 20.0,
+                                 "pay_frequency": "biweekly", "work_state": "MI", "hire_date": hired, **extra})
+    return eid
+
+
+def test_someone_on_staff_but_not_paid_yet_is_counted(db):
+    """The review's '6 of 6, everything the W-2s need is here' with nothing
+    on file: the check read only people with paid lines."""
+    _new_hire(db)                                     # no W-4, address or SSN, no pay runs
+    y = pf.year(_biz(db), 2026, today=TODAY)
+    ready = {r["key"]: r for r in y["readiness"]}
+    assert ready["w4s"]["ok"] is False and ready["w4s"]["line"] == "Jo Tran has no W-4 on file"
+    assert ready["addresses"]["ok"] is False and "Jo Tran" in ready["addresses"]["line"]
+    assert ready["ssns"]["ok"] is False and "Jo Tran" in ready["ssns"]["line"]
+    assert y["w2"] == []                              # no pay, no W-2 row
+    # Marcus and Dana are on staff too, with a W-4 each: three people checked.
+    db.rows("employee_tax_profiles").append({"employee_id": db.rows("employees")[-1]["id"], "business_id": CHURCH,
+                                             "ssn_last4": "1111", "address": {"line1": "1 Main", "city": "Flint",
+                                                                              "state": "MI", "zip": "48502"},
+                                             "w4_signed_at": "2026-11-27T00:00:00Z"})
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    assert ready["w4s"] == {"key": "w4s", "ok": True, "line": "W-4s on file for all 3 people", "fix": None}
+
+
+def test_an_earlier_year_and_a_later_hire_leave_them_out(db):
+    _new_hire(db)
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2025, today=TODAY)["readiness"]}
+    assert ready["w4s"]["ok"] and ready["addresses"]["ok"] and ready["ssns"]["ok"]
+    db.rows("employees")[-1]["hire_date"] = "2027-01-04"
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    assert ready["w4s"]["ok"]
+    db.rows("employees")[-1].update(hire_date="2026-11-27", status="terminated")
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    assert ready["w4s"]["ok"]                         # no longer on staff
+
+
+def test_no_one_on_staff_says_so():
+    db = PayrollFake()
+    import pytest as _p  # noqa: F401
+    mp = _p.MonkeyPatch()
+    try:
+        install(mp, seed(db))
+        ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+        assert ready["w4s"] == {"key": "w4s", "ok": True, "line": "No one on staff yet", "fix": None}
+    finally:
+        mp.undo()
+
+
+def test_a_housing_allowance_kept_elsewhere_with_no_minister_pay_here_is_flagged(db):
+    """Love City's shape: Bookkeeping, Housing holds the pastor's designation
+    and paid allowance, but Pay staff pays nobody as a minister, so no W-2
+    from here carries Box 14. Never 'no housing designation is needed'."""
+    designate(db)
+    run(db, "2026-11-30", "paid", lines=[l for l in standard_lines() if l["employee_id"] == STAFF])
+    db.rows("employees")[0]["minister"] = False       # the pastor isn't marked a minister here
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    h = ready["housing_designation"]
+    assert h["ok"] is False
+    assert h["line"].startswith("Bookkeeping, Housing has a 2026 housing allowance for Marcus Ellwood")
+    assert "no W-2 from here will show it" in h["line"] and "Box 14" in h["fix"]
+
+
+def test_no_housing_records_still_reads_as_nothing_needed(db):
+    run(db, "2026-11-30", "paid", lines=[l for l in standard_lines() if l["employee_id"] == STAFF])
+    db.rows("employees")[0]["minister"] = False
+    ready = {r["key"]: r for r in pf.year(_biz(db), 2026, today=TODAY)["readiness"]}
+    assert ready["housing_designation"]["ok"] is True
+    assert ready["housing_designation"]["line"] == "No minister’s pay this year, so no housing designation is needed"
+
+
+def test_housing_records_that_cannot_be_read_are_never_nothing_needed(db, monkeypatch):
+    import housing_allowance
+    monkeypatch.setattr(housing_allowance, "list_allowances",
+                        lambda *a, **k: (_ for _ in ()).throw(housing_allowance.Unavailable("down")))
+    db.rows("employees")[0]["minister"] = False
+    with pytest.raises(pf.HousingUnreadable):
+        pf.year(_biz(db), 2026, today=TODAY)
