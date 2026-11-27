@@ -282,7 +282,14 @@ def _sent_in(marked: Dict[str, Dict[str, Any]], first: date, last: date) -> List
         p = pcal.parse_key(key)
         if not p or p["kind"] != "federal":
             continue
-        on = p["pay_date"] if p["schedule"] == pcal.SEMIWEEKLY else date(p["year"], p["month"], 1)
+        if p["schedule"] == pcal.SEMIWEEKLY:
+            on = p["pay_date"]
+        elif p["schedule"] == pcal.QUARTERLY:
+            on = date(p["year"], 3 * p["q"] - 2, 1)
+        elif p["schedule"] == pcal.ANNUAL:
+            on = date(p["year"], 12, 31)            # the year's one payment, with the 944: counted in Q4
+        else:
+            on = date(p["year"], p["month"], 1)
         if first <= on <= last:
             out.append({"key": key, "period": p["period"], "amount": _r(row.get("amount")),
                         "sent_on": row.get("sent_on")})
@@ -344,7 +351,16 @@ def quarter(biz_row: Dict[str, Any], year: int, q: int, today: Optional[date] = 
         notes.append(f"{pcal.money(unchecked)} of housing paid this quarter is left out of line 2 without being "
                      f"checked: {' and '.join(reasons)}. If the board didn’t designate it in advance, it is wages "
                      f"({HOUSING_RULE}).")
-    due = pcal.form_941_due(year, q)
+    schedule = ctx["settings"]["deposit_schedule"]
+    if schedule == pcal.ANNUAL:
+        notes.append(f"You file Form 944 for the whole year, not a 941 each quarter. These are {pcal.QUARTER_WORDS[q]}’s "
+                     f"share: the year’s quarters add up to the 944’s wages, income tax, Social Security and Medicare, "
+                     f"due {pcal.long_day(pcal.form_944_due(year))}.")
+    elif schedule == pcal.QUARTERLY:
+        notes.append("Your taxes are under $2,500 a quarter, so they are paid with this 941 by its due date: tick the "
+                     "line 16 box that says line 12 is less than $2,500. If a quarter reaches $2,500, deposit monthly "
+                     "instead (Publication 15).")
+    due = pcal.form_944_due(year) if schedule == pcal.ANNUAL else pcal.form_941_due(year, q)
     return {
         "ok": True, "year": year, "q": q, "due": due.isoformat(),
         "runs_in": len(paid_runs), "runs_expected": expected,
@@ -353,7 +369,7 @@ def quarter(biz_row: Dict[str, Any], year: int, q: int, today: Optional[date] = 
         "months": months,
         "deposited": _r(sum(s["amount"] for s in sent)),
         "deposits": sent,
-        "schedule": ctx["settings"]["deposit_schedule"],
+        "schedule": schedule,
         "quarter_words": pcal.QUARTER_WORDS[q],
         "notes": notes,
         "deposits_ready": ctx["deposits_ready"],
@@ -675,13 +691,15 @@ def quarter_pdf(biz_row: Dict[str, Any], data: Dict[str, Any]) -> bytes:
     title = f"941 worksheet, {words} {data['year']}"
     buf, doc = _doc(title)
     due = _day(data["due"])
-    sched = "monthly" if data["schedule"] == pcal.MONTHLY else "semiweekly"
+    sched = {pcal.MONTHLY: "You deposit monthly", pcal.SEMIWEEKLY: "You deposit semiweekly",
+             pcal.QUARTERLY: "You pay with the 941", pcal.ANNUAL: "You file Form 944 for the year, paid with it"
+             }.get(data["schedule"], "You deposit monthly")
     L = data["lines"]
     story = [
         Paragraph(_esc(f"Form 941 worksheet: {words} {data['year']}"), s["h1"]),
         Paragraph(_esc(str(biz_row.get("name") or "")), s["muted"]),
         Paragraph(_esc(f"{NOT_A_FORM} {FILE_IT}"), s["notice"]),
-        Paragraph(_esc(f"You deposit {sched}. The return is due {pcal.long_day(due)}. "
+        Paragraph(_esc(f"{sched}. {'The 944 is' if data['schedule'] == pcal.ANNUAL else 'The return is'} due {pcal.long_day(due)}. "
                        f"{data['runs_in']} paid run{'s' if data['runs_in'] != 1 else ''} counted"
                        + (f" of {data['runs_expected']} expected." if data["runs_expected"] else ".")), s["p"]),
         Paragraph("The numbers, by the return’s line", s["h2"]),

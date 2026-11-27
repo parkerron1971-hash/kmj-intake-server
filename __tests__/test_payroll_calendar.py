@@ -301,3 +301,80 @@ def test_a_read_that_fails_is_never_an_empty_month(db, monkeypatch):
     db.missing.add("employees")
     with pytest.raises(pcal.Unreadable):
         pcal.month_view(_row(db), "2026-12", today=D(2026, 12, 1))
+
+
+# ─── Paying with the 941, and Form 944 (M-6, 2026-11-27) ──────────────
+
+def test_the_two_small_schedules_have_keys_and_due_dates():
+    q = {"deposit_schedule": "quarterly", "state_day": None, "state_label": None}
+    assert pcal.federal_key("quarterly", D(2026, 11, 30)) == "federal:2026Q4"
+    assert pcal.federal_key("annual", D(2026, 3, 13)) == "federal:2026"
+    assert pcal.parse_key("federal:2026Q4") == {"kind": "federal", "period": "2026Q4", "year": 2026, "q": 4,
+                                                "schedule": "quarterly"}
+    assert pcal.parse_key("federal:2026") == {"kind": "federal", "period": "2026", "year": 2026, "schedule": "annual"}
+    assert pcal.due_for(pcal.parse_key("federal:2026Q3"), q) == D(2026, 11, 2)     # with the Q3 941 (Oct 31: Sat)
+    assert pcal.due_for(pcal.parse_key("federal:2026Q4"), q) == D(2027, 2, 1)
+    assert pcal.due_for(pcal.parse_key("federal:2026"), q) == D(2027, 2, 1)        # with the 944: Jan 31, 2027 a Sunday
+    assert pcal.due_for(pcal.parse_key("forms:944:2026"), q) == D(2027, 2, 1)
+    assert pcal.parse_key("forms:944:2026")["form"] == "944"
+    for bad in ("federal:2026Q5", "federal:202", "federal:20261", "forms:944:2026Q1", "forms:944:26"):
+        assert pcal.parse_key(bad) is None, bad
+    assert pcal.settings_patch({"deposit_schedule": "quarterly"}) == {"deposit_schedule": "quarterly"}
+    assert pcal.settings_patch({"deposit_schedule": "annual"}) == {"deposit_schedule": "annual"}
+    assert pcal.settings_of({"settings": {"payroll": {"deposit_schedule": "annual"}}})["deposit_schedule"] == "annual"
+
+
+def test_the_table_s_key_check_matches_the_calendar_s_keys():
+    """A key the calendar makes must be one payroll_deposits accepts, or Mark
+    sent fails at the database. Both migration files, against KEY_RE."""
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent / "supabase"
+    keys = ["federal:2026-11", "federal:2026-12-22", "federal:2026Q4", "federal:2026", "state:2026-11",
+            "forms:941:2026Q4", "forms:944:2026", "forms:w2:2026",
+            "federal:2026Q5", "federal:20261", "forms:944:2026Q1", "forms:w3:2026", "state:2026", "federal:2026-11x"]
+    for name in ("APPLY-2026-11-19-payroll-deposits.sql", "APPLY-2026-11-27-payroll-deposit-keys.sql"):
+        sql = (root / name).read_text(encoding="utf-8")
+        pattern = re.search(r"key ~ '\^\((.+)\)\$'", sql).group(1)
+        for k in keys:
+            assert bool(re.fullmatch(pattern, k)) == bool(pcal.KEY_RE.fullmatch(k)), (name, k)
+
+
+def _feb_2027(db):
+    view = pcal.month_view(_row(db), "2027-02", today=D(2026, 12, 1))
+    return [e for d in view["days"] if d["date"] == "2027-02-01" for e in d["events"]]
+
+
+def test_paying_with_the_941_is_one_deposit_a_quarter_due_with_the_return(db):
+    _row(db)["settings"]["payroll"] = {"deposit_schedule": "quarterly"}
+    run(db, "2026-11-30", "paid", lines=standard_lines())
+    feb1 = _feb_2027(db)
+    fed = next(e for e in feb1 if e["kind"] == "deposit_federal")
+    assert fed["deposit_key"] == "federal:2026Q4" and fed["amount"] == 956.0
+    assert fed["sub"].startswith("for October to December, paid with the Form 941. Submit it on EFTPS")
+    assert "can’t wait for the return" not in fed["sub"]
+    assert [e["title"] for e in feb1 if e["kind"] == "forms"] == ["Form 941", "W-2s, W-3 and 1099-NEC"]
+
+
+def test_a_quarter_that_reaches_2500_says_it_can_not_wait_for_the_return(db):
+    _row(db)["settings"]["payroll"] = {"deposit_schedule": "quarterly"}
+    for pd in ("2026-10-30", "2026-11-30", "2026-12-31"):
+        run(db, pd, "paid", lines=standard_lines())            # $956 each: $2,868 for the quarter
+    fed = next(e for e in _feb_2027(db) if e["kind"] == "deposit_federal")
+    assert fed["amount"] == 2868.0
+    assert "This quarter’s taxes have reached $2,500, so they can’t wait for the return" in fed["sub"]
+
+
+def test_a_form_944_filer_files_once_a_year_and_pays_with_it(db):
+    _row(db)["settings"]["payroll"] = {"deposit_schedule": "annual"}
+    run(db, "2026-11-30", "paid", lines=standard_lines())
+    feb1 = _feb_2027(db)
+    fed = next(e for e in feb1 if e["kind"] == "deposit_federal")
+    assert fed["deposit_key"] == "federal:2026" and fed["sub"].startswith("for 2026, paid with Form 944.")
+    forms = [e for e in feb1 if e["kind"] == "forms"]
+    assert [e["title"] for e in forms] == ["Form 944", "W-2s, W-3 and 1099-NEC"]
+    assert forms[0]["deposit_key"] == "forms:944:2026"
+    assert "January 31 is a Sunday" in forms[0]["sub"]
+    # No 941 anywhere in the year for a 944 filer.
+    for m in ("2026-04", "2026-05", "2026-07", "2026-08", "2026-10", "2026-11"):
+        view = pcal.month_view(_row(db), m, today=D(2026, 12, 1))
+        assert not any(e["title"] == "Form 941" for d in view["days"] for e in d["events"]), m
