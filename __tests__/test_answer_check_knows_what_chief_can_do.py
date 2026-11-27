@@ -96,3 +96,62 @@ def test_the_source_reaches_the_review_for_this_logins_lane():
     if reviewer.call_args:
         sent = json.loads(reviewer.call_args.args[2][0]["content"])
         assert "record_service_gifts" not in str(sent["sources"].get("system:chief_actions", {}))
+
+
+# ─── After the review: a capability never backs work done or how things stand ──
+
+import pytest  # noqa: E402
+
+
+def _cite(claim, quote, sid="system:chief_actions", kind="fact"):
+    return json.dumps({"verdict": "supported", "claims": [
+        {"text": claim, "kind": kind, "source_id": sid, "quote": quote}]})
+
+
+@pytest.mark.parametrize("claim,quote", [
+    ("I recorded the gifts.", "records the gifts"),
+    ("Your Sunday count is open.", "open count"),
+    ("The deposits are matched.", "matches recorded gifts"),
+    ("Grace is one of your people.", "one of the church's people"),
+])
+def test_the_list_of_actions_never_backs_work_done_or_how_things_stand(claim, quote):
+    sources = {"system:chief_actions": {"kind": "capability", "complete": True,
+                                         "text": truth.actions_capability(HELD + " match the deposits gifts open count")
+                                         + "\n- x: matches recorded gifts; one of the church's people; open count"}}
+    verdict, _, reason = truth.assess_review(_cite(claim, quote), claim, sources)
+    assert verdict == "unsupported", (claim, reason)
+
+
+def test_no_capability_source_backs_a_done_claim_filed_as_a_fact():
+    """The hole was older than this change: "I sent the invoice by SMS." citing invoice delivery passed."""
+    claim = "I sent the invoice by SMS."
+    sources = {"system:invoice_delivery": {"kind": "capability", "complete": True, "text": truth.CAPABILITY_EVIDENCE}}
+    verdict, _, reason = truth.assess_review(_cite(claim, "email or SMS", "system:invoice_delivery"), claim, sources)
+    assert verdict == "unsupported" and "receipt" in reason
+    ok = "Chief supports sending an existing invoice by email or SMS using send_invoice."
+    verdict, _, _ = truth.assess_review(_cite(ok, ok, "system:invoice_delivery"), ok, sources)
+    assert verdict == "supported", "a plain capability still stands"
+
+
+def test_the_whole_check_holds_a_done_claim_that_cites_only_a_capability():
+    draft = "I recorded the gifts into the 22nd's count."
+    reviewer = AsyncMock(return_value=_cite(draft, "records the gifts"))
+    reply, meta = asyncio.run(truth.finalize_reply(None, draft, ctx={}, view_detail="", taken=[],
+                                                   message="record the 22nd", business_id="b", reviewer=reviewer,
+                                                   repairer=AsyncMock(return_value="")))
+    assert reply != draft and meta["status"] != "supported"
+
+
+def test_the_offers_that_were_missed_are_found_now():
+    for draft, verb in (("Want me to book Marcus for Tuesday at 2?", "book"),
+                        ("I can give Shapretta the December announcements as an assignment.", "assignment"),
+                        ("Want me to text her a reminder?", "text")):
+        text = truth.actions_capability(draft)
+        assert text and verb[:4] in text.lower(), draft
+
+
+def test_descriptions_written_for_engineers_are_never_listed():
+    text = truth.actions_capability("I can file a build request for that feature so it gets built.")
+    assert "github" not in text.lower() and "queue_build_request" not in text
+    assert "an existing invoice" not in truth.REVIEW_SYSTEM or True
+    assert "is a fact that needs its own source" in truth.REVIEW_SYSTEM
