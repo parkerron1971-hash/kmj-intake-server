@@ -6,7 +6,7 @@ asked: "specialist desks: KAI attaches a desk's playbook to every worker it open
 status: waiting on Kevin
 prs: [kmj-intake-server#2094]
 migrations: []
-left_undone: ["Solution Space does not attach docs/desks/<id>.md to a worker's brief yet; that is KAI's side, in claude-bench"]
+left_undone: ["Solution Space attaches docs/desks/<id>.md from origin/main to a worker's brief on the local claude-bench branch kai-desks-and-phone; live once Kevin runs that branch"]
 decisions: ["nine fixed desk ids: member-app, church-office, chief, websites, money, messaging, live-media, system, tickets", "the playbooks are knowledge, not policy: CLAUDE.md and AGENTS.md win where they disagree", "tickets diagnoses and hands off; it never fixes code itself"]
 related: []
 ---
