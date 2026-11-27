@@ -2,7 +2,7 @@
 title: Welcome texts only after the phone replies YES; DMARC reports kept, not copied
 date: 2026-11-27
 agent: Claude Code (Claude Opus 5.5)
-asked: "F1: welcome texts only after the phone replies YES (one 'Reply YES to get texts from <church>' first) ... rank 5: DMARC aggregate reports are kept but not copied to the pastor" (M-5 step 1, relayed by KAI)
+asked: "M-5 step 1, relayed by KAI: F1, welcome texts only after the phone replies YES (one 'Reply YES to get texts from <church>' first); rank 5, DMARC aggregate reports are kept but not copied to the pastor"
 status: in progress
 prs: [kmj-intake-server#2100]
 migrations: []
