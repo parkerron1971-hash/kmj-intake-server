@@ -60,6 +60,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -228,7 +229,46 @@ def quoted_submission(name: Any, email: Any, data: Dict[str, Any]) -> "tuple[str
     flags = list(untrusted_text.detect_injection(raw))
     if n_tags:
         flags.append("action_tag")
+    # A stranger can't close the <submission> tag the draft reads it in (the
+    # review of #2099, should-fix 1): angle brackets become look-alikes, and
+    # trying is itself a flag.
+    if _SUBMISSION_TAG.search(raw):
+        flags.append("tag_breakout")
+    text = text.replace("<", "\u2039").replace(">", "\u203a")
     return text, flags
+
+
+_SUBMISSION_TAG = re.compile(r"<\s*/?\s*submission", re.I)
+# What a reply must never copy from a stranger's words unasked (the review of
+# #2099, should-fix 3): a web address or domain, an email address, a phone
+# number.
+_ECHO_PATTERNS = (
+    re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"),
+    re.compile(r"\b(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b", re.I),
+    re.compile(r"(?:\+?\d[\s().-]*){7,}"),
+)
+
+
+def echoed_from_submission(draft: str, submission: str, own: str = "") -> List[str]:
+    """The links, addresses and numbers from the submission that the draft
+    repeats and the business's own words (`own`: the draft's instructions,
+    its facts) don't have. [] when it repeats none."""
+    said, mine = (draft or "").lower(), (own or "").lower()
+    found: List[str] = []
+    for pat in _ECHO_PATTERNS:
+        for m in pat.finditer(submission or ""):
+            bit = m.group(0).strip().lower()
+            if pat is _ECHO_PATTERNS[2]:
+                digits = re.sub(r"\D", "", bit)
+                if len(digits) < 7 or digits in re.sub(r"\D", "", mine):
+                    continue
+                if digits in re.sub(r"\D", "", said):
+                    found.append(bit)
+                continue
+            bit = re.sub(r"^https?://(www\.)?|^www\.", "", bit)
+            if len(bit) >= 4 and bit in said and bit not in mine and bit not in found:
+                found.append(bit)
+    return found
 
 
 async def call_claude(
@@ -704,6 +744,7 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         logger.info(f"Scored contact {contact_id}: {lead_score} ({priority})")
 
         # ── 7. AI: Draft response ─────────────────────────────────────
+        own_words = str(business_name or "")
         draft_subject = f"Thanks for reaching out, {name}!"
         draft_body = f"Hi {name},\n\nThank you for your interest. We'll be in touch soon.\n\nBest regards,\n{business_name}"
         draft_reasoning = score_reasoning
@@ -754,11 +795,17 @@ RESPOND ONLY WITH VALID JSON:
             draft_msg = (f"<submission>\n{submission_summary}\n</submission>\n\n"
                          f"Lead score: {lead_score}\nResponse type: {response_type}")
 
+            own_words = draft_system
             draft_raw = await call_claude(client, draft_system, draft_msg, DRAFT_MODEL, 1000)
             if draft_raw:
                 draft_json = parse_json_from_ai(draft_raw)
                 draft_subject = draft_json.get("subject", draft_subject)
                 draft_body = draft_json.get("body", draft_body)
+
+        # A draft that repeats a link, address or number from the stranger's
+        # words is a person's to send, never autopilot's (should-fix 3).
+        if echoed_from_submission(f"{draft_subject}\n{draft_body}", submission_summary, own_words):
+            inbound_flags = list(inbound_flags) + ["echoed_link"]
 
         # ── 8. Insert into agent_queue ────────────────────────────────
         await supabase_request(client, "POST", "/agent_queue", {

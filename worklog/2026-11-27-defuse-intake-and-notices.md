@@ -2,12 +2,12 @@
 title: The intake draft reads a submission as data; autopilot skips flagged ones; notification titles defused
 date: 2026-11-27
 agent: Claude Code (Claude Opus 5.5)
-asked: "M-5 step 1, relayed by KAI: F2, the intake draft defuses the submission, and autopilot 'full' skips drafts from flagged or tainted submissions; F3, notification titles are defused before Chief's prompt"
+asked: 'M-5 step 1, relayed by KAI: F2, the intake draft defuses the submission, and autopilot ''full'' skips drafts from flagged or tainted submissions; F3, notification titles are defused before Chief''s prompt'
 status: in progress
 prs: [kmj-intake-server#2099]
 migrations: []
-left_undone: []
-decisions: ["intake isn't a Chief turn, so its flags ride on the draft (agent_queue.data.inbound_flags) instead of a turn's taint", "autopilot refuses any draft whose data says inbound_flags, needs_a_look, inbound_hold or tainted, before the policy engine and on every level", "a flagged draft is still written; a person can read it and send it"]
+left_undone: ['review of #2099 should-fix 2: route /intake/submit through #2098''s inbound_risk.check and put needs_a_look in the draft''s data (handed to the Needs-a-look worker; _inbound_flagged already reads the key)', 'the morning, mid-day and evening briefs (notification_engine._format_data_for_prompt) still put lead names, subjects and titles into a model prompt raw: where Sofia was called a lovely person to greet first; a chief-desk fix']
+decisions: ['intake isn''t a Chief turn, so its flags ride on the draft (agent_queue.data.inbound_flags) instead of a turn''s taint', 'autopilot refuses any draft whose data says inbound_flags, needs_a_look, inbound_hold or tainted, before the policy engine and on every level', a flagged draft is still written; a person can read it and send it, 'review of #2099: a typed </submission> can''t close the tag (angle brackets become look-alikes) and flags tag_breakout', 'review of #2099: a draft that repeats a link, domain, email or phone number from the submission that the business''s own words don''t have carries echoed_link, so autopilot never sends it']
 related: [2026-11-27-inactive-closes-follow-up.md]
 ---
 Found in the M-5 inbound-safety review:
