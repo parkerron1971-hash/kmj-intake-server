@@ -95,6 +95,9 @@ _FORBIDDEN_VERBS = {
     # for an exception, their yes to what was put to them. Never a step that
     # runs later while nobody is looking.
     "ask_time_off", "answer_time_off", "take_back_time_off", "add_repeat", "take_off_repeat",
+    # Asking people to serve (chief_serving_spots): the person's own yes to who and which spot, in the
+    # turn they give it. Never a step that asks a volunteer later while nobody is looking.
+    "ask_to_serve", "offer_serving_spot", "take_back_serving_ask", "fill_serving_spots",
 }
 
 _TERMINAL = ("completed", "abandoned")

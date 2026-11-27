@@ -151,6 +151,8 @@ CHURCH_VERBS: FrozenSet[str] = frozenset({
     "team_week", "monthly_report_draft",
     # The leaders schedule and the volunteers' week.
     "who_is_away", "time_off_asks", "serving_week", "check_dates", "event_volunteers",
+    # An open serving spot and who could take it (chief_serving_spots; its handler says where it isn't on).
+    "serving_spot",
     "church_email",
 })
 EDITIONS = ("", "church")

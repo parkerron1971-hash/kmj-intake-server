@@ -607,6 +607,26 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "event_volunteers": {**_r("reads how full one event is: the serving teams' spots (open, asked, yes) and its own "
                               "roles, the ask's state and its note; names only where the picture lets this login "
                               "read them", sensitive=True), "chief_only": True},
+    # Serving spots (chief_serving_spots): the serving page's own board, ask, offer, take back and fill, as the
+    # signed-in login (its own gates decide who schedules which team), so Chief's alone. C: an ask reaches a
+    # volunteer on the next send (every 15 minutes) and can't be recalled once it has.
+    "serving_spot": {**_r("reads one service's serving spots for a place (open, asked, said yes) and who on the "
+                          "team could take one, best first, for whoever may schedule that team; volunteers by name",
+                          sensitive=True), "chief_only": True},
+    "ask_to_serve": {**_w("C", "asks one person on a serving team to take a spot at one service through the serving "
+                               "page's own ask (on the team, not away, not on another spot then, a yes never "
+                               "overwritten); they get it on the next send and it stays asked until they answer"),
+                     "chief_only": True},
+    "offer_serving_spot": {**_w("C", "offers one spot at one service to everyone on its team who is trained and "
+                                     "free, through the serving page's own offer; the first yes takes it"),
+                           "chief_only": True},
+    "take_back_serving_ask": {**_w("C", "takes back an ask or an offer for a serving spot that nobody said yes to "
+                                        "(or a fill's asks not yet sent) through the serving page's own take back; "
+                                        "one already sent may have been seen"), "chief_only": True},
+    "fill_serving_spots": {**_w("C", "asks people for every open serving spot over the coming weeks, fairly (trained, "
+                                     "free, not away, under their Sundays a month), through the serving page's own "
+                                     "fill; taken back with take_back_serving_ask until they go out", bulk=True),
+                           "chief_only": True},
     "serving_week": {**_r("reads one week of a church's volunteers by department (church_week: who is on, open "
                           "places, away; hours and checks only where church_serving lets this login); volunteers by "
                           "name", sensitive=True), "chief_only": True},
