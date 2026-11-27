@@ -86,7 +86,10 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          "who_is_away", "time_off_asks", "check_dates", "serving_week",
                                          # An event's volunteers (chief_event_volunteers): names only as the
                                          # office's own picture lets the signed-in login read them.
-                                         "event_volunteers"}
+                                         "event_volunteers",
+                                         # Serving spots (chief_serving_spots): volunteers by name, behind the
+                                         # serving page's own gates for the signed-in login.
+                                         "serving_spot"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
     assert names == (exposed - {"show_view"}) | chief_only, (
         "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "

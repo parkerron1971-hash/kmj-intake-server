@@ -41,7 +41,7 @@ KEEPER_WORKS = {"areas": ["office", "giving_money"], "role": "manager", "lane": 
                 "money": {"level": "work", "can_work": True}}
 KEEPER_SEES = {"areas": ["office", "giving_money"], "role": "manager", "lane": "office",
                "money": {"level": "see", "can_work": False}}
-ALL_ON = {"giving_services": True, "giving_deposits": True}
+ALL_ON = {"giving_services": True, "giving_deposits": True, "serving_spots": True}
 
 
 def turn(biz=CHURCH, on=True, ready=None):
@@ -62,7 +62,8 @@ def steps(message, scope=None, t=None):
 # ─── The files ────────────────────────────────────────────────────────
 
 def test_the_starting_skills_parse_and_name_only_chiefs_own_actions():
-    assert [s["name"] for s in cs.skills()] == ["giving-bank-match", "sunday-giving-count", "year-end-giving-statements"]
+    assert [s["name"] for s in cs.skills()] == ["fill-a-serving-spot", "giving-bank-match", "sunday-giving-count",
+                                                "year-end-giving-statements"]
     for s in cs.skills():
         assert s["use_when"] and s["triggers"] and s["actions"]
         for v in s["actions"]:
@@ -137,8 +138,20 @@ def test_a_word_inside_another_word_doesnt_match():
 def test_a_login_without_the_key_to_the_job_is_handed_nothing():
     """Kevin's rule: check the login's key BEFORE loading a job's steps. A care login has no Giving & money."""
     for s in cs.skills():
+        if s["name"] == "fill-a-serving-spot":
+            continue        # who schedules a team is the serving page's, by duties, never a lane: below
         assert not cs.allowed(s, CARE, ALL_ON), s["name"]
     assert steps("record Sunday's offering", CARE) == "" and steps("run the giving statements", CARE) == ""
+
+
+def test_the_serving_spot_steps_follow_the_page_not_a_lane():
+    """Who may schedule which team is sunday_planning's (_scheduler: the owner, Admins, and whoever holds a
+    duty that schedules a team's door), and a duty can move to any office lane, so no lane is refused the
+    steps; the page refuses whoever schedules nothing. A church where the switch is off gets none."""
+    spot = next(s for s in cs.skills() if s["name"] == "fill-a-serving-spot")
+    assert cs.allowed(spot, CARE, ALL_ON) and cs.allowed(spot, MONEY, ALL_ON)
+    assert steps("we need someone to serve on sound Sunday", CARE).startswith("CHURCH JOB STEPS: fill-a-serving-spot")
+    assert steps("we need someone to serve on sound Sunday", None, turn(ready={**ALL_ON, "serving_spots": False})) == ""
 
 
 def test_the_giving_keeper_who_works_gets_the_count_and_one_who_only_sees_does_not():
@@ -163,8 +176,10 @@ def test_features_on_reads_each_feature_and_cant_tell_is_off(monkeypatch):
     import giving_ways
     monkeypatch.setattr(giving_ways, "switched_on", lambda bid: True)
     monkeypatch.setattr(giving_deposits, "switched_on", lambda bid: (_ for _ in ()).throw(RuntimeError("down")))
-    assert cs.features_on(CHURCH) == {"giving_services": True, "giving_deposits": False}
-    assert cs.features_on(None) == {"giving_services": False, "giving_deposits": False}
+    import chief_serving_spots
+    monkeypatch.setattr(chief_serving_spots, "turn_ready", lambda bid: True)
+    assert cs.features_on(CHURCH) == {"giving_services": True, "giving_deposits": False, "serving_spots": True}
+    assert cs.features_on(None) == {"giving_services": False, "giving_deposits": False, "serving_spots": False}
 
 
 def test_the_lookup_by_name_has_the_same_gate():

@@ -262,6 +262,7 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_schedule as _church_schedule  # the leaders schedule: who is away, asks, what repeats
+import chief_serving_spots as _serving_spots  # an open serving spot: ask, offer, take back, fill (the page's routes)
 import chief_event_volunteers as _event_volunteers  # an event's volunteers and flyer: the serving teams' ask, how full
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 import chief_church_sheet as _church_sheet  # one sheet per person: what a login can open and do, and the church's own jobs
@@ -429,6 +430,7 @@ _ACTION_PHRASES = {
     **_church_assign.PROGRESS,
     **_church_schedule.PROGRESS,
     **_event_volunteers.PROGRESS,
+    **_serving_spots.PROGRESS,
     **_church_jobs.PROGRESS,
     **_church_sheet.PROGRESS,
     **_church_structure.PROGRESS,
@@ -12652,6 +12654,8 @@ ACTION_HANDLERS = {
     **_church_schedule.HANDLERS,
     # An event's volunteers (chief_event_volunteers): how full one event is, both kinds.
     **_event_volunteers.HANDLERS,
+    # An open serving spot (chief_serving_spots): the serving page's own ask, offer, take back and fill.
+    **_serving_spots.HANDLERS,
     **_church_jobs.HANDLERS,
     **_church_sheet.HANDLERS,
     **_church_structure.HANDLERS,
@@ -16267,6 +16271,10 @@ async def chief_chat(
                 # it by login, and a Viewer's line differs). A read that fails adds nothing.
                 _login_block += await asyncio.to_thread(_event_volunteers.turn_line, biz,
                                                         str(user_session.user.id))
+                # Serving spots (chief_serving_spots): only where Chief may ask people to serve for this
+                # church (its switch, Love City first) and the login has an office seat; the page decides
+                # who may schedule which team. A read that fails adds nothing.
+                _login_block += await asyncio.to_thread(_serving_spots.turn_line, biz, str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             # THE OFFICE: read up front with the context for a church (else now), shown to the owner, the

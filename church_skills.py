@@ -68,7 +68,12 @@ def _giving_deposits(bid: Any) -> bool:
     return bool(giving_deposits.switched_on(bid))
 
 
-NEEDS = {"giving_services": _giving_services, "giving_deposits": _giving_deposits}
+def _serving_spots(bid: Any) -> bool:
+    import chief_serving_spots
+    return bool(chief_serving_spots.turn_ready(bid))
+
+
+NEEDS = {"giving_services": _giving_services, "giving_deposits": _giving_deposits, "serving_spots": _serving_spots}
 
 # This turn's church and login lane, for the action_guide lookup (set in chief_chat).
 _TURN: contextvars.ContextVar[Optional[Tuple[Dict[str, Any], Any]]] = contextvars.ContextVar(

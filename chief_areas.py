@@ -113,6 +113,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # An event's volunteers (chief_event_volunteers): how full one event is. Who may read it, and whose names,
         # is the office's own picture's (event_volunteers.picture), never an area's.
         "event_volunteers",
+        # Serving spots (chief_serving_spots): who could take one, asking, offering, taking back and filling.
+        # Who may schedule which team is the serving page's own (sunday_planning._scheduler, _place_gate),
+        # never an area's.
+        "serving_spot", "ask_to_serve", "offer_serving_spot", "take_back_serving_ask", "fill_serving_spots",
         # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
         # writing one. Who may read or write whose is church_over's, never an area's.
         "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description",
