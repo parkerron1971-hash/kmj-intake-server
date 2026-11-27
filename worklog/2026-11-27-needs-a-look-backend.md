@@ -14,6 +14,7 @@ left_undone:
   - "Not-a-guest and Scam contacts are not deleted after 30 days (L8); inbound_checks rows are not purged (reads filter by time)"
   - "W4's close_for_contact (#2097) is called once it exists; until it merges, inbound_hold closes follow-ups with its own loop. Once #2097 is in, its leave_path cancels the queued welcome texts itself, so an undo of Not a guest reopens the follow-ups but can't requeue those texts (it doesn't see their ids)"
   - "No live evals run (Chief's block was checked by unit tests only)"
+  - "The intake door (#2099 review should-fix 2, handed over by W1): once #2098 and #2099 are both on main, a fresh branch makes submit_intake call inbound_risk.check(door=intake) and put needs_a_look: true in the agent_queue data dict beside inbound_flags (#2099 already refuses autopilot on that key)"
 decisions:
   - "inbound_risk.assess is pure and deterministic; weights from the proposal §4.2 with two splits found by the seeker corpus: Zelle/Venmo/Cash App/PayPal alone is 1 (people ask how to give), the hard money words are 3; a link to the sender's own domain or a social site is 1, elsewhere 2. Threshold 3. On the real shapes (made-up details): second card 7 (9 once the first was held), first card 6, real guests 0"
   - "Repeats here count only against a card that already needed a look (a guest filling the card twice isn't a campaign); elsewhere: the same long words at one other church, or the same address at two or more, in 7 days. Junk phones and free-mail domains are never fingerprints"
