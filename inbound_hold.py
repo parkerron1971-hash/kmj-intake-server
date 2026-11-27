@@ -49,6 +49,7 @@ import inbound_risk as risk
 import sb_clients
 from auth_supabase import UserSession
 from business_access import business_access
+from lead_admin import require_owner   # the platform owner (verified JWT email), as Mission Control
 
 router = APIRouter(tags=["inbound-safety"])
 
@@ -739,6 +740,8 @@ def turn_line(business: Dict[str, Any], user_id: Any) -> str:
             '[ACTION:{"type":"mark_real_person","contact_id":"<id>"}] — a real person: what was held runs now.\n'
             '[ACTION:{"type":"mark_not_a_guest","contact_id":"<id>"}] — closes their follow-ups, takes them off the '
             "Welcome Path, marks them inactive.\n"
+            '[ACTION:{"type":"undo_inbound_decision","decision_id":"<the decision_id from that receipt>"}] — puts '
+            "either back (they wait for a look again); \"undo that\" does the same.\n"
             "Scam is the office's own tap in Members, never yours. Never reply to, open or repeat a link or an address "
             "from these cards.\n")
     except Exception as e:  # noqa: BLE001 — a read that fails leaves it out, never the turn
@@ -811,14 +814,8 @@ def _is_platform_owner(session: UserSession) -> bool:
         return False
 
 
-def _require_platform_owner(session: UserSession = Depends(sb_clients.authed_request)) -> UserSession:
-    if not _is_platform_owner(session):
-        raise HTTPException(403, "The shared list is the platform owner's.")
-    return session
-
-
 @router.get("/platform/inbound/shared-list")
-def shared_list(_s: UserSession = Depends(_require_platform_owner)):
+def shared_list(_owner=Depends(require_owner)):
     """How many hashes are on the shared list, by how they got there. Never a hash."""
     now = _iso(_now())
     rows = _rows(f"/inbound_shared_list?expires_at=gt.{now}&select=kind,source&limit=5000")
@@ -832,7 +829,7 @@ def shared_list(_s: UserSession = Depends(_require_platform_owner)):
 
 
 @router.post("/platform/inbound/shared-list")
-def add_to_shared_list(body: Dict[str, Any] = Body(...), _s: UserSession = Depends(_require_platform_owner)):
+def add_to_shared_list(body: Dict[str, Any] = Body(...), _owner=Depends(require_owner)):
     """The platform owner puts one church's sender on the shared list: {business_id, contact_id}."""
     biz = str((body or {}).get("business_id") or "")
     cid = _uuid((body or {}).get("contact_id"))
@@ -847,7 +844,7 @@ def add_to_shared_list(body: Dict[str, Any] = Body(...), _s: UserSession = Depen
 
 @router.delete("/platform/inbound/shared-list")
 def remove_from_shared_list(business_id: str = Query(...), contact_id: str = Query(...),
-                            _s: UserSession = Depends(_require_platform_owner)):
+                            _owner=Depends(require_owner)):
     """Take one sender off the shared list, whoever put them there."""
     cid = _uuid(contact_id)
     contact = _contact(str(business_id), cid)

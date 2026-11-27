@@ -511,6 +511,7 @@ def office(db, site, monkeypatch):
     app = FastAPI()
     app.include_router(H.router)
     app.dependency_overrides[auth_supabase.require_user_session] = lambda: SimpleNamespace(user=who, token="t")
+    app.dependency_overrides[auth_supabase.require_user] = lambda: who
     return SimpleNamespace(client=TestClient(app), who=who)
 
 
@@ -540,6 +541,10 @@ def test_a_viewer_cannot_tap_and_only_the_platform_owner_shares(db, site, office
     office.client.post(f"/inbound/{A}/people/{cid}/scam", json={"share": True})
     assert db.rows("inbound_shared_list") == []               # not the platform owner: share is ignored
     assert office.client.get("/platform/inbound/shared-list").status_code == 403
+    import lead_admin
+    office.who.email = lead_admin.PLATFORM_OWNER_EMAIL
+    got = office.client.get("/platform/inbound/shared-list")
+    assert got.status_code == 200 and got.json() == {"total": 0, "by_source": {}}
 
 
 # ─── Chief ────────────────────────────────────────────────────────────
