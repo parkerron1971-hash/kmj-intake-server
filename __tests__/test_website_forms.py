@@ -60,6 +60,7 @@ def env(monkeypatch):
     monkeypatch.setattr(lead_scoring, "score_in_background", lambda *a, **kw: state.scores.append((a, kw)))
     monkeypatch.setattr(public_site, "_record_website_sms_consent", lambda *a: state.consents.append(a))
     monkeypatch.setattr(public_site, "_check_contact_rate", lambda ip: True)
+    monkeypatch.setattr(public_site, "_check_contact_email", lambda biz, body: True)
     monkeypatch.setattr(brand_engine, "get_bundle", lambda b: {"business": {"name": "Church"}, "footer": {"contact_email": "legacy@site.org"}})
     monkeypatch.setattr(brand_engine, "_sb_get", lambda p: [])
     monkeypatch.setattr(public_site.httpx, "AsyncClient", MailClient)
