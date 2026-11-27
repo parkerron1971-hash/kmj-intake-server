@@ -682,6 +682,11 @@ app.include_router(member_portal_checkin_router)
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# The member warning (member_warning.py, 2026-11-27): a church's own "the pastor
+# will never ask you for gift cards" note and its Give-page line. Off by default.
+# BEFORE public_site_router.
+from member_warning import router as member_warning_router
+app.include_router(member_warning_router)
 # A member's Look in the new look (member_lumen_look.py): POST /my/look,
 # Light, Dark or Same as my phone. BEFORE public_site_router.
 from member_lumen_look import router as member_lumen_look_router

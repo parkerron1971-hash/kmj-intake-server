@@ -16269,6 +16269,10 @@ async def chief_chat(
             # church and this login has an office seat; a read that fails adds nothing.
             if _cfu.is_church(biz):
                 _login_block += await asyncio.to_thread(_church_assign.turn_line, biz, str(user_session.user.id))
+                # The member warning (member_warning): offered once, only on a turn about scams, at a church
+                # that hasn't sent one. It points to the page; the office sends it. A read that fails adds nothing.
+                import member_warning as _member_warning
+                _login_block += _member_warning.turn_line(biz, str(user_session.user.id), req.message or "")
                 # The leaders schedule (chief_church_schedule): the same, only where it (or the volunteers'
                 # week) is open for the church; a read that fails adds nothing.
                 _login_block += await asyncio.to_thread(_church_schedule.turn_line, biz, str(user_session.user.id))
