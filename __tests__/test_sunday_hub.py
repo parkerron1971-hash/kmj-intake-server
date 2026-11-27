@@ -211,3 +211,42 @@ def test_blank_sundays_for_whoever_schedules_either_door(church):
     for who in ("booth", "viewer", "carer"):
         assert as_(who).post("/planning/sundays", json={"business_id": BIZ, "count": 1}).status_code == 403, who
     assert as_("stranger").post("/planning/sundays", json={"business_id": BIZ, "count": 1}).status_code == 404
+
+
+# ─── the helpers the hub's parts share ────────────────────────────────
+
+def test_live_ok_reads_not_open_unless_a_mark_is_live(church):
+    from datetime import datetime, timedelta, timezone
+    sid = "s-live"
+    church.db.t["worship_services"].append({"id": sid, "business_id": BIZ, "title": "Sunday", "items": []})
+    assert hub.live_ok(BIZ, sid) == {"on": False, "until": None, "by": None}       # never marked (or no column)
+    later = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+    church.db.t["worship_services"][-1].update(live_ok_until=later, live_ok_by="u-owner")
+    got = hub.live_ok(BIZ, sid)
+    assert got["on"] is True and got["by"] == {"name": "The owner"} and got["until"]
+    church.db.t["worship_services"][-1]["live_ok_by"] = "u-leader"
+    assert hub.live_ok(BIZ, sid)["by"] == {"name": "Lee"}
+    church.db.t["worship_services"][-1]["live_ok_by"] = "u-gone"
+    assert hub.live_ok(BIZ, sid)["by"] == {"name": "The pastor"}
+    earlier = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    church.db.t["worship_services"][-1]["live_ok_until"] = earlier
+    assert hub.live_ok(BIZ, sid)["on"] is False
+
+
+def test_team_areas_default_by_name_and_the_church_can_say(church):
+    areas = hub.team_areas(BIZ)
+    assert areas["song"] == WORSHIP
+    assert all(areas[k] == PRODUCTION for k in ("announcement", "media", "countdown", "loop", "third"))
+    assert areas["text"] is None and areas["scripture"] is None and areas["section"] is None
+    church.db.t["worship_settings"].append({"business_id": BIZ, "team_areas": {"song": PRODUCTION, "text": WELCOME,
+                                                                               "loop": "not-a-team"}})
+    areas = hub.team_areas(BIZ)
+    assert areas["song"] == PRODUCTION and areas["text"] == WELCOME and areas["loop"] is None
+    assert hub.item_team({"kind": "song"}, areas) == PRODUCTION
+    assert hub.item_team({"kind": "song", "team": WORSHIP}, areas) == WORSHIP
+
+
+def test_open_to_ops_is_closed_unless_opened(church):
+    assert hub.open_to_ops(BIZ) == set()
+    church.db.t["serve_teams"][1]["open_to_ops"] = True
+    assert hub.open_to_ops(BIZ) == {PRODUCTION}
