@@ -1337,6 +1337,12 @@ app.include_router(document_ledger_router)
 from agent_site import router as agent_site_router
 app.include_router(agent_site_router)
 
+# Needs a look (inbound_hold.py, 2026-11-27): the office's queue of cards held
+# before anything ran, and Real person / Not a guest / Scam; the platform
+# owner's shared list. INBOUND_SAFETY=off|watch|owner|on|<ids> (default off).
+from inbound_hold import router as inbound_hold_router
+app.include_router(inbound_hold_router)
+
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)

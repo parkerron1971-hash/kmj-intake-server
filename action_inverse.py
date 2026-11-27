@@ -316,6 +316,12 @@ INVERSES: Dict[str, Inverse] = {
         "take that job back off the list",
         lambda a, r: ({"type": "remove_church_job", "job": r["job"]}
                       if r.get("created") and isinstance(r.get("job"), str) and r["job"] else None)),
+    # Needs a look (chief_inbound): either decision is put back from its own
+    # record (inbound_decisions), and the person waits for a look again.
+    **{verb: Inverse("undo_inbound_decision", "put that back so their card waits for a look again",
+                     lambda a, r: ({"type": "undo_inbound_decision", "decision_id": r["decision_id"]}
+                                   if isinstance(r.get("decision_id"), str) and r["decision_id"] else None))
+       for verb in ("mark_real_person", "mark_not_a_guest")},
     "move_duty": Inverse(
         "undo_duty",
         "put that duty back the way it was",
