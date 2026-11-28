@@ -4,7 +4,7 @@ date: 2026-11-28
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin said GO on mission M-8: answers to can be a specific person, with the role as the fallback; YES, switch the leaders map (CHURCH_MAP) on for every church as part of this, check nothing breaks at the other church first"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#2121]
 migrations: []
 left_undone:
   - "groups.answers_to_contact_id comes from part 1's file (#2120, supabase/APPLY-2026-11-28-group-leads.sql); until it is applied the map reads no group links and nothing changes"
