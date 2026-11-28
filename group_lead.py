@@ -99,7 +99,22 @@ def view(biz: Dict[str, Any], me: Dict[str, Any], group_id: str = "") -> Optiona
     if meet is None or study is None or missing is None or to_pastor is None:
         return None
     return {"groups": groups, "g": data["group"], "data": data, "meet": meet, "study": study,
-            "missing": missing, "to_pastor": to_pastor}
+            "missing": missing, "to_pastor": to_pastor, "leads": _leads(biz, str(pick["id"]))}
+
+
+def _leads(biz: Dict[str, Any], group_id: str) -> Optional[Dict[str, Any]]:
+    """The group's lead and co-leaders (church_group_leads), where who leads
+    each group is open and its file is in; None hides "Your co-leaders"."""
+    import church_group_leads as cgl
+    from fastapi import HTTPException
+    try:
+        if not cgl.church_open(biz) or not cgl.ready():
+            return None
+        rows = cgl.leader_rows(str(biz["id"]), group_id)
+    except HTTPException:
+        return None
+    lead = cgl.lead_of(rows)
+    return {"lead": lead, "co": [r["contact_id"] for r in rows if r["contact_id"] != lead]}
 
 
 # ─── the page ────────────────────────────────────────────────────────
@@ -237,6 +252,9 @@ def render_body(biz: Dict[str, Any], me: Dict[str, Any], v: Dict[str, Any], *, i
                      f'<span>Something shared in your group this week went straight to a pastor. You don’t need to do anything.</span>'
                      f'</span></div></section>')
     parts.append('<div class="mb-sh"><h2>Needs you</h2></div>' + ("".join(needs) or '<p class="gs-empty">Nothing needs you right now.</p>'))
+    co = _co_leaders_block(v, me_id, people, gid, ic=ic, esc=esc, face=face, name=name)
+    if co:
+        parts.append(co)
     # Chief: this week's questions, waiting.
     st = v.get("study")
     if st and st.get("study") and not st["study"].get("posted_at"):
@@ -253,3 +271,45 @@ def render_body(biz: Dict[str, Any], me: Dict[str, Any], v: Dict[str, Any], *, i
                      f'<b>{esc(mine.get("title") or "Your post")}</b><p>{esc(mine.get("body") or "")}</p>'
                      f'<small>{esc(" · ".join(bits))}</small></a>')
     return "".join(parts)
+
+
+def _co_leaders_block(v: Dict[str, Any], me_id: str, people: List[Dict[str, Any]], gid: str, *, ic, esc, face, name) -> str:
+    """Your co-leaders: the group's lead adds one from the people already in
+    the group, or takes one off (church_group_leads; Kevin 2026-11-28: a
+    leader adds their own co-leader). Only on the lead's own page."""
+    import church_group_leads as cgl
+    import member_messaging_rules as rules
+    leads = v.get("leads")
+    if not leads or leads.get("lead") != me_id:         # the lead's own page only
+        return ""
+    by_id = {str(p["id"]): p for p in people}
+    mine = True
+    rows = []
+    for cid in leads["co"]:
+        p = by_id.get(cid)
+        if not p:
+            continue
+        off = (f'<form method="post" action="/my/lead/groups/co-leaders" style="margin:0">'
+               f'<input type="hidden" name="group_id" value="{esc(gid)}"><input type="hidden" name="contact_id" value="{esc(cid)}">'
+               f'<input type="hidden" name="do" value="off"><button class="gs-btn sm ghost" type="submit">Take off</button></form>'
+               if mine else "")
+        rows.append(f'<div class="gl-row">{face(p)}<span class="gs-t"><b>{esc(name(p))}</b><span>Co-leader</span></span>{off}</div>')
+    pick = ""
+    if mine and len(leads["co"]) < cgl.CO_LEADERS_MAX:
+        led = {leads["lead"], *leads["co"]}
+        can = [p for p in people if str(p["id"]) not in led and not rules.is_teen(p)]
+        if can:
+            opts = "".join(f'<option value="{esc(p["id"])}">{esc(name(p))}</option>' for p in can[:200])
+            pick = (f'<form method="post" action="/my/lead/groups/co-leaders" class="gl-draft" style="display:flex;gap:8px;flex-wrap:wrap">'
+                    f'<input type="hidden" name="group_id" value="{esc(gid)}"><input type="hidden" name="do" value="add">'
+                    f'<label class="sr-only" for="gl-co">Someone in the group</label>'
+                    f'<select id="gl-co" name="contact_id" class="gs-in" style="flex:1;min-width:180px">{opts}</select>'
+                    f'<button class="gs-btn sm" type="submit">{ic("plus", 15)}Make co-leader</button></form>')
+    if not rows and not pick:
+        return ""
+    note = ('<p class="gl-note">A co-leader leads with you: they see the group’s people and gatherings and can post to its Board.</p>'
+            if mine else "")
+    empty = '' if rows else '<p class="gl-note">No co-leader yet.</p>'
+    return (f'<div class="mb-sh"><h2>Your co-leaders</h2></div>'
+            f'<section class="gl-need" aria-label="Co-leaders">{"".join(rows)}{empty}{note}{pick}</section>')
+

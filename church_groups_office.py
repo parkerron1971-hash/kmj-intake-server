@@ -291,3 +291,9 @@ def remind(body: RemindIn, user: AuthedUser = Depends(require_user)):
         url=f"/my/groups/{gid}", contact_ids=leads,
         ref_id=f"join-remind:{gid}:{_now().date().isoformat()}", tag=f"group-{gid}")
     return {"ok": True, "phones": phones, "why": "" if phones else "no_phone"}
+
+
+# Who leads each group (church_group_leads), on this router so it mounts with it.
+from church_group_leads import router as _leads_router  # noqa: E402
+
+router.include_router(_leads_router)
