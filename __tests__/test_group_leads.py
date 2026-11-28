@@ -299,6 +299,14 @@ def test_every_probe_names_the_church(lc, monkeypatch):
     assert seen and all(f"business_id=eq.{LC}" in p for p in seen)
 
 
+def test_unset_means_on_for_every_church(lc, monkeypatch):
+    monkeypatch.delenv("GROUP_LEADS", raising=False)
+    import church_follow_up
+    assert cgl.mode() == "on"
+    assert cgl.church_open(LC) and cgl.church_open(GRACE)
+    assert church_follow_up.group_leads_open(GRACE)
+
+
 def test_owner_mode_opens_only_the_platform_owners_church(lc, monkeypatch):
     monkeypatch.setenv("GROUP_LEADS", "owner")
     import member_asks

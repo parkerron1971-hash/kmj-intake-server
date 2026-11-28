@@ -542,14 +542,14 @@ def team_leads(business_id: str, all_defs: Optional[List[Dict[str, Any]]] = None
 def group_leads_open(business_id: str) -> bool:
     """Whether every group has a leader (GROUP_LEADS) is on for this church:
     church_group_leads' own switch where it is deployed, else the same rule
-    (off | owner = the platform owner's church | on; default owner). A Serve
+    (off | owner = the platform owner's church | on; default on). A Serve
     sign-up goes to a team's own leader only where it is (M-8 review M3), so
     merging changes no church's routing before its switch-on."""
     try:
         import church_group_leads
         return church_group_leads.church_open(business_id)
     except ImportError:
-        m = (os.environ.get("GROUP_LEADS") or "owner").strip().lower()
+        m = (os.environ.get("GROUP_LEADS") or "on").strip().lower()
         if m == "on":
             return True
         if m == "owner":

@@ -38,6 +38,11 @@ os.environ.setdefault("CHIEF_RAIL", "off")
 # sets CHURCH_MAP itself (church_three.build follows map_on).
 os.environ.setdefault("CHURCH_MAP", "owner")
 
+# Every group has a leader is on for every church too (church_group_leads.mode()
+# defaults to on, Kevin 2026-11-28). Same rule: the older tests keep it to the
+# platform owner's church; a test about it sets GROUP_LEADS itself.
+os.environ.setdefault("GROUP_LEADS", "owner")
+
 # The member app's main alert kinds are on by default for every church from
 # member_push.DEFAULT_ON_FROM (Kevin, 2026-11-24). The many tests written
 # against "a kind is on only where the church turned it on" run that way
