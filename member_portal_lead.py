@@ -1388,6 +1388,51 @@ async def care_notes(request: Request):
     return HTMLResponse(html, headers=_SECURE_HEADERS)
 
 
+@router.post("/my/lead/groups/co-leaders", include_in_schema=False)
+async def co_leaders(request: Request):
+    """A group's lead adds a co-leader from the people in their group, or
+    takes one off (church_group_leads; Kevin 2026-11-28: a leader adds their
+    own co-leader, and can't change who they answer to). The one added gets
+    a note: "You're now a co-leader of Parking Team"."""
+    import church_group_leads as cgl
+    from fastapi import HTTPException
+    from member_portal_church import _signed_in
+    church, me, unavailable = await _signed_in(request)
+    if unavailable:
+        return _go("/my/lead/groups", err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return _go("/my")
+    form = await request.form()
+    gid, cid, do = str(form.get("group_id") or ""), str(form.get("contact_id") or ""), str(form.get("do") or "")
+    if not _FID.match(gid) or not _FID.match(cid) or do not in ("add", "off"):
+        return _go("/my/lead/groups")
+    biz = church["business"]
+    back = f"/my/lead/groups/{gid}"
+    if not cgl.church_open(biz) or not await asyncio.to_thread(cgl.ready, str(biz["id"])):
+        return _go(back)
+    if not await asyncio.to_thread(_allowed, church, me):
+        return _go(back, err="slow")
+    try:
+        rows = await asyncio.to_thread(cgl.leader_rows, str(biz["id"]), gid)
+        if cgl.lead_of(rows) != str(me["id"]):
+            return _go(back)
+        lead = cgl.lead_of(rows)
+        co = [r["contact_id"] for r in rows if r["contact_id"] != lead]
+        if do == "add":
+            if cid in co:
+                return _go(back, done="co_leader_added")
+            if len(co) >= cgl.CO_LEADERS_MAX:
+                return _go(back, err="co_leader_full")
+            co.append(cid)
+        else:
+            co = [c for c in co if c != cid]
+        out = await asyncio.to_thread(cgl.save, str(biz["id"]), gid, {"co_leader_contact_ids": co}, "lead")
+    except HTTPException:
+        return _go(back, err="co_leader_error")
+    await cgl.tell(biz, out["group"], out["new"])
+    return _go(back, done="co_leader_added" if do == "add" else "co_leader_off")
+
+
 @router.get("/my/lead/groups/{group_id}/desk", include_in_schema=False)
 async def desk(group_id: str, request: Request):
     """The leader's desk's left and middle columns (group_desk), as JSON,

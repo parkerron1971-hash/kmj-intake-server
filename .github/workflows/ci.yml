@@ -216,6 +216,7 @@ jobs:
           node __tests__/news_alerts_db.mjs
           node __tests__/group_chat_db.mjs
           node __tests__/leaders_room_db.mjs
+          node __tests__/group_leads_db.mjs
           node __tests__/quiet_hours_db.mjs
           node __tests__/group_email_db.mjs
           node __tests__/group_prayer_db.mjs

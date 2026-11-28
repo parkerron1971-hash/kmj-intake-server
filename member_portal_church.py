@@ -47,6 +47,8 @@ FIELD_MAX = 120
 PHONE_RE = re.compile(r"^[0-9+()\-.\s]{7,25}(\s*(x|ext\.?)\s*\d{1,6})?$", re.IGNORECASE)
 
 DONE = {
+    "co_leader_added": "They’re your co-leader now. They’ll get a note.",
+    "co_leader_off": "They’re in the group as a member again.",
     "coming": "You're on the list. See you there.",
     "serving": "Thank you for serving. You're on the roster.",
     "cant": "Thanks for letting us know.",
@@ -138,6 +140,8 @@ DONE = {
     "signup_already": "You're already signed up for that one.",
 }
 ERRORS = {
+    "co_leader_full": "A group has at most 4 co-leaders.",
+    "co_leader_error": "That didn’t save. Please try again.",
     "full": "That one is full now.",
     "role": "That role was just filled, or isn't on this event any more.",
     # A role that works with kids, for someone church_serving.cleared doesn't
