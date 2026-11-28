@@ -46,6 +46,7 @@ Center and "what's new?" all say the same thing.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -71,6 +72,27 @@ AUDIENCES = ("all", "business", "church")
 ROLES = ("owner", "admin", "manager", "member", "viewer")
 
 NEW_DAYS = 30          # what counts as new: a dot, and a place on the card
+# Old news stays old (the cross-review's M2). An entry imported from the old
+# whatsNew.ts (source 'ledger', whats_new_ledger.py) dated on or before this
+# day never counts as new: the old pop-up already showed it, per device, and
+# that seen-state didn't come over. Without this, the first import would hand
+# every login the 120-odd entries of its last 30 days. Entries PRs add to the
+# file after this day are new as usual. WHATS_NEW_LEDGER_NEW_AFTER moves it.
+LEDGER_NEW_AFTER_DEFAULT = "2026-11-27"
+
+
+def ledger_new_after() -> str:
+    v = (os.environ.get("WHATS_NEW_LEDGER_NEW_AFTER") or "").strip()
+    return v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) else LEDGER_NEW_AFTER_DEFAULT
+
+
+def is_new(entry: Dict[str, Any], v: "Viewer", today: str) -> bool:
+    """Unseen by this login, from the last NEW_DAYS days, and not old news."""
+    day = str(entry.get("date"))[:10]
+    if entry.get("source") == "ledger" and day <= ledger_new_after():
+        return False
+    since = (date.fromisoformat(today) - timedelta(days=NEW_DAYS)).isoformat()
+    return entry["id"] not in v.seen and day >= since
 CARD_SIZE = 3
 PAGE_DEFAULT, PAGE_MAX = 40, 100
 SEEN_MAX = 500
@@ -208,13 +230,12 @@ def _tour_for(entry: Dict[str, Any], church: bool) -> List[Dict[str, str]]:
 def shape(entry: Dict[str, Any], v: Viewer, today: str) -> Dict[str, Any]:
     """One update as the app gets it."""
     w = words_for(entry, v.church)
-    since = (date.fromisoformat(today) - timedelta(days=NEW_DAYS)).isoformat()
     return {
         "id": entry["id"], "date": str(entry.get("date"))[:10], "area": entry.get("area") or "Everywhere",
         "page": entry.get("page") or None, "weight": entry.get("weight") or "normal",
         **w, "tour": _tour_for(entry, v.church),
         "seen": entry["id"] in v.seen,
-        "new": entry["id"] not in v.seen and str(entry.get("date"))[:10] >= since,
+        "new": is_new(entry, v, today),
         "why": _why(entry, v),
     }
 
@@ -246,8 +267,7 @@ def rank(entries: Sequence[Dict[str, Any]], v: Viewer, today: str) -> List[Dict[
 def card(entries: Sequence[Dict[str, Any]], v: Viewer, today: str) -> List[Dict[str, Any]]:
     """The weekly card: the best three this login hasn't seen, from the last
     NEW_DAYS days."""
-    since = (date.fromisoformat(today) - timedelta(days=NEW_DAYS)).isoformat()
-    fresh = [e for e in rank(entries, v, today) if e["id"] not in v.seen and str(e.get("date"))[:10] >= since]
+    fresh = [e for e in rank(entries, v, today) if is_new(e, v, today)]
     return fresh[:CARD_SIZE]
 
 
@@ -369,8 +389,7 @@ def for_me(business: Dict[str, Any] = Depends(business_access("viewer")),
         bd, _, bi = before.partition("|")
         visible = [e for e in visible if (str(e.get("date")), str(e["id"])) < (bd, bi)]
     page = visible[:limit]
-    since = (date.fromisoformat(today) - timedelta(days=NEW_DAYS)).isoformat()
-    unseen = sum(1 for e in for_viewer(rows, v) if e["id"] not in v.seen and str(e.get("date"))[:10] >= since)
+    unseen = sum(1 for e in for_viewer(rows, v) if is_new(e, v, today))
     return {
         "ok": True, "church": v.church,
         "card": [shape(e, v, today) for e in picked],
@@ -595,6 +614,17 @@ def edit(update_id: str, payload: Dict[str, Any] = Body(...),
     return {"ok": True, "row": _with_warnings(res[0] if isinstance(res, list) else res)}
 
 
+@router.post("/platform/updates/sync-ledger")
+def sync_ledger(_: AuthedUser = Depends(require_owner)) -> Dict[str, Any]:
+    """Add the old whatsNew.ts entries the table doesn't have yet
+    (whats_new_ledger.py). Safe to run again: it never overwrites a row."""
+    import whats_new_ledger
+    got = whats_new_ledger.sync()
+    if not got.get("ok"):
+        raise HTTPException(503, got.get("error") or "The import didn't run.")
+    return got
+
+
 # ─── Mission Control: news drafts ───────────────────────────────────────
 
 NEWS_COLUMNS = ("id,update_id,status,audience,headline,body,church_headline,church_body,source_repo,"
@@ -669,6 +699,8 @@ def edit_news(draft_id: str, payload: Dict[str, Any] = Body(...),
     if row.get("status") in ("approved", "dropped"):
         row["decided_at"] = _now().isoformat()
     res = sb_clients.sb_patch_as_service(f"/platform_news_drafts?id=eq.{_q(draft_id)}", row)
+    if res is None:
+        raise HTTPException(503, "Couldn't save that just now.")
     if not res:
         raise HTTPException(404, "No such draft.")
     return {"ok": True, "row": res[0] if isinstance(res, list) else res}

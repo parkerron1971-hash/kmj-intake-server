@@ -388,6 +388,8 @@ app.include_router(worship_team_router)
 # "Next service". SUNDAY_HUB=off|owner|on (default off) until the one launch.
 from sunday_hub import router as sunday_hub_router
 app.include_router(sunday_hub_router)
+from sunday_summary import router as sunday_summary_router
+app.include_router(sunday_summary_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
@@ -2892,6 +2894,16 @@ async def startup():
                           misfire_grace_time=240, coalesce=True, id="plan_reminders")
     except Exception as e:
         print(f"   [warn] plan reminders not scheduled: {e}")
+
+    # What's New: the old whatsNew.ts keeps flowing into platform_updates
+    # (whats_new_ledger.py) until PRs put their updates in their descriptions.
+    # Adds what's missing, never overwrites. WHATS_NEW_LEDGER_SYNC=off stops it.
+    try:
+        import whats_new_ledger as _wn_ledger
+        scheduler.add_job(g("whats_new_ledger", _wn_ledger.sync_tick), "cron", minute="7,22,37,52",
+                          misfire_grace_time=600, coalesce=True, id="whats_new_ledger")
+    except Exception as e:
+        print(f"   [warn] What's New ledger sync not scheduled: {e}")
 
     # The sample church's daily cleanup (sample_church.py, BE-3): deletes the
     # samples whose home now pays or is gone, the ones a deploy left
