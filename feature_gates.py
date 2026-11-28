@@ -28,8 +28,10 @@ PLANS = ("starter", "professional", "practice")   # the public ladder
 # Professional's AI surfaces, which a single minimum-tier rank can't say.
 # PLANS stays the public ladder, so the site and the compare table are
 # untouched; ALL_PLANS is every key a subscription or comp can resolve to.
-# Churches by size (Kevin, 2026-11-03): Small $79 / Growing $199 /
-# Established $399 / Large $699, sold only to churches and ministries. Same
+# Churches by size (Kevin, 2026-11-03; regular prices since 2026-11-14,
+# Small since 2026-11-27): Small $129 / Growing $249 / Established $499 /
+# Large $899, founding $99 / $199 / $399 / $699 (church_founding), sold only
+# to churches and ministries. Same
 # machinery as the barber plans: their own features (every church feature on
 # all four), limits and checkout rule. pricing_config holds the numbers.
 CHURCH_PLANS = pricing_config.CHURCH_PLAN_KEYS
@@ -458,6 +460,18 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
 }
 
 
+def kept_price_ids() -> Dict[str, str]:
+    """Retired prices that subscriptions still hold (docs/FOUNDING_CHURCHES.md):
+    STRIPE_PRICE_IDS_KEPT="price_a=church_growing,price_b=church_large". A
+    price that goes up keeps meaning its plan for the churches still on it."""
+    out: Dict[str, str] = {}
+    for pair in (os.environ.get("STRIPE_PRICE_IDS_KEPT") or "").split(","):
+        pid, _, plan = (x.strip() for x in pair.partition("="))
+        if pid and plan in ALL_PLANS:
+            out.setdefault(pid, plan)
+    return out
+
+
 def price_to_plan() -> Dict[str, str]:
     """Stripe price id → tier name, from env (empty entries skipped)."""
     out: Dict[str, str] = {}
@@ -465,12 +479,8 @@ def price_to_plan() -> Dict[str, str]:
         pid = (os.environ.get(f"STRIPE_PRICE_ID_{env_key}") or "").strip()
         if pid:
             out[pid] = plan
-    # Retired prices that subscriptions still hold (docs/FOUNDING_CHURCHES.md):
-    # STRIPE_PRICE_IDS_KEPT="price_a=church_growing,price_b=church_large". A
-    # price that goes up keeps meaning its plan for the churches still on it.
-    for pair in (os.environ.get("STRIPE_PRICE_IDS_KEPT") or "").split(","):
-        pid, _, plan = (x.strip() for x in pair.partition("="))
-        if pid and plan in ALL_PLANS and pid not in out:
+    for pid, plan in kept_price_ids().items():
+        if pid not in out:
             out[pid] = plan
     # Legacy single-plan default maps to professional.
     default = (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
