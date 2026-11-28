@@ -10,10 +10,14 @@ founding prices, shown as a deal while the offer is open:
 
 | Plan | Founding | Regular | Credits (both) |
 |---|---|---|---|
-| Small | $79 | $99 | 3,000 |
+| Small | $99 (was $79) | $129 (was $99) | 3,000 |
 | Growing | $199 | $249 | 7,500 |
 | Established | $399 | $499 | 15,000 |
 | Large | $699 | $899 | 27,500 |
+
+Kevin, 2026-11-27: Small changes to **founding $99 / regular $129**, the
+credits still 3,000; the other sizes stay. The church that took its founding
+place at $79 keeps paying $79 (see "Raising a founding price" below).
 
 - **One plan, two prices.** The credits are the same at both (Kevin: "so
   people don't think they get higher credits cheaper"), so "Save $50 a month"
@@ -68,6 +72,30 @@ the old price **loses its plan**. So, for each size and cadence you raise:
    both ids for every size.
 3. Never move a founding church's subscription onto the new price, and don't
    archive the old price while anyone is on it.
+
+### Raising a founding price (Small, 2026-11-27)
+
+When the founding price itself goes up, `_FOUNDING` has to hold the new
+founding price (that's what checkout sells to a church taking an open place),
+so the outgoing founding id goes into `STRIPE_PRICE_IDS_KEPT` like an old list
+id. Every outgoing id of that size goes there, list and founding, every term:
+
+    STRIPE_PRICE_IDS_KEPT=price_old_list=church_small,price_old_founding=church_small,...
+
+A church still on a kept price pays what that price charges, and the code
+says so: `church_founding.kept_price` reads its amount from Stripe once (a
+price's amount never changes), so the church's own card on Billing
+(`/billing/plans` `price_plans[id].kept_cents`), its move
+(`church_founding.price_cents_for`) and Mission Control's income
+(`platform_money.monthly_price_cents`) all say the kept price, not today's
+founding price. Order: merge the PR first (the code that reads the kept
+amount), then set the env on both services in one go: the new list and
+`_FOUNDING` ids, the `PRICE_TIER_` / `PRICE_FOUNDING_` dials if Railway sets
+them, and `STRIPE_PRICE_IDS_KEPT`. `STRIPE_PRICE_IDS_KEPT` alone is safe at any
+time: it only adds meanings.
+
+The 2026-11-27 Small prices (lookup keys `*_2026_11b`): regular $129 / $387
+every 3 months / $1,290 a year; founding $99 / $297 / $990.
 
 After that, a founding church (or a church taking a place that's still open)
 that changes size checks out at that size's `_FOUNDING` price, everyone else

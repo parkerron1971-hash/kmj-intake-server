@@ -143,7 +143,7 @@ _TIER_LADDER = {
     "solo":         "claude-sonnet-5",
     "booked":       "claude-sonnet-5",
     "boss":         "claude-sonnet-5",
-    # Churches think on the ladder by size: Small ($79) on Starter's lane,
+    # Churches think on the ladder by size: Small ($129, founding $99) on Starter's lane,
     # Growing on Professional's, Established and Large on the top one.
     # Growing went from $149 to $199 on 2026-11-03 and kept its lane.
     "church_small":       "claude-sonnet-5",

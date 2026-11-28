@@ -60,8 +60,11 @@ Docs: `docs/BILLING_GO_LIVE.md`, `docs/FOUNDING_CHURCHES.md`, `docs/STRIPE_COUPO
 - **Who moves money:** giving, store and invoices are direct charges on the
   business's own Stripe account (platform fee zero, Stripe carries losses).
   Plaid is read only. Payroll moves nothing. The ONE exception, contractor
-  payouts from the platform balance, is locked to the platform owner's
-  businesses (`contractors_router._platform_money`). Never route a church's
+  payouts from the platform balance, is locked to the businesses named in
+  `CONTRACTOR_PAYOUT_BUSINESS_IDS` (unset = nobody) and never a church or
+  nonprofit (`contractors_router._platform_money`, M-6). Never key it on the
+  owner's email: that once let the platform owner's church spend Solutionist's
+  balance. Never route a church's
   gifts through the platform's account; change the platform's payment-method
   config only with the owner's yes.
 - **Every money door asks `church_money_gate.require_money`.** Don't write a
