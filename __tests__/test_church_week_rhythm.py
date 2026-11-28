@@ -202,7 +202,7 @@ def test_the_owner_does_every_job_by_day(client):
     assert _item(r, "monthly_report")["when"] == "The first Monday of the month"
     assert [i["key"] for i in _day(r, "any")["items"]] == [
         "chat_rules", "leaders_list", "new_leaders", "supplies", "church_email", "help_requests", "member_records",
-        "ministry_ops", "new_volunteers",
+        "new_volunteers",
         "churchsavvy_team", "website", "store"]
     one = _item(r, "rooms")
     assert one["label"] == "Rooms" and one["does"] == cd.CATALOG["rooms"]["does"] and one["door"]["id"] == "spaces"
@@ -264,12 +264,12 @@ def test_the_first_time_guests_sunday_is_the_new_here_cards(client, week, db, mo
 def test_sunday_and_servings_week_is_the_volunteers(client, week):
     _as_manager(client, week, lane="sunday_serving")
     r = _rhythm(client)
-    assert sorted(_keys(r)) == sorted(cd.STARTER["sunday_serving"]) and r["count"] == 9
+    assert sorted(_keys(r)) == sorted(cd.STARTER["sunday_serving"]) and r["count"] == 8
     assert [d["key"] for d in r["days"]] == ["Wed", "Thu", "Sun", "month", "any"]
     assert [i["key"] for i in _day(r, "Wed")["items"]] == ["serve_schedule"]
     assert [i["key"] for i in _day(r, "Thu")["items"]] == ["events", "outreach_nights"]
     assert [i["key"] for i in _day(r, "month")["items"]] == ["serve_teams", "background_checks", "serving_thanks"]
-    assert [i["key"] for i in _day(r, "any")["items"]] == ["ministry_ops", "new_volunteers"]
+    assert [i["key"] for i in _day(r, "any")["items"]] == ["new_volunteers"]
     # Rooms are the Office's now, and ChurchSavvy's jobs Media's.
     assert not {"rooms", "sunday_plan", "churchsavvy_team", "announcements"} & set(_keys(r))
 
