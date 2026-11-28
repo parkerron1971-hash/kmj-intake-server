@@ -116,9 +116,12 @@ PARTS_FROM_DUTIES: Dict[str, Tuple[str, ...]] = {
     "production_schedule": ("planner",),
     "serve_schedule": ("scheduler",),
     "stream": ("media", "booth"),
-    # Ministry operations (the one Sunday hub, M-7): schedules, never plans.
-    "ministry_ops": ("scheduler",),
 }
+# Ministry operations (the one Sunday hub, M-7): schedules, never plans. Only
+# where the duty exists, while SUNDAY_HUB isn't off (church_duties.with_ministry_ops).
+import church_duties as _cd  # noqa: E402
+if _cd.MINISTRY_OPS in _cd.CATALOG:
+    PARTS_FROM_DUTIES[_cd.MINISTRY_OPS] = ("scheduler",)
 MAX_TEAM = 60
 INVITE_DAYS = 30
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
