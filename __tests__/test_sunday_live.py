@@ -107,6 +107,8 @@ def test_the_list_says_which_sunday_is_open(live):
     _mark(live.db, S2)
     rows = live.as_("booth").get("/worship/services", params={"business_id": BIZ}).json()["services"]
     assert {r["id"]: r["live_ok"]["on"] for r in rows} == {S1: False, S2: True}
+    assert next(r for r in rows if r["id"] == S2)["live_ok"]["by"] == {"name": "The owner"}
+    assert next(r for r in rows if r["id"] == S1)["live_ok"]["by"] is None
 
 
 # ─── media & tech ─────────────────────────────────────────────────────
@@ -119,7 +121,10 @@ def test_media_and_tech_only_on_the_opened_sunday(live, who):
     assert r.status_code == 403 and r.json()["detail"] == sunday_live.NOT_OPENED
     _mark(live.db, S1)
     assert _save(live, who, S1, items=items).status_code == 200
-    assert _save(live, who, S1, title="Sunday, live").status_code == 200       # that Sunday's whole plan
+    assert _save(live, who, S1, notes="Run long on the response").status_code == 200   # its items and notes
+    for change in ({"title": "Sunday, live"}, {"starts_at": "2026-10-25T17:00:00Z"}, {"is_template": True}):
+        r = _save(live, who, S1, items=items, **change)                    # never its time, name or template
+        assert r.status_code == 403 and r.json()["detail"] == sunday_live.LIVE_ONLY, change
     assert _save(live, who, S2, items=_items(live.db, S2)[:1]).status_code == 403  # never another Sunday
     assert live.as_(who).post("/worship/services", json={"business_id": BIZ, "title": "New"}).status_code == 403
     assert live.as_(who).delete(f"/worship/services/{S1}", params={"business_id": BIZ}).status_code == 403

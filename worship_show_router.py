@@ -169,7 +169,8 @@ def _with_live_ok(biz: str, user: AuthedUser, services: List[Dict[str, Any]]) ->
         return services
     import sunday_live
     marks = sunday_live.live_marks(biz)
-    return [{**s, "live_ok": {"on": s["id"] in marks, "until": marks.get(s["id"])}} for s in services]
+    return [{**s, "live_ok": {"on": s["id"] in marks, "until": (marks.get(s["id"]) or {}).get("until"),
+                              "by": (marks.get(s["id"]) or {}).get("by")}} for s in services]
 
 
 def _read(path: str, what: str) -> List[Dict[str, Any]]:

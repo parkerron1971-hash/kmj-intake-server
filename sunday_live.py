@@ -36,6 +36,10 @@ router = APIRouter(prefix="/worship", tags=["worship"])
 NOT_OPENED = "The pastor hasn't opened this Sunday for live changes."
 THE_ORDER = "The order is the planner's. You can change your team's items."
 ONLY_PASTOR = "Only the pastor or an admin opens a Sunday for live changes."
+LIVE_ONLY = "On a live Sunday, media and tech change its items and notes. Its time and name stay the planner's."
+# What media & tech may change on a Sunday the pastor opened: the plan's
+# items and notes, never when it is, its name, or whether it's a template.
+LIVE_FIELDS = ("items", "notes")
 SERVICE_FIELDS = ("title", "starts_at", "notes", "is_template")
 
 
@@ -66,6 +70,8 @@ def check_plan_write(biz: str, user: Any, roles: Set[str], op: str, sid: Optiona
     if whole_plan(st):
         return
     if op == "save" and sid and roles & {"booth", "media"} and hub.live_ok(biz, sid)["on"]:
+        if fields and any(k not in LIVE_FIELDS for k in fields):
+            raise HTTPException(403, LIVE_ONLY)
         return
     if op == "save" and "team_leader" in st["roles"] and current is not None and fields is not None:
         _leader_scope(biz, st, current, fields)
@@ -145,13 +151,23 @@ def put_live_ok(service_id: str, body: Dict[str, Any], user: AuthedUser = Depend
     return {"live_ok": hub.live_ok(biz, sid)}
 
 
-def live_marks(biz: str) -> Dict[str, str]:
-    """service id -> until, for the church's Sundays open for live changes
-    now (one read, for the list). None on a failed read: no marks."""
+def live_marks(biz: str) -> Dict[str, Dict[str, Any]]:
+    """service id -> {until, by}, for the church's Sundays open for live
+    changes now (one read for the list, one name a person who opened one).
+    A failed read: no marks."""
     now = datetime.now(timezone.utc).isoformat()
     rows = sb_clients.sb_get_as_service(f"/worship_services?business_id=eq.{_q(biz)}&live_ok_until=gt.{_q(now)}"
-                                        "&select=id,live_ok_until&limit=50")
-    return {str(r["id"]): r["live_ok_until"] for r in rows} if isinstance(rows, list) else {}
+                                        "&select=id,live_ok_until,live_ok_by&limit=50")
+    if not isinstance(rows, list):
+        return {}
+    names: Dict[str, str] = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        by = str(r.get("live_ok_by") or "")
+        if by and by not in names:
+            names[by] = hub.login_name(biz, by)
+        out[str(r["id"])] = {"until": r["live_ok_until"], "by": {"name": names[by]} if by else None}
+    return out
 
 
 # ─── team areas ──────────────────────────────────────────────────────
