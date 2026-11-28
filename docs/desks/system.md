@@ -54,8 +54,9 @@ Backend (kmj-intake-server, trunk `main`, auto-deploys to Railway):
 - Docs: `docs/MIGRATIONS.md`, `docs/RLS_MODEL.md`, `docs/RUNBOOK.md`,
   `docs/OPERATIONS.md`, `docs/BETA_VERIFY_QUERIES.md`, `docs/RESTORE.md`,
   `docs/backup_and_restore.md`, `.env.example` (every var and what breaks).
-- Workflows (`.github/workflows/`): `ci.yml` (`test-part` 1-4, `test-db`,
-  aggregator `test`), `pr-review.yml`, `oncall.yml`, `uptime.yml` (every 10
+- Workflows (`.github/workflows/`): `ci.yml` (`test-part` 1-4, each four
+  pytest processes; `test-db` parts 1-2; aggregator `test`, the one required
+  check), `pr-review.yml`, `oncall.yml`, `uptime.yml` (every 10
   min), `deploy-check.yml`, `security-steward.yml`, `backup.yml`,
   `restore-drill.yml`, `chief-eval-weekly.yml`, `claude.yml`.
   `scripts/shard_tests.py` splits the suite.
@@ -125,10 +126,20 @@ Solution Space (`C:\Users\kmccl\claude-bench`, Electron, NO git remote):
 - Supabase SQL editor: long typed SQL wedges the tab; DROP scripts show a confirm; each editor load runs a heavy query (Disk IO).
 - `docs/RUNBOOK.md` "Not yet built" predates `backup.yml` / `restore-drill.yml`; check the workflows.
 - CI agents misdiagnose without evidence: gather it in shell first (on-call lesson).
+- A PGlite that wrote anything keeps node alive ~10 s after a check ends unless
+  it calls `db.close()`; `scripts/db_check_child.mjs` closes it for CI. That
+  wait was 13 of CI's 19 database minutes until 2026-11-28.
+- pytest-xdist makes every worker collect every file it was given; with
+  ~300 files per part, collecting was most of a part. CI runs separate
+  pytest processes on slices instead (`shard_tests.py N 16`).
+- Merge to live on Railway is ~1 min 50 s (build ~85 s: pip 31 s,
+  Playwright 16-50 s, image push ~20 s; container ~10 s; app ready ~9 s).
+  The slow part of built-to-live is CI and re-running it, not Railway.
 
 ## 5. How to check work
 
-- `pytest -q -n auto --dist loadfile __tests__/<files>`; for this desk usually
+- `pytest -q -n 2 __tests__/<files>` (never `-n auto` on the PC; see "Local
+  test load" in `CLAUDE.md`); for this desk usually
   `test_business_access_ratchet.py test_businesses_server_columns.py
   test_settings_server_keys.py test_close_allow_all_policies.py
   test_export_import.py test_process_role.py test_scheduler_gate.py
@@ -136,8 +147,11 @@ Solution Space (`C:\Users\kmccl\claude-bench`, Electron, NO git remote):
   test_agents_live.py test_db_health.py test_ops_desk.py
   test_worklog_and_unfinished.py test_shared_rate_limit.py
   test_spend_guard_day_start.py test_inbound_webhook_signatures.py`.
-- `python scripts/shard_tests.py --check` after adding test files; new
-  `*_db.mjs` checks join the `test-db` job in `ci.yml`.
+- `python scripts/shard_tests.py --check 4 16` after adding test files. A new
+  `__tests__/*_db.mjs` or `scripts/*-db-check.mjs` runs in CI on its own
+  (`scripts/db_checks.mjs` finds it; no `ci.yml` line); `node scripts/db_checks.mjs
+  --check 2` proves it is in exactly one part. Pin it from pytest with
+  `__tests__/db_checks_ci.runs_in_ci`.
 - Migrations: rehearse in a `*_db.mjs` (PGlite) check where one exists; after
   the owner applies, read back with the queries in `docs/MIGRATIONS.md` and
   `docs/RLS_MODEL.md` (`to_regclass`, `pg_policies`, `relrowsecurity`).
