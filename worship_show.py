@@ -371,6 +371,14 @@ def clean_item(raw: Any) -> Dict[str, Any]:
     # item saved before comes back key for key.
     if kind in AS_THIRD_KINDS and raw.get("as_third") is True:
         out["as_third"] = True
+    # Whose item it is (the one Sunday hub, M-7): a Sunday team's group id, set by
+    # the planner; a team's leader changes only their team's items. Only written when
+    # given, so an item saved before comes back key for key.
+    team = raw.get("team")
+    if team not in (None, ""):
+        if not isinstance(team, str) or not _UUID.match(team.lower()):
+            raise ValueError("Pick the team this item is for")
+        out["team"] = team.lower()
     return out
 
 
