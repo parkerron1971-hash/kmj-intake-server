@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -337,7 +338,7 @@ _STREAM_WORDS = {"baptism": "Baptism cards", "visit": "Plan your visit cards", "
 
 def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]],
            load: Optional[Dict[str, int]] = None, all_defs: Optional[List[Dict[str, Any]]] = None,
-           *, what: str = "", m: Any = None) -> Dict[str, Any]:
+           *, what: str = "", m: Any = None, teams: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
     """{leader: holder row or None, role: its key, reason}. The church's own
     roles decide: the ones whose job takes what the card asks for (its
     stream), the holder with the fewest open follow-ups first. A team's
@@ -347,7 +348,10 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
     reason is said to the leader and shown to the office, so it names what
     decided it. `what` names the cards in that reason when they aren't the
     stream's own ("First check-ins go to …" rides the connect stream). `m`
-    is the church's map where it is open (church_map.opened)."""
+    is the church's map where it is open (church_map.opened). `teams`
+    (team_leads, M-8): each serving team's leaders by its Serve card choice;
+    a sign-up for one goes to that team's own leader first, the record the
+    Sunday hub calls its Team leader."""
     import church_roles as cr
     load = load or {}
     defs = _effective_defs(all_defs, roles)
@@ -393,6 +397,11 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
         team = _team_answer(answers)
         if not team:
             return fallback("They didn’t pick a team.")
+        own = (teams or {}).get(_norm(team)) or []
+        if own:
+            lead = own[0]
+            return {"leader": lead, "role": lead["role"],
+                    "reason": f"They picked {team}, and {first_name(lead.get('name') or '')} leads {lead.get('team') or 'that team'}."}
         leads = [t for t in takers("serve", team) if t[0].get("covers") == "team"]
         if leads:
             rows = [r for _d, rs in leads for r in rs]
@@ -489,6 +498,64 @@ def _load(biz: str) -> Optional[Dict[str, int]]:
             k = str(r["leader_contact_id"])
             load[k] = load.get(k, 0) + 1
     return load
+
+
+def team_leads(business_id: str, all_defs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Each serving team's leaders (M-8), by the Serve card choice it answers
+    for (groups.serve_option), else by its own name: {choice: [the lead, then
+    co-leaders]}, each row shaped as a holder row (contact_id, name, email,
+    phone, role = the church's team role, scope = the choice, team = the
+    team's name). {} when a read fails: a card then goes as it did before."""
+    biz = str(business_id)
+    q = _q(biz)
+    has_choice = sb_clients.sb_get_as_service(f"/groups?business_id=eq.{q}&select=serve_option&limit=1")
+    has_co = sb_clients.sb_get_as_service(f"/group_members?business_id=eq.{q}&select=co_leader&limit=1")
+    cols = isinstance(has_choice, list) and isinstance(has_co, list)
+    groups = _rows(f"/groups?business_id=eq.{q}&kind=eq.team&active=eq.true"
+                   f"&select=id,name{',serve_option' if cols else ''}&order=name.asc&limit=500")
+    if not groups:
+        return {}
+    leads = _rows(f"/group_members?business_id=eq.{q}&role=eq.leader&group_id=in.({','.join(_q(g['id']) for g in groups)})"
+                  f"&select=group_id,contact_id{',co_leader' if cols else ''}"
+                  f"&order=group_id.asc,{'co_leader.asc,' if cols else ''}created_at.asc,contact_id.asc&limit=2000")
+    if not leads:
+        return {}
+    people = _contacts(biz, (r["contact_id"] for r in leads))
+    if people is None:
+        return {}
+    role = next((d["key"] for d in (all_defs or []) if d.get("covers") == "team" and d.get("job") == "team"
+                 and d.get("status", "active") == "active"), "team_leader")
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for g in groups:
+        mine = sorted((r for r in leads if str(r["group_id"]) == str(g["id"]) and str(r["contact_id"]) in people),
+                      key=lambda r: bool(cols and r.get("co_leader")))
+        if not mine:
+            continue
+        choice = _plain((g.get("serve_option") if cols else None) or g.get("name") or "")
+        if not choice or _norm(choice) in out:
+            continue
+        out[_norm(choice)] = [{"contact_id": str(r["contact_id"]), "role": role, "status": "active", "scope": choice,
+                               "team": _plain(g.get("name")) or choice, **people[str(r["contact_id"])]} for r in mine]
+    return out
+
+
+def group_leads_open(business_id: str) -> bool:
+    """Whether every group has a leader (GROUP_LEADS) is on for this church:
+    church_group_leads' own switch where it is deployed, else the same rule
+    (off | owner = the platform owner's church | on; default owner). A Serve
+    sign-up goes to a team's own leader only where it is (M-8 review M3), so
+    merging changes no church's routing before its switch-on."""
+    try:
+        import church_group_leads
+        return church_group_leads.church_open(business_id)
+    except ImportError:
+        m = (os.environ.get("GROUP_LEADS") or "owner").strip().lower()
+        if m == "on":
+            return True
+        if m == "owner":
+            import member_asks
+            return member_asks.platform_church(business_id)
+        return False
 
 
 def teams(business_id: str) -> Optional[List[str]]:
@@ -600,7 +667,8 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
             return None
         route_by = answers if route_answers is None else route_answers
         decided = pick
-        pick = decided if decided else choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp)
+        pick = decided if decided else choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp,
+                                              teams=team_leads(biz, all_defs) if kind == "serve" and group_leads_open(biz) else None)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         assigned_by, due = "chief", now + timedelta(days=int(steps[0]["days"]))

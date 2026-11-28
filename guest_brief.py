@@ -342,7 +342,8 @@ class Church:
         if r is None:
             return None
         roles, load, defs, mp = r
-        return cfu.choose(kind, answers, roles, load, defs, m=mp)
+        return cfu.choose(kind, answers, roles, load, defs, m=mp,
+                          teams=cfu.team_leads(self.b, defs) if kind == "serve" and cfu.group_leads_open(self.b) else None)
 
     def title_of(self, role: str) -> str:
         r = self.routing
