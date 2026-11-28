@@ -14,6 +14,7 @@ decisions:
   - "Answers to: the person on the holder row or the group, else the fallback in words: the role's answers-to (whoever holds it), the group's department's leader, or the leaders map"
   - "A Course Studio teacher who leads the class group pointing at that class shows once, on the group's row with teaches; teachers and Worship-part people are matched to the church's people by email, and an address two people share names nobody"
   - "The Worship part names the church's worship team the way the Sunday hub does (a Sunday team, ChurchSavvy's, named worship/praise/band/choir/music/singers), once, unless they already lead it"
+  - "Review fixes (account 2, 11-28): S2, the worship team is the Sunday hub's own rule copied exactly (WORSHIP_WORDS with vocal, a ChurchSavvy-owned Sunday team by name); with none, Worship-part people aren't listed (the hub makes them its Planner); once M-7 is on main, call sunday_hub.worship_team. M1, leader rows in one fixed order, so the lead is the earliest row"
   - "Same seat as Leaders & roles (manager and up); every read pages past 1,000; a failed read is a 503, never a short list"
 related: [2026-11-28-m8-group-leads.md, 2026-11-28-m8-map-person.md]
 ---

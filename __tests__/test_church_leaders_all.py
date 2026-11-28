@@ -165,3 +165,31 @@ def test_a_failed_read_is_a_503(lc, monkeypatch):
                         lambda path, *a, **k: None if path.startswith("/space_leaders") else real(path, *a, **k))
     r = _client(monkeypatch, "owner").get(f"/church/leaders/everyone?business_id={LC}")
     assert r.status_code == 503 and r.json()["detail"] == cla.UNREAD
+
+
+# ── M-8 review S2: the worship team is the Sunday hub's own ──────────
+
+def test_no_churchsavvy_worship_team_lists_no_worship_part(lc):
+    lc.t["serve_teams"] = [{"group_id": TEAM, "business_id": LC, "owner": None}]        # the hub wants churchsavvy
+    out = cla.everyone(church(lc, LC))
+    assert [r for r in out["rows"] if r["kind"] == "worship"] == []                     # the hub's Planner, not a team leader
+
+
+def test_a_vocal_team_is_the_worship_team(lc):
+    next(g for g in lc.t["groups"] if g["id"] == TEAM)["name"] = "Vocal Team"
+    out = cla.everyone(church(lc, LC))
+    assert [r["leads"] for r in out["rows"] if r["kind"] == "worship"] == ["Vocal Team"]
+
+
+# ── M-8 review M1: the lead is the earliest row, on every read ───────
+
+def test_the_lead_is_the_earliest_plain_leader(lc):
+    w = lc.who[LC]
+    sisters = next(g for g in lc.t["groups"] if g["business_id"] == LC and g["name"] == "Sisters in the City")
+    for m in lc.t["group_members"]:
+        if m["group_id"] == sisters["id"]:
+            m.update(co_leader=False, created_at="2026-10-01T00:00:00+00:00" if m["contact_id"] == w["gloria"]
+                     else "2026-11-20T00:00:00+00:00")
+    out = cla.everyone(church(lc, LC))
+    rows = {r["who"]["name"]: r for r in out["rows"] if r["kind"] == "group" and r["leads"] == "Sisters in the City"}
+    assert rows["Gloria Hunt"]["co_leader"] is False and rows["Eve Hall"]["co_leader"] is True

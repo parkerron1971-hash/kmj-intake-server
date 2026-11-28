@@ -18,7 +18,9 @@ second copy of them:
              department's leader, else the leaders map
     worship  someone with the Worship part on the Sunday team (worship_team),
              as the Sunday hub counts them a team leader of the worship team
-             (Kevin's answer 6); once, beside the team's own leader row
+             (Kevin's answer 6); once, beside the team's own leader row. The
+             worship team is the hub's own (WORSHIP_WORDS); a church with
+             none lists nobody here (the hub makes them its Planner)
     teacher  a Course Studio class's teacher (academy_teachers, by email).
              A teacher who also leads the class group pointing at that class
              (groups.course_id) shows once, on the group's row, with both
@@ -34,7 +36,6 @@ they answer.
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, Iterable, List, Optional, Set
 from urllib.parse import quote
 
@@ -47,7 +48,21 @@ router = APIRouter(tags=["church"])
 
 UNREAD = "Your leaders couldn't be loaded. Try again in a moment."
 KIND_WORD = {"small_group": "Small group", "team": "Serve team", "class": "Class", "ministry": "Ministry"}
-WORSHIP_RX = re.compile(r"worship|praise|band|choir|music|singers", re.I)
+# The Sunday hub's own rule for the church's worship team (M-7, sunday_hub.
+# WORSHIP_WORDS and _named), copied exactly so both say the same team (M-8
+# review S2). Once M-7 is on main, call sunday_hub.worship_team(
+# sunday_hub.sunday_teams(biz)) here instead.
+WORSHIP_WORDS = ("worship", "praise", "band", "choir", "music", "singers", "vocal")
+
+
+def _worship_team(groups: List[Dict[str, Any]], sunday: Set[str], owners: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The first ChurchSavvy-owned Sunday team, by name, whose name says one
+    of WORSHIP_WORDS; None when the church has none."""
+    for g in sorted((g for g in groups if str(g["id"]) in sunday), key=lambda g: str(g.get("name") or "")):
+        low = str(g.get("name") or "").lower()
+        if owners.get(str(g["id"])) == "churchsavvy" and any(w in low for w in WORSHIP_WORDS):
+            return g
+    return None
 PAGE = 1000
 
 
@@ -142,7 +157,8 @@ def everyone(business: Dict[str, Any]) -> Dict[str, Any]:
     groups = _need(f"/groups?business_id=eq.{_q(biz)}&active=eq.true&select=id,name,kind"
                    f"{',answers_to_contact_id,course_id,serve_option' if cols else ''}&order=name.asc")
     leads = _need(f"/group_members?business_id=eq.{_q(biz)}&role=eq.leader&select=group_id,contact_id"
-                  f"{',co_leader' if cols else ''}&order=group_id.asc,contact_id.asc")
+                  f"{',co_leader' if cols else ''}"
+                  f"&order=group_id.asc,{'co_leader.asc,' if cols else ''}created_at.asc,contact_id.asc")
     sunday = {str(r["group_id"]) for r in _need(f"/serve_teams?business_id=eq.{_q(biz)}&select=group_id&order=group_id.asc")}
     owners = {str(r["group_id"]): r.get("owner") for r in _maybe(
         f"/serve_teams?business_id=eq.{_q(biz)}&select=group_id,owner&limit=200",
@@ -208,16 +224,17 @@ def everyone(business: Dict[str, Any]) -> Dict[str, Any]:
                          "answers_to": who(to), "fallback": fallback})
 
     # The Worship part: a team leader of the church's worship team (the
-    # Sunday hub's rule), once, unless they already lead that group.
-    wteam = next((g for g in groups if g.get("kind") == "team" and str(g["id"]) in sunday
-                  and owners.get(str(g["id"])) in (None, "churchsavvy") and WORSHIP_RX.search(g.get("name") or "")), None)
-    for w in worship:
+    # Sunday hub's rule), once, unless they already lead that group. With no
+    # worship team the hub makes them its Planner, not a team leader, so they
+    # aren't listed here.
+    wteam = _worship_team(groups, sunday, owners)
+    for w in (worship if wteam else []):
         cid = teach_people.get(str(w.get("email") or "").strip().lower())
         if wteam and cid and any(str(r["contact_id"]) == cid for r in by_group.get(str(wteam["id"]), [])):
             continue
         rows.append({"kind": "worship", "who": who(cid) if cid else {"contact_id": "", "name": _plain(w.get("name")) or "Someone"},
-                     "status": "active", "leads": gname[str(wteam["id"])] if wteam else "Worship on Sunday",
-                     "thing": {"id": str(wteam["id"]) if wteam else "", "name": gname[str(wteam["id"])] if wteam else "Worship", "kind": "team"},
+                     "status": "active", "leads": gname[str(wteam["id"])],
+                     "thing": {"id": str(wteam["id"]), "name": gname[str(wteam["id"])], "kind": "team"},
                      "part": "Worship", "answers_to": None, "fallback": "the planner and the pastor"})
 
     # Course Studio teachers, once each; one who leads the class group already has it.
