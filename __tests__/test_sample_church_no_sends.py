@@ -190,6 +190,9 @@ TICKS = {
     # Payroll reminders (Payroll, the free version): its businesses go through
     # drop_samples before any is read, so a sample church is never claimed or told.
     "payroll_reminders": "payroll_reminders:tick",
+    # Not business-scoped: reads the app's whatsNew.ts from GitHub and adds
+    # platform-wide update rows (platform_updates); no business is read or told.
+    "whats_new_ledger": "whats_new_ledger:sync_tick",
 }
 # Not run here, with the reason. Neither touches a business.
 NOT_RUN = {
