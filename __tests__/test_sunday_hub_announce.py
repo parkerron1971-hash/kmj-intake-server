@@ -19,6 +19,7 @@ import os
 import sys
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -104,3 +105,37 @@ def test_off_neither_is_asked(boards, monkeypatch):
     assert r.status_code == 200 and "screens" not in r.json() and len(boards.db.t["worship_announcements"]) == 1
     listed = boards.as_("planner").get("/worship/announcements", params={"business_id": BIZ}).json()["announcements"]
     assert all("news_post_id" not in a for a in listed)
+
+
+# ─── the second side never fails the first ────────────────────────────
+
+def _raises(exc):
+    def go(*a, **k):
+        raise exc
+    return go
+
+
+@pytest.mark.parametrize("exc,want", [
+    (HTTPException(503, "News couldn't be read."), {"unavailable": war.NEWS_UNAVAILABLE}),
+    (RuntimeError("boom"), {"unavailable": war.NEWS_UNAVAILABLE}),
+    (HTTPException(422, "Write something first."), {"refused": "Write something first."}),
+])
+def test_news_failing_never_fails_the_announcement(boards, monkeypatch, exc, want):
+    monkeypatch.setattr(church_news, "create", _raises(exc))
+    r = _announce(boards, "planner", also_news=True)
+    assert r.status_code == 200 and r.json()["news"] == want
+    assert len(boards.db.t["worship_announcements"]) == 1 and r.json()["announcement"]["title"] == "Community Day"
+
+
+@pytest.mark.parametrize("exc,want", [
+    (HTTPException(503, "The announcements couldn't be read."), {"unavailable": church_news.SCREENS_UNAVAILABLE}),
+    (RuntimeError("boom"), {"unavailable": church_news.SCREENS_UNAVAILABLE}),
+    (HTTPException(400, "A church keeps up to 200 announcements."), {"refused": "A church keeps up to 200 announcements."}),
+    (HTTPException(403, "Your part doesn't change the plan."), {"refused": church_news.SCREENS_REFUSED}),
+])
+def test_the_screens_failing_never_fails_the_post(boards, monkeypatch, exc, want):
+    monkeypatch.setattr(war, "create_announcement", _raises(exc))
+    r = _post(boards, "planner", also_screens=True)
+    assert r.status_code == 200 and r.json()["screens"] == want
+    # Posted once: the composer shows it went out, so nobody posts it (and rings members) twice.
+    assert len(boards.db.t["church_posts"]) == 1 and r.json()["ok"] is True

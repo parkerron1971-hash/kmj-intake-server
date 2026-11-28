@@ -1091,11 +1091,29 @@ class PostIn(BaseModel):
 
 
 SCREENS_REFUSED = "Only the people who plan Sunday put announcements on the screens."
+SCREENS_UNAVAILABLE = "It didn't go on the screens just now. Try again from Announcements."
 
 
 def also_screens(biz_id: str, user: AuthedUser, post_id: str, title: str, text: str) -> Dict[str, Any]:
-    """Put a News post on Sunday's announcements board too: {announcement_id}
-    or {refused}. The board's own create route decides who may."""
+    """Put a News post on Sunday's announcements board too: {announcement_id},
+    {refused} or {unavailable}. Never fails the post's own answer: it is
+    posted (and its alert on its way) already, so a retry must not post it
+    twice; whatever the board says comes back as words, never an error."""
+    try:
+        return _also_screens(biz_id, user, post_id, title, text)
+    except HTTPException as e:
+        if e.status_code in (402, 403, 404):
+            return {"refused": SCREENS_REFUSED}
+        if e.status_code < 500:
+            return {"refused": e.detail if isinstance(e.detail, str) and e.detail else SCREENS_REFUSED}
+        logger.warning("church news: the board didn't take post %s: %s", post_id, e.detail)
+    except Exception:  # noqa: BLE001 — the post is out; the screens are the second side
+        logger.warning("church news: the board didn't take post %s", post_id, exc_info=True)
+    return {"unavailable": SCREENS_UNAVAILABLE}
+
+
+def _also_screens(biz_id: str, user: AuthedUser, post_id: str, title: str, text: str) -> Dict[str, Any]:
+    """The board's own create route decides who may."""
     import worship_announce_router as war
     try:
         made = war.create_announcement({"business_id": biz_id, "title": (title or text.split("\n")[0] or "News")[:80],

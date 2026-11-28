@@ -105,6 +105,7 @@ def _day(raw: Optional[str], biz: str) -> date:
 # permission gets its own side saved and a plain refusal for the other.
 # Editing or taking out one side never changes the other by itself.
 NEWS_REFUSED = "You can't post to News here."
+NEWS_UNAVAILABLE = "It didn't post to News just now. Try again from News."
 
 
 def _hub_on(user: AuthedUser) -> bool:
@@ -120,9 +121,24 @@ def _news_of(biz: str, ann_id: str) -> Optional[str]:
 
 
 def also_news(biz: str, user: AuthedUser, row: Dict[str, Any]) -> Dict[str, Any]:
-    """Post this announcement to News too, by News's own create route and
-    its rules: {post_id} or {refused}. Posted once: an announcement already
-    on News (or one that came from News) answers with that post."""
+    """Post this announcement to News too: {post_id}, {refused} or
+    {unavailable}. Never fails the announcement's own answer: it is saved
+    already, so whatever News says comes back as words, never an error."""
+    try:
+        return _also_news(biz, user, row)
+    except HTTPException as e:
+        if e.status_code < 500:
+            return {"refused": e.detail if isinstance(e.detail, str) and e.detail else NEWS_REFUSED}
+        logger.warning("announcements: News didn't take %s: %s", row.get("id"), e.detail)
+    except Exception:  # noqa: BLE001 — the announcement is saved; News is the second side
+        logger.warning("announcements: News didn't take %s", row.get("id"), exc_info=True)
+    return {"unavailable": NEWS_UNAVAILABLE}
+
+
+def _also_news(biz: str, user: AuthedUser, row: Dict[str, Any]) -> Dict[str, Any]:
+    """By News's own create route and its rules. Posted once: an
+    announcement already on News (or one that came from News) answers with
+    that post."""
     import church_news
     if row.get("source") == "news" and row.get("source_ref"):
         return {"post_id": str(row["source_ref"])}
@@ -146,11 +162,12 @@ def also_news(biz: str, user: AuthedUser, row: Dict[str, Any]) -> Dict[str, Any]
     return {"post_id": pid}
 
 
-def _with_news_links(biz: str, user: AuthedUser, out: List[Dict[str, Any]]) -> None:
-    """With the hub on, each announcement says the News post it's paired with."""
+def _with_news_links(biz: str, user: AuthedUser, out: List[Dict[str, Any]], board: List[Dict[str, Any]]) -> None:
+    """With the hub on, each announcement says the News post it's paired with
+    (`board`: the rows the list was made from, read once)."""
     if not _hub_on(user) or not out:
         return
-    rows = {str(r["id"]): r for r in _rows(biz)}
+    rows = {str(r["id"]): r for r in board}
     ids = [str(a["id"]) for a in out]
     posts = sb_clients.sb_get_as_service(f"/church_posts?business_id=eq.{_q(biz)}&screen_announcement_id=in.({','.join(_q(i) for i in ids)})"
                                          "&select=id,screen_announcement_id&limit=500") or []
@@ -166,10 +183,11 @@ def list_announcements(business_id: str, day: Optional[str] = None, user: Authed
     biz = _uuid(business_id)
     roles = _seat(biz, user)
     today = _day(day, biz)
-    out = [wa.as_out(r, today) for r in _rows(biz)]
+    board = _rows(biz)
+    out = [wa.as_out(r, today) for r in board]
     cutoff = wa.past_cutoff(today)
     out = [a for a in out if a["tab"] != "declined" and not (a["tab"] == "past" and (a["show_until"] or "") < cutoff)]
-    _with_news_links(biz, user, out)
+    _with_news_links(biz, user, out, board)
     counts = {t: sum(1 for a in out if a["tab"] == t) for t in wa.TABS}
     # can_write: the plan's part (planner, worship leader, admin) makes and changes them.
     return {"announcements": out, "counts": counts, "day": today.isoformat(), "can_write": can(roles, "plan")}
