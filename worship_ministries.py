@@ -14,7 +14,8 @@
 #   GET    /worship/ministries/leader-matches  each ministry's typed leader matched to
 #                                              one of the church's people (M-8): by
 #                                              email, then by name; the rest listed
-#   POST   /worship/ministries/leader-matches/apply   link every match
+#   POST   /worship/ministries/leader-matches/apply   {pairs}: link the matches the office
+#                                              saw and kept, each only while it still matches
 # A ministry's leader can be one of the church's people (leader_contact_id,
 # APPLY-2026-11-28-group-leads.sql; Kevin 2026-11-28: from the members list):
 # picking one fills the typed name and email the links and emails read.
@@ -293,7 +294,8 @@ def save_ministry(ministry_id: str, body: Dict[str, Any], user: AuthedUser = Dep
 def leader_matches(biz: str) -> Dict[str, Any]:
     """Each ministry with a typed leader and no person yet, matched to one
     of the church's people: by email (one person has it), else by the whole
-    name (one person has it). The rest are listed with why, never guessed."""
+    name (one person has it, and their email, if any, isn't a different one
+    from the typed email). The rest are listed with why, never guessed."""
     if not _has_person(biz):
         return {"ready": False, "matched": [], "unmatched": [], "linked": []}
     people: List[Dict[str, Any]] = []
@@ -331,7 +333,12 @@ def leader_matches(biz: str) -> Dict[str, Any]:
         elif e and len(by_email.get(e, [])) > 1:
             why = "More than one of your people has that email."
         if not hit and n and len(by_name.get(n, [])) == 1:
-            hit, by = by_name[n][0], "name"
+            other = str(by_name[n][0].get("email") or "").strip().lower()
+            if e and other and other != e:
+                # The typed email is someone else's address: never guess (review M4).
+                why = why or "Same name, different email."
+            else:
+                hit, by = by_name[n][0], "name"
         elif not hit and n and len(by_name.get(n, [])) > 1 and not why:
             why = "More than one of your people has that name."
         if hit:
@@ -351,13 +358,23 @@ def ministry_leader_matches(business_id: str, user: AuthedUser = Depends(require
 
 @router.post("/ministries/leader-matches/apply")
 def ministry_leader_matches_apply(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    biz = _uuid((body or {}).get("business_id"))
+    """Link the pairs the office saw and kept ({pairs: [{ministry_id,
+    contact_id}]}), each only while it is still a match now (review M4):
+    nothing the office didn't see is ever linked."""
+    body = body or {}
+    biz = _uuid(body.get("business_id"))
     _staff(biz, user, "plan")
+    pairs = body.get("pairs")
+    if not isinstance(pairs, list) or not pairs or len(pairs) > MAX_MINISTRIES:
+        raise HTTPException(400, "Pick the matches to link.")
+    seen = {(str((p or {}).get("ministry_id") or ""), str((p or {}).get("contact_id") or "")) for p in pairs}
     got = leader_matches(biz)
     if not got["ready"]:
         raise HTTPException(503, "Picking a ministry leader from your members is being switched on. Try again shortly.")
     done = []
     for m in got["matched"]:
+        if (str(m["id"]), str(m["contact"]["id"])) not in seen:
+            continue
         rows = sb_clients.sb_patch_as_service(
             f"/worship_ministries?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz)}&leader_contact_id=is.null&select=id",
             {"leader_contact_id": m["contact"]["id"], "updated_at": _now()})

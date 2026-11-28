@@ -11,6 +11,7 @@ left_undone:
 decisions:
   - "Picking a person fills the typed name and email the ministry's link and emails already read; letting go keeps the typed words"
   - "Matching is by email (exactly one person has it), else by the whole name (exactly one person has it); two people with the same email or name are never guessed; the rest are listed with why"
+  - "Review fix M4 (account 2, 11-28): a name match whose person has a different email than the typed one is listed as Same name, different email, never linked; Link takes the pairs the office saw and kept ({ministry_id, contact_id}) and links each only while it still matches"
   - "Applying links only a ministry with no person yet, and only the matches; same seat as the ministries (the plan's part)"
 related: [2026-11-28-m8-group-leads.md]
 ---

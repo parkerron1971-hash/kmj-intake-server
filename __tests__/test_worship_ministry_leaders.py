@@ -74,11 +74,18 @@ def test_the_match_list(people):
     assert as_("member").get(f"/worship/ministries/leader-matches?business_id={BIZ}").status_code == 403
 
 
-def test_applying_links_every_match_and_nothing_else(people):
+def _ministry(db, name):
+    return next(m["id"] for m in db.t["worship_ministries"] if m["name"] == name)
+
+
+def test_applying_links_the_pairs_the_office_saw_and_nothing_else(people):
     db, as_, _, _ = people
     add(as_)
     add(as_, name="Ushers", leader_name="Nobody Here", leader_email="")
-    r = as_("owner").post("/worship/ministries/leader-matches/apply", json={"business_id": BIZ})
+    # A pair for a ministry that doesn't match is ignored; the match is linked.
+    pairs = [{"ministry_id": _ministry(db, "Women's ministry"), "contact_id": GLORIA},
+             {"ministry_id": _ministry(db, "Ushers"), "contact_id": DANA}]
+    r = as_("owner").post("/worship/ministries/leader-matches/apply", json={"business_id": BIZ, "pairs": pairs})
     assert r.status_code == 200, r.text
     assert [m["name"] for m in r.json()["linked_now"]] == ["Women's ministry"]
     rows = {m["name"]: m.get("leader_contact_id") for m in db.t["worship_ministries"]}
@@ -104,3 +111,23 @@ def test_before_the_file(people, monkeypatch):
     assert as_("owner").get(f"/worship/ministries/leader-matches?business_id={BIZ}").json()["ready"] is False
     r = as_("owner").post("/worship/ministries", json={"business_id": BIZ, "name": "Youth", "leader_contact_id": DANA})
     assert r.status_code == 503
+
+
+# ── M-8 review M4: never the wrong person ────────────────────────────
+
+def test_the_same_name_with_a_different_email_is_not_a_match(people):
+    db, as_, _, _ = people
+    add(as_, name="Men's ministry", leader_name="Dana Owens", leader_email="dana@old.org")
+    got = as_("owner").get(f"/worship/ministries/leader-matches?business_id={BIZ}").json()
+    assert got["matched"] == []
+    assert {m["name"]: m["why"] for m in got["unmatched"]} == {"Men's ministry": "Same name, different email."}
+
+
+def test_a_pair_the_office_never_saw_is_never_linked(people):
+    db, as_, _, _ = people
+    add(as_)
+    r = as_("owner").post("/worship/ministries/leader-matches/apply",
+                          json={"business_id": BIZ, "pairs": [{"ministry_id": _ministry(db, "Women's ministry"), "contact_id": DANA}]})
+    assert r.status_code == 200 and r.json()["linked_now"] == []
+    assert next(m for m in db.t["worship_ministries"] if m["name"] == "Women's ministry").get("leader_contact_id") is None
+    assert as_("owner").post("/worship/ministries/leader-matches/apply", json={"business_id": BIZ}).status_code == 400
