@@ -143,7 +143,8 @@ _RECEIPT_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|pdf)")
 # #1418). An app without the tab ignores bkTab and opens Bookkeeping.
 NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "housing"}
 CARE = ("Figures follow the IRS housing allowance rules (§107); confirm them with your tax "
-        "preparer. The allowance is still counted for self-employment tax.")
+        "preparer. The allowance is still counted for self-employment tax, unless the minister "
+        "has an approved Form 4361.")
 
 
 class Unavailable(Exception):
