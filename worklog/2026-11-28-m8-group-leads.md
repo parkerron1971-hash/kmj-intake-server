@@ -4,7 +4,7 @@ date: 2026-11-28
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin said GO on mission M-8, Every group has a leader: naming a group's leader puts them straight in, with a note; the pastor, admins and office logins who manage groups name leaders; a leader adds their own co-leader and can't change who they answer to; answers to is ONE person per group"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#2120]
 migrations: [supabase/APPLY-2026-11-28-group-leads.sql (NOT APPLIED)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-28-group-leads.sql (until then the routes read ready: false and saving is a 503)"
