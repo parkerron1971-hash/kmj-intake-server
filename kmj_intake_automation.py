@@ -367,6 +367,9 @@ from worship_router import router as worship_router
 app.include_router(worship_router)
 from worship_show_router import router as worship_show_router
 app.include_router(worship_show_router)
+# A Sunday the pastor opens for live changes, and whose each plan item is (M-7).
+from sunday_live import router as sunday_live_router
+app.include_router(sunday_live_router)
 from worship_media_router import router as worship_media_router
 app.include_router(worship_media_router)
 # The announcements board: made once, shown where they belong, gone when over.
@@ -381,6 +384,12 @@ app.include_router(worship_announce_import_router)
 # Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
 from worship_team import router as worship_team_router
 app.include_router(worship_team_router)
+# The one Sunday hub (M-7): who holds which Sunday role, "This Sunday" or
+# "Next service". SUNDAY_HUB=off|owner|on (default off) until the one launch.
+from sunday_hub import router as sunday_hub_router
+app.include_router(sunday_hub_router)
+from sunday_summary import router as sunday_summary_router
+app.include_router(sunday_summary_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)

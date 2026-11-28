@@ -2036,7 +2036,8 @@ def put_on_screen(business_id: str, background: BackgroundTasks, user: AuthedUse
         raise HTTPException(404, "Sunday’s screens aren’t open for your church yet.")
     # The parts the board goes by (a 503 when they can't be read; a 402 when a
     # church on ChurchSavvy alone hasn't the screens in its plan).
-    plans = worship_team.can(worship_team.roles_of(biz, user), "plan")
+    # A guest's welcome onto the board reads no Sunday plan: past the hub's wall.
+    plans = worship_team.can(worship_team.roles_of(biz, user, wall=False), "plan")
     media = church_duties.lane_label("media_comms")
     today = war.church_today(biz)
     try:
