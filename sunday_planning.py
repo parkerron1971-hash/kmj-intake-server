@@ -345,13 +345,40 @@ def _borrowed(who: Dict[str, Any], owner: str, gid: str) -> bool:
 
 
 def _tell_team(biz: str, user: AuthedUser, who: Dict[str, Any], gid: str, what: str, ctx: Dict[str, Any]) -> None:
-    """Tell a team's own leaders what ministry operations did on it (sunday_leading's note)."""
-    import sunday_leading as sl
-    church = _read(f"/businesses?id=eq.{_q(biz)}&select=id,name,type,settings,owner_id&limit=1")
-    if not church:
-        return
-    me = {"id": who.get("cid") or "", "name": _asker(biz, user)}
-    sl._tell_its_leaders(church[0], me, {"group_id": gid, "name": _team_name(biz, gid)}, what, ctx)
+    """Tell a team's own leaders what ministry operations did on it
+    (sunday_leading's note). Never able to fail the write it follows: a read
+    that fails here only means no note."""
+    try:
+        import sunday_leading as sl
+        church = _read(f"/businesses?id=eq.{_q(biz)}&select=id,name,type,settings,owner_id&limit=1")
+        if not church:
+            return
+        me = {"id": who.get("cid") or "", "name": _asker(biz, user)}
+        sl._tell_its_leaders(church[0], me, {"group_id": gid, "name": _team_name(biz, gid)}, what, ctx)
+    except Exception:  # noqa: BLE001 — a note is never worth failing the write it is about
+        logger.warning("planning: a note to %s's leaders wasn't handed on (%s)", gid, what, exc_info=True)
+
+
+def _borrowed_unsent(biz: str, who: Dict[str, Any], ids: List[str]) -> Dict[str, int]:
+    """Of these asks, the ones not yet sent on ChurchSavvy teams ministry
+    operations schedules only because they're opened to it: team -> how many."""
+    if not (who["office"] and who.get("ops")) or CHURCHSAVVY in who["owners"] or not ids:
+        return {}
+    opened = _opened(biz) - set(who.get("leads") or ())
+    if not opened:
+        return {}
+    out: Dict[str, int] = {}
+    for i in range(0, len(ids), 100):
+        rows = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 100])})&status=eq.asked"
+                     "&notified_at=is.null&select=id,position_id")
+        pids = sorted({str(r["position_id"]) for r in rows})
+        places = {str(p["id"]): str(p["group_id"]) for p in (_read(
+            f"/serve_positions?business_id=eq.{_q(biz)}&id=in.({_ids(pids)})&select=id,group_id") if pids else [])}
+        for r in rows:
+            gid = places.get(str(r["position_id"]))
+            if gid in opened:
+                out[gid] = out.get(gid, 0) + 1
+    return out
 
 
 def _hub_marks(biz: str, user: AuthedUser, teams: List[Dict[str, Any]]) -> None:
@@ -1816,8 +1843,17 @@ def take_back(assignment_id: str, business_id: str, user: AuthedUser = Depends(r
     biz = _uuid(business_id)
     who = _scheduler(biz, user)
     aid = _uuid(assignment_id, "schedule")
-    _asked_gate(biz, who, _assignment(biz, aid), schedule=True)
-    return do_take_back(biz, aid)
+    row = _assignment(biz, aid)
+    _asked_gate(biz, who, row, schedule=True)
+    out = do_take_back(biz, aid)
+    if who["office"] and who.get("ops"):
+        places = _read(f"/serve_positions?id=eq.{_q(row['position_id'])}&business_id=eq.{_q(biz)}"
+                       "&select=group_id,name&limit=1")
+        gid = str(places[0]["group_id"]) if places else ""
+        if gid and _borrowed(who, _team_row(biz, gid)["owner"], gid):
+            _tell_team(biz, user, who, gid, "take_back", {"service_id": str(row["service_id"]),
+                                                          "place": places[0].get("name"), "id": aid})
+    return out
 
 
 def do_take_back(biz: str, aid: str) -> Dict[str, Any]:
@@ -1921,7 +1957,11 @@ def unfill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         if not who["owners"] and not extra:
             raise HTTPException(403, _refusal(biz, VOLUNTEERS))
         ids = _asks_on(biz, ids, who["owners"], extra)
-    return do_unfill(biz, ids)
+    told = _borrowed_unsent(biz, who, ids)
+    out = do_unfill(biz, ids)
+    for gid, n in told.items():
+        _tell_team(biz, user, who, gid, "unfill", {"n": n, "id": ids[0]})
+    return out
 
 
 def _asks_on(biz: str, ids: List[str], owners: Iterable[str], extra: Iterable[str] = ()) -> List[str]:

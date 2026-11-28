@@ -153,3 +153,36 @@ def test_off_every_rule_is_as_before(board, monkeypatch):
     assert _ask(board, "ministry", PRODUCTION).status_code == 403
     teams = board.as_("owner").get("/planning/teams", params={"business_id": BIZ}).json()["teams"]
     assert all("open_to_ops" not in t and "mine" not in t for t in teams)
+
+
+def test_the_teams_leaders_hear_of_every_change_ministry_ops_makes(board):
+    _open(board, "owner", PRODUCTION)
+    aid = _ask(board, "ministry", PRODUCTION).json()["assignment"]["id"]
+    assert board.as_("ministry").delete(f"/planning/assignments/{aid}", params={"business_id": BIZ}).status_code == 200
+    filled = board.as_("ministry").post("/planning/fill", json={"business_id": BIZ, "group_id": PRODUCTION, "weeks": 2})
+    assert filled.json()["asked"] >= 1
+    back = board.as_("ministry").post("/planning/unfill", json={"business_id": BIZ, "ids": filled.json()["ids"]})
+    assert back.json()["taken_back"] == filled.json()["asked"]
+    assert board.told == [(PRODUCTION, "ask"), (PRODUCTION, "take_back"), (PRODUCTION, "fill"), (PRODUCTION, "unfill")]
+    # Their own Volunteers' team: nobody else to tell.
+    board.told.clear()
+    w = _ask(board, "ministry", WELCOME).json()["assignment"]["id"]
+    board.as_("ministry").delete(f"/planning/assignments/{w}", params={"business_id": BIZ})
+    assert board.told == []
+
+
+def test_a_note_that_fails_never_fails_the_write(board, monkeypatch):
+    _open(board, "owner", PRODUCTION)
+
+    def broken(*a, **k):
+        raise RuntimeError("push is down")
+    monkeypatch.setattr(sl, "_tell_its_leaders", broken)
+    assert _ask(board, "ministry", PRODUCTION).status_code == 200
+
+
+def test_the_notes_words():
+    took = sl.words("take_back", "Laura", "Production", {"place": "Sound", "day": "Sunday, Nov 1"})
+    assert took == {"title": "The ask for Sound was taken back",
+                    "body": "Laura took back the ask for Sound, Sunday, Nov 1, on Production."}
+    assert sl.words("unfill", "Laura", "Production", {"n": 3})["title"] == "Production: 3 asks taken back"
+    assert sl.words("unfill", "Laura", "Production", {"n": 1})["body"] == "Laura took back 1 ask that hadn't gone out yet."
