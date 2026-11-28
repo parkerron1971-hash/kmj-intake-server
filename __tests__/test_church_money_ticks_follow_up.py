@@ -681,8 +681,8 @@ def test_the_sql_picks_exactly_the_codes_gifts_and_waits_for_kevin():
     ledger = pathlib.Path(ROOT, "docs", "MIGRATIONS.md").read_text(encoding="utf-8")
     row = next(line for line in ledger.splitlines() if line.startswith("| `supabase/APPLY-2026-11-20-gift-thankyou-events.sql`"))
     assert row.rstrip().endswith("| **NOT APPLIED** (Kevin applies it by hand, before the switch goes on). |")
-    ci = pathlib.Path(ROOT, ".github", "workflows", "ci.yml").read_text(encoding="utf-8")
-    assert "node __tests__/gift_thankyou_events_db.mjs" in ci
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/gift_thankyou_events_db.mjs")
 
 
 # ─── The sheet's guarded rows say who may hold giving ─────────────────

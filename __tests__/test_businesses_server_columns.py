@@ -219,8 +219,8 @@ def test_the_rls_doc_says_how_to_add_a_column():
 
 
 def test_ci_runs_the_database_check():
-    assert "node __tests__/businesses_server_columns_db.mjs" in (
-        ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/businesses_server_columns_db.mjs")
 
 
 # ─── 4. the badge is the server's ─────────────────────────────────────

@@ -30,6 +30,23 @@ changed; the other desk's playbook goes in the brief as reading. A problem
 report with no clear owner goes to **tickets** first, and tickets names the
 desk.
 
+## Local test load (every desk)
+
+Kevin's PC runs several sessions at once and is short on memory; CI is
+where the whole suite runs (about 6 minutes, 28,000 tests), not the PC.
+Locally, run only the tests for what you touched: the test files for the
+modules you changed, plus the ones your desk playbook lists. Never the
+whole suite, and never `-n auto`: use no `-n` for a few files, at most
+`-n 2` for more. For a database check, run only the one you changed
+(`node scripts/db_checks.mjs --run __tests__/<name>_db.mjs`). Don't install
+or launch Playwright/Chromium locally unless the change is UI, or the test
+you changed opens a browser. No background watchers (`gh run watch`, poll
+loops, `--watch`): push, then check once with `gh pr checks <n>` when you
+need the answer. If you want the full suite's verdict, push and let CI
+give it.
+The same rule is in `CLAUDE.md`; each playbook's "How to check work"
+lists the files to run.
+
 ## How KAI uses these
 
 When KAI (the owner's orchestrator in Solution Space) opens a Claude Code

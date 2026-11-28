@@ -201,7 +201,8 @@ def test_the_ledger_names_it_not_applied():
 
 
 def test_ci_runs_the_database_check():
-    assert "node __tests__/settings_server_keys_db.mjs" in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/settings_server_keys_db.mjs")
 
 
 # ─── 3. the server's merge ────────────────────────────────────────────

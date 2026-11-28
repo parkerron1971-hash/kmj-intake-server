@@ -372,7 +372,6 @@ def test_the_ledger_has_the_row_and_ci_runs_the_database_check():
     assert "| **NOT APPLIED" in row or "| **APPLIED" in row
     assert "DEPLOY THE SITE FIRST" in row and "REOPENS" in row and "ets_close_policies_db.mjs" in row
     assert "events list" in row and "virtual_link" in row and "ets-event-files" in row
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = ci[ci.index("  test-db:"):ci.index("\n  test:\n")]
-    assert "node __tests__/ets_close_policies_db.mjs" in job
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/ets_close_policies_db.mjs")
     assert (HERE / "ets_close_policies_db.mjs").exists()

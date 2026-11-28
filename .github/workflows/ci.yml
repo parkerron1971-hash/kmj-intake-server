@@ -156,20 +156,62 @@ jobs:
       - name: Run this part of the test suite
         # Controller fixtures use real Chromium with local route responses only.
         # No supplier, model or paid service is contacted.
-        # One worker per core; each test file stays on one worker, so its
-        # module fixtures build once and its tests keep their order.
+        # 2026-11-28: four separate pytest processes, one per core, each on
+        # its own slice of 16 (part k runs slices 4k-3..4k). Not -n auto:
+        # xdist makes EVERY worker collect EVERY file of the part, and that
+        # collecting was ~3.3 of this job's ~5.5 minutes. Each file still
+        # runs whole in one process, its tests in order.
         run: |
-          python scripts/shard_tests.py --check
+          python scripts/shard_tests.py --check 4 16
           python -m playwright install --with-deps chromium
-          pytest -q -n auto --dist loadfile $(python scripts/shard_tests.py ${{ matrix.part }} 4) --maxfail=10 --durations=10
+          # Each slice prints its files' measured seconds (scripts/pytest_file_times.py,
+          # copied alone onto PYTHONPATH so nothing else in scripts/ shadows a module);
+          # scripts/test_seconds.json holds them for shard_tests.py's split.
+          mkdir -p "$RUNNER_TEMP/plugins" && cp scripts/pytest_file_times.py "$RUNNER_TEMP/plugins/"
+          export PYTHONPATH="$RUNNER_TEMP/plugins"
+          k=${{ matrix.part }}
+          pids=()
+          for j in 1 2 3 4; do
+            slice=$(( (k - 1) * 4 + j ))
+            pytest -q -p no:cacheprovider -p pytest_file_times --basetemp="$RUNNER_TEMP/pytest-tmp-$j" \
+              $(python scripts/shard_tests.py $slice 16) --maxfail=10 --durations=5 \
+              > "$RUNNER_TEMP/pytest-$j.log" 2>&1 &
+            pids+=($!)
+          done
+          status=0
+          for j in 1 2 3 4; do
+            slice=$(( (k - 1) * 4 + j ))
+            if wait "${pids[$((j - 1))]}"; then
+              echo "::group::slice $slice of 16 passed: $(tail -n 1 "$RUNNER_TEMP/pytest-$j.log")"
+              cat "$RUNNER_TEMP/pytest-$j.log"
+              echo "::endgroup::"
+            else
+              status=1
+              echo "::error title=pytest slice $slice of 16 failed::$(tail -n 1 "$RUNNER_TEMP/pytest-$j.log")"
+              cat "$RUNNER_TEMP/pytest-$j.log"
+            fi
+          done
+          exit $status
 
       - name: Chief computer sabotage check
         if: matrix.part == 1
         run: python scripts/chief_computer_sabotage.py
 
+  # The database checks (PGlite): every scripts/*-db-check.mjs and every
+  # __tests__/*_db.mjs, FOUND by scripts/db_checks.mjs (2026-11-28; no list to
+  # keep here: a new check runs the moment its file exists). Two parts, each
+  # running its checks one per core; scripts/db_checks.json weighs them by
+  # measured seconds and names the few that must not run. Each check runs in
+  # its own process through scripts/db_check_child.mjs, which closes the
+  # PGlite a check left open, so node no longer waits ~10 s after each one.
+  # Was ~19 minutes one after another; see worklog/2026-11-28-faster-ci.md.
   test-db:
-    name: test database checks
+    name: test database checks part ${{ matrix.part }} of 2
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
     steps:
       - uses: actions/checkout@v4
 
@@ -177,117 +219,23 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Image storage policies and migrations
-        env:
-          PGLITE_MODULE: ${{ runner.temp }}/image-db-check/node_modules/@electric-sql/pglite/dist/index.js
-        run: |
-          npm install --ignore-scripts --no-package-lock --prefix "$RUNNER_TEMP/image-db-check" @electric-sql/pglite@0.5.8
-          node scripts/image-studio-db-check.mjs
-          node scripts/chief-authority-db-check.mjs
-          node scripts/dev-relay-db-check.mjs
-          node scripts/lifecycle-email-db-check.mjs
-          node scripts/ledger-utf8-db-check.mjs
-          node scripts/chief-computer-db-check.mjs
-          node scripts/chief-computer-runtime-db-check.mjs
-          node scripts/chief-computer-completion-db-check.mjs
-          node scripts/chief-link-pilot-db-check.mjs
-          node scripts/link-wallet-db-check.mjs
-          node scripts/lane-wallet-db-check.mjs
-          node scripts/lane-saved-links-db-check.mjs
-          node scripts/chief-builds-db-check.mjs
-          node scripts/chief-event-delivery-db-check.mjs
-          node scripts/chief-build-lanes-db-check.mjs
-          node __tests__/marketing_campaigns_db.mjs
-          node __tests__/chief_local_work_db.mjs
-          node __tests__/business_marketing_db.mjs
-          node __tests__/booking_columns_db.mjs
-          node __tests__/square_connections_db.mjs
-          node __tests__/square_booking_sync_db.mjs
-          node __tests__/church_leaders_db.mjs
-          node __tests__/church_role_library_db.mjs
-          node __tests__/sunday_checkin_db.mjs
-          node __tests__/bible_marks_db.mjs
-          node __tests__/devotionals_db.mjs
-          node __tests__/member_safety_officers_db.mjs
-          node __tests__/group_space_db.mjs
-          node __tests__/church_news_db.mjs
-          node __tests__/celebrations_db.mjs
-          node __tests__/academy_private_db.mjs
-          node __tests__/news_alerts_db.mjs
-          node __tests__/group_chat_db.mjs
-          node __tests__/leaders_room_db.mjs
-          node __tests__/group_leads_db.mjs
-          node __tests__/quiet_hours_db.mjs
-          node __tests__/group_email_db.mjs
-          node __tests__/group_prayer_db.mjs
-          node __tests__/group_gatherings_db.mjs
-          node __tests__/church_moments_db.mjs
-          node __tests__/group_bring_db.mjs
-          node __tests__/group_study_db.mjs
-          node __tests__/chat_evening_db.mjs
-          node __tests__/worship_songs_db.mjs
-          node __tests__/worship_show_db.mjs
-          node __tests__/worship_media_db.mjs
-          node __tests__/worship_team_db.mjs
-          node __tests__/church_areas_db.mjs
-          node __tests__/church_keys_db.mjs
-          node __tests__/church_keys_gift_rows_db.mjs
-          node __tests__/church_money_holders_db.mjs
-          node __tests__/church_pledges_db.mjs
-          node __tests__/church_spaces_db.mjs
-          node __tests__/church_help_db.mjs
-          node __tests__/church_checks_db.mjs
-          node __tests__/church_money_levels_db.mjs
-          node __tests__/church_board_member_yes_db.mjs
-          node __tests__/church_register_db.mjs
-          node __tests__/church_board_db.mjs
-          node __tests__/church_event_signups_db.mjs
-          node __tests__/login_areas_db.mjs
-          node __tests__/task_hand_off_db.mjs
-          node __tests__/leader_tasks_db.mjs
-          node __tests__/group_word_db.mjs
-          node __tests__/group_every_db.mjs
-          node __tests__/group_post_later_db.mjs
-          node __tests__/group_monthly_db.mjs
-          node __tests__/group_guests_db.mjs
-          node __tests__/chat_polls_db.mjs
-          node __tests__/chat_photos_db.mjs
-          node __tests__/sunday_planning_db.mjs
-          node __tests__/serving_member_db.mjs
-          node __tests__/serving_alerts_db.mjs
-          node __tests__/serve_notes_db.mjs
-          node __tests__/serve_here_db.mjs
-          node __tests__/serve_email_stop_db.mjs
-          node __tests__/leader_tasks_db.mjs
-          node __tests__/task_handed_by_db.mjs
-          node __tests__/church_duties_db.mjs
-          node __tests__/church_assignments_db.mjs
-          node __tests__/church_schedule_db.mjs
-          node __tests__/church_schedule_limits_db.mjs
-          node __tests__/church_meetings_db.mjs
-          node __tests__/church_job_descriptions_db.mjs
-          node __tests__/church_jobs_db.mjs
-          node __tests__/chief_conversations_by_login_db.mjs
-          node __tests__/chief_thread_summaries_db.mjs
-          node __tests__/needs_a_look_db.mjs
-          node __tests__/whats_new_db.mjs
-          node __tests__/sunday_hub_db.mjs
-          node __tests__/serve_team_owner_db.mjs
-          node __tests__/church_map_db.mjs
-          node __tests__/church_map_step2_db.mjs
-          node __tests__/church_map_asks_db.mjs
-          node __tests__/church_map_asks_cap_db.mjs
-          node __tests__/settings_server_keys_db.mjs
-          node __tests__/businesses_server_columns_db.mjs
-          node __tests__/church_storage_db.mjs
-          node __tests__/recording_small_copy_db.mjs
-          node __tests__/event_volunteer_dates_db.mjs
-          node __tests__/event_volunteers_db.mjs
-          node __tests__/db_health_db.mjs
-          node __tests__/ets_close_policies_db.mjs
-          node __tests__/member_plan_prefs_db.mjs
+      - name: PGlite from the cache
+        id: pglite
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pglite
+          key: pglite-0.5.8-${{ runner.os }}
 
-          node __tests__/gift_thankyou_events_db.mjs
+      - name: Install PGlite
+        if: steps.pglite.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts --no-package-lock --prefix "$RUNNER_TEMP/pglite" @electric-sql/pglite@0.5.8
+
+      - name: Run this part of the database checks
+        env:
+          PGLITE_MODULE: ${{ runner.temp }}/pglite/node_modules/@electric-sql/pglite/dist/index.js
+        run: |
+          node scripts/db_checks.mjs --check ${{ strategy.job-total }}
+          node scripts/db_checks.mjs --run ${{ matrix.part }} ${{ strategy.job-total }}
 
   # The check the main branch's rule requires. It waits for every part and
   # the database checks, and passes only when all of them passed: a part

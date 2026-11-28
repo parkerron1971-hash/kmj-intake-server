@@ -462,8 +462,8 @@ def test_the_ledger_and_ci_know_about_it():
     for name in ("APPLY-2026-10-27-church-keys-gift-rows.sql", "APPLY-2026-09-29-ministry-readiness.sql"):
         row = next(ln for ln in ledger.splitlines() if ln.startswith(f"| `supabase/{name}`"))
         assert "APPLY-2026-11-18-church-money-holders.sql" in row, name
-    ci = _read(ROOT / ".github" / "workflows" / "ci.yml")
-    assert "node __tests__/church_money_holders_db.mjs" in ci
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/church_money_holders_db.mjs")
     assert (ROOT / "__tests__" / "church_money_holders_db.mjs").exists()
 
 

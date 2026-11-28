@@ -6,14 +6,27 @@ the test files that belong to one part, so each file runs in exactly one.
 
     python scripts/shard_tests.py 2 4      # the files for part 2 of 4
     python scripts/shard_tests.py --check  # every file in exactly one part
+    python scripts/shard_tests.py --check 4 16  # the same for 4 parts and for 16
+
+In CI each of the 4 jobs runs 4 slices of 16 as separate pytest processes
+side by side (part k runs slices 4k-3..4k), not one pytest with -n auto:
+xdist makes every worker collect every file of the part, and collecting
+(importing the app over and over) was ~3 of each job's ~5 minutes. A slice's
+process collects only its own files.
 
 The files are the ones pytest collects from __tests__ and agents with its
-default names (test_*.py, *_test.py). Each file weighs its number of tests,
-and the heaviest go first to the lightest part, so the parts finish close
-together. The split depends only on the files, so every job agrees on it.
+default names (test_*.py, *_test.py). Each file weighs the seconds CI
+measured for it (scripts/test_seconds.json: collecting plus running, from
+the line scripts/pytest_file_times.py prints in each slice's log). A file not
+in there yet (a new one) weighs its number of tests times the median seconds
+per test. Every file also weighs "per_file" more: pytest's own cost for each
+file, which the timer can't see (a slice of 283 small files took 168 s). The heaviest go first to the lightest part, so the parts finish
+close together. The split depends only on the files and that json, so every
+job agrees on it.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -23,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIRS = ("__tests__", "agents")
 SKIP = {"__pycache__", "node_modules", ".pytest_cache"}
 TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test", re.M)
+SECONDS = ROOT / "scripts" / "test_seconds.json"
 
 
 def collect_files() -> List[Path]:
@@ -39,15 +53,32 @@ def collect_files() -> List[Path]:
     return sorted(out, key=lambda p: p.relative_to(ROOT).as_posix())
 
 
-def weight(p: Path) -> int:
+def count(p: Path) -> int:
     try:
         return max(1, len(TEST_DEF.findall(p.read_text(encoding="utf-8", errors="replace"))))
     except OSError:
         return 1
 
 
+def measured() -> Dict[str, float]:
+    if not SECONDS.exists():
+        return {}
+    return {k: float(v) for k, v in json.loads(SECONDS.read_text(encoding="utf-8")).get("seconds", {}).items()}
+
+
+def weights() -> Dict[str, float]:
+    files = collect_files()
+    secs = measured()
+    names = [p.relative_to(ROOT).as_posix() for p in files]
+    counts = {n: count(p) for n, p in zip(names, files)}
+    per_test = sorted(secs[n] / counts[n] for n in names if n in secs) or [0.05]
+    per_test = per_test[len(per_test) // 2]
+    per_file = float(json.loads(SECONDS.read_text(encoding="utf-8")).get("per_file", 0)) if SECONDS.exists() else 0.0
+    return {n: (secs[n] if n in secs else counts[n] * per_test) + per_file for n in names}
+
+
 def parts(n: int) -> List[List[str]]:
-    files = [(weight(p), p.relative_to(ROOT).as_posix()) for p in collect_files()]
+    files = [(w, name) for name, w in weights().items()]
     files.sort(key=lambda f: (-f[0], f[1]))
     bins: List[List[str]] = [[] for _ in range(n)]
     load = [0] * n
@@ -68,7 +99,10 @@ def check(n: int = 4) -> Dict[str, int]:
 
 def main(argv: List[str]) -> int:
     if argv[:1] == ["--check"]:
-        print(check())
+        # CI runs 4 jobs, each running 4 slices of 16 side by side:
+        # `--check 4 16` checks both splits.
+        for n in [int(a) for a in argv[1:]] or [4]:
+            print(check(n))
         return 0
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
