@@ -21,6 +21,10 @@ from urllib.parse import quote
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+# The list is what the launch gives: worked out with the hub on (church_duties
+# lists ministry_ops only then). This process only; nothing is written.
+os.environ["SUNDAY_HUB"] = "on"
+
 import sb_clients  # noqa: E402
 from auth_supabase import AuthedUser  # noqa: E402
 
