@@ -615,7 +615,8 @@ def status(business_id: Optional[str] = None, user: AuthedUser = Depends(require
     if not business_id:
         return {"enabled": True}
     biz = _uuid(business_id)
-    roles = roles_of(biz, user, part=None)
+    # Never walled (sunday_hub): the app reads it to know what to show.
+    roles = roles_of(biz, user, part=None, wall=False)
     settings = _church(biz).get("settings") or {}
     cs = settings.get("churchsavvy") if isinstance(settings.get("churchsavvy"), dict) else {}
     portal = settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {}

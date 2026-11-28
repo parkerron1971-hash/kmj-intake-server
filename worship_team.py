@@ -225,7 +225,7 @@ def _manager_parts(biz: str, user: AuthedUser) -> Set[str]:
     return duty_parts(held) | _team_roles(biz, user)
 
 
-def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set[str]:
+def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens", wall: bool = True) -> Set[str]:
     """This person's parts in a church's ChurchSavvy: every part for the
     owner or an admin (and a manager of a business that isn't a church); a
     church's manager, the parts its duties give it (PARTS_FROM_DUTIES) and
@@ -237,7 +237,13 @@ def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set
     screens (the default, every worship route), "planning", or None for
     what every plan shares (the team, Setup, the status the app reads
     first). A church on ChurchSavvy alone without it in its plan is
-    answered 402 (churchsavvy_billing), after who they are is settled."""
+    answered 402 (churchsavvy_billing), after who they are is settled.
+
+    `wall`: with the one Sunday hub on (sunday_hub, M-7), a login that holds
+    no Sunday role, duty or part reads no Sunday plan: 403. A part (a team
+    part, or one a Sunday duty gives) is always a Sunday role, so only a
+    login with none is asked. The status routes and New here's "put it on
+    Sunday's screen" pass wall=False: they read no plan."""
     seat = _seat(biz, user)
     if seat in ("owner", "admin"):
         roles = set(ROLES)
@@ -247,6 +253,10 @@ def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set
         roles = set(_team_roles(biz, user))
         if not seat and not roles:
             raise HTTPException(404, "business not found")
+    if wall and not roles:
+        import sunday_hub
+        if sunday_hub.open_to(user) and not sunday_hub.standing(biz, user)["reader"]:
+            raise HTTPException(403, sunday_hub.WALL)
     if part:
         import churchsavvy_billing
         churchsavvy_billing.require_part(biz, part, user)

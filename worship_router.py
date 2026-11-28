@@ -293,7 +293,7 @@ def status(business_id: str, user: AuthedUser = Depends(require_user)):
     # Every plan reads this (part=None): the app learns who they are here
     # first, and churchsavvy-billing/status says what the plan opens.
     biz = _uuid(business_id)
-    roles = roles_of(biz, user, part=None)
+    roles = roles_of(biz, user, part=None, wall=False)
     allowed = can_all(roles)
     # can_write: the song library; `can` is each part of ChurchSavvy, `roles` the caller's parts.
     out = {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles],

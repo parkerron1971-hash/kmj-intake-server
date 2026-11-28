@@ -393,6 +393,44 @@ def _contractors(biz: str, year: int) -> List[Dict[str, Any]]:
              "w9": bool(r.get("contractor_id") and w9.get(str(r["contractor_id"])))} for r in rows]
 
 
+def _unpaid_staff(ctx: Dict[str, Any], paid: set, yr: int, today: date) -> List[Dict[str, Any]]:
+    """Active employees with no counted line in `yr`, for this year or a
+    later one, hired by the year's end (no start date counts), by name."""
+    if yr < today.year:
+        return []
+    out = []
+    for eid, e in ctx["emps"].items():
+        if eid in paid or e.get("status") != "active":
+            continue
+        hired = _day(e.get("hire_date"))
+        if hired and hired > date(yr, 12, 31):
+            continue
+        out.append(e)
+    return sorted(out, key=lambda e: _name(e).lower())
+
+
+def _housing_without_pay(ctx: Dict[str, Any], yr: int) -> List[str]:
+    """The ministers named on the year's housing allowance records, when the
+    records are switched on. Asked only when no line in the year was paid as
+    a minister's. A read that FAILS raises HousingUnreadable (never "none")."""
+    import housing_allowance as ha
+    biz = str(ctx["biz"]["id"])
+    try:
+        if not ha.switched_on(biz):
+            return []
+        rows = ha.list_allowances(biz, yr) or []
+    except Exception as e:  # noqa: BLE001 — never a confident "nothing to do"
+        logger.warning("[payroll] housing records unread biz=%s: %s", biz[:8], type(e).__name__)
+        raise HousingUnreadable("minister_housing_allowances")
+    names = []
+    for a in rows:
+        emp = ctx["emps"].get(str(a.get("employee_id") or "")) if a.get("employee_id") else None
+        who = (_name(emp) if emp else "") or str(a.get("minister_name") or "").strip()
+        if who and who not in names:
+            names.append(who)
+    return names
+
+
 def _names(people: List[str]) -> str:
     if len(people) <= 1:
         return people[0] if people else ""
@@ -490,11 +528,30 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
                                 "title": (str(emp.get("title")).strip() or None) if emp.get("title") else None,
                                 "minister": minister},
                    "boxes": boxes, "missing": missing, "notes": notes})
+    # Active staff not paid in the year yet count too (M-6, 2026-11-27). The
+    # check used to read only people with paid lines, so a church that had
+    # added its pastor but not run payroll saw "6 of 6, everything the W-2s
+    # need is here" with no W-4, address or Social Security number on file.
+    # This year or a later one only: someone on staff today has nothing to
+    # do with an earlier year's W-2s. Someone hired after the year is left out.
+    unpaid_staff = _unpaid_staff(ctx, set(per), yr, today)
+    for emp in unpaid_staff:
+        prof = ctx["profiles"].get(str(emp["id"])) or {}
+        who = _name(emp)
+        if not prof.get("w4_signed_at"):
+            need["w4s"].append(who)
+        if not _address_ok(prof):
+            need["addresses"].append(who)
+        if not prof.get("ssn_last4"):
+            need["ssns"].append(who)
     contractors = _contractors(str(biz_row["id"]), yr)
     line = nec_threshold(yr)
     past_unpaid = [r for r in ctx["runs"] if r.get("status") in ("draft", "approved")
                    and (_day(r.get("pay_date")) or today) <= today]
-    n = len(w2)
+    n = len(w2) + len(unpaid_staff)
+    # A housing allowance recorded on Bookkeeping, Housing for someone this
+    # page never paid as a minister: their W-2 here won't carry it.
+    housing_elsewhere = _housing_without_pay(ctx, yr) if not ministers else []
 
     def ready_line(key: str, ok: bool, yes: str, no: str, fix: Optional[str]) -> Dict[str, Any]:
         return {"key": key, "ok": ok, "line": yes if ok else no, "fix": None if ok else fix}
@@ -507,8 +564,8 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
                    f"today {'aren’t' if len(past_unpaid) != 1 else 'isn’t'} marked paid yet",
                    "Mark each one paid on Pay staff once the money has gone out."),
         ready_line("w4s", not need["w4s"],
-                   "W-4 on file" if n == 1 else "W-4s on file for both people" if n == 2
-                   else f"W-4s on file for all {n} people",
+                   "No one on staff yet" if n == 0 else "W-4 on file" if n == 1
+                   else "W-4s on file for both people" if n == 2 else f"W-4s on file for all {n} people",
                    f"{_names(need['w4s'])} {'has' if len(need['w4s']) == 1 else 'have'} no W-4 on file",
                    "Add the W-4 on their page in Pay staff."),
         ready_line("addresses", not need["addresses"], "Every W-2 has a mailing address",
@@ -525,7 +582,17 @@ def year(biz_row: Dict[str, Any], yr: int, today: Optional[date] = None) -> Dict
                    f"{_names(no_w9)} {'has' if len(no_w9) == 1 else 'have'} no W-9 on file",
                    "Add their W-9 on Contractors before the 1099-NEC."),
     ]
-    if not ministers:
+    if not ministers and housing_elsewhere:
+        names = _names(housing_elsewhere)
+        readiness.append({
+            "key": "housing_designation", "ok": False,
+            "line": (f"Bookkeeping, Housing has a {yr} housing allowance for {names}, but no pay run here pays "
+                     f"{'them' if len(housing_elsewhere) > 1 else names} as a minister, so no W-2 from here will "
+                     f"show it"),
+            "fix": ("Mark them as a minister on Pay staff and pay them through pay runs, or have your accountant "
+                    "prepare their W-2 with the housing allowance in Box 14."),
+        })
+    elif not ministers:
         readiness.append(ready_line("housing_designation", True,
                                     "No minister’s pay this year, so no housing designation is needed", "", None))
     elif not housing_on:

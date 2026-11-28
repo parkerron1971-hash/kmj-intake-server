@@ -1577,7 +1577,7 @@ ACTIONS — FUNDS FOR THE YEAR (a fund is a name like "Pastoral staff", "Buildin
   [ACTION:{{"type":"fund_status","year":2026}}]  — the same figures as a reply card.
   [ACTION:{{"type":"find_fund_payments","fund":"Pastoral staff","housing":true}}]  — the same search as a reply card.
     — Placing changes no money and no category in the books; it says which fund each transaction belongs to.
-    — This is record-keeping, not tax advice: say the figures follow the IRS housing allowance rules and the tax preparer confirms them. Don't call the allowance tax-free: it's still counted for self-employment tax.
+    — This is record-keeping, not tax advice: say the figures follow the IRS housing allowance rules and the tax preparer confirms them. Don't call the allowance tax-free: it's still counted for self-employment tax, unless the minister has an approved Form 4361.
 
 BANK HISTORY (a newly linked bank gives about 90 days; the months before come from the bank's own statements, added on the Statements screen under Bookkeeping, Transactions — a CSV or OFX download, or the PDF statement, each checked against its own balances before it goes in):
   [ACTION:{{"type":"bank_history","year":2026}}]  — which days the app has, per account: where the bank feed starts, the statements in, and the days of the year still missing. Look first with the bank_history lookup before totalling a year from the bank, or when they ask what's missing. You can't add a statement from chat: say which months are missing and offer to open the screen.
