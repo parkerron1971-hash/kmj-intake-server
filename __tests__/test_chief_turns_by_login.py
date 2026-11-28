@@ -279,6 +279,6 @@ def test_the_sql_keeps_who_asked_and_lets_no_login_read_anothers():
     assert "APPLIED" in row, "the ledger says where it stands"
     # The rollback names the switch first (the server keeps saving whatever the row rules say).
     assert sql.index("CHIEF_TURNS_BY_LOGIN=off") > sql.index("-- ROLLBACK")
-    ci = open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
-    assert "node __tests__/chief_conversations_by_login_db.mjs" in ci
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/chief_conversations_by_login_db.mjs")
     assert "CHIEF_TURNS_BY_LOGIN=" in open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read()

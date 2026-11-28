@@ -383,8 +383,8 @@ def test_the_ledger_ci_env_list_and_export_list_carry_it():
     ledger = open(os.path.join(ROOT, "docs", "MIGRATIONS.md"), encoding="utf-8").read()
     row = next(ln for ln in ledger.split("\n") if "APPLY-2026-11-25-chief-thread-summaries.sql" in ln)
     assert "APPLIED" in row, "the ledger says where it stands"
-    assert "node __tests__/chief_thread_summaries_db.mjs" in open(
-        os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+    from __tests__.db_checks_ci import runs_in_ci
+    assert runs_in_ci("__tests__/chief_thread_summaries_db.mjs")
     assert "CHIEF_THREAD_SUMMARY=" in open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read()
     import account_lifecycle
     assert "chief_thread_summaries" in account_lifecycle.EXPORT_EXCLUDED, "keyed by sign-in ids: not exported"

@@ -6,6 +6,13 @@ the test files that belong to one part, so each file runs in exactly one.
 
     python scripts/shard_tests.py 2 4      # the files for part 2 of 4
     python scripts/shard_tests.py --check  # every file in exactly one part
+    python scripts/shard_tests.py --check 4 16  # the same for 4 parts and for 16
+
+In CI each of the 4 jobs runs 4 slices of 16 as separate pytest processes
+side by side (part k runs slices 4k-3..4k), not one pytest with -n auto:
+xdist makes every worker collect every file of the part, and collecting
+(importing the app over and over) was ~3 of each job's ~5 minutes. A slice's
+process collects only its own files.
 
 The files are the ones pytest collects from __tests__ and agents with its
 default names (test_*.py, *_test.py). Each file weighs its number of tests,
@@ -68,7 +75,10 @@ def check(n: int = 4) -> Dict[str, int]:
 
 def main(argv: List[str]) -> int:
     if argv[:1] == ["--check"]:
-        print(check())
+        # CI runs 4 jobs, each running 4 slices of 16 side by side:
+        # `--check 4 16` checks both splits.
+        for n in [int(a) for a in argv[1:]] or [4]:
+            print(check(n))
         return 0
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)

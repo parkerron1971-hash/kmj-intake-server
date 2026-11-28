@@ -1,4 +1,7 @@
-import { PGlite } from '../output/marketing-qa/node_modules/@electric-sql/pglite/dist/index.js';
+import { pathToFileURL } from 'node:url';
+const { PGlite } = await import(process.env.PGLITE_MODULE
+  ? pathToFileURL(process.env.PGLITE_MODULE).href
+  : '../output/marketing-qa/node_modules/@electric-sql/pglite/dist/index.js');
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const db = new PGlite();
