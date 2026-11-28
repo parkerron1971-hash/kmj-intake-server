@@ -31,6 +31,13 @@ os.environ.setdefault("LEAD_SCORING_MODE", "off")
 # tests call it directly with the reads faked.
 os.environ.setdefault("CHIEF_RAIL", "off")
 
+# The leaders map is on for every church in production (church_map.mode()
+# defaults to on since M-8, Kevin 2026-11-28). The tests written before that
+# fake the database without the map's tables and columns, so they keep it to
+# the platform owner's church, as production ran then; a test about the map
+# sets CHURCH_MAP itself (church_three.build follows map_on).
+os.environ.setdefault("CHURCH_MAP", "owner")
+
 # The member app's main alert kinds are on by default for every church from
 # member_push.DEFAULT_ON_FROM (Kevin, 2026-11-24). The many tests written
 # against "a kind is on only where the church turned it on" run that way

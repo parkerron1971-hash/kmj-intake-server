@@ -14,7 +14,8 @@ it from the church's own data, never from names or title words:
                      other Manager login, never an Admin or the owner
   the ministry ..... where the church's leaders map is open and ready
                      (church_map.opened): whoever a person's active holder
-                     row answers to; an active department's overseer over its
+                     row answers to; whoever a group answers to over its
+                     leaders (M-8); an active department's overseer over its
                      leader; its leader over the people of what hangs from it
                      (its groups' leaders, its Serve teams' leaders, the
                      holders of its roles), and its overseer over them while
@@ -686,6 +687,10 @@ def _direct(ch: Church, p: str) -> List[Tuple[str, str]]:
         for x in m.links:
             if x["answers_to_contact_id"] == p and x["contact_id"] != p:
                 out.append((x["contact_id"], "answers"))
+        # A group whose leaders answer to p (groups.answers_to_contact_id, M-8).
+        for gid, to in (getattr(m, "group_links", None) or {}).items():
+            if to == p and gid in ch.groups:
+                out += [(c, f"Leads {ch.groups[gid]}") for c in ch.group_leaders.get(gid, []) if c != p]
     for d in m.active():
         lead = d.get("leader_contact_id")
         if d.get("overseer_contact_id") == p and ch.qualifies(p, "oversee"):
