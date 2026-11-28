@@ -556,3 +556,9 @@ def shepherding_family(household_id: str, business_id: str = Query(...),
     """A family's shepherd and touches with their notes, for the office.
     The family never reads these."""
     return church_shepherding.office_family(biz, household_id)
+
+
+# The old Team leader rows onto the team itself (church_team_moves, M-8), under /church.
+from church_team_moves import router as _team_moves_router  # noqa: E402
+
+router.include_router(_team_moves_router)
