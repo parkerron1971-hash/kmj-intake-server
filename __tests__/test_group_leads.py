@@ -267,12 +267,36 @@ def test_closed_is_a_404_and_before_the_file_writes_are_a_503(lc, monkeypatch):
     monkeypatch.setenv("GROUP_LEADS", "off")
     assert o.as_(uid, email).get(f"/church/groups/{gid}/leads", params={"business_id": LC}).status_code == 404
     monkeypatch.setenv("GROUP_LEADS", "on")
-    monkeypatch.setattr(cgl, "ready", lambda: False)
+    monkeypatch.setattr(cgl, "ready", lambda *a: False)
     r = o.as_(uid, email).get(f"/church/groups/{gid}/leads", params={"business_id": LC})
     assert r.status_code == 200 and r.json()["ready"] is False and r.json()["can"]["name_leader"] is False
     assert [x["name"] for x in r.json()["leaders"]] == ["Gloria Hunt"]
     r = _put(o, uid, gid, {"leader_contact_id": w["dana"]}, email=email)
     assert r.status_code == 503 and r.json()["detail"] == cgl.NOT_YET
+
+
+def test_the_choices_before_a_group_exists(lc):
+    w, o = lc.who[LC], Office(lc)
+    uid, email = _owner(lc)
+    lc.t["academy_courses"].append({"id": "c0000000-0000-4000-8000-000000000002", "business_id": LC, "title": "The Making",
+                                    "status": "published"})
+    r = o.as_(uid, email).get("/church/groups/leads/choices", params={"business_id": LC})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ready"] and body["can_name"] and "Marcus Taylor" in [p["name"] for p in body["answer_choices"]]
+    assert body["classes"] == [{"id": "c0000000-0000-4000-8000-000000000002", "title": "The Making"}]
+    assert isinstance(body["serve_options"], list)
+    r = o.as_(w["laquesha@"]).get("/church/groups/leads/choices", params={"business_id": LC})
+    assert r.status_code == 200 and r.json()["can_name"] is False and r.json()["answer_choices"] == []
+
+
+def test_every_probe_names_the_church(lc, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    seen = []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, *a, **k: seen.append(path) or real(path, *a, **k))
+    cgl._READY.clear()
+    assert cgl.ready(LC)
+    assert seen and all(f"business_id=eq.{LC}" in p for p in seen)
 
 
 def test_owner_mode_opens_only_the_platform_owners_church(lc, monkeypatch):

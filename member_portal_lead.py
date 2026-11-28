@@ -1408,7 +1408,7 @@ async def co_leaders(request: Request):
         return _go("/my/lead/groups")
     biz = church["business"]
     back = f"/my/lead/groups/{gid}"
-    if not cgl.church_open(biz) or not await asyncio.to_thread(cgl.ready):
+    if not cgl.church_open(biz) or not await asyncio.to_thread(cgl.ready, str(biz["id"])):
         return _go(back)
     if not await asyncio.to_thread(_allowed, church, me):
         return _go(back, err="slow")

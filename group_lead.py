@@ -108,7 +108,7 @@ def _leads(biz: Dict[str, Any], group_id: str) -> Optional[Dict[str, Any]]:
     import church_group_leads as cgl
     from fastapi import HTTPException
     try:
-        if not cgl.church_open(biz) or not cgl.ready():
+        if not cgl.church_open(biz) or not cgl.ready(str(biz["id"])):
             return None
         rows = cgl.leader_rows(str(biz["id"]), group_id)
     except HTTPException:

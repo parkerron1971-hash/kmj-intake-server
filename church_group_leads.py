@@ -13,6 +13,10 @@ group answers to (groups.answers_to_contact_id), a class group's Course
 Studio class (groups.course_id) and a team's Serve-card choice
 (groups.serve_option): supabase/APPLY-2026-11-28-group-leads.sql.
 
+    GET /church/groups/leads/choices?business_id=
+        before a group exists (the New group form): who a group can answer
+        to, the church's Course Studio classes, the Serve card's choices,
+        and whether this login names leaders. Any seat that sees groups.
     GET /church/groups/{group_id}/leads?business_id=
         the group's lead, co-leaders, who it answers to, its class and
         Serve choice, the people it can answer to, and what this login may
@@ -104,16 +108,18 @@ _READY: Dict[str, Any] = {}
 READY_SECONDS = 300
 
 
-def ready() -> bool:
-    """The file's columns answer. A yes is kept; a no is asked again after
-    five minutes (Kevin may apply it any time)."""
+def ready(biz: str = "") -> bool:
+    """The file's columns answer, asked of this church's own rows as every
+    read here is. A yes is kept; a no is asked again after five minutes
+    (Kevin may apply it any time)."""
     if _READY.get("yes"):
         return True
     at = _READY.get("no_at")
     if at and time.monotonic() - at < READY_SECONDS:
         return False
-    ok = isinstance(sb_clients.sb_get_as_service("/group_members?select=co_leader&limit=1"), list) and \
-        isinstance(sb_clients.sb_get_as_service("/groups?select=answers_to_contact_id,course_id,serve_option&limit=1"), list)
+    scope = f"business_id=eq.{_q(biz)}&" if biz else ""
+    ok = isinstance(sb_clients.sb_get_as_service(f"/group_members?{scope}select=co_leader&limit=1"), list) and \
+        isinstance(sb_clients.sb_get_as_service(f"/groups?{scope}select=answers_to_contact_id,course_id,serve_option&limit=1"), list)
     if ok:
         _READY["yes"] = True
     else:
@@ -186,7 +192,7 @@ def answer_choices(biz: str) -> List[Dict[str, Any]]:
 def view(biz: str, gid: str) -> Dict[str, Any]:
     """What GET answers (and PUT answers with): the group's leaders and who
     it answers to, by name."""
-    if not ready():
+    if not ready(biz):
         g = group(biz, gid, cols=False)
         rows = leader_rows(biz, gid, cols=False)
         names = _people(biz, [r["contact_id"] for r in rows])
@@ -271,7 +277,7 @@ def save(biz: str, gid: str, body: Dict[str, Any], how: str) -> Dict[str, Any]:
     """Change a group's leaders. `how` is 'office' (everything) or 'lead'
     (co-leaders only). Returns {'view', 'new': [(contact_id, co)], 'group'}:
     who now leads it who didn't before, for the note."""
-    if not ready():
+    if not ready(biz):
         raise HTTPException(503, NOT_YET)
     sent = {k for k in FIELDS if k in body}
     if not sent:
@@ -440,6 +446,29 @@ def _church(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+@router.get("/church/groups/leads/choices")
+def leads_choices(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """What a New group form offers before the group exists: who a group can
+    answer to (people holding an active role), the church's Course Studio
+    classes, the Serve card's choices, and whether this login names leaders."""
+    import church_follow_up as cfu
+    business = _church(business_id, user)
+    biz = str(business["id"])
+    role, _person = _seat(biz, user)
+    if _RANK.get(role or "", 0) < _RANK["viewer"]:
+        raise HTTPException(403, "This seat can't see groups.")
+    if not ready(biz):
+        return {"ready": False, "can_name": False, "answer_choices": [], "classes": [], "serve_options": []}
+    can = office_names(biz, user, role)
+    classes = _need(f"/academy_courses?business_id=eq.{_q(biz)}&status=neq.archived&select=id,title&order=title.asc&limit=200")
+    teams = cfu.teams(biz)
+    if teams is None:
+        raise HTTPException(503, UNREAD)
+    return {"ready": True, "can_name": can, "answer_choices": answer_choices(biz) if can else [],
+            "classes": [{"id": str(c["id"]), "title": _plain(c.get("title")) or "Class"} for c in classes],
+            "serve_options": teams}
+
+
 @router.get("/church/groups/{group_id}/leads")
 def leads_read(group_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     business = _church(business_id, user)
@@ -471,7 +500,7 @@ async def leads_save(group_id: str, body: LeadsIn, user: AuthedUser = Depends(re
     business = await asyncio.to_thread(_church, body.business_id, user)
     biz = str(business["id"])
     gid = _id(group_id, "group")
-    if not await asyncio.to_thread(ready):
+    if not await asyncio.to_thread(ready, biz):
         raise HTTPException(503, NOT_YET)
     rows = await asyncio.to_thread(leader_rows, biz, gid)
     # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
