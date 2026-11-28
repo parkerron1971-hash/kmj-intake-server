@@ -687,6 +687,12 @@ app.include_router(member_photos_router)
 # BEFORE public_site_router.
 from member_warning import router as member_warning_router
 app.include_router(member_warning_router)
+
+# What's New from the database (platform_updates.py, 2026-11-27): the weekly
+# card and the Updates list for each login, seen-state per login, and the
+# platform owner's queue. Tables: supabase/APPLY-2026-11-27-whats-new.sql.
+from platform_updates import router as platform_updates_router
+app.include_router(platform_updates_router)
 # A member's Look in the new look (member_lumen_look.py): POST /my/look,
 # Light, Dark or Same as my phone. BEFORE public_site_router.
 from member_lumen_look import router as member_lumen_look_router
