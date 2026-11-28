@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -515,7 +516,8 @@ def team_leads(business_id: str, all_defs: Optional[List[Dict[str, Any]]] = None
     if not groups:
         return {}
     leads = _rows(f"/group_members?business_id=eq.{q}&role=eq.leader&group_id=in.({','.join(_q(g['id']) for g in groups)})"
-                  f"&select=group_id,contact_id{',co_leader' if cols else ''}&limit=2000")
+                  f"&select=group_id,contact_id{',co_leader' if cols else ''}"
+                  f"&order=group_id.asc,{'co_leader.asc,' if cols else ''}created_at.asc,contact_id.asc&limit=2000")
     if not leads:
         return {}
     people = _contacts(biz, (r["contact_id"] for r in leads))
@@ -535,6 +537,25 @@ def team_leads(business_id: str, all_defs: Optional[List[Dict[str, Any]]] = None
         out[_norm(choice)] = [{"contact_id": str(r["contact_id"]), "role": role, "status": "active", "scope": choice,
                                "team": _plain(g.get("name")) or choice, **people[str(r["contact_id"])]} for r in mine]
     return out
+
+
+def group_leads_open(business_id: str) -> bool:
+    """Whether every group has a leader (GROUP_LEADS) is on for this church:
+    church_group_leads' own switch where it is deployed, else the same rule
+    (off | owner = the platform owner's church | on; default owner). A Serve
+    sign-up goes to a team's own leader only where it is (M-8 review M3), so
+    merging changes no church's routing before its switch-on."""
+    try:
+        import church_group_leads
+        return church_group_leads.church_open(business_id)
+    except ImportError:
+        m = (os.environ.get("GROUP_LEADS") or "owner").strip().lower()
+        if m == "on":
+            return True
+        if m == "owner":
+            import member_asks
+            return member_asks.platform_church(business_id)
+        return False
 
 
 def teams(business_id: str) -> Optional[List[str]]:
@@ -647,7 +668,7 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
         route_by = answers if route_answers is None else route_answers
         decided = pick
         pick = decided if decided else choose(kind, route_by, all_roles, load, all_defs, what=what, m=mp,
-                                              teams=team_leads(biz, all_defs) if kind == "serve" else None)
+                                              teams=team_leads(biz, all_defs) if kind == "serve" and group_leads_open(biz) else None)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         assigned_by, due = "chief", now + timedelta(days=int(steps[0]["days"]))

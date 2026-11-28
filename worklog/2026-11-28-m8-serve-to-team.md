@@ -12,6 +12,7 @@ left_undone:
 decisions:
   - "A Serve card choice a serving team answers for (groups.serve_option, else the team's own name) goes to that team's lead first: the group's leader row, the Sunday hub's Team leader. With no leader there, today's routing exactly"
   - "team_leads is {} on any failed read, so a card is never held up by it; the leader row carries the church's team role key, so follow-ups read as before"
+  - "Review fixes (account 2, 11-28): M3, a Serve sign-up goes to a team's own leader only where GROUP_LEADS is open for the church (church_group_leads.church_open, or the same rule before part 1), so merging changes no routing before the switch-on. S5, one lead a team: a second mover for the same leaderless team is a co-leader, worked out again as rows are applied; moves send the You now lead note through church_group_leads.tell. M1, team leaders read in one fixed order. The router include moved up, so it no longer collides with #2122"
   - "The move list says lead, co_leader, already, asked (never moved) or no_team; applying adds the team's own leader row and keeps the role row; owner or admin only"
 related: [2026-11-28-m8-group-leads.md, 2026-11-27-m7-sunday-hub-backend.md]
 ---

@@ -160,3 +160,52 @@ def test_the_owner_or_an_admin(lc, monkeypatch, role, code):
     assert c.get(f"/church/leaders/team-moves?business_id={LC}").status_code == code
     r = c.post(f"/church/leaders/team-moves/apply?business_id={LC}", json={"holder_ids": []})
     assert r.status_code == (400 if code == 200 else code)
+
+
+# ── M-8 review M3: no church's routing changes before its switch-on ──
+
+@pytest.mark.parametrize("mode,who", [("off", "tyrone"), ("on", "yolanda")])
+def test_a_serve_card_goes_to_the_team_only_where_group_leads_is_on(lc, monkeypatch, mode, who):
+    monkeypatch.setenv("GROUP_LEADS", mode)
+    w = lc.who[LC]
+    row = cfu.start(LC, w["calvin"], card_key=f"serve-{mode}", card_name="Serve with us", kind="serve",
+                    answers=[{"q": "Where would you like to serve?", "a": "Youth Ministry (YWD)"}])
+    assert row is not None
+    assert row["leader_contact_id"] == w[who]
+
+
+def test_owner_mode_is_the_platform_owners_church_only(monkeypatch):
+    import member_asks
+    monkeypatch.setenv("GROUP_LEADS", "owner")
+    monkeypatch.setattr(member_asks, "platform_church", lambda b: b == LC)
+    assert cfu.group_leads_open(LC) and not cfu.group_leads_open("2b000000-0000-4000-8000-000000000000")
+
+
+# ── M-8 review S5: one lead a team; the note goes out ────────────────
+
+def test_two_movers_for_one_leaderless_team_one_lead_one_co_leader(lc):
+    w = lc.who[LC]
+    lc.t["church_leader_roles"].append(
+        {"id": "h-second", "business_id": LC, "contact_id": w["ivy"], "role": "team_leader", "scope": "Hospitality Team",
+         "status": "active", "invited_at": "2026-11-02T00:00:00+00:00", "answered_at": None, "answers_to_contact_id": None})
+    rows = {r["name"]: r["will"] for r in ctm.plan(LC)["rows"]}
+    assert rows["Tasha Williams"] == "lead" and rows["Ivy Lane"] == "co_leader"
+    # Only the second picked: they become the lead, since the team has none.
+    out = ctm.apply(LC, ["h-second"])
+    assert [(m["name"], m["as"]) for m in out["moved"]] == [("Ivy Lane", "lead")]
+    assert {r["name"]: r["will"] for r in out["rows"]}["Tasha Williams"] == "co_leader"
+
+
+def test_moves_send_the_note_through_group_leads(lc, monkeypatch):
+    import asyncio
+    import types
+    told = []
+
+    async def tell(business, g, new):
+        told.append((g["name"], sorted(new)))
+        return {"phones": len(new), "emailed": 0}
+    monkeypatch.setitem(sys.modules, "church_group_leads", types.SimpleNamespace(tell=tell))
+    out = ctm.apply(LC, [r["holder_id"] for r in ctm.plan(LC)["rows"]])
+    n = asyncio.run(ctm.tell_moved({"id": LC, "name": "Love City"}, out["moved"]))
+    w = lc.who[LC]
+    assert n == 2 and sorted(told) == [("Welcome", [(w["tasha"], False)]), ("Youth Ministry (YWD)", [(w["tyrone"], True)])]

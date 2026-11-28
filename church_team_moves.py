@@ -69,6 +69,7 @@ def plan(biz: str) -> Dict[str, Any]:
                 by_choice[cfu._norm(label)] = g
     leads = _need(f"/group_members?business_id=eq.{q}&role=eq.leader&select=group_id,contact_id&limit=2000") if groups else []
     rows = []
+    claimed: set = set()            # leaderless teams this plan already gives a lead (review S5)
     for h in holders:
         if h["role"] not in team_keys or not h.get("scope"):
             continue
@@ -80,30 +81,58 @@ def plan(biz: str) -> Dict[str, Any]:
             will = "no_team"
         elif h["contact_id"] in mine:
             will = "already"
+        elif mine or str(g["id"]) in claimed:
+            will = "co_leader"
         else:
-            will = "co_leader" if mine else "lead"
+            will = "lead"
+            claimed.add(str(g["id"]))
         rows.append({"holder_id": h["id"], "contact_id": h["contact_id"], "name": h["name"], "status": h.get("status"),
                      "serve_choice": h["scope"], "team": {"group_id": str(g["id"]), "name": g.get("name") or ""} if g else None,
-                     "will": will, "says": WORDS[will]})
+                     "team_led": bool(mine), "will": will, "says": WORDS[will]})
     return {"rows": rows, "co_leaders_ready": has_co}
 
 
 def apply(biz: str, holder_ids: List[str]) -> Dict[str, Any]:
+    """Add each picked row to its team's own leaders. A team gets one lead:
+    the first picked for a team with no leader; every other one picked for
+    it, or for a team that has one, joins as a co-leader (review S5)."""
     p = plan(biz)
     want = {str(x) for x in holder_ids}
     moved = []
+    led_now: set = set()
     for r in p["rows"]:
         if r["holder_id"] not in want or r["will"] not in ("lead", "co_leader"):
             continue
-        row = {"group_id": r["team"]["group_id"], "contact_id": r["contact_id"], "business_id": biz, "role": "leader"}
+        gid = r["team"]["group_id"]
+        how = "co_leader" if r["team_led"] or gid in led_now else "lead"
+        led_now.add(gid)
+        row = {"group_id": gid, "contact_id": r["contact_id"], "business_id": biz, "role": "leader"}
         if p["co_leaders_ready"]:
-            row["co_leader"] = r["will"] == "co_leader"
+            row["co_leader"] = how == "co_leader"
         saved = sb_clients.sb_post_as_service("/group_members?on_conflict=group_id,contact_id", [row],
                                               prefer="resolution=merge-duplicates,return=representation")
         if not isinstance(saved, list) or not saved:
             raise HTTPException(503, UNSAVED)
-        moved.append({"holder_id": r["holder_id"], "name": r["name"], "team": r["team"]["name"], "as": r["will"]})
+        moved.append({"holder_id": r["holder_id"], "contact_id": r["contact_id"], "name": r["name"],
+                      "group_id": gid, "team": r["team"]["name"], "as": how})
     return {"moved": moved, **plan(biz)}
+
+
+async def tell_moved(business: Dict[str, Any], moved: List[Dict[str, Any]]) -> int:
+    """"You now lead Welcome": the note Kevin's answer 1 gives anyone named a
+    group's leader, through church_group_leads.tell (M-8 part 1) where it is
+    deployed. Returns how many people it went to (0 before part 1)."""
+    try:
+        import church_group_leads as cgl
+    except ImportError:
+        return 0
+    told = 0
+    for gid in dict.fromkeys(m["group_id"] for m in moved):
+        mine = [m for m in moved if m["group_id"] == gid]
+        out = await cgl.tell(business, {"id": gid, "name": mine[0]["team"]},
+                             [(m["contact_id"], m["as"] == "co_leader") for m in mine])
+        told += len(mine) if (out.get("phones") or out.get("emailed")) else 0
+    return told
 
 
 @router.get("/leaders/team-moves")
@@ -116,7 +145,11 @@ class MovesIn(BaseModel):
 
 
 @router.post("/leaders/team-moves/apply")
-def team_moves_apply(body: MovesIn, business_id: str = Query(...), biz: Dict[str, Any] = Depends(business_access("admin"))):
+async def team_moves_apply(body: MovesIn, business_id: str = Query(...),
+                           biz: Dict[str, Any] = Depends(business_access("admin"))):
+    import asyncio
     if not body.holder_ids or len(body.holder_ids) > 100:
         raise HTTPException(400, "Pick the people to move, at most 100 at once.")
-    return apply(str(biz["id"]), body.holder_ids)
+    out = await asyncio.to_thread(apply, str(biz["id"]), body.holder_ids)
+    out["told"] = await tell_moved(biz, out["moved"])
+    return out
