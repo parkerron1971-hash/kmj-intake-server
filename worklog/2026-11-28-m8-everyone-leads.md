@@ -4,7 +4,7 @@ date: 2026-11-28
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin said GO on mission M-8: one place to see every leader and who they answer to; the Worship part shows as worship team leaders; a class group points to its Course Studio class and the teacher shows once, with both"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#2122]
 migrations: []
 left_undone:
   - "The group-leads columns come from part 1's file (#2120); before it is applied the list is whole, with no co-leaders, group answers-to, class links or Serve choices"
