@@ -19,7 +19,8 @@ default names (test_*.py, *_test.py). Each file weighs the seconds CI
 measured for it (scripts/test_seconds.json: collecting plus running, from
 the line scripts/pytest_file_times.py prints in each slice's log). A file not
 in there yet (a new one) weighs its number of tests times the median seconds
-per test. The heaviest go first to the lightest part, so the parts finish
+per test. Every file also weighs "per_file" more: pytest's own cost for each
+file, which the timer can't see (a slice of 283 small files took 168 s). The heaviest go first to the lightest part, so the parts finish
 close together. The split depends only on the files and that json, so every
 job agrees on it.
 """
@@ -72,7 +73,8 @@ def weights() -> Dict[str, float]:
     counts = {n: count(p) for n, p in zip(names, files)}
     per_test = sorted(secs[n] / counts[n] for n in names if n in secs) or [0.05]
     per_test = per_test[len(per_test) // 2]
-    return {n: secs[n] if n in secs else counts[n] * per_test for n in names}
+    per_file = float(json.loads(SECONDS.read_text(encoding="utf-8")).get("per_file", 0)) if SECONDS.exists() else 0.0
+    return {n: (secs[n] if n in secs else counts[n] * per_test) + per_file for n in names}
 
 
 def parts(n: int) -> List[List[str]]:
