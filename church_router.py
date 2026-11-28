@@ -53,6 +53,13 @@ from business_access import business_access
 
 router = APIRouter(prefix="/church", tags=["church"])
 
+# The old Team leader rows onto the team itself (church_team_moves, M-8), under
+# /church. Mounted here, not at the end, so it never collides with another
+# router added there (#2122's Everyone who leads).
+from church_team_moves import router as _team_moves_router  # noqa: E402
+
+router.include_router(_team_moves_router)
+
 # Who may read the care numbers: the church's owner and its staff, the same
 # people Chief gives them to (chief_church_actions._CARE_ROLES: owner, admin,
 # manager). business_access takes a MINIMUM rank on the seat ladder in
@@ -556,3 +563,9 @@ def shepherding_family(household_id: str, business_id: str = Query(...),
     """A family's shepherd and touches with their notes, for the office.
     The family never reads these."""
     return church_shepherding.office_family(biz, household_id)
+
+
+# Everyone who leads, in one place (church_leaders_all, M-8), under /church.
+from church_leaders_all import router as _leaders_all_router  # noqa: E402
+
+router.include_router(_leaders_all_router)

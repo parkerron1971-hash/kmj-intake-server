@@ -15,12 +15,17 @@ xdist makes every worker collect every file of the part, and collecting
 process collects only its own files.
 
 The files are the ones pytest collects from __tests__ and agents with its
-default names (test_*.py, *_test.py). Each file weighs its number of tests,
-and the heaviest go first to the lightest part, so the parts finish close
-together. The split depends only on the files, so every job agrees on it.
+default names (test_*.py, *_test.py). Each file weighs the seconds CI
+measured for it (scripts/test_seconds.json: collecting plus running, from
+the line scripts/pytest_file_times.py prints in each slice's log). A file not
+in there yet (a new one) weighs its number of tests times the median seconds
+per test. The heaviest go first to the lightest part, so the parts finish
+close together. The split depends only on the files and that json, so every
+job agrees on it.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -30,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIRS = ("__tests__", "agents")
 SKIP = {"__pycache__", "node_modules", ".pytest_cache"}
 TEST_DEF = re.compile(r"^\s*(?:async\s+)?def\s+test", re.M)
+SECONDS = ROOT / "scripts" / "test_seconds.json"
 
 
 def collect_files() -> List[Path]:
@@ -46,15 +52,31 @@ def collect_files() -> List[Path]:
     return sorted(out, key=lambda p: p.relative_to(ROOT).as_posix())
 
 
-def weight(p: Path) -> int:
+def count(p: Path) -> int:
     try:
         return max(1, len(TEST_DEF.findall(p.read_text(encoding="utf-8", errors="replace"))))
     except OSError:
         return 1
 
 
+def measured() -> Dict[str, float]:
+    if not SECONDS.exists():
+        return {}
+    return {k: float(v) for k, v in json.loads(SECONDS.read_text(encoding="utf-8")).get("seconds", {}).items()}
+
+
+def weights() -> Dict[str, float]:
+    files = collect_files()
+    secs = measured()
+    names = [p.relative_to(ROOT).as_posix() for p in files]
+    counts = {n: count(p) for n, p in zip(names, files)}
+    per_test = sorted(secs[n] / counts[n] for n in names if n in secs) or [0.05]
+    per_test = per_test[len(per_test) // 2]
+    return {n: secs[n] if n in secs else counts[n] * per_test for n in names}
+
+
 def parts(n: int) -> List[List[str]]:
-    files = [(weight(p), p.relative_to(ROOT).as_posix()) for p in collect_files()]
+    files = [(w, name) for name, w in weights().items()]
     files.sort(key=lambda f: (-f[0], f[1]))
     bins: List[List[str]] = [[] for _ in range(n)]
     load = [0] * n

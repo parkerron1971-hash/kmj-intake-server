@@ -164,11 +164,16 @@ jobs:
         run: |
           python scripts/shard_tests.py --check 4 16
           python -m playwright install --with-deps chromium
+          # Each slice prints its files' measured seconds (scripts/pytest_file_times.py,
+          # copied alone onto PYTHONPATH so nothing else in scripts/ shadows a module);
+          # scripts/test_seconds.json holds them for shard_tests.py's split.
+          mkdir -p "$RUNNER_TEMP/plugins" && cp scripts/pytest_file_times.py "$RUNNER_TEMP/plugins/"
+          export PYTHONPATH="$RUNNER_TEMP/plugins"
           k=${{ matrix.part }}
           pids=()
           for j in 1 2 3 4; do
             slice=$(( (k - 1) * 4 + j ))
-            pytest -q -p no:cacheprovider --basetemp="$RUNNER_TEMP/pytest-tmp-$j" \
+            pytest -q -p no:cacheprovider -p pytest_file_times --basetemp="$RUNNER_TEMP/pytest-tmp-$j" \
               $(python scripts/shard_tests.py $slice 16) --maxfail=10 --durations=5 \
               > "$RUNNER_TEMP/pytest-$j.log" 2>&1 &
             pids+=($!)

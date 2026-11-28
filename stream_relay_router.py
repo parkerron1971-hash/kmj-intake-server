@@ -626,6 +626,24 @@ def _view(s: Dict[str, Any]) -> Dict[str, Any]:
 # ─── team routes ─────────────────────────────────────────────────────
 
 
+def _may_stream(biz: str, user: AuthedUser) -> None:
+    """A manager seat or the owner, as always. With the one Sunday hub on
+    (sunday_hub, M-7), also media & tech: a login whose ChurchSavvy team part
+    runs the livestream (worship_team.team_can "live": the Media, Booth and
+    Admin parts), so the person on the stream sets it up. Off, a manager only."""
+    try:
+        require(biz, user, "manager")
+    except HTTPException as e:
+        if e.status_code != 403:
+            raise
+        import sunday_hub
+        import worship_team
+        if sunday_hub.open_to(user) and worship_team.team_can(biz, user, "live"):
+            return
+        raise
+
+
+
 class BizIn(BaseModel):
     business_id: str
 
@@ -647,7 +665,7 @@ _OFF = {"ready": False, "server": "", "has_key": False, "key_last4": "",
 @router.get("/stream-relay")
 def stream_overview(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business_id")
-    require(biz, user, "manager")
+    _may_stream(biz, user)
     if not is_ready():
         return dict(_OFF)
     row = stream_row(biz)
@@ -677,7 +695,7 @@ def stream_new_key(body: BizIn, user: AuthedUser = Depends(require_user)):
     working at once, and a stream on it is cut within a minute). The full
     key is in this response and nowhere else."""
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "manager")
+    _may_stream(biz, user)
     if not is_ready():
         raise _not_ready()
     row = stream_row(biz)
@@ -697,7 +715,7 @@ def stream_new_key(body: BizIn, user: AuthedUser = Depends(require_user)):
 @router.patch("/stream-relay/settings")
 def stream_settings(body: SettingsIn, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "manager")
+    _may_stream(biz, user)
     if not is_ready():
         raise _not_ready()
     row = stream_row(biz)

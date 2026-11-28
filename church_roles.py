@@ -1068,7 +1068,8 @@ def _view(d: Dict[str, Any], all_defs: List[Dict[str, Any]], holders: List[Dict[
         "is_new": d["key"] in ("intercessor_leader", "intercessors") or d.get("source") in ("custom", "chief"),
         "created_at": created,
         "holders": [{k: h.get(k) for k in ("id", "contact_id", "name", "email", "phone", "status", "scope",
-                                           "invited_at", "answered_at", "term_ends_at")}
+                                           "invited_at", "answered_at", "term_ends_at",
+                                           *(("answers_to_contact_id", "answers_to_name") if "answers_to_name" in h else ()))}
                     for h in holders if h.get("role") == d["key"]],
         **({k: switches.get(k) for k in (*SWITCHES, "made_for")} if switches else {}),
     }
@@ -1124,6 +1125,23 @@ def library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         switches = church_map.role_switches(biz)
         if switches is None:
             return None
+        # Who each holder answers to, a person (M-8: Elder Dana, not just Elders).
+        links = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&answers_to_contact_id=not.is.null"
+                      "&select=id,answers_to_contact_id&limit=2000")
+        if links is None:
+            return None
+        to = {str(x["id"]): str(x["answers_to_contact_id"]) for x in links}
+        names = {h["contact_id"]: h["name"] for h in holders}
+        missing = {c for c in to.values() if c not in names}
+        if missing:
+            import church_follow_up as cfu2
+            more = cfu2._contacts(biz, missing)
+            if more is None:
+                return None
+            names.update({k: v["name"] for k, v in more.items()})
+        holders = [{**h, "answers_to_contact_id": to.get(h["id"]),
+                    "answers_to_name": names.get(to.get(h["id"]) or "", "") if to.get(h["id"]) else ""}
+                   for h in holders]
     classes = _classes(biz)
     cmap = {c["id"]: c["title"] for c in classes}
     keys = {d["key"] for d in all_defs}

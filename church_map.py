@@ -6,7 +6,8 @@ the admins, the lead pastor and the people, for every church that subscribes;
 messed up for other churches." Every church runs on one engine, and each
 church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
 
-    the switch ...... CHURCH_MAP = off | owner | on (default owner):
+    the switch ...... CHURCH_MAP = off | owner | on (default on since M-8,
+                      Kevin 2026-11-28: on for every church; it was owner):
                       open_to(user) opens the office's routes to a login,
                       church_open(biz) the engine (sweeps, the member side)
                       to a church; office_open(user, biz), either, is what
@@ -77,7 +78,7 @@ UNIT_REF = {"group": "group_id", "role": "role_id", "board": "board_id", "worshi
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("CHURCH_MAP") or "owner").strip().lower()
+    m = (os.environ.get("CHURCH_MAP") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 
@@ -147,6 +148,7 @@ class Map:
     links: List[Dict[str, Any]] = field(default_factory=list)
     settings: Dict[str, Any] = field(default_factory=dict)
     departments: List[Dict[str, Any]] = field(default_factory=list)
+    group_links: Dict[str, str] = field(default_factory=dict)      # group id -> who its leaders answer to (M-8)
 
     def active(self) -> List[Dict[str, Any]]:
         return [d for d in self.departments if d["status"] == "active"]
@@ -155,6 +157,10 @@ class Map:
         """The person this holder answers to, for `role` (or any role they hold)."""
         return next((x["answers_to_contact_id"] for x in self.links
                      if x["contact_id"] == str(contact_id) and (not role or x["role"] == role)), None)
+
+    def group_answers_to(self, group_id: Any) -> Optional[str]:
+        """The one person a group's leaders answer to (groups.answers_to_contact_id, M-8)."""
+        return self.group_links.get(str(group_id or "")) if group_id else None
 
     def led_by(self, contact_id: str) -> List[Dict[str, Any]]:
         return [d for d in self.active() if d["leader_contact_id"] == str(contact_id)]
@@ -225,7 +231,8 @@ def load(biz: Any) -> Optional[Map]:
     depts = _rows(f"/church_departments?business_id=eq.{q}&status=neq.archived&select={DEPT_COLS}"
                   "&order=sort.asc,name.asc&limit=200")
     units = _rows(f"/church_department_units?business_id=eq.{q}&select={UNIT_COLS}&limit=1000")
-    if roles is None or links is None or st is None or depts is None or units is None:
+    groups = _group_links(bid)
+    if roles is None or links is None or st is None or depts is None or units is None or groups is None:
         return None
     under: Dict[str, List[Dict[str, Any]]] = {}
     for u in units:
@@ -236,7 +243,35 @@ def load(biz: Any) -> Optional[Map]:
                 "answers_to_contact_id": str(x["answers_to_contact_id"])}
                for x in links if x.get("status") == "active" and x.get("answers_to_contact_id")],
         settings={k: (st[0] if st else {}).get(k) for k in SETTINGS_COLS.split(",")},
-        departments=[_dept(d, under.get(str(d["id"]), [])) for d in depts])
+        departments=[_dept(d, under.get(str(d["id"]), [])) for d in depts],
+        group_links=groups)
+
+
+def groups_ready(bid: str) -> bool:
+    """Every group has a leader's file (APPLY-2026-11-28-group-leads.sql) is
+    in: groups.answers_to_contact_id answers (asked of this church's rows,
+    as every read here is). A yes is kept; a no is asked again next load."""
+    if _READY.get("groups"):
+        return True
+    if isinstance(sb_clients.sb_get_as_service(f"/groups?business_id=eq.{_q(bid)}&select=answers_to_contact_id&limit=1"), list):
+        _READY["groups"] = True
+        return True
+    return False
+
+
+def _group_links(bid: str) -> Optional[Dict[str, str]]:
+    """Each active group that names who its leaders answer to. {} before the
+    file is in, and {} when the read fails: a groups blip never takes the
+    whole map down; a group's item then climbs by its department and the
+    role chain, as before M-8, until the next read."""
+    if not groups_ready(bid):
+        return {}
+    rows = _rows(f"/groups?business_id=eq.{_q(bid)}&active=eq.true&answers_to_contact_id=not.is.null"
+                 "&select=id,answers_to_contact_id&limit=2000")
+    if rows is None:
+        print(f"church_map: groups' answers-to unread for {bid}; the chain goes by departments", flush=True)
+        return {}
+    return {str(r["id"]): str(r["answers_to_contact_id"]) for r in rows if r.get("answers_to_contact_id")}
 
 
 def state() -> Optional[bool]:
@@ -450,6 +485,9 @@ def chain_for(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[s
     where a step is a role, or a department step (_step), or the role the
     answers-to person holds. Each step up from a person P (§3):
 
+      0. from the item's own person only, the item a group that names who
+         its leaders answer to (groups.answers_to_contact_id, M-8): that
+         person, while they hold an active role here;
       1. P leads active departments: their overseer (the one whose units
          hold the item's group, team or role; else every one, once each);
       2. from the item's own person only: the item's department, which P
@@ -501,9 +539,17 @@ def chain_for(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[s
     while cur:
         if len(out) >= CHAIN_MAX:
             return out
-        led = [d for d in m.led_by(cur) if d["id"] not in done]
-        nxt = up([d for d in led if d["id"] in ids] or led, "overseer") if led else None
-        mine = item[0] if item and first else None
+        nxt = None
+        if first and group_id:
+            s = seat(m.group_answers_to(group_id))
+            if s:
+                out.append(({**s[0], "answers_to": str(s[1]["contact_id"]), "for_group": str(group_id)}, [s[1]]))
+                named.add(str(s[1]["contact_id"]))
+                nxt = s
+        led = [d for d in m.led_by(cur) if d["id"] not in done] if not nxt else []
+        if led:
+            nxt = up([d for d in led if d["id"] in ids] or led, "overseer")
+        mine = item[0] if item and first and not nxt else None
         if not nxt and mine and mine["id"] not in done and cur != mine["overseer_contact_id"]:
             lead = up([mine], "leader")
             nxt = up([mine], "overseer") or lead

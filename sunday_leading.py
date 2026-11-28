@@ -182,7 +182,14 @@ def words(what: str, asker: str, team: str, ctx: Dict[str, Any]) -> Dict[str, st
         n = int(ctx.get("n") or 0)
         return {"title": f"{team}: {n} place{'' if n == 1 else 's'} asked for",
                 "body": f"{asker} asked people for the next five Sundays. You'll see who on your team's Sundays."}
+    if what == "unfill":
+        n = int(ctx.get("n") or 0)
+        return {"title": f"{team}: {n} ask{'' if n == 1 else 's'} taken back",
+                "body": f"{asker} took back {n} ask{'' if n == 1 else 's'} that hadn't gone out yet."}
     day = ctx.get("day") or "a coming Sunday"
+    if what == "take_back":
+        return {"title": f"The ask for {ctx.get('place') or 'a place'} was taken back",
+                "body": f"{asker} took back the ask for {ctx.get('place') or 'a place'}, {day}, on {team}."}
     if what == "offer":
         return {"title": f"{ctx['place']} was offered to {team}",
                 "body": f"{asker} offered {ctx['place']}, {day}, to the whole team. The first yes takes it."}

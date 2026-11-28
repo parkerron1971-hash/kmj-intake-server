@@ -11,6 +11,14 @@
 #   PUT    /worship/ministries/{id}            change one
 #   POST   /worship/ministries/{id}/new-link   a new link; the old one stops working
 #   DELETE /worship/ministries/{id}            take it out; its link stops working
+#   GET    /worship/ministries/leader-matches  each ministry's typed leader matched to
+#                                              one of the church's people (M-8): by
+#                                              email, then by name; the rest listed
+#   POST   /worship/ministries/leader-matches/apply   {pairs}: link the matches the office
+#                                              saw and kept, each only while it still matches
+# A ministry's leader can be one of the church's people (leader_contact_id,
+# APPLY-2026-11-28-group-leads.sql; Kevin 2026-11-28: from the members list):
+# picking one fills the typed name and email the links and emails read.
 # Its link, with no sign-in (signed; names one church and one ministry):
 #   GET    /worship/send/{link}                the church, the ministry, when it's due
 #   POST   /worship/send/{link}                send one: it waits on the board for the office
@@ -69,6 +77,16 @@ _FIELDS = "id,business_id,name,leader_name,leader_email,remind,link_n,reminded_o
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _has_person(biz: str) -> bool:
+    """APPLY-2026-11-28-group-leads.sql is in: leader_contact_id answers."""
+    return isinstance(sb_clients.sb_get_as_service(
+        f"/worship_ministries?business_id=eq.{_q(biz)}&select=leader_contact_id&limit=1"), list)
+
+
+def _fields(biz: str) -> str:
+    return _FIELDS + (",leader_contact_id" if _has_person(biz) else "")
 
 
 # ─── the link ────────────────────────────────────────────────────────
@@ -178,13 +196,39 @@ def clean(body: Dict[str, Any], partial: bool = False) -> Dict[str, Any]:
 
 
 def _out(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {"id": row["id"], "name": row.get("name") or "", "leader_name": row.get("leader_name") or "",
-            "leader_email": row.get("leader_email") or "", "remind": row.get("remind") is not False,
-            "link": page_url(link_of(row))}
+    out = {"id": row["id"], "name": row.get("name") or "", "leader_name": row.get("leader_name") or "",
+           "leader_email": row.get("leader_email") or "", "remind": row.get("remind") is not False,
+           "link": page_url(link_of(row))}
+    if "leader_contact_id" in row:
+        out["leader_contact_id"] = str(row["leader_contact_id"]) if row.get("leader_contact_id") else None
+    return out
+
+
+def _person_fields(biz: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """leader_contact_id, when the body names it: one of this church's
+    people, whose name (and email, when it's a good one) the ministry's link
+    and emails then use. None lets go of the person and keeps the typed words."""
+    if "leader_contact_id" not in body:
+        return {}
+    if not _has_person(biz):
+        raise HTTPException(503, "Picking a ministry leader from your members is being switched on. Try again shortly.")
+    cid = body.get("leader_contact_id")
+    if not cid:
+        return {"leader_contact_id": None}
+    import academy_join
+    cid = _uuid(cid, "person")
+    rows = _read(f"/contacts?id=eq.{_q(cid)}&business_id=eq.{_q(biz)}&select=id,name,email&limit=1", "That person")
+    if not rows:
+        raise HTTPException(400, "That person isn't one of this church's people.")
+    out = {"leader_contact_id": cid, "leader_name": " ".join(str(rows[0].get("name") or "").split())[:80]}
+    email = str(rows[0].get("email") or "").strip()
+    if email and len(email) <= 254 and academy_join.valid_email(email):
+        out["leader_email"] = email
+    return out
 
 
 def _mine(biz: str, mid: str) -> Dict[str, Any]:
-    rows = _read(f"/worship_ministries?id=eq.{_q(mid)}&business_id=eq.{_q(biz)}&archived_at=is.null&select={_FIELDS}&limit=1",
+    rows = _read(f"/worship_ministries?id=eq.{_q(mid)}&business_id=eq.{_q(biz)}&archived_at=is.null&select={_fields(biz)}&limit=1",
                  "The ministry")
     if not rows:
         raise HTTPException(404, "ministry not found")
@@ -192,7 +236,7 @@ def _mine(biz: str, mid: str) -> Dict[str, Any]:
 
 
 def _list(biz: str) -> List[Dict[str, Any]]:
-    return _read(f"/worship_ministries?business_id=eq.{_q(biz)}&archived_at=is.null&select={_FIELDS}"
+    return _read(f"/worship_ministries?business_id=eq.{_q(biz)}&archived_at=is.null&select={_fields(biz)}"
                  f"&order=name.asc&limit={MAX_MINISTRIES}", "Your ministries")
 
 
@@ -212,13 +256,14 @@ def add_ministry(body: Dict[str, Any], user: AuthedUser = Depends(require_user))
         fields = clean(body)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    fields.update(_person_fields(biz, body))
     have = _list(biz)
     if len(have) >= MAX_MINISTRIES:
         raise HTTPException(400, f"A church has up to {MAX_MINISTRIES} ministry links")
     if any((r.get("name") or "").lower() == fields["name"].lower() for r in have):
         raise HTTPException(409, f"There's already a link for {fields['name']}")
     now = _now()
-    rows = sb_clients.sb_post_as_service(f"/worship_ministries?select={_FIELDS}", {
+    rows = sb_clients.sb_post_as_service(f"/worship_ministries?select={_fields(biz)}", {
         "business_id": biz, **fields, "remind": fields.get("remind", True), "link_n": 1, "created_at": now, "updated_at": now},
         prefer="return=representation")
     if not isinstance(rows, list) or not rows:
@@ -233,16 +278,111 @@ def save_ministry(ministry_id: str, body: Dict[str, Any], user: AuthedUser = Dep
     _staff(biz, user, "plan")
     cur = _mine(biz, _uuid(ministry_id, "ministry"))
     try:
-        change = clean({k: v for k, v in body.items() if k != "business_id"}, partial=True)
+        change = clean({k: v for k, v in body.items() if k not in ("business_id", "leader_contact_id")}, partial=True)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    change.update(_person_fields(biz, body))
     if "name" in change and any((r.get("name") or "").lower() == change["name"].lower() and r["id"] != cur["id"] for r in _list(biz)):
         raise HTTPException(409, f"There's already a link for {change['name']}")
     change["updated_at"] = _now()
-    rows = sb_clients.sb_patch_as_service(f"/worship_ministries?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_FIELDS}", change)
+    rows = sb_clients.sb_patch_as_service(f"/worship_ministries?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_fields(biz)}", change)
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The change wasn't saved. Try again.")
     return {"ministry": _out(rows[0])}
+
+
+def leader_matches(biz: str) -> Dict[str, Any]:
+    """Each ministry with a typed leader and no person yet, matched to one
+    of the church's people: by email (one person has it), else by the whole
+    name (one person has it, and their email, if any, isn't a different one
+    from the typed email). The rest are listed with why, never guessed."""
+    if not _has_person(biz):
+        return {"ready": False, "matched": [], "unmatched": [], "linked": []}
+    people: List[Dict[str, Any]] = []
+    while True:
+        more = f"&offset={len(people)}" if people else ""
+        rows = sb_clients.sb_get_as_service(f"/contacts?business_id=eq.{_q(biz)}&select=id,name,email&order=id.asc&limit=1000{more}")
+        if not isinstance(rows, list):
+            raise HTTPException(503, "Your members couldn't be read just now. Try again.")
+        people += rows
+        if len(rows) < 1000:
+            break
+    by_email: Dict[str, List[Dict[str, Any]]] = {}
+    by_name: Dict[str, List[Dict[str, Any]]] = {}
+    for p in people:
+        e = str(p.get("email") or "").strip().lower()
+        n = " ".join(str(p.get("name") or "").split()).casefold()
+        if e:
+            by_email.setdefault(e, []).append(p)
+        if n:
+            by_name.setdefault(n, []).append(p)
+    matched, unmatched, linked = [], [], []
+    for m in _list(biz):
+        base = {"id": m["id"], "name": m.get("name") or "", "leader_name": m.get("leader_name") or "",
+                "leader_email": m.get("leader_email") or ""}
+        if m.get("leader_contact_id"):
+            linked.append({**base, "contact_id": str(m["leader_contact_id"])})
+            continue
+        e = base["leader_email"].strip().lower()
+        n = " ".join(base["leader_name"].split()).casefold()
+        if not e and not n:
+            continue
+        hit, by, why = None, "", ""
+        if e and len(by_email.get(e, [])) == 1:
+            hit, by = by_email[e][0], "email"
+        elif e and len(by_email.get(e, [])) > 1:
+            why = "More than one of your people has that email."
+        if not hit and n and len(by_name.get(n, [])) == 1:
+            other = str(by_name[n][0].get("email") or "").strip().lower()
+            if e and other and other != e:
+                # The typed email is someone else's address: never guess (review M4).
+                why = why or "Same name, different email."
+            else:
+                hit, by = by_name[n][0], "name"
+        elif not hit and n and len(by_name.get(n, [])) > 1 and not why:
+            why = "More than one of your people has that name."
+        if hit:
+            matched.append({**base, "contact": {"id": str(hit["id"]), "name": " ".join(str(hit.get("name") or "").split())},
+                            "by": by})
+        else:
+            unmatched.append({**base, "why": why or "No one in your members has that email or name."})
+    return {"ready": True, "matched": matched, "unmatched": unmatched, "linked": linked}
+
+
+@router.get("/ministries/leader-matches")
+def ministry_leader_matches(business_id: str, user: AuthedUser = Depends(require_user)):
+    biz = _uuid(business_id)
+    _staff(biz, user, "plan")
+    return leader_matches(biz)
+
+
+@router.post("/ministries/leader-matches/apply")
+def ministry_leader_matches_apply(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Link the pairs the office saw and kept ({pairs: [{ministry_id,
+    contact_id}]}), each only while it is still a match now (review M4):
+    nothing the office didn't see is ever linked."""
+    body = body or {}
+    biz = _uuid(body.get("business_id"))
+    _staff(biz, user, "plan")
+    pairs = body.get("pairs")
+    if not isinstance(pairs, list) or not pairs or len(pairs) > MAX_MINISTRIES:
+        raise HTTPException(400, "Pick the matches to link.")
+    seen = {(str((p or {}).get("ministry_id") or ""), str((p or {}).get("contact_id") or "")) for p in pairs}
+    got = leader_matches(biz)
+    if not got["ready"]:
+        raise HTTPException(503, "Picking a ministry leader from your members is being switched on. Try again shortly.")
+    done = []
+    for m in got["matched"]:
+        if (str(m["id"]), str(m["contact"]["id"])) not in seen:
+            continue
+        rows = sb_clients.sb_patch_as_service(
+            f"/worship_ministries?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz)}&leader_contact_id=is.null&select=id",
+            {"leader_contact_id": m["contact"]["id"], "updated_at": _now()})
+        if not isinstance(rows, list):
+            raise HTTPException(503, "Some didn't save. Look again and try once more.")
+        if rows:
+            done.append(m)
+    return {"linked_now": done, **leader_matches(biz)}
 
 
 @router.post("/ministries/{ministry_id}/new-link")
@@ -250,7 +390,7 @@ def new_ministry_link(ministry_id: str, body: Dict[str, Any], user: AuthedUser =
     biz = _uuid((body or {}).get("business_id"))
     _staff(biz, user, "plan")
     cur = _mine(biz, _uuid(ministry_id, "ministry"))
-    rows = sb_clients.sb_patch_as_service(f"/worship_ministries?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_FIELDS}",
+    rows = sb_clients.sb_patch_as_service(f"/worship_ministries?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_fields(biz)}",
                                           {"link_n": int(cur.get("link_n") or 1) + 1, "updated_at": _now()})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The new link wasn't made. The old one still works; try again.")

@@ -817,9 +817,9 @@ def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[st
 def group_department(m: Any, business_id: str, leader_id: str, all_roles: List[Dict[str, Any]],
                      defs: List[Dict[str, Any]]) -> Optional[Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]]:
     """A group leader who holds no role, where the church's map is open: the
-    first step to a department one of their groups hangs from (its leader,
-    else its overseer). (None, []) when none says; None when their groups
-    couldn't be read."""
+    first step up from one of their groups: the person the group answers to
+    (M-8), else a department it hangs from (its leader, else its overseer).
+    (None, []) when none says; None when their groups couldn't be read."""
     import church_map
     import church_roles as cr
     import group_lead
@@ -831,7 +831,7 @@ def group_department(m: Any, business_id: str, leader_id: str, all_roles: List[D
     held = cr.active_holders(all_roles)
     for g in groups:
         chain = church_map.chain_for(m, defs, held, leader_id, None, group_id=str(g["id"]), skip={leader_id})
-        if chain and chain[0][0].get("department_id"):
+        if chain and (chain[0][0].get("department_id") or chain[0][0].get("for_group")):
             return chain[0]
     return None, []
 
