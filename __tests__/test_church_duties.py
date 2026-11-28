@@ -207,20 +207,18 @@ def test_each_lanes_starter_set_is_read_from_the_catalog():
     assert cd.STARTER["people_care"] == ["first_guests", "care_visits", "prayer", "help_requests", "shepherding",
                                          "groups", "member_records", "kids", "youth", "devotionals"]
     # The volunteers: rooms are the Office's alone, and ChurchSavvy's jobs Media's.
-    # Ministry operations (M-7, 2026-11-27): every team's serving, the lane's from day one.
-    assert cd.STARTER["sunday_serving"] == ["serve_schedule", "ministry_ops", "serve_teams", "new_volunteers",
-                                            "background_checks", "serving_thanks", "events", "outreach_nights",
-                                            "attendance"]
+    assert cd.STARTER["sunday_serving"] == ["serve_schedule", "serve_teams", "new_volunteers", "background_checks",
+                                            "serving_thanks", "events", "outreach_nights", "attendance"]
     # ChurchSavvy and production (Kevin, 2026-11-02: "churchsavvy is shapretta").
     assert cd.STARTER["media_comms"] == ["sunday_plan", "production_schedule", "churchsavvy_team", "announcements",
                                          "stream", "sermons", "clips", "posts", "flyers", "website"]
     # Each lane's duties are its own: nothing is in two lanes now.
     lanes = ("office_leadership", "people_care", "sunday_serving", "media_comms", "treasurer")
-    assert [len(cd.STARTER[ln]) for ln in lanes] == [14, 10, 9, 10, 4]
+    assert [len(cd.STARTER[ln]) for ln in lanes] == [14, 10, 8, 10, 4]
     assert all(len(d["lanes"]) == 1 for d in cd.CATALOG.values())
     # The care board is the People & Care lane's jobs now, one by one.
     assert "care_board" not in cd.CATALOG and "sunday_ready" not in cd.CATALOG
-    assert len(cd.CATALOG) == 49
+    assert len(cd.CATALOG) == 48
     # The Executive Pastor covers any lane: every duty but money (the plan Kevin approved 10-27).
     assert cd.STARTER["executive_pastor"] == [k for k, d in cd.CATALOG.items() if not d["money"]]
     assert [k for k, d in cd.CATALOG.items() if d["lanes"] == ["executive_pastor"]] == ["monthly_report", "oversee_lanes"]

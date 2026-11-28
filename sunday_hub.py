@@ -388,11 +388,23 @@ def open_to_ops(biz: str) -> Set[str]:
 
 
 def status_block(biz: str, user: Any) -> Dict[str, Any]:
-    """The `sunday` block of GET /worship/status (the hub on for this login)."""
-    st = standing(biz, user)
-    giving = st["approve"] or bool(sees_giving(biz, user)) if st["reader"] else False
+    """The `sunday` block of GET /worship/status (the hub on for this login).
+    Never a 503: a read that fails answers {unavailable: true} with no role
+    (the app shows "didn't load" and asks again), so one blip never takes
+    the Sunday pages away for the session. The offering is the giving
+    gate's to say, for everyone (the owner and the admins too: a church's
+    giving keeper and giving-by-service's own switch decide for them)."""
+    try:
+        st = standing(biz, user)
+    except HTTPException as e:
+        if e.status_code < 500:
+            raise
+        logger.warning("[sunday-hub] status unreadable for %s: %s", biz, e.detail)
+        return {"unavailable": True, "roles": [], "reader": False, "leads": [], "approve": False, "giving": False,
+                "service_word": "Sunday", "service_word_set": False}
+    giving = bool(sees_giving(biz, user)) if st["reader"] else False
     return {"roles": st["roles"], "reader": st["reader"], "leads": st["leads"], "approve": st["approve"],
-            "giving": bool(giving), **service_word(biz)}
+            "giving": giving, **service_word(biz)}
 
 
 # ─── the church's word ───────────────────────────────────────────────
