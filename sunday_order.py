@@ -202,7 +202,9 @@ def put_note(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    # With the one Sunday hub on (M-7), a team's own leader writes their
+    # team's note too: who may is _team_gate's, below.
+    _staff(biz, user, write=not sp._hub_on(user))
     sid = _uuid(body.get("service_id"), "service")
     item_id = str(body.get("item_id") or "")
     team = str(body.get("team") or "")
@@ -226,7 +228,9 @@ def put_note(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     # a Volunteers team's is whoever schedules the volunteers; a ChurchSavvy
     # team's, and a note for every team ("all"), is ChurchSavvy's.
     who = sp._scheduler(biz, user)
-    sp._team_gate(biz, who, sp.CHURCHSAVVY if team == "all" else sp._team_row(biz, team)["owner"])
+    mine = team != "all" and team in who.get("leads", ())
+    sp._team_gate(biz, who, sp.CHURCHSAVVY if team == "all" else sp._team_row(biz, team)["owner"],
+                  None if team == "all" else team, schedule=mine)
     key = f"business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&item_id=eq.{_q(item_id)}&team=eq.{_q(team)}"
     if not note:
         if not sb_clients.sb_delete_as_service(f"/serve_notes?{key}"):
