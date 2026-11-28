@@ -463,7 +463,7 @@ def screen(room, db, monkeypatch):
     c, who = room
     state = {"open": True, "parts": set(), "board": []}
     monkeypatch.setattr(worship_router, "open_to", lambda user: state["open"])
-    monkeypatch.setattr(worship_team, "roles_of", lambda biz, user, part="screens": set(state["parts"]))
+    monkeypatch.setattr(worship_team, "roles_of", lambda biz, user, part="screens", wall=True: set(state["parts"]))
     monkeypatch.setattr(war, "_read", lambda path, what: list(state["board"]))
     monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 11, 15))
     monkeypatch.setattr(business_users_router, "seat_person", lambda biz, uid: {"name": "Tiara Jones"})
