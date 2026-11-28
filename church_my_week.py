@@ -146,6 +146,11 @@ DOOR = {
     # for the first-time guests' Sunday cards line (SUNDAY_CARDS).
     "new_here": {"area": "operate", "id": "sms", "label": "Open New here", "view": "new-here"},
 }
+# Ministry operations (the one Sunday hub, M-7) has a door only where the
+# duty exists: while SUNDAY_HUB isn't off (church_duties.with_ministry_ops).
+import church_duties as _cd  # noqa: E402
+if _cd.MINISTRY_OPS in _cd.CATALOG:
+    DOOR[_cd.MINISTRY_OPS] = {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"}
 # A door whose page is the church's events room (Services & Events): its own
 # id is the room's module, read when the week is (room_door).
 ROSTER = "@roster"

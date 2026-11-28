@@ -332,6 +332,39 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         ["Store orders"], money=True),
 }
 
+# Ministry operations (the one Sunday hub, M-7, Kevin 2026-11-27): every
+# Sunday team's serving seen in one place. The volunteer teams are changed as
+# serve_schedule does; worship and production only where their leader or the
+# pastor has opened the team to ministry operations (serve_teams.open_to_ops).
+# It is in the catalog only while SUNDAY_HUB isn't off, decided as the server
+# starts (a Railway variable change restarts it): with the switch off it is
+# listed nowhere and held by nobody, so every duty list, job sheet, the map
+# and the week are exactly as before.
+MINISTRY_OPS = "ministry_ops"
+_MINISTRY_OPS_DUTY = _duty(
+    "Every team's serving", "worship_media", ["sunday_serving"], "as needed",
+    "Who serves on every Sunday team is seen in one place: the volunteer teams filled, and worship and "
+    "production's spots too once their leader opens them.",
+    ["Who serves when: every team"])
+
+
+def with_ministry_ops(catalog: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """The catalog with ministry_ops in its place, after serve_schedule."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for k, d in catalog.items():
+        out[k] = d
+        if k == "serve_schedule":
+            out[MINISTRY_OPS] = _MINISTRY_OPS_DUTY
+    return out
+
+
+def _hub_lists_ministry_ops() -> bool:
+    return (os.environ.get("SUNDAY_HUB") or "off").strip().lower() in ("owner", "on")
+
+
+if _hub_lists_ministry_ops():
+    CATALOG = with_ministry_ops(CATALOG)
+
 # Each lane's default duties: the general structure a church starts from.
 STARTER: Dict[str, List[str]] = {ln: [k for k, d in CATALOG.items() if ln in d["lanes"]] for ln in LANE_KEYS}
 # The Executive Pastor is over every lane, so she covers any lane's work by
@@ -610,6 +643,12 @@ def _manager_duties(lanes: Set[str], uid: str, moved: Dict[str, List[str]],
                 out.add(key)
         elif any(key in STARTER.get(ln, ()) for ln in lanes) or (by_area is not None and key in by_area):
             out.add(key)
+    # Ministry operations by a lane or the areas follows the lane's "Who serves
+    # when": where the church moved serve_schedule to someone else, the rest
+    # of the lane doesn't keep every team's serving. Moved to a person by name,
+    # it is theirs whatever else they hold.
+    if MINISTRY_OPS in out and MINISTRY_OPS not in moved and "serve_schedule" not in out:
+        out.discard(MINISTRY_OPS)
     return frozenset(out)
 
 
