@@ -56,7 +56,9 @@ def test_the_switch_is_off_owner_or_on_and_owner_is_the_platform_owners_church(m
     db = build(monkeypatch, filled=False)
     me, other = SimpleNamespace(email=PLATFORM.upper()), SimpleNamespace(email="pastor@gracebaptist.org")
     monkeypatch.delenv("CHURCH_MAP")
-    assert cm.mode() == "owner"
+    assert cm.mode() == "on"                    # every church since M-8 (Kevin 2026-11-28)
+    assert (cm.open_to(me), cm.open_to(other), cm.church_open(GRACE)) == (True, True, True)
+    monkeypatch.setenv("CHURCH_MAP", "owner")
     assert (cm.open_to(me), cm.open_to(other)) == (True, False)
     assert (cm.church_open(LC), cm.church_open(church(db, LC)), cm.church_open(GRACE)) == (True, True, False)
     monkeypatch.setenv("CHURCH_MAP", "on")
