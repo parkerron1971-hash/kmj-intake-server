@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "platform_update_seen": "What's New (platform_updates.py): which app updates a login has seen in this business, and how. App bookkeeping, not the business's records, and meaningless outside Solutionist; the rows go with the business (cascade)",
     "inbound_checks": "Needs a look (inbound_hold.py): one row a checked website card, its verdict, reasons and salted hashes (no words); the card itself is exported with its contact and event. Hashes salted with this server's secret mean nothing elsewhere; the rows go with the business (cascade)",
     "inbound_decisions": "Needs a look: each Real person / Not a guest / Scam tap and what it changed, for a week's undo; the outcome is on the contact (status, metadata.inbound_decision), which is exported. The rows go with the business (cascade)",
     "inbound_senders": "Needs a look: a church's memory of a sender as salted hashes (real or scam), meaningful only under this server's secret; restored, a church starts its sender memory again. The rows go with the business (cascade)",
