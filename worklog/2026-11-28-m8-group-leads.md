@@ -16,6 +16,7 @@ decisions:
   - "Who the group answers to must hold an active role here (the map's answers-to rule) and can't be one of its leaders"
   - "Office: owner, admin, or a login holding the groups duty (church_duties). The lead: co-leaders only, picked from the group's own people, from their login or the Lead tab's Your co-leaders"
   - "The note: a phone note (groups kind) and an email to an adult without a phone; only to people newly leading"
+  - "Review fixes (account 2, 11-28): M1, the leader rows are read in one order (co_leader, created_at, contact_id), so the lead of a group with several plain leader rows is always the earliest; a save of only answers-to, a class or a Serve choice leaves every leader row alone. M2, the file's triggers let only the server (service_role, or the SQL editor) change who a group answers to, its class or its Serve choice, or name a co-leader; an office seat writing straight to the database is refused (PGlite: 35 checks)"
   - "Routes ride church_groups_office's router (no change to kmj_intake_automation.py, which M-7's open PRs edit)"
 related: [2026-10-20-group-lead.md, 2026-11-04-church-map-chain.md, 2026-11-27-m7-sunday-hub-backend.md]
 ---

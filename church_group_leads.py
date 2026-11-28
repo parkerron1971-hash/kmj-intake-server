@@ -68,7 +68,7 @@ _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 _RANK = {"viewer": 1, "member": 2, "manager": 3, "admin": 4, "owner": 5}
 KIND_WORD = {"small_group": "group", "team": "team", "class": "class", "ministry": "ministry"}
 UNREAD = "Group leaders didn't load. Nothing was changed. Try again."
-UNSAVED = "That didn't save. Try again."
+UNSAVED = "That didn't all save. Open the group again to see what did, then try again."
 NOT_YET = "Group leaders are being switched on. Try again shortly."
 
 
@@ -145,11 +145,19 @@ def group(biz: str, gid: str, *, cols: bool = True) -> Dict[str, Any]:
     return rows[0]
 
 
+LEADER_ORDER = "co_leader.asc,created_at.asc,contact_id.asc"
+
+
 def leader_rows(biz: str, gid: str, *, cols: bool = True) -> List[Dict[str, Any]]:
+    """The group's leader rows in one fixed order (M-8 review M1): the lead
+    first, then by when each started leading, then by id, so "the lead" of a
+    group with several plain leader rows (led before co-leaders existed, or
+    made leader on Groups) is the same row on every read."""
     more = ",co_leader" if cols else ""
+    order = LEADER_ORDER if cols else "created_at.asc,contact_id.asc"
     return [{"contact_id": str(r["contact_id"]), "co_leader": bool(r.get("co_leader"))}
             for r in _need(f"/group_members?business_id=eq.{_q(biz)}&group_id=eq.{_q(gid)}&role=eq.leader"
-                           f"&select=contact_id{more}&limit=50")]
+                           f"&select=contact_id{more}&order={order}&limit=50")]
 
 
 def lead_of(rows: List[Dict[str, Any]]) -> Optional[str]:
@@ -343,7 +351,10 @@ def save(biz: str, gid: str, body: Dict[str, Any], how: str) -> Dict[str, Any]:
         patch["serve_option"] = opt
 
     _ours(biz, [new_lead, *co, to])
-    want = ({new_lead: False} if new_lead else {}) | {c: True for c in co}
+    leaders_sent = bool(sent & {"leader_contact_id", "co_leader_contact_ids"})
+    # A save of only who it answers to, a class or a Serve choice leaves every
+    # leader row as it is (M-8 review M1).
+    want = (({new_lead: False} if new_lead else {}) | {c: True for c in co}) if leaders_sent else dict(before)
     up = [{"group_id": gid, "contact_id": c, "business_id": biz, "role": "leader", "co_leader": flag}
           for c, flag in want.items() if before.get(c) is not flag]
     if up:

@@ -28,7 +28,12 @@
 --                                emails that read them.
 --
 -- Each new column is checked against the row's own church by a trigger
--- (group_leads_same_business), only when a write names it. No table is made,
+-- (group_leads_same_business), only when a write names it. Only the server
+-- (service_role, or the SQL editor) changes who a group answers to, its class
+-- or its Serve choice, or makes someone a co-leader: an office seat writing
+-- straight to the database never does, so the groups-duty gate and Kevin's
+-- answer 2 (a leader never changes who their group answers to) hold there
+-- too (M-8 review M2). No table is made,
 -- nothing is dropped, every existing row reads its default (not a co-leader;
 -- answers to nobody; no class; no Serve choice; no ministry person). The
 -- server never sends these columns until it reads them back
@@ -78,12 +83,20 @@ do $$ begin
   end if;
 end $$;
 
--- A row that stops leading stops being a co-leader; a member row is never one.
+-- Who may change what only the server changes (M-8 review M2): the service
+-- role the server writes with, and the SQL editor's own roles, checked inline
+-- (current_user) so a browser write that names none of these columns, like
+-- Groups' New group, runs as before.
+-- A row that stops leading stops being a co-leader; a member row is never one;
+-- only the server makes someone a co-leader.
 create or replace function public.group_members_co_leader() returns trigger
 language plpgsql set search_path = public as $$
 begin
   if new.role <> 'leader' then
     new.co_leader := false;
+  end if;
+  if new.co_leader and (tg_op = 'INSERT' or not old.co_leader) and current_user not in ('service_role', 'postgres', 'supabase_admin') then
+    raise exception 'Only the church office names a co-leader';
   end if;
   return new;
 end $$;
@@ -96,6 +109,14 @@ create trigger group_members_co_leader before insert or update of role, co_leade
 create or replace function public.group_leads_same_business() returns trigger
 language plpgsql set search_path = public as $$
 begin
+  if tg_table_name = 'groups' and current_user not in ('service_role', 'postgres', 'supabase_admin') then
+    if (tg_op = 'INSERT' and (new.answers_to_contact_id is not null or new.course_id is not null or new.serve_option is not null))
+       or (tg_op = 'UPDATE' and (new.answers_to_contact_id is distinct from old.answers_to_contact_id
+                                 or new.course_id is distinct from old.course_id
+                                 or new.serve_option is distinct from old.serve_option)) then
+      raise exception 'Only the church office changes who a group answers to, its class or its Serve choice';
+    end if;
+  end if;
   if tg_table_name = 'groups' then
     if new.answers_to_contact_id is not null and (tg_op = 'INSERT'
         or new.answers_to_contact_id is distinct from old.answers_to_contact_id
@@ -128,7 +149,7 @@ end $$;
 revoke all on function public.group_leads_same_business() from public, anon, authenticated;
 drop trigger if exists group_leads_same_business on public.groups;
 create trigger group_leads_same_business
-  before insert or update of answers_to_contact_id, course_id, business_id
+  before insert or update of answers_to_contact_id, course_id, serve_option, business_id
   on public.groups for each row execute function public.group_leads_same_business();
 drop trigger if exists group_leads_same_business on public.worship_ministries;
 create trigger group_leads_same_business

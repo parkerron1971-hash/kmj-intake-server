@@ -348,3 +348,33 @@ def test_the_lead_tab_shows_the_co_leaders_block_to_the_lead_only(lc):
     assert "Your co-leaders" in html and "Make co-leader" in html and "Eve Hall" in html
     assert group_lead._co_leaders_block(v, w["eve"], people, gid, **kw) == ""
     assert group_lead._co_leaders_block({"leads": None}, w["gloria"], people, gid, **kw) == ""
+
+
+# ── M-8 review M1: the lead is the same row every time ───────────────
+
+def test_with_two_plain_leaders_the_earlier_is_the_lead_every_time(lc):
+    w, o = lc.who[LC], Office(lc)
+    gid = _gid(lc, LC, "Sisters in the City")
+    uid, email = _owner(lc)
+    # Made leader on Groups later: a second plain row, read first by the database.
+    for m in lc.t["group_members"]:
+        if m["group_id"] == gid:
+            m["created_at"] = "2026-10-01T00:00:00+00:00"
+    lc.t["group_members"].insert(0, {"group_id": gid, "business_id": LC, "contact_id": w["eve"], "role": "leader",
+                                     "co_leader": False, "created_at": "2026-11-20T00:00:00+00:00"})
+    r = o.as_(uid, email).get(f"/church/groups/{gid}/leads", params={"business_id": LC})
+    assert r.json()["leader"]["name"] == "Gloria Hunt"
+    assert [p["name"] for p in r.json()["co_leaders"]] == ["Eve Hall"]
+
+
+def test_a_save_of_only_who_it_answers_to_leaves_every_leader_row(lc):
+    w, o = lc.who[LC], Office(lc)
+    gid = _gid(lc, LC, "Sisters in the City")
+    uid, email = _owner(lc)
+    lc.t["group_members"].append({"group_id": gid, "business_id": LC, "contact_id": w["eve"], "role": "leader",
+                                  "co_leader": False, "created_at": "2026-11-20T00:00:00+00:00"})
+    before = _rows(lc, gid)
+    r = _put(o, uid, gid, {"answers_to_contact_id": w["marcus"]}, email=email)
+    assert r.status_code == 200, r.text
+    assert _rows(lc, gid) == before                                       # nobody turned into a co-leader
+    assert lc.pushed == [] and lc.emails == []

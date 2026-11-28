@@ -99,6 +99,31 @@ assert.deepEqual(await one(`SELECT leader_contact_id FROM worship_ministries WHE
 await db.query(`DELETE FROM academy_courses WHERE id = $1`, [c1]);
 assert.deepEqual(await one(`SELECT course_id FROM groups WHERE id = $1`, [g1]), { course_id: null }); checks++;
 
+// Only the server changes who a group answers to, its class or its Serve
+// choice, or names a co-leader (M-8 review M2). An office seat writing
+// straight to the database (here a role past row security, as a writer seat's
+// policies let it through) is refused; its ordinary writes still work.
+await db.exec(`CREATE ROLE seat BYPASSRLS; GRANT ALL ON ALL TABLES IN SCHEMA public TO seat;`);
+await db.exec(`SET ROLE seat`);
+await refuses(`UPDATE groups SET answers_to_contact_id = $2 WHERE id = $1`, [g2, elsewhere], /Only the church office/);
+await refuses(`UPDATE groups SET serve_option = 'Parking' WHERE id = $1`, [g1], /Only the church office/);
+await refuses(`INSERT INTO groups(business_id, name, course_id) VALUES ($1,'Sneaky class',$2)`, [b2, c2], /Only the church office/);
+await refuses(`INSERT INTO group_members(group_id, contact_id, business_id, role, co_leader) VALUES ($1,$2,$3,'leader',true)`,
+  [g2, elsewhere, b2], /Only the church office names a co-leader/);
+await db.query(`UPDATE groups SET name = 'Parking (seat)' WHERE id = $1`, [g1]); checks++;               // a rename: fine
+const g3 = (await db.query(`INSERT INTO groups(business_id, name) VALUES ($1,'New group from the browser') RETURNING id`, [b1])).rows[0].id;
+checks++;                                                                                                 // New group: fine
+await db.query(`INSERT INTO group_members(group_id, contact_id, business_id, role) VALUES ($1,$2,$3,'leader')`, [g3, ana, b1]);
+checks++;                                                                                                 // Make leader: fine
+await db.exec(`RESET ROLE`);
+await db.query(`UPDATE group_members SET co_leader = true WHERE group_id = $1 AND contact_id = $2`, [g3, ana]); checks++;  // the server may
+await db.exec(`SET ROLE seat`);
+await db.query(`UPDATE group_members SET role = 'member' WHERE group_id = $1 AND contact_id = $2`, [g3, ana]); checks++;   // Make member: fine
+assert.equal((await one(`SELECT co_leader FROM group_members WHERE group_id = $1 AND contact_id = $2`, [g3, ana])).co_leader, false); checks++;
+await refuses(`UPDATE group_members SET role = 'leader', co_leader = true WHERE group_id = $1 AND contact_id = $2`, [g3, ana],
+  /Only the church office names a co-leader/);
+await db.exec(`RESET ROLE`);
+
 // The functions are not for the browser roles.
 const grants = await db.query(`SELECT p.proname, has_function_privilege('anon', p.oid, 'execute') AS anon,
   has_function_privilege('authenticated', p.oid, 'execute') AS auth FROM pg_proc p
