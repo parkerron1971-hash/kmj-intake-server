@@ -456,15 +456,25 @@ def plan_name(plan: str) -> str:
 
 
 def monthly_price_cents(plan: str, price_id: str, *, founding_ids: set, founder_ids: set,
-                        annual_ids: set) -> Tuple[int, bool]:
+                        annual_ids: set, kept_founding: bool = False) -> Tuple[int, bool]:
     """(what this subscription brings in a month, whether it's a founding
     church price). A church on a founding price id pays the founding price;
-    the Founder seat pays its own; an annual price counts a twelfth of its
-    year (ten months' price)."""
+    a church on a kept price (raised since it joined) pays what that price
+    charges, and it is a founding price when the church holds a place
+    (`kept_founding`); the Founder seat pays its own; an annual price counts
+    a twelfth of its year (ten months' price)."""
+    import church_founding
     import feature_gates
     import pricing_config
     founding = False
     if plan in feature_gates.CHURCH_PLANS:
+        # A church still on a price raised since it joined pays that price
+        # (STRIPE_PRICE_IDS_KEPT; Small's $79 founding price, 2026-11-27).
+        kept = church_founding.kept_price(price_id)             if feature_gates.kept_price_ids().get(price_id) == plan else None
+        if kept:
+            if kept["year"]:
+                return int(round(kept["unit_amount"] / 12)), kept_founding
+            return int(kept["month_cents"]), kept_founding
         if price_id in founding_ids:
             base, founding = pricing_config.church_founding_price_cents().get(plan, 0), True
         else:
@@ -516,7 +526,8 @@ def income_from_rows(rows: List[Dict[str, Any]],
         if mine:
             continue
         cents, is_founding = monthly_price_cents(plan, price_id, founding_ids=founding_ids,
-                                                 founder_ids=founder_ids, annual_ids=annual_ids)
+                                                 founder_ids=founder_ids, annual_ids=annual_ids,
+                                                 kept_founding=bool(row.get("founding")))
         entry = by_plan.setdefault(plan, {"plan": plan, "name": plan_name(plan), "count": 0, "cents": 0})
         entry["count"] += 1
         entry["cents"] += cents
@@ -533,7 +544,7 @@ def read_income() -> Dict[str, Any]:
     rows = sb_clients.sb_get_all_as_service(
         "/businesses?or=(subscription_status.in.(active,past_due),comp_tier.not.is.null)"
         "&is_sample=not.is.true"   # a sample church never pays (sample_church.py, BE-3)
-        "&select=id,owner_id,subscription_status,subscription_plan,comp_tier",
+        "&select=id,owner_id,subscription_status,subscription_plan,comp_tier,founding:settings->founding_church",
         key="id", strict=True, redact=True) or []
     return income_from_rows(rows, church_founding._owner_is_platform)
 

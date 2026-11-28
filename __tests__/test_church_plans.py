@@ -1,7 +1,8 @@
 """Church plans by size (Kevin, 2026-11-03: "I agree with the plan").
 
-Small $79 (up to 100 on a Sunday), Growing $199 (100-250), Established $399
-(250-500), Large $699 (500-1,500), sold only to churches and ministries.
+Small $129 (up to 100 on a Sunday), Growing $249 (100-250), Established $499
+(250-500), Large $899 (500-1,500), founding $99 / $199 / $399 / $699
+(Small since 2026-11-27), sold only to churches and ministries.
 The plan sets the room: office logins 3 / 8 / 15 / 35, texts 500 / 1,500 /
 3,000 / 8,000, sermon clip hours 0 / 5 / 10 / 20, Chief credits 3,000 /
 7,500 / 15,000 / 27,500. Small has no weekly plan and no included clip hours
@@ -48,8 +49,9 @@ def test_the_ladder_is_kevins():
     # the founding prices the first ten churches pay. One plan, two prices:
     # the credits are the same at both (Kevin: "so people don't think they
     # get higher credits cheaper").
-    assert pricing_config.church_price_cents() == {SMALL: 9900, GROWING: 24900, ESTABLISHED: 49900, LARGE: 89900}
-    assert pricing_config.church_founding_price_cents() == {SMALL: 7900, GROWING: 19900, ESTABLISHED: 39900,
+    # Small rose on 2026-11-27 (Kevin): founding $99, regular $129.
+    assert pricing_config.church_price_cents() == {SMALL: 12900, GROWING: 24900, ESTABLISHED: 49900, LARGE: 89900}
+    assert pricing_config.church_founding_price_cents() == {SMALL: 9900, GROWING: 19900, ESTABLISHED: 39900,
                                                             LARGE: 69900}
     assert pricing_config.church_seats() == {SMALL: 3, GROWING: 8, ESTABLISHED: 15, LARGE: 35}
     assert pricing_config.church_texts_monthly() == {SMALL: 500, GROWING: 1500, ESTABLISHED: 3000, LARGE: 8000}

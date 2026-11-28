@@ -682,6 +682,8 @@ async def move_status(business_id: str, user: AuthedUser = Depends(require_user)
     taken = await asyncio.to_thread(_founding_taken)
     left = None if taken is None else max(0, pricing_config.founding_church_moves() - taken)
     import church_founding
+    # A kept price is read from Stripe once (church_founding.kept_price); off the loop.
+    await asyncio.to_thread(church_founding.kept_price, str(biz.get("subscription_plan") or ""))
     price = await asyncio.to_thread(church_founding.public_state)
     return {"ok": True, "move": _settings(biz).get(MOVE),
             "on_church_plan": plan in feature_gates.CHURCH_PLANS,
@@ -711,6 +713,8 @@ async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user))
         return {"ok": True, "move": now, "already": True}
     plan = feature_gates.plan_of(biz)
     moving_from = (body.moving_from or "").strip() or None
+    import church_founding
+    await asyncio.to_thread(church_founding.kept_price, str(biz.get("subscription_plan") or ""))
     taken = await asyncio.to_thread(_founding_taken)
     if taken is None:
         raise HTTPException(503, "Couldn't check the founding churches. Try again in a minute.")
