@@ -170,12 +170,17 @@ def offer_prices() -> Optional[Dict[str, Dict[str, int]]]:
 
 
 def price_cents_for(biz: Optional[Dict[str, Any]], plan: Optional[str]) -> int:
-    """What this church pays a month for `plan`: the founding price for a
-    church holding a place (or already on a founding price), else the
-    regular price. For the first payment and the move (three months of it)."""
+    """What this church pays a month for `plan`: what its kept price charges
+    when it is still on one for that plan (a price raised since it joined,
+    kept_month_cents), else the founding price for a church holding a place
+    (or already on a founding price), else the regular price. For the first
+    payment and the move (three months of it)."""
     import pricing_config
     regular = pricing_config.church_price_cents().get(plan or "", 0)
     sub = str((biz or {}).get("subscription_plan") or "").strip()
+    kept = kept_month_cents(sub, plan)
+    if kept:
+        return kept
     if record(biz) is not None or (sub and sub in founding_price_ids()):
         return pricing_config.church_founding_price_cents().get(plan or "", regular) or regular
     return regular
@@ -183,6 +188,76 @@ def price_cents_for(biz: Optional[Dict[str, Any]], plan: Optional[str]) -> int:
 
 def forget() -> None:
     _public.update(at=0.0, value=None)
+
+
+# ─── A kept price ────────────────────────────────────────────────────
+
+# A price raised while a church was on it stays its price: its id moves to
+# STRIPE_PRICE_IDS_KEPT (docs/FOUNDING_CHURCHES.md), so it keeps meaning the
+# plan. What it charges is read from Stripe once: a Stripe price's amount
+# never changes, so a good read is kept for the life of the process. Small's
+# founding price went from $79 to $99 on 2026-11-27, and the church that took
+# its place at $79 is still charged $79; this is how its card, its move and
+# the income say so, instead of the new founding price.
+_kept: Dict[str, Dict[str, int]] = {}
+
+
+def _month_cents_of(price: Dict[str, Any]) -> Optional[int]:
+    """A Stripe price as a month: every three months is a third, a year is
+    ANNUAL_MONTHS months (how the yearly prices are made)."""
+    import marketing_pages as mp
+    amount, rec = price.get("unit_amount"), price.get("recurring") or {}
+    if not isinstance(amount, int) or amount <= 0:
+        return None
+    count = int(rec.get("interval_count") or 1) or 1
+    if rec.get("interval") == "month":
+        return round(amount / count)
+    if rec.get("interval") == "year" and count == 1:
+        return round(amount / mp.ANNUAL_MONTHS)
+    return None
+
+
+def kept_price(price_id: str) -> Optional[Dict[str, int]]:
+    """{unit_amount, month_cents, interval_count, year} for a kept price, or
+    None when it isn't one (or Stripe can't be read now: asked again later)."""
+    pid = (price_id or "").strip()
+    if not pid:
+        return None
+    import feature_gates
+    if pid not in feature_gates.kept_price_ids():
+        return None
+    if pid in _kept:
+        return _kept[pid]
+    key = (os.environ.get("STRIPE_SECRET_KEY") or "").strip()
+    if not key:
+        return None
+    try:
+        import httpx
+        from urllib.parse import quote
+        r = httpx.get(f"https://api.stripe.com/v1/prices/{quote(pid, safe='')}", auth=(key, ""), timeout=10)
+        price = r.json() if r.status_code < 400 else None
+    except Exception as e:  # noqa: BLE001 — unread: the plan's own prices answer this time
+        logger.warning("kept price %s unreadable: %s", pid, e)
+        return None
+    month = _month_cents_of(price) if isinstance(price, dict) else None
+    if not month:
+        return None
+    rec = price.get("recurring") or {}
+    _kept[pid] = {"unit_amount": int(price["unit_amount"]), "month_cents": month,
+                  "interval_count": int(rec.get("interval_count") or 1),
+                  "year": 1 if rec.get("interval") == "year" else 0}
+    return _kept[pid]
+
+
+def kept_month_cents(price_id: str, plan: Optional[str] = None) -> Optional[int]:
+    """What a kept price charges a month, or None. With `plan`, only a kept
+    price of that plan answers (a church moving to another size pays that
+    size's price)."""
+    import feature_gates
+    if plan and feature_gates.kept_price_ids().get((price_id or "").strip()) != plan:
+        return None
+    held = kept_price(price_id)
+    return held["month_cents"] if held else None
 
 
 # ─── The founding prices ─────────────────────────────────────────────
