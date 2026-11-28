@@ -199,13 +199,19 @@ def audience_plan_offered(plan: str) -> bool:
 # "so people don't think they get higher credits cheaper"): one plan, two
 # prices, so the founding card's "Save $50 a month" is the same plan for
 # less. A full tank is about 36% of the founding price, 29% of the regular.
+#
+# Small rose again on 2026-11-27 (Kevin): founding $99, regular $129, the
+# credits still 3,000. The other three sizes did not move. The church that
+# took its founding place at $79 keeps paying $79: its price id is in
+# STRIPE_PRICE_IDS_KEPT, and church_founding.kept_month_cents reads what it
+# charges from Stripe, so its own card, its move and the income all say $79.
 CHURCH_PLAN_KEYS = ("church_small", "church_growing", "church_established", "church_large")
 
 
 def church_price_cents() -> Dict[str, int]:
     """church plan key -> monthly REGULAR price, cents (annual = 10x)."""
     return {
-        "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 9900),
+        "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 12900),
         "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 24900),
         "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 49900),
         "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 89900),
@@ -217,7 +223,7 @@ def church_founding_price_cents() -> Dict[str, int]:
     the first ten churches pay (church_founding). These are the Stripe prices
     in STRIPE_PRICE_ID_CHURCH_<SIZE>_FOUNDING; the two must say the same."""
     return {
-        "church_small":       _dial("FOUNDING_CHURCH_SMALL_CENTS", "PRICE_", 7900),
+        "church_small":       _dial("FOUNDING_CHURCH_SMALL_CENTS", "PRICE_", 9900),
         "church_growing":     _dial("FOUNDING_CHURCH_GROWING_CENTS", "PRICE_", 19900),
         "church_established": _dial("FOUNDING_CHURCH_ESTABLISHED_CENTS", "PRICE_", 39900),
         "church_large":       _dial("FOUNDING_CHURCH_LARGE_CENTS", "PRICE_", 69900),

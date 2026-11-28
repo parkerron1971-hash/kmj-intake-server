@@ -608,12 +608,25 @@ async def billing_plans(for_type: Optional[str] = None):
                                  "ends": founding.get("ends") if founding else None,
                                  "prices": prices}
 
+    price_plans = _price_plans()
+    if church_founding_state is not None:
+        # A church still on a price raised since it joined (STRIPE_PRICE_IDS_KEPT)
+        # pays that price, not today's: its own card says what it really
+        # charges (Small's $79 founding price, 2026-11-27).
+        for pid, plan in fg.kept_price_ids().items():
+            if plan in fg.CHURCH_PLANS and pid in price_plans:
+                held = await asyncio.to_thread(church_founding.kept_price, pid)
+                if held:
+                    every = ("year" if held["year"] else
+                             "quarter" if held["interval_count"] == 3 else "month")
+                    price_plans[pid].update(every=every, kept_cents=held["unit_amount"])
+
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
             "audience_plans": audience,
             "church_offer": church_offer,
             "church_founding": church_founding_state,
-            "price_plans": _price_plans(),
+            "price_plans": price_plans,
             "features_by_plan": features_by_plan,
             "marketing_by_plan": marketing_by_plan,
             "plan_details": plan_details,
@@ -2090,8 +2103,12 @@ BOOTSTRAP_CATALOG = [
     # ids belong in the _FOUNDING vars (church_founding, docs/FOUNDING_CHURCHES.md).
     # Creating them sells nothing: checkout refuses them until
     # PLAN_CHURCH_OFFERED=1, and only to churches.
-    ("STRIPE_PRICE_ID_CHURCH_SMALL",              "solutionist_church_small_monthly_2026_11",       "Solutionist Small Church",       9900,   "month"),
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual_2026_11",        "Solutionist Small Church",       99000,  "year"),
+    # Small rose again on 2026-11-27 (Kevin): regular $129, founding $99, on
+    # their own keys (_2026_11b). The keys they replace still name $99 / $79,
+    # and the one church on the $79 price keeps it through STRIPE_PRICE_IDS_KEPT,
+    # so those keys are out of the catalog: a run must never hand them back.
+    ("STRIPE_PRICE_ID_CHURCH_SMALL",              "solutionist_church_small_monthly_2026_11b",      "Solutionist Small Church",       12900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual_2026_11b",       "Solutionist Small Church",       129000, "year"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING",            "solutionist_church_growing_monthly_2026_11",     "Solutionist Growing Church",     24900,  "month"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL",     "solutionist_church_growing_annual_2026_11",      "Solutionist Growing Church",     249000, "year"),
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly_2026_11", "Solutionist Established Church", 49900,  "month"),
@@ -2099,9 +2116,10 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly_2026_11",       "Solutionist Large Church",       89900,  "month"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual_2026_11",        "Solutionist Large Church",       899000, "year"),
     # The founding prices: the 2026-11-03 prices, reused by their keys (a
-    # re-run hands back the same ids, never new ones).
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_FOUNDING",              "solutionist_church_small_monthly",       "Solutionist Small Church",       7900,   "month"),
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL_FOUNDING",       "solutionist_church_small_annual",        "Solutionist Small Church",       79000,  "year"),
+    # re-run hands back the same ids, never new ones). Small's are its own
+    # since 2026-11-27: $99 a month.
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_FOUNDING",              "solutionist_church_small_monthly_founding_2026_11b", "Solutionist Small Church", 9900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL_FOUNDING",       "solutionist_church_small_annual_founding_2026_11b",  "Solutionist Small Church", 99000, "year"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_FOUNDING",            "solutionist_church_growing_monthly",     "Solutionist Growing Church",     19900,  "month"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL_FOUNDING",     "solutionist_church_growing_annual",      "Solutionist Growing Church",     199000, "year"),
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_FOUNDING",        "solutionist_church_established_monthly", "Solutionist Established Church", 39900,  "month"),
@@ -2124,11 +2142,11 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_STARTER_QUARTERLY",                     "solutionist_starter_quarterly",                     "Solutionist Starter",            23700,  "quarter"),
     ("STRIPE_PRICE_ID_PROFESSIONAL_QUARTERLY",                "solutionist_professional_quarterly",                "Solutionist Professional",       44700,  "quarter"),
     ("STRIPE_PRICE_ID_PRACTICE_QUARTERLY",                    "solutionist_practice_quarterly",                    "The Solutionist",                89700,  "quarter"),
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY",                "solutionist_church_small_quarterly_2026_11",        "Solutionist Small Church",       29700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY",                "solutionist_church_small_quarterly_2026_11b",       "Solutionist Small Church",       38700,  "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY",              "solutionist_church_growing_quarterly_2026_11",      "Solutionist Growing Church",     74700,  "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_QUARTERLY",          "solutionist_church_established_quarterly_2026_11",  "Solutionist Established Church", 149700, "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE_QUARTERLY",                "solutionist_church_large_quarterly_2026_11",        "Solutionist Large Church",       269700, "quarter"),
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY_FOUNDING",       "solutionist_church_small_quarterly_founding",       "Solutionist Small Church",       23700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY_FOUNDING",       "solutionist_church_small_quarterly_founding_2026_11b", "Solutionist Small Church",    29700,  "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY_FOUNDING",     "solutionist_church_growing_quarterly_founding",     "Solutionist Growing Church",     59700,  "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_QUARTERLY_FOUNDING", "solutionist_church_established_quarterly_founding", "Solutionist Established Church", 119700, "quarter"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE_QUARTERLY_FOUNDING",       "solutionist_church_large_quarterly_founding",       "Solutionist Large Church",       209700, "quarter"),
