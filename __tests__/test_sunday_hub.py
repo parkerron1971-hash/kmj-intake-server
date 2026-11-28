@@ -149,6 +149,28 @@ def test_status_carries_the_roles(church):
                  "service_word": "Sunday", "service_word_set": False}
 
 
+def test_the_pastor_too_goes_through_the_giving_gate(church):
+    # A church whose giving keeper holds the key back from the Admin login (or
+    # where giving by service is off): the gate says no, and so does the status.
+    church.state["giving"].discard("u-admin")
+    s = church.as_("admin").get("/worship/status", params={"business_id": BIZ}).json()["sunday"]
+    assert s["approve"] is True and s["giving"] is False
+    church.state["giving"].discard("u-owner")
+    assert church.as_("owner").get("/worship/status", params={"business_id": BIZ}).json()["sunday"]["giving"] is False
+
+
+def test_status_never_503s_with_the_hub_on(church, monkeypatch):
+    # The hub's own reads fail (the seat check before it answered as today).
+    def broken(biz, user):
+        raise HTTPException(503, "Who does what on Sunday couldn't be read just now. Try again.")
+    monkeypatch.setattr(hub, "person_of", broken)
+    r = church.as_("worship").get("/worship/status", params={"business_id": BIZ})
+    assert r.status_code == 200
+    s = r.json()["sunday"]
+    assert r.json()["sunday_hub"] is True and s["unavailable"] is True
+    assert s["roles"] == [] and s["reader"] is False and s["giving"] is False
+
+
 def test_giving_follows_the_giving_gate(church):
     church.state["giving"].add("u-planner")
     assert church.as_("planner").get("/worship/status", params={"business_id": BIZ}).json()["sunday"]["giving"] is True
@@ -193,12 +215,30 @@ def test_the_word_route_is_dark_while_the_switch_is_off(church, monkeypatch):
 
 # ─── the duty ─────────────────────────────────────────────────────────
 
-def test_ministry_ops_is_the_sunday_and_serving_lanes():
-    d = cd.CATALOG["ministry_ops"]
+def test_with_the_switch_off_the_duty_is_nowhere():
+    # CI runs with SUNDAY_HUB unset: every duty list is exactly today's.
+    assert "ministry_ops" not in cd.CATALOG and "ministry_ops" not in cd.ALL
+    assert "ministry_ops" not in cd.STARTER["sunday_serving"] and len(cd.STARTER["sunday_serving"]) == 8
+    import church_my_week
+    assert "ministry_ops" not in church_my_week.DOOR
+    assert "ministry_ops" not in cd._manager_duties({"sunday_serving"}, "u-1", {})
+
+
+def test_with_the_hub_on_it_is_the_sunday_and_serving_lanes(monkeypatch):
+    full = cd.with_ministry_ops(cd.CATALOG)
+    assert list(full)[list(full).index("serve_schedule") + 1] == "ministry_ops"
+    d = full["ministry_ops"]
     assert d["lanes"] == ["sunday_serving"] and d["area"] == "worship_media" and d["money"] is False
-    assert "ministry_ops" in cd.STARTER["sunday_serving"]
-    assert set(hub.MINISTRY_OPS_DUTIES) == set(cd.STARTER["sunday_serving"])
+    lane = [k for k, v in full.items() if "sunday_serving" in v["lanes"]]
+    assert set(hub.MINISTRY_OPS_DUTIES) == set(lane)
     assert "ministry_ops" in hub.SUNDAY_DUTIES
+    monkeypatch.setattr(cd, "CATALOG", full)
+    monkeypatch.setitem(cd.STARTER, "sunday_serving", lane)
+    # The lane holds it, as long as it holds the lane's "Who serves when".
+    assert "ministry_ops" in cd._manager_duties({"sunday_serving"}, "u-1", {})
+    assert "ministry_ops" not in cd._manager_duties({"sunday_serving"}, "u-1", {"serve_schedule": ["u-2"]})
+    # Moved to someone by name, it's theirs whatever else they hold.
+    assert "ministry_ops" in cd._manager_duties(set(), "u-2", {"ministry_ops": ["u-2"], "serve_schedule": ["u-3"]})
 
 
 # ─── POST /planning/sundays keeps its rule ────────────────────────────
