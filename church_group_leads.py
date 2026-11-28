@@ -39,8 +39,8 @@ A new lead takes the lead row; whoever led before stays on as a co-leader
 unless the same save lists the co-leaders. Leaving the co-leaders makes
 someone a member of the group again, never removes them from it.
 
-Behind GROUP_LEADS = off | owner | on (default owner: the platform owner's
-church). Closed, both routes are a 404. Before the file is applied (ready()),
+Behind GROUP_LEADS = off | owner | on (default on: every church, Kevin
+2026-11-28; owner = the platform owner's church only, the rollback). Closed, both routes are a 404. Before the file is applied (ready()),
 reads say ready: false and writes are a 503.
 """
 from __future__ import annotations
@@ -90,7 +90,7 @@ def _id(v: Any, what: str) -> str:
 # ─── The switch, and whether the file is in ──────────────────────────
 
 def mode() -> str:
-    m = (os.environ.get("GROUP_LEADS") or "owner").strip().lower()
+    m = (os.environ.get("GROUP_LEADS") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 
