@@ -192,6 +192,14 @@ def test_the_offering_only_with_giving_access(sunday):
     assert _get(sunday, "planner").json()["after"]["offering"]["total_cents"] == 7500
 
 
+def test_an_admin_the_giving_keeper_holds_back_sees_no_offering(sunday):
+    sunday.state["giving"].discard("u-admin")
+    s = _get(sunday, "admin").json()
+    assert "offering" not in s["after"]
+    sunday.state["giving"].discard("u-owner")
+    assert "offering" not in _get(sunday, "owner").json()["after"]
+
+
 def test_the_sermon_the_stream_saved(sunday):
     sunday.db.t["sermons"].append({"id": "ser-1", "business_id": BIZ, "title": "", "published": False,
                                    "preached_on": "2026-10-25", "video_url": "https://api/stream-relay/watch/x",

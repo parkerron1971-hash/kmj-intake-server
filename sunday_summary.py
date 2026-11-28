@@ -238,7 +238,9 @@ def sunday_summary(service_id: str, business_id: str, user: AuthedUser = Depends
         "count_recorded": _count_recorded(church, day, now),
         "sermon_draft": part("after.sermon_draft", lambda: _sermon_draft(biz, day)),
     }
-    if st["approve"] or hub.sees_giving(biz, user) is True:
+    # The giving gate decides for everyone, the owner and the admins too (a
+    # giving keeper, and giving by service's own switch).
+    if hub.sees_giving(biz, user) is True:
         after["offering"] = part("after.offering", lambda: _offering(biz, day))
     out = {
         "service": _service(row, biz),
