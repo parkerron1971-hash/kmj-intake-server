@@ -216,6 +216,7 @@ jobs:
           node __tests__/news_alerts_db.mjs
           node __tests__/group_chat_db.mjs
           node __tests__/leaders_room_db.mjs
+          node __tests__/group_leads_db.mjs
           node __tests__/quiet_hours_db.mjs
           node __tests__/group_email_db.mjs
           node __tests__/group_prayer_db.mjs
@@ -270,6 +271,7 @@ jobs:
           node __tests__/chief_thread_summaries_db.mjs
           node __tests__/needs_a_look_db.mjs
           node __tests__/whats_new_db.mjs
+          node __tests__/sunday_hub_db.mjs
           node __tests__/serve_team_owner_db.mjs
           node __tests__/church_map_db.mjs
           node __tests__/church_map_step2_db.mjs

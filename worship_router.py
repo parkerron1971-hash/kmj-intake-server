@@ -292,11 +292,21 @@ def status(business_id: str, user: AuthedUser = Depends(require_user)):
         return {"enabled": False, "can_write": False}
     # Every plan reads this (part=None): the app learns who they are here
     # first, and churchsavvy-billing/status says what the plan opens.
-    roles = roles_of(_uuid(business_id), user, part=None)
+    biz = _uuid(business_id)
+    roles = roles_of(biz, user, part=None, wall=False)
     allowed = can_all(roles)
     # can_write: the song library; `can` is each part of ChurchSavvy, `roles` the caller's parts.
-    return {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles],
-            "sunday_tools": sunday_tools(user)}
+    out = {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles],
+           "sunday_tools": sunday_tools(user)}
+    # The one Sunday hub (sunday_hub.py, M-7): the switch for this login, and
+    # with it on, this login's Sunday roles. Never walled: the app reads it
+    # to know whether to show the Sunday pages at all.
+    # With the switch off nothing new is said, so the app builds today's screens.
+    import sunday_hub
+    if sunday_hub.open_to(user):
+        out["sunday_hub"] = True
+        out["sunday"] = sunday_hub.status_block(biz, user)
+    return out
 
 
 @router.post("/parse")

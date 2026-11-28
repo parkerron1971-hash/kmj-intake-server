@@ -107,7 +107,8 @@ DOORS = (VOLUNTEERS, CHURCHSAVVY)
 # the Volunteers pages show to holders of the first five), besides the ones
 # that change its teams (sunday_planning.OWNER_DUTIES).
 READS: Dict[str, Tuple[str, ...]] = {
-    VOLUNTEERS: ("serve_schedule", "serve_teams", "new_volunteers", "background_checks", "serving_thanks"),
+    VOLUNTEERS: ("serve_schedule", "serve_teams", "new_volunteers", "background_checks", "serving_thanks",
+                 "ministry_ops"),
     CHURCHSAVVY: ("production_schedule", "churchsavvy_team"),
 }
 KEEPS_ALL = ("owner", "admin")

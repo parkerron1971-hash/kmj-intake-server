@@ -174,7 +174,7 @@ def status(business_id: str, user: AuthedUser = Depends(require_user)):
     import feature_gates
     from worship_team import _uuid, roles_of
     biz_id = _uuid(business_id)
-    roles_of(biz_id, user, part=None)
+    roles_of(biz_id, user, part=None, wall=False)
     biz = _church(biz_id, extra="stripe_subscription_id")
     if not biz:
         raise HTTPException(404, "business not found")

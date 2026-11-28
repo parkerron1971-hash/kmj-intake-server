@@ -142,6 +142,37 @@ def _staff(biz: str, user: AuthedUser, what: str) -> set:
     return require(biz, user, what)
 
 
+def _plan_gate(biz: str, user: AuthedUser) -> set:
+    """Before a plan write: with the one Sunday hub off, the Plan part (as
+    before, refused now); with it on, the caller's parts, and the write is
+    checked once its row and fields are known (sunday_live.check_plan_write)."""
+    import sunday_hub
+    if not sunday_hub.open_to(user):
+        return _staff(biz, user, "plan")
+    return _seat(biz, user)
+
+
+def _plan_scope(biz: str, user: AuthedUser, roles: set, op: str, sid: Optional[str] = None,
+                current: Optional[Dict[str, Any]] = None, fields: Optional[Dict[str, Any]] = None) -> None:
+    """With the hub on: who may make this plan write (sunday_live)."""
+    import sunday_hub
+    if sunday_hub.open_to(user):
+        import sunday_live
+        sunday_live.check_plan_write(biz, user, roles, op, sid, current, fields)
+
+
+def _with_live_ok(biz: str, user: AuthedUser, services: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """With the hub on, each service says whether the pastor opened it for
+    live changes (sunday_live; one read for the list)."""
+    import sunday_hub
+    if not sunday_hub.open_to(user) or not services:
+        return services
+    import sunday_live
+    marks = sunday_live.live_marks(biz)
+    return [{**s, "live_ok": {"on": s["id"] in marks, "until": (marks.get(s["id"]) or {}).get("until"),
+                              "by": (marks.get(s["id"]) or {}).get("by")}} for s in services]
+
+
 def _read(path: str, what: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(path)
     if rows is None:
@@ -363,14 +394,19 @@ def list_services(business_id: str, user: AuthedUser = Depends(require_user)):
     rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null{sd.plans_only()}&select={_SERVICE_LIST}"
                  f"&order=starts_at.desc.nullslast&limit=200", "Your services")
     # can_write: the plan; `can`: each part of ChurchSavvy the caller's team parts allow.
-    return {"services": [_service_out(r) for r in rows], "can_write": can(roles, "plan"), "can": can_all(roles)}
+    return {"services": _with_live_ok(biz, user, [_service_out(r) for r in rows]), "can_write": can(roles, "plan"),
+            "can": can_all(roles)}
 
 
 @router.get("/services/{service_id}")
 def get_service(service_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     _seat(biz, user)
-    return {"service": _service_out(_service(biz, _uuid(service_id, "service")), full=True)}
+    out = _service_out(_service(biz, _uuid(service_id, "service")), full=True)
+    import sunday_hub
+    if sunday_hub.open_to(user):
+        out["live_ok"] = sunday_hub.live_ok(biz, out["id"])
+    return {"service": out}
 
 
 @router.get("/services/{service_id}/show")
@@ -384,7 +420,8 @@ def get_show(service_id: str, business_id: str, user: AuthedUser = Depends(requi
 def create_service(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, "plan")
+    roles = _plan_gate(biz, user)
+    _plan_scope(biz, user, roles, "create")
     try:
         fields = _clean_service(body, partial=False)
     except ValueError as e:
@@ -407,7 +444,7 @@ def create_service(body: Dict[str, Any], user: AuthedUser = Depends(require_user
 def save_service(service_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, "plan")
+    roles = _plan_gate(biz, user)
     sid = _uuid(service_id, "service")
     current = _service(biz, sid)
     try:
@@ -416,6 +453,7 @@ def save_service(service_id: str, body: Dict[str, Any], user: AuthedUser = Depen
         raise HTTPException(400, str(e))
     if not fields:
         return {"ok": True, "service": _service_out(current, full=True)}
+    _plan_scope(biz, user, roles, "save", sid, current, fields)
     fields["updated_at"] = _now()
     rows = sb_clients.sb_patch_as_service(
         f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={_SERVICE_LIST}", fields)
@@ -427,7 +465,8 @@ def save_service(service_id: str, body: Dict[str, Any], user: AuthedUser = Depen
 @router.delete("/services/{service_id}")
 def remove_service(service_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    _staff(biz, user, "plan")
+    roles = _plan_gate(biz, user)
+    _plan_scope(biz, user, roles, "remove")
     sid = _uuid(service_id, "service")
     _service(biz, sid)
     rows = sb_clients.sb_patch_as_service(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select=id",

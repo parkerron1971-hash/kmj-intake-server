@@ -96,14 +96,98 @@ def _day(raw: Optional[str], biz: str) -> date:
     return church_today(biz)
 
 
+# ─── announcements once, two places (the one Sunday hub, M-7) ────────
+# With SUNDAY_HUB on, an announcement made or changed here can also be posted
+# to News ("Also post to News"), and a News post can also go on the screens
+# (church_news.create's also_screens). Each side keeps its own permission:
+# posting to News is News's own rule (church_news.create, an editing seat),
+# the screens are the Plan part's. A login missing the other side's
+# permission gets its own side saved and a plain refusal for the other.
+# Editing or taking out one side never changes the other by itself.
+NEWS_REFUSED = "You can't post to News here."
+NEWS_UNAVAILABLE = "It didn't post to News just now. Try again from News."
+
+
+def _hub_on(user: AuthedUser) -> bool:
+    import sunday_hub
+    return sunday_hub.open_to(user)
+
+
+def _news_of(biz: str, ann_id: str) -> Optional[str]:
+    """The News post this announcement was posted with, if any."""
+    rows = sb_clients.sb_get_as_service(f"/church_posts?business_id=eq.{_q(biz)}&screen_announcement_id=eq.{_q(ann_id)}"
+                                        "&select=id&limit=1")
+    return str(rows[0]["id"]) if isinstance(rows, list) and rows else None
+
+
+def also_news(biz: str, user: AuthedUser, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Post this announcement to News too: {post_id}, {refused} or
+    {unavailable}. Never fails the announcement's own answer: it is saved
+    already, so whatever News says comes back as words, never an error."""
+    try:
+        return _also_news(biz, user, row)
+    except HTTPException as e:
+        if e.status_code < 500:
+            return {"refused": e.detail if isinstance(e.detail, str) and e.detail else NEWS_REFUSED}
+        logger.warning("announcements: News didn't take %s: %s", row.get("id"), e.detail)
+    except Exception:  # noqa: BLE001 — the announcement is saved; News is the second side
+        logger.warning("announcements: News didn't take %s", row.get("id"), exc_info=True)
+    return {"unavailable": NEWS_UNAVAILABLE}
+
+
+def _also_news(biz: str, user: AuthedUser, row: Dict[str, Any]) -> Dict[str, Any]:
+    """By News's own create route and its rules. Posted once: an
+    announcement already on News (or one that came from News) answers with
+    that post."""
+    import church_news
+    if row.get("source") == "news" and row.get("source_ref"):
+        return {"post_id": str(row["source_ref"])}
+    have = _news_of(biz, str(row["id"]))
+    if have:
+        return {"post_id": have}
+    try:
+        church_news._need(biz, user, "member")
+    except HTTPException:
+        return {"refused": NEWS_REFUSED}
+    line = " · ".join(x for x in (row.get("when_text"), row.get("where_text")) if x)
+    text = "\n".join(x for x in (line, row.get("body")) if x)
+    made = church_news.create(church_news.PostIn(business_id=biz, kind="announcement",
+                                                 title=(row.get("title") or "")[:church_news.TITLE_MAX],
+                                                 body=text[:church_news.BODY_MAX]), user)
+    pid = str(made["post_id"])
+    linked = sb_clients.sb_patch_as_service(f"/church_posts?id=eq.{_q(pid)}&business_id=eq.{_q(biz)}&select=id",
+                                            {"screen_announcement_id": str(row["id"])})
+    if not isinstance(linked, list) or not linked:
+        logger.warning("announcements: post %s isn't linked to its announcement %s", pid, row["id"])
+    return {"post_id": pid}
+
+
+def _with_news_links(biz: str, user: AuthedUser, out: List[Dict[str, Any]], board: List[Dict[str, Any]]) -> None:
+    """With the hub on, each announcement says the News post it's paired with
+    (`board`: the rows the list was made from, read once)."""
+    if not _hub_on(user) or not out:
+        return
+    rows = {str(r["id"]): r for r in board}
+    ids = [str(a["id"]) for a in out]
+    posts = sb_clients.sb_get_as_service(f"/church_posts?business_id=eq.{_q(biz)}&screen_announcement_id=in.({','.join(_q(i) for i in ids)})"
+                                         "&select=id,screen_announcement_id&limit=500") or []
+    by_ann = {str(p["screen_announcement_id"]): str(p["id"]) for p in posts if isinstance(p, dict)}
+    for a in out:
+        r = rows.get(str(a["id"])) or {}
+        a["news_post_id"] = (str(r["source_ref"]) if r.get("source") == "news" and r.get("source_ref")
+                             else by_ann.get(str(a["id"])))
+
+
 @router.get("/announcements")
 def list_announcements(business_id: str, day: Optional[str] = None, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     roles = _seat(biz, user)
     today = _day(day, biz)
-    out = [wa.as_out(r, today) for r in _rows(biz)]
+    board = _rows(biz)
+    out = [wa.as_out(r, today) for r in board]
     cutoff = wa.past_cutoff(today)
     out = [a for a in out if a["tab"] != "declined" and not (a["tab"] == "past" and (a["show_until"] or "") < cutoff)]
+    _with_news_links(biz, user, out, board)
     counts = {t: sum(1 for a in out if a["tab"] == t) for t in wa.TABS}
     # can_write: the plan's part (planner, worship leader, admin) makes and changes them.
     return {"announcements": out, "counts": counts, "day": today.isoformat(), "can_write": can(roles, "plan")}
@@ -131,7 +215,10 @@ def create_announcement(body: Dict[str, Any], user: AuthedUser = Depends(require
     }, prefer="return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "The announcement wasn't saved. Try again.")
-    return {"announcement": wa.as_out(saved[0], church_today(biz))}
+    out = {"announcement": wa.as_out(saved[0], church_today(biz))}
+    if body.get("also_news") is True and _hub_on(user):
+        out["news"] = also_news(biz, user, saved[0])
+    return out
 
 
 @router.put("/announcements/{announcement_id}")
@@ -152,7 +239,10 @@ def save_announcement(announcement_id: str, body: Dict[str, Any], user: AuthedUs
         f"/worship_announcements?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_FIELDS}", change)
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "The change wasn't saved. Try again.")
-    return {"announcement": wa.as_out(saved[0], church_today(biz))}
+    out = {"announcement": wa.as_out(saved[0], church_today(biz))}
+    if body.get("also_news") is True and _hub_on(user):
+        out["news"] = also_news(biz, user, saved[0])
+    return out
 
 
 @router.post("/announcements/{announcement_id}/decide")
