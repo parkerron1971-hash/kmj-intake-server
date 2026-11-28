@@ -4,7 +4,7 @@ date: 2026-11-28
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin said GO on mission M-8: use the same team-leader idea as M-7; note the Linda Samuel launch risk"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#2123]
 migrations: []
 left_undone:
   - "Kevin looks at GET /church/leaders/team-moves for each church and says which to move (the frontend shows it); nothing moves on its own"
