@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin said GO on mission M-8: YES, now: worship ministries' typed leaders become real people from the members list. Match by email and name, and list any that don't match"
 status: waiting on Kevin
 prs: [kmj-intake-server#2124]
-migrations: [supabase/APPLY-2026-11-28-group-leads.sql (part 1, #2120: worship_ministries.leader_contact_id)]
+migrations: ["supabase/APPLY-2026-11-28-group-leads.sql (from part 1, kmj-intake-server#2120: worship_ministries.leader_contact_id)"]
 left_undone:
   - "Run the match at each church once part 1's file is applied: GET /worship/ministries/leader-matches lists it, the frontend shows it, and Link them applies"
 decisions:
