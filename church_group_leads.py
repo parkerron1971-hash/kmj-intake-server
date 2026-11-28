@@ -366,7 +366,7 @@ def save(biz: str, gid: str, body: Dict[str, Any], how: str) -> Dict[str, Any]:
     if gone:
         done = sb_clients.sb_patch_as_service(
             f"/group_members?business_id=eq.{_q(biz)}&group_id=eq.{_q(gid)}&contact_id=in.({','.join(_q(c) for c in gone)})",
-            {"role": "member", "co_leader": False})
+            {"role": "member", "co_leader": False, "can_host_live": False})     # stepping down ends hosting live, as Groups did
         if not isinstance(done, list):
             raise HTTPException(503, UNSAVED)
     if patch:

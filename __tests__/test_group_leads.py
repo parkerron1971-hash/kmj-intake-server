@@ -378,3 +378,14 @@ def test_a_save_of_only_who_it_answers_to_leaves_every_leader_row(lc):
     assert r.status_code == 200, r.text
     assert _rows(lc, gid) == before                                       # nobody turned into a co-leader
     assert lc.pushed == [] and lc.emails == []
+
+
+def test_stepping_down_ends_hosting_live_as_groups_did(lc):
+    w, o = lc.who[LC], Office(lc)
+    gid = _gid(lc, LC, "Sisters in the City")
+    uid, email = _owner(lc)
+    next(m for m in lc.t["group_members"] if m["group_id"] == gid and m["contact_id"] == w["gloria"])["can_host_live"] = True
+    _put(o, uid, gid, {"leader_contact_id": w["dana"], "co_leader_contact_ids": []}, email=email)
+    gloria = next(m for m in lc.t["group_members"] if m["group_id"] == gid and m["contact_id"] == w["gloria"])
+    assert gloria["role"] == "member" and gloria["can_host_live"] is False
+
